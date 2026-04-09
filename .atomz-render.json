@@ -53,7 +53,7 @@
     },
     {
       "id": "f3",
-      "subject": "conversation",
+      "subject": "chat interface",
       "predicate": "poor fit for writing",
       "children": [
         {
@@ -137,7 +137,7 @@
         "f3b"
       ],
       "para": 2,
-      "text": "Conversation is a poor fit for writing. Writers revise by acting on text directly, moving sentences, cutting phrases, and reshaping structure. They do not describe changes verbally and wait for a response. and here's some new text"
+      "text": "The chat interface, built around turn-taking between user and model, is poorly suited to the demands of writing. Writers revise by acting on text directly, moving sentences, cutting phrases, and reshaping structure. They do not describe changes verbally and wait for a response. and here's some new text"
     },
     {
       "id": "block_markdown_4",

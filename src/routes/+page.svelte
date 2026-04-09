@@ -19,6 +19,9 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 		atoms,
 		fragments,
 		rules,
+		agentChangedBlockIds,
+		agentChangedAtomIds,
+		pendingEditBlockIds,
 		paraBreaks,
 		prose,
 		isRendering,
@@ -80,7 +83,7 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 	}
 
 	// Panel widths
-	let atomsWidth = $state(420); // px
+	let atomsWidth = $state(480); // px
 	let historyWidth = $state(380); // px
 	isRendering.subscribe((v) => (rendering = v));
 
@@ -737,6 +740,19 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 						const newBlocks = buildBlocksFromRuntimeView({ atoms: curAtoms, prose: data.sentences });
 						blocks.set(newBlocks);
 						reproject();
+					}
+					// Clear pending edit indicators — agent has processed them
+					pendingEditBlockIds.set(new Set());
+					// Highlight agent changes for 5 seconds
+					const cblocks = (data as any).changedBlockIds as string[] | undefined;
+					const catoms = (data as any).changedAtomIds as string[] | undefined;
+					if (cblocks?.length || catoms?.length) {
+						agentChangedBlockIds.set(new Set(cblocks || []));
+						agentChangedAtomIds.set(new Set(catoms || []));
+						setTimeout(() => {
+							agentChangedBlockIds.set(new Set());
+							agentChangedAtomIds.set(new Set());
+						}, 5000);
 					}
 					success = true;
 				}

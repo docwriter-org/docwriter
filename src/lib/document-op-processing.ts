@@ -47,8 +47,12 @@ function buildTrigger(ops: DocumentOp[]): string {
 		switch (op.type) {
 			case 'edit_atom':
 				return `Atom "${op.fragId}" was edited. New subject: "${op.subject}", new predicate: "${op.predicate}". Update only the prose sentences linked to this atom to reflect the new meaning.`;
-			case 'add_atom':
-				return `New atom added at position ${op.index}${op.parentId ? ` under parent "${op.parentId}"` : ''}. Subject: "${op.atom.subject}", predicate: "${op.atom.predicate}". Write a new prose sentence for this atom and insert it at the appropriate position in the document.`;
+			case 'add_atom': {
+				const subjectNote = op.atom.subject
+					? `Subject: "${op.atom.subject}"`
+					: 'No subject provided — pick a natural subject based on the predicate';
+				return `New atom added at position ${op.index}${op.parentId ? ` under parent "${op.parentId}"` : ''}. ${subjectNote}, predicate: "${op.atom.predicate}". Update the atom's subject if blank, then write a new prose sentence for this atom and insert it at the appropriate position in the document.`;
+			}
 			case 'delete_atom':
 				return `Atom "${op.atomId}" was deleted (was: "${op.subject} | ${op.predicate}"). Remove or merge its linked prose sentences. Ensure surrounding prose still flows naturally.`;
 			case 'reorder_atoms':

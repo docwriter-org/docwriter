@@ -382,7 +382,32 @@ ${pinnedWordsInfo || 'None'}
 					const parsed = JSON.parse(content);
 					const mergedCanonical = mergeRenderDocumentIntoAtomzFile(canonicalFile, parsed);
 					writeJsonAtomic(DOC_FILE, mergedCanonical);
-					send('result', { document: mergedCanonical });
+
+					// Detect which blocks and atoms changed
+					const oldBlockMap = new Map(canonicalFile.blocks.map((b: any) => [b.id, b]));
+					const changedBlockIds: string[] = [];
+					for (const block of mergedCanonical.blocks) {
+						const old = oldBlockMap.get(block.id);
+						if (!old) { changedBlockIds.push(block.id); continue; }
+						if (block.type === 'heading' && old.type === 'heading' && block.text !== old.text) changedBlockIds.push(block.id);
+						if (block.type === 'markdown' && old.type === 'markdown' && block.markdown !== old.markdown) changedBlockIds.push(block.id);
+					}
+
+					const oldAtomMap = new Map<string, { subject: string; predicate: string }>();
+					function walkOld(list: any[]) { for (const a of list) { oldAtomMap.set(a.id, { subject: a.subject, predicate: a.predicate }); if (a.children) walkOld(a.children); } }
+					walkOld(canonicalFile.atoms);
+					const changedAtomIds: string[] = [];
+					function walkNew(list: any[]) {
+						for (const a of list) {
+							const old = oldAtomMap.get(a.id);
+							if (!old) { changedAtomIds.push(a.id); }
+							else if (old.subject !== a.subject || old.predicate !== a.predicate) { changedAtomIds.push(a.id); }
+							if (a.children) walkNew(a.children);
+						}
+					}
+					walkNew(mergedCanonical.atoms);
+
+					send('result', { document: mergedCanonical, changedBlockIds, changedAtomIds });
 				} catch (err) {
 					send('error', { error: 'Failed to read document: ' + String(err) });
 				}

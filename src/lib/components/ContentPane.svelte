@@ -541,8 +541,8 @@
 			<!-- Hover zone to add top-level atom after this one -->
 			{#if addingAtom && !addingChildOf && addAtIndex === i}
 				<div class="add-inline-form">
-					<input class="add-inline-input" bind:value={newSubject} placeholder="subject" onkeydown={(e) => e.key === 'Escape' && cancelAddAtom()} />
-					<input class="add-inline-input" bind:value={newPredicate} placeholder="claim" onkeydown={(e) => { if (e.key === 'Enter') confirmAddAtom(); if (e.key === 'Escape') cancelAddAtom(); }} />
+					<textarea class="add-inline-input subject" bind:value={newSubject} placeholder="subject" onkeydown={(e) => e.key === 'Escape' && cancelAddAtom()} rows="1"></textarea>
+					<textarea class="add-inline-input claim" bind:value={newPredicate} placeholder="what do you want to say?" onkeydown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); confirmAddAtom(); } if (e.key === 'Escape') cancelAddAtom(); }} rows="1"></textarea>
 					<button class="add-inline-btn" onclick={confirmAddAtom}>Add</button>
 					<button class="add-inline-btn cancel" onclick={cancelAddAtom}>Esc</button>
 				</div>
@@ -788,28 +788,39 @@
 	.add-sibling-btn:hover { opacity: 1; }
 	.add-inline-form {
 		display: flex;
-		gap: 4px;
-		padding: 4px 8px;
-		align-items: center;
+		gap: 6px;
+		padding: 8px;
+		align-items: stretch;
+		background: var(--bg-hover, #f9fafb);
+		border-radius: 6px;
+		margin: 4px 0;
 	}
 	.add-inline-input {
 		border: 1px solid var(--border-light);
-		border-radius: 4px;
-		padding: 3px 6px;
-		font-size: 12px;
+		border-radius: 6px;
+		padding: 8px 10px;
+		font-size: 14px;
 		font-family: inherit;
 		outline: none;
-		flex: 1;
+		resize: none;
+		overflow: hidden;
+		min-height: 38px;
+		field-sizing: content;
+		line-height: 1.4;
 	}
+	.add-inline-input.subject { width: 100px; flex-shrink: 0; }
+	.add-inline-input.claim { flex: 1; }
 	.add-inline-input:focus { border-color: var(--accent); }
 	.add-inline-btn {
 		border: none;
 		background: var(--accent);
 		color: white;
-		border-radius: 4px;
-		padding: 3px 8px;
-		font-size: 11px;
+		border-radius: 6px;
+		padding: 6px 12px;
+		font-size: 12px;
 		cursor: pointer;
+		flex-shrink: 0;
+		align-self: flex-start;
 	}
 	.add-inline-btn.cancel { background: transparent; color: var(--text-faint); }
 	/* Add atom */

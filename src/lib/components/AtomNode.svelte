@@ -3,7 +3,7 @@
 	import { GripVertical, Plus, Trash2, Sparkles, Pencil, Pin } from 'lucide-svelte';
 	import type { Atom } from '$lib/types';
 	import { TRANSITIONS } from '$lib/types';
-	import { highlightedFrags, highlightedSents, prose } from '$lib/stores';
+	import { highlightedFrags, highlightedSents, prose, agentChangedAtomIds } from '$lib/stores';
 
 	const transitionWords = TRANSITIONS.filter(t => t !== '');
 
@@ -56,6 +56,9 @@
 
 	let currentProse: import('$lib/types').Sentence[] = $state([]);
 	prose.subscribe((v) => (currentProse = v));
+
+	let changedAtomIds: Set<string> = $state(new Set());
+	agentChangedAtomIds.subscribe((v) => (changedAtomIds = v));
 
 	// Drag state (local to siblings)
 	let dragOver = $state(false);
@@ -122,6 +125,7 @@
 	class="atom-node"
 	class:highlighted={hlFrags.has(atom.id)}
 	class:drop-target={dragOver}
+	class:agent-edited={changedAtomIds.has(atom.id)}
 	style="padding-left: {depth * 20}px"
 	draggable={editingId !== atom.id}
 	ondragstart={handleDragStart}
@@ -226,19 +230,21 @@
 <!-- Add child (hover-only +, or form if actively adding) -->
 {#if addingChildOf === atom.id}
 	<div class="add-form" style="padding-left: {(depth + 1) * 20}px">
-		<input
-			class="add-input"
+		<textarea
+			class="add-input subject"
 			value={newSubject}
 			oninput={(e) => onBindNewSubject(e.currentTarget.value)}
 			placeholder="subject"
-		/>
-		<input
-			class="add-input"
+			rows="1"
+		></textarea>
+		<textarea
+			class="add-input claim"
 			value={newPredicate}
 			oninput={(e) => onBindNewPredicate(e.currentTarget.value)}
-			onkeydown={(e) => { if (e.key === 'Enter') onConfirmAddChild(); if (e.key === 'Escape') onCancelAddChild(); }}
-			placeholder="claim"
-		/>
+			onkeydown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onConfirmAddChild(); } if (e.key === 'Escape') onCancelAddChild(); }}
+			placeholder="what do you want to say?"
+			rows="1"
+		></textarea>
 		<button class="add-btn" onclick={onConfirmAddChild}>Add</button>
 		<button class="add-btn cancel" onclick={onCancelAddChild}>Esc</button>
 	</div>
@@ -257,6 +263,33 @@
 	}
 	.atom-node.highlighted {
 		background: var(--accent-bg, #f0eeff);
+	}
+	.atom-node.agent-edited {
+		background: color-mix(in srgb, #10b981 12%, transparent);
+		box-shadow: 0 0 12px color-mix(in srgb, #10b981 20%, transparent);
+		position: relative;
+		animation: agent-atom-fade 5s ease-out forwards;
+	}
+	.atom-node.agent-edited::before {
+		content: '';
+		position: absolute;
+		left: 0;
+		top: 0;
+		width: 3px;
+		height: 100%;
+		background: #10b981;
+		border-radius: 2px;
+		animation: agent-cursor-fade 5s ease-out forwards;
+	}
+	@keyframes agent-atom-fade {
+		0% { background: color-mix(in srgb, #10b981 15%, transparent); box-shadow: 0 0 12px color-mix(in srgb, #10b981 25%, transparent); }
+		70% { background: color-mix(in srgb, #10b981 8%, transparent); box-shadow: 0 0 6px color-mix(in srgb, #10b981 12%, transparent); }
+		100% { background: transparent; box-shadow: none; }
+	}
+	@keyframes agent-cursor-fade {
+		0% { opacity: 1; }
+		70% { opacity: 0.5; }
+		100% { opacity: 0; }
 	}
 	.atom-node.drop-target {
 		border-color: var(--accent, #7c3aed);
@@ -417,27 +450,39 @@
 	.add-child-trigger:hover { color: var(--accent, #7c3aed); }
 	.add-form {
 		display: flex;
-		gap: 4px;
-		padding: 4px 0;
-		align-items: center;
+		gap: 6px;
+		align-items: stretch;
+		background: color-mix(in srgb, var(--accent, #7c3aed) 4%, transparent);
+		border-radius: 6px;
+		margin: 4px 0;
+		padding: 8px;
 	}
 	.add-input {
 		border: 1px solid var(--border-light, #e5e7eb);
-		border-radius: 4px;
-		padding: 3px 6px;
-		font-size: 12px;
+		border-radius: 6px;
+		padding: 8px 10px;
+		font-size: 14px;
 		font-family: inherit;
 		outline: none;
+		resize: none;
+		overflow: hidden;
+		min-height: 38px;
+		field-sizing: content;
+		line-height: 1.4;
 	}
+	.add-input.subject { width: 100px; flex-shrink: 0; }
+	.add-input.claim { flex: 1; }
 	.add-input:focus { border-color: var(--accent, #7c3aed); }
 	.add-btn {
 		border: none;
 		background: var(--accent, #7c3aed);
 		color: white;
-		border-radius: 4px;
-		padding: 3px 8px;
-		font-size: 11px;
+		border-radius: 6px;
+		padding: 6px 12px;
+		font-size: 12px;
 		cursor: pointer;
+		flex-shrink: 0;
+		align-self: flex-start;
 	}
 	.add-btn.cancel { background: transparent; color: var(--text-faint, #999); }
 </style>

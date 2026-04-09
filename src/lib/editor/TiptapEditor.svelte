@@ -32,7 +32,9 @@
 		renderingSentences,
 		clearUserEdits,
 		undoBlocks,
-		editorMode
+		editorMode,
+		agentChangedBlockIds,
+		pendingEditBlockIds
 	} from '$lib/stores';
 
 	let element: HTMLDivElement;
@@ -356,6 +358,44 @@
 	// Feature 4: Clear UserEdit marks when agent finishes processing
 	clearUserEdits.subscribe((v) => { if (v > 0 && editor) clearUserEditMarks(); });
 
+	// Agent edit highlights — apply after a short delay to let DOM settle
+	agentChangedBlockIds.subscribe(() => {
+		if (!editor || !element) return;
+		requestAnimationFrame(() => applyAgentHighlights());
+	});
+
+	// Pending user edit highlights — amber indicator on blocks awaiting agent
+	pendingEditBlockIds.subscribe(() => {
+		if (!editor || !element) return;
+		requestAnimationFrame(() => applyPendingHighlights());
+	});
+
+	function applyPendingHighlights() {
+		if (!editor || !element) return;
+		let pendingIds: Set<string> = new Set();
+		pendingEditBlockIds.subscribe((v) => (pendingIds = v))();
+		element.querySelectorAll('.pending-edit').forEach((el) => el.classList.remove('pending-edit'));
+		if (pendingIds.size === 0) return;
+		let currentBlockList: import('$lib/atomz').AtomzBlock[] = [];
+		blocks.subscribe((v) => (currentBlockList = v))();
+		const pendingIndices = new Set<number>();
+		currentBlockList.forEach((block, idx) => {
+			if (pendingIds.has(block.id)) pendingIndices.add(idx);
+		});
+		let blockIdx = 0;
+		editor.state.doc.descendants((node, pos) => {
+			if (node.type.name !== 'paragraph' && node.type.name !== 'heading') return;
+			if (pendingIndices.has(blockIdx)) {
+				try {
+					const dom = editor!.view.nodeDOM(pos);
+					if (dom instanceof HTMLElement) dom.classList.add('pending-edit');
+				} catch {}
+			}
+			blockIdx++;
+			return false;
+		});
+	}
+
 	// Feature 6: Diff transitions
 	let transitions: Map<number, SentenceTransition> = $state(new Map());
 	sentenceTransitions.subscribe((v) => { transitions = v; });
@@ -493,8 +533,26 @@
 			}
 		}
 
+		// Detect which blocks changed
+		const changedIds = new Set<string>();
+		for (const nb of nextBlocks) {
+			const ob = currentBlocks.find((b) => b.id === nb.id);
+			if (!ob) { changedIds.add(nb.id); continue; }
+			if (nb.type === 'heading' && ob.type === 'heading' && nb.text !== ob.text) changedIds.add(nb.id);
+			if (nb.type === 'markdown' && ob.type === 'markdown' && nb.markdown !== ob.markdown) changedIds.add(nb.id);
+		}
+
 		blocks.set(nextBlocks);
 		reproject();
+
+		// Mark changed blocks as pending agent review
+		if (changedIds.size > 0) {
+			pendingEditBlockIds.update((existing) => {
+				const next = new Set(existing);
+				for (const id of changedIds) next.add(id);
+				return next;
+			});
+		}
 
 		pushDocumentOp({
 			type: 'update_blocks',
@@ -514,11 +572,43 @@
 			hasUnsavedEdits = false;
 			clearCountdown();
 			applyPinMarks();
-			applyPinMarks();
-			requestAnimationFrame(() => applyAnnotationStyles());
+			requestAnimationFrame(() => {
+				applyAnnotationStyles();
+				applyAgentHighlights();
+			});
 		}
 		buildSentenceRanges();
 		if (hlSents.size > 0) applyEditorHighlight(hlSents);
+	}
+
+	/** Apply green glow to paragraphs the agent edited */
+	function applyAgentHighlights() {
+		if (!editor || !element) return;
+		let changedIds: Set<string> = new Set();
+		agentChangedBlockIds.subscribe((v) => (changedIds = v))();
+		// Remove old highlights
+		element.querySelectorAll('.agent-edited').forEach((el) => el.classList.remove('agent-edited'));
+		if (changedIds.size === 0) return;
+		// Map block IDs to indices
+		let currentBlockList: import('$lib/atomz').AtomzBlock[] = [];
+		blocks.subscribe((v) => (currentBlockList = v))();
+		const changedIndices = new Set<number>();
+		currentBlockList.forEach((block, idx) => {
+			if (changedIds.has(block.id)) changedIndices.add(idx);
+		});
+		// Apply to matching editor nodes
+		let blockIdx = 0;
+		editor.state.doc.descendants((node, pos) => {
+			if (node.type.name !== 'paragraph' && node.type.name !== 'heading') return;
+			if (changedIndices.has(blockIdx)) {
+				try {
+					const dom = editor!.view.nodeDOM(pos);
+					if (dom instanceof HTMLElement) dom.classList.add('agent-edited');
+				} catch {}
+			}
+			blockIdx++;
+			return false;
+		});
 	}
 
 	function clearCountdown() {
@@ -1006,6 +1096,53 @@
 		color: var(--text-faint);
 		pointer-events: none;
 		height: 0;
+	}
+
+	/* Pending user edit — amber left border, waiting for agent */
+	.tiptap-editor :global(.pending-edit) {
+		border-left: 3px solid #f59e0b;
+		padding-left: 8px;
+		position: relative;
+	}
+	.tiptap-editor :global(.pending-edit)::after {
+		content: 'queued';
+		position: absolute;
+		right: 0;
+		top: 0;
+		font-size: 9px;
+		color: #f59e0b;
+		opacity: 0.6;
+		font-family: inherit;
+	}
+
+	/* Agent edit highlights */
+	.tiptap-editor :global(.agent-edited) {
+		background: color-mix(in srgb, #10b981 12%, transparent);
+		border-radius: 4px;
+		box-shadow: 0 0 12px color-mix(in srgb, #10b981 20%, transparent);
+		position: relative;
+		animation: agent-fade 5s ease-out forwards;
+	}
+	.tiptap-editor :global(.agent-edited)::before {
+		content: '';
+		position: absolute;
+		left: -4px;
+		top: 0;
+		width: 3px;
+		height: 100%;
+		background: #10b981;
+		border-radius: 2px;
+		animation: agent-cursor-fade 5s ease-out forwards;
+	}
+	@keyframes agent-fade {
+		0% { background: color-mix(in srgb, #10b981 15%, transparent); box-shadow: 0 0 12px color-mix(in srgb, #10b981 25%, transparent); }
+		70% { background: color-mix(in srgb, #10b981 10%, transparent); box-shadow: 0 0 8px color-mix(in srgb, #10b981 15%, transparent); }
+		100% { background: transparent; box-shadow: none; }
+	}
+	@keyframes agent-cursor-fade {
+		0% { opacity: 1; }
+		70% { opacity: 0.6; }
+		100% { opacity: 0; }
 	}
 
 	.tiptap-editor :global(.pinned-mark) {

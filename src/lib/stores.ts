@@ -80,6 +80,13 @@ export const sentenceTransitions = writable<Map<number, SentenceTransition>>(new
 
 export const documentOps = writable<DocumentOp[]>([]);
 
+// Agent edit highlights — temporarily show which blocks/atoms the agent changed
+export const agentChangedBlockIds = writable<Set<string>>(new Set());
+export const agentChangedAtomIds = writable<Set<string>>(new Set());
+
+// Queued edit highlights — show which blocks have pending user edits awaiting agent
+export const pendingEditBlockIds = writable<Set<string>>(new Set());
+
 function createDocumentOpId(): string {
 	return `op_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
