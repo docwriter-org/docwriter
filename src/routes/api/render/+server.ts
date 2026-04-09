@@ -5,6 +5,7 @@ import { writeFileSync, readFileSync } from 'fs';
 import { DOC_FILE, HISTORY_FILE, RENDER_DOC_FILE } from '$lib/server/document-files';
 import { writeJsonAtomic } from '$lib/server/file-utils';
 import { getSessionId, setSessionId } from '$lib/server/runtime-state';
+import { mergeRenderDocumentIntoAtomzFile, normalizeAtomzFile, projectAtomzFileToRenderDocument } from '$lib/atomz';
 const MAX_HISTORY = 30;
 
 interface HistoryEntry {
@@ -197,15 +198,17 @@ export const POST: RequestHandler = async ({ request }) => {
 	try {
 		const body = await request.json();
 		const { documentJson, editedFragId, model, changes } = body;
+		const canonicalFile = normalizeAtomzFile(documentJson);
+		const renderDocument = projectAtomzFileToRenderDocument(canonicalFile);
 
 		// Save pre-edit snapshot to history
 		const trigger = changes || (editedFragId ? `Atom edit: ${editedFragId}` : 'Full re-render');
-		if (documentJson.prose?.length > 0) {
-			saveHistoryEntry(trigger, documentJson.prose);
+		if (renderDocument.prose.length > 0) {
+			saveHistoryEntry(trigger, renderDocument.prose);
 		}
 
 		// Separate headings from prose — agent must not touch headings
-		const allProse: any[] = documentJson.prose || [];
+		const allProse: any[] = renderDocument.prose || [];
 		const headingEntries: { index: number; entry: any }[] = [];
 		const agentProse: any[] = [];
 		for (let i = 0; i < allProse.length; i++) {
@@ -219,13 +222,13 @@ export const POST: RequestHandler = async ({ request }) => {
 		// Write doc with headings stripped — agent only sees prose entries
 		const currentSessionId = getSessionId();
 		const docForAgent = {
-			...documentJson,
+			...renderDocument,
 			prose: agentProse
 		};
 		writeJsonAtomic(RENDER_DOC_FILE, docForAgent);
 
 		const prompt = buildPrompt(editedFragId, changes);
-		const hooks = buildValidationHooks(documentJson);
+		const hooks = buildValidationHooks(renderDocument);
 		const abortController = new AbortController();
 
 		const isPinSync = typeof changes === 'string' && changes.includes('[PIN_');
@@ -274,8 +277,8 @@ export const POST: RequestHandler = async ({ request }) => {
 
 					// Give the agent a paragraph-editor subagent it can choose to use
 					if (!isUserEdit) {
-						const rulesList = (documentJson.rules || []).map((r: string) => `- ${r}`).join('\n');
-						const pinnedWordsInfo = (documentJson.atoms || [])
+						const rulesList = (renderDocument.rules || []).map((r: string) => `- ${r}`).join('\n');
+						const pinnedWordsInfo = (renderDocument.atoms || [])
 							.flatMap((a: any) => {
 								const words = [...(a.pinnedWords || []), ...((a.children || []).flatMap((c: any) => c.pinnedWords || []))];
 								return words.length ? [`Atom "${a.id}": ${words.join(', ')}`] : [];
@@ -384,9 +387,10 @@ ${pinnedWordsInfo || 'None'}
 					// Re-number IDs
 					mergedProse.forEach((p: any, i: number) => { p.id = i; });
 					parsed.prose = mergedProse;
+					const mergedCanonical = mergeRenderDocumentIntoAtomzFile(canonicalFile, parsed);
 					// Commit the full merged result atomically to the canonical snapshot.
-					writeJsonAtomic(DOC_FILE, parsed);
-					send('result', { document: parsed });
+					writeJsonAtomic(DOC_FILE, mergedCanonical);
+					send('result', { document: mergedCanonical });
 				} catch (err) {
 					send('error', { error: 'Failed to read document: ' + String(err) });
 				}

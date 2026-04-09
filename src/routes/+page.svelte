@@ -1,8 +1,10 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { Settings, Undo2, MessageSquareText, FolderOpen, History, XCircle } from 'lucide-svelte';
-	import { serialize, deserialize, uploadText } from '$lib/atomz';
+	import { normalizeAtomzFile, uploadText } from '$lib/atomz';
+	import { applyCanonicalFileToStores, buildCanonicalFileFromRuntimeState } from '$lib/runtime-canonical';
 import { applyDocumentOp } from '$lib/document-op-utils';
+import { buildDocumentOpProcessingPlan } from '$lib/document-op-processing';
 import { SYNC_TIMING } from '$lib/sync-timing';
 	import { themes, applyTheme } from '$lib/themes';
 	import { wordDiff } from '$lib/diff';
@@ -22,10 +24,7 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 		annotations,
 		renderingSentences,
 		sentenceTransitions,
-		actionQueue,
 		documentOps,
-		drainQueue,
-		pushAction,
 		checkpoints,
 		proseHistory,
 		pushProseSnapshot,
@@ -35,18 +34,18 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 		pushHistory,
 		selectedModel,
 		selectedTheme,
+		blocks,
 		editorPins,
+		pins,
 		sections,
 		clearUserEdits,
 		editorMode
 	} from '$lib/stores';
-	import type { Fragment, Sentence, QueueItem, DocumentOp } from '$lib/types';
+	import type { Fragment, Sentence, DocumentOp } from '$lib/types';
 
 	let showRules = $state(false);
 	let rendering = $state(false);
 	let currentAbort: AbortController | null = $state(null);
-	const persistedQueueItemIds = new Set<string>();
-	const pendingQueuePersistIds = new Set<string>();
 	const persistedDocumentOpIds = new Set<string>();
 	const pendingDocumentOpPersistIds = new Set<string>();
 	let isReplayingDocumentOps = $state(false);
@@ -117,13 +116,7 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 			const data = await res.json();
 			if (data.document) {
 				await resetPendingState();
-				const parsed = deserialize(JSON.stringify(data.document));
-				fragments.set(parsed.fragments);
-				prose.set(parsed.prose);
-				rules.set(parsed.rules);
-				paraBreaks.set(new Set(parsed.paraBreaks));
-				editorPins.set(parsed.editorPins);
-				sections.set(parsed.sections);
+				applyCanonicalDocument(normalizeAtomzFile(data.document));
 				pushHistory({ type: 'user_action', timestamp: Date.now(), description: `Restored version from ${formatTime(versions.find(v => v.index === diffVersionIndex)?.timestamp ?? 0)}` });
 			}
 		} catch (e) {
@@ -216,13 +209,7 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 			if (isAtomz) {
 				// Load directly
 				await resetPendingState();
-				const data = deserialize(text);
-				fragments.set(data.fragments);
-				prose.set(data.prose);
-				rules.set(data.rules);
-				paraBreaks.set(new Set(data.paraBreaks));
-				editorPins.set(data.editorPins);
-				sections.set(data.sections);
+				applyCanonicalDocument(normalizeAtomzFile(text));
 				pushHistory({ type: 'user_action', timestamp: Date.now(), description: `Opened ${file.name}` });
 			} else {
 				// Atomize raw text
@@ -248,12 +235,17 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 						});
 					},
 					onResult: (data) => {
+						if (data.document) {
+							applyCanonicalDocument(normalizeAtomzFile(data.document));
+							return;
+						}
 						if (data.fragments) fragments.set(data.fragments as Fragment[]);
 						if (data.sentences) prose.set(data.sentences);
 						if (data.paraBreaks) paraBreaks.set(new Set(data.paraBreaks as number[]));
 						rules.set([]);
 						editorPins.set([]);
 						sections.set([]);
+						refreshCanonicalStoresFromRuntime();
 					}
 				});
 				await resetPendingState();
@@ -399,30 +391,22 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 		}
 	}
 
-	async function loadPendingQueueItems() {
-		try {
-			const res = await fetch('/api/ops');
-			const data = await res.json();
-			const items = ((data.items || []) as QueueItem[]).sort((a, b) => a.createdAt - b.createdAt);
-			persistedQueueItemIds.clear();
-			for (const item of items) persistedQueueItemIds.add(item.id);
-			actionQueue.set(items);
-		} catch {
-			actionQueue.set([]);
-		}
+	function applyCanonicalDocument(file: ReturnType<typeof normalizeAtomzFile>) {
+		applyCanonicalFileToStores(file);
+	}
+
+	function refreshCanonicalStoresFromRuntime() {
+		const file = buildCanonicalFileFromRuntimeState(getCurrentDocumentState());
+		blocks.set(file.blocks);
+		pins.set(file.pins || []);
+		return file;
 	}
 
 	async function resetPendingState() {
-		actionQueue.set([]);
 		documentOps.set([]);
-		persistedQueueItemIds.clear();
-		pendingQueuePersistIds.clear();
 		persistedDocumentOpIds.clear();
 		pendingDocumentOpPersistIds.clear();
-		await Promise.allSettled([
-			fetch('/api/ops', { method: 'DELETE' }),
-			fetch('/api/document-ops', { method: 'DELETE' })
-		]);
+		await fetch('/api/document-ops', { method: 'DELETE' }).catch(() => {});
 	}
 
 	async function loadPendingDocumentOps() {
@@ -469,23 +453,6 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 		}
 	}
 
-	async function persistQueueItem(item: QueueItem) {
-		if (persistedQueueItemIds.has(item.id) || pendingQueuePersistIds.has(item.id)) return;
-		pendingQueuePersistIds.add(item.id);
-		try {
-			await fetch('/api/ops', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ items: [item] })
-			});
-			persistedQueueItemIds.add(item.id);
-		} catch {
-			// Best effort for now; unresolved queue items are still kept in memory.
-		} finally {
-			pendingQueuePersistIds.delete(item.id);
-		}
-	}
-
 	async function persistDocumentOp(op: DocumentOp) {
 		if (persistedDocumentOpIds.has(op.id) || pendingDocumentOpPersistIds.has(op.id)) return;
 		pendingDocumentOpPersistIds.add(op.id);
@@ -501,15 +468,6 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 		} finally {
 			pendingDocumentOpPersistIds.delete(op.id);
 		}
-	}
-
-	async function resolvePendingQueueItems(items: QueueItem[]) {
-		if (items.length === 0) return;
-		await fetch('/api/ops', {
-			method: 'PATCH',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ ids: items.map((item) => item.id) })
-		}).catch(() => {});
 	}
 
 	async function resolvePendingDocumentOps(ops: DocumentOp[]) {
@@ -530,20 +488,12 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 			const res = await fetch('/api/document');
 			const doc = await res.json();
 			if (doc) {
-				const parsed = deserialize(JSON.stringify(doc));
-				fragments.set(parsed.fragments);
-				prose.set(parsed.prose);
-				rules.set(parsed.rules);
-				paraBreaks.set(new Set(parsed.paraBreaks));
-				editorPins.set(parsed.editorPins);
-				sections.set(parsed.sections);
+				applyCanonicalDocument(normalizeAtomzFile(doc));
 			}
 			documentLoaded = true;
 		} catch { /* no doc yet — start empty */ }
 
 		await loadPendingDocumentOps();
-		await loadPendingQueueItems();
-
 		// Load session history
 		try {
 			const res = await fetch('/api/history');
@@ -591,30 +541,33 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 		documentOps.subscribe((ops) => (pendingDocumentOps = ops))();
 		try {
 			await Promise.all(pendingDocumentOps.map((op) => persistDocumentOp(op)));
+			const currentState = getCurrentDocumentState();
+			const { localOnlyOps } = buildDocumentOpProcessingPlan(pendingDocumentOps, currentState);
 			await fetch('/api/document', {
 				method: 'PUT',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify(doc)
 			});
-			await resolvePendingDocumentOps(pendingDocumentOps);
+			await resolvePendingDocumentOps(localOnlyOps);
 		} catch {
 			// Best-effort persistence for now.
 		}
 	}
-	fragments.subscribe(() => scheduleSaveToDisk());
-	prose.subscribe(() => scheduleSaveToDisk());
-	rules.subscribe(() => scheduleSaveToDisk());
-	paraBreaks.subscribe(() => scheduleSaveToDisk());
-	editorPins.subscribe(() => scheduleSaveToDisk());
-	sections.subscribe(() => scheduleSaveToDisk());
+	fragments.subscribe(() => { refreshCanonicalStoresFromRuntime(); scheduleSaveToDisk(); });
+	prose.subscribe(() => { refreshCanonicalStoresFromRuntime(); scheduleSaveToDisk(); });
+	rules.subscribe(() => { refreshCanonicalStoresFromRuntime(); scheduleSaveToDisk(); });
+	paraBreaks.subscribe(() => { refreshCanonicalStoresFromRuntime(); scheduleSaveToDisk(); });
+	editorPins.subscribe(() => { refreshCanonicalStoresFromRuntime(); scheduleSaveToDisk(); });
+	sections.subscribe(() => { refreshCanonicalStoresFromRuntime(); scheduleSaveToDisk(); });
+	blocks.subscribe(() => scheduleSaveToDisk());
+	pins.subscribe(() => scheduleSaveToDisk());
 	documentOps.subscribe((ops) => {
 		for (const op of ops) {
 			void persistDocumentOp(op);
 		}
 	});
 
-	// Build the unified document JSON for the agent
-	function getDocumentJson() {
+	function getCurrentDocumentState() {
 		let f: Fragment[], p: Sentence[], r: typeof $rules, b: Set<number>;
 		let ep: import('$lib/types').EditorPin[], sec: import('$lib/types').Section[];
 		fragments.subscribe((v) => (f = v))();
@@ -623,7 +576,19 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 		paraBreaks.subscribe((v) => (b = v))();
 		editorPins.subscribe((v) => (ep = v))();
 		sections.subscribe((v) => (sec = v))();
-		return JSON.parse(serialize({ fragments: f!, prose: p!, rules: r!, paraBreaks: b!, editorPins: ep!, sections: sec! }));
+		return {
+			fragments: f!,
+			prose: p!,
+			rules: r!,
+			paraBreaks: b!,
+			editorPins: ep!,
+			sections: sec!
+		};
+	}
+
+	// Build the unified document JSON for the agent
+	function getDocumentJson() {
+		return buildCanonicalFileFromRuntimeState(getCurrentDocumentState());
 	}
 
 	function getRequestBody(editedFragId?: string, changes?: string, batched?: boolean) {
@@ -780,8 +745,7 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 				},
 				onResult: (data) => {
 					if (data.document) {
-						const parsed = deserialize(JSON.stringify(data.document));
-						prose.set(parsed.prose);
+						applyCanonicalDocument(normalizeAtomzFile(data.document));
 					} else if (data.sentences) {
 						prose.set(data.sentences);
 					}
@@ -806,50 +770,36 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 		return success;
 	}
 
-	// Reactive queue — feedback-like items batch at 10s, structural edits at 500ms
-	let queueTimer: ReturnType<typeof setTimeout> | null = null;
+	// Process unresolved semantic document ops in batches.
+	let documentOpTimer: ReturnType<typeof setTimeout> | null = null;
 	let isProcessing = $state(false);
 
-	actionQueue.subscribe((q) => {
-		for (const item of q) {
-			void persistQueueItem(item);
-		}
-		if (q.length === 0 || isProcessing) return;
-		if (queueTimer) clearTimeout(queueTimer);
-		queueTimer = setTimeout(async () => {
+	documentOps.subscribe((ops) => {
+		if (ops.length === 0 || isProcessing || isReplayingDocumentOps) return;
+		if (documentOpTimer) clearTimeout(documentOpTimer);
+		documentOpTimer = setTimeout(async () => {
 			if (isProcessing) return;
-			const items = drainQueue();
-			if (items.length === 0) return;
-			await Promise.all(items.map((item) => persistQueueItem(item)));
+			let currentOps: DocumentOp[] = [];
+			documentOps.subscribe((value) => (currentOps = value))();
+			if (currentOps.length === 0) return;
+			await Promise.all(currentOps.map((op) => persistDocumentOp(op)));
 			isProcessing = true;
-
-			// Find if any items target a specific atom
-			const editedFragIds = items.filter((i) => i.editedFragId).map((i) => i.editedFragId!);
-			const trigger = items.map((i) => i.description).join('; ');
-
-			// Compile into one agent call — batched if multiple changes
-			const isBatched = items.length > 1 || editedFragIds.length > 1;
-			const success = await doRender(editedFragIds.length === 1 ? editedFragIds[0] : undefined, trigger, isBatched);
-			if (success) {
-				await resolvePendingQueueItems(items);
-			} else {
-				actionQueue.update((q) => {
-					const next = [...items];
-					for (const item of q) {
-						if (!next.some((existing) => existing.id === item.id)) next.push(item);
-					}
-					return next;
-				});
+			const currentState = getCurrentDocumentState();
+			const plan = buildDocumentOpProcessingPlan(currentOps, currentState);
+			if (plan.localOnlyOps.length > 0) {
+				await saveToDisk();
+			}
+			if (plan.agentOps.length > 0) {
+				const success = await doRender(
+					plan.editedFragId,
+					plan.trigger,
+					plan.agentOps.length > 1
+				);
+				if (success) {
+					await resolvePendingDocumentOps(plan.agentOps);
+				}
 			}
 			isProcessing = false;
-
-			// Check if more items arrived during processing
-			let pending: typeof items = [];
-			actionQueue.subscribe((q) => (pending = q))();
-			if (pending.length > 0) {
-				// Recurse
-				queueTimer = setTimeout(() => actionQueue.update((q) => [...q]), 100);
-			}
 		}, SYNC_TIMING.queueProcessMs);
 	});
 

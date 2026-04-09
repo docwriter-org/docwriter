@@ -42,7 +42,7 @@ export const POST: RequestHandler = async ({ request }) => {
 									description: 'Takes text from a file and decomposes it into atoms. Writes a .atomz JSON file.',
 									prompt: `Decompose text into atoms. Write a .atomz JSON file using Write.
 
-Format: {"tag":"...","source":"...","atoms":[{"id":"f1","subject":"...","predicate":"...","children":[]}],"rules":[],"paraBreaks":[],"prose":[{"id":0,"frags":["f1"],"para":0,"text":"Original sentence."}]}
+Format: {"version":2,"tag":"...","source":"...","atoms":[{"id":"f1","subject":"...","predicate":"...","children":[]}],"rules":[{"id":"r1","text":"..."}],"blocks":[{"id":"b1","type":"markdown","markdown":"Original sentence.","atomIds":["f1"]}],"pins":[]}
 
 IMPORTANT: Subjects and predicates must be MINIMAL — drop articles, drop filler words. Examples:
 - Good: subject="LLMs" predicate="changed HCI"

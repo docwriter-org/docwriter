@@ -32,9 +32,9 @@ An **atom** (Fragment) is an atomic claim with a `subject` (what the sentence is
 
 Both server endpoints use `@anthropic-ai/claude-agent-sdk`'s `query()` with built-in tools:
 
-- **`/api/render`** — Uses `Read` + `Edit` tools on `/tmp/atomz/prose.md`. The prose file uses HTML comment markers (`<!-- SENTENCE N | frags: ... | para: ... -->`) to preserve metadata. The agent edits only text lines, never comment lines. Session ID is persisted module-level (`savedSessionId`) for session reuse across requests (saves ~2s init per call).
+- **`/api/render`** — Uses `Read` + `Edit` tools on `.atomz-render.atomz`, a temporary working copy derived from the current document snapshot. The server strips heading rows before Claude edits, then merges headings back in and atomically commits the final merged result to `document.atomz`. Session metadata lives in `.atomz-state.json`.
 
-- **`/api/atomize`** — Uses `Read` + `Write` tools. Reads `/tmp/atomz/input.txt`, writes decomposed atoms to `/tmp/atomz/atoms.json`.
+- **`/api/atomize`** — Uses `Write` to create a fresh `document.atomz`-shaped result from raw text, then the client hydrates stores from the returned atoms/prose.
 
 Both endpoints stream responses as SSE with events: `tool_call_start`, `text_streaming`, `tool_call`, `assistant_text`, `result`, `error`, `done`.
 
@@ -44,9 +44,9 @@ All state is in Svelte writable stores (`src/lib/stores.ts`). Key stores:
 - `fragments`, `prose`, `rules`, `paraBreaks` — document state
 - `renderingSentences`, `sentenceTransitions` — rendering UI state
 - `agentHistory` — agent activity log
-- `pendingSelectiveRender` — set to a fragment ID to trigger auto-render
+- `documentOps` — durable semantic document changes and reconciliation requests
 
-When a fragment is edited, `saveEdit()` sets `pendingSelectiveRender`, which `+page.svelte` subscribes to and calls `doRender(fragId)`. This sends only the edited fragment's context to the agent.
+User actions now emit semantic `DocumentOp` entries rather than pushing directly into a separate action queue. `+page.svelte` processes unresolved ops, resolves purely local ones after save, and runs `/api/render` only for ops that still require Claude reconciliation.
 
 ### Diff & Transitions
 
@@ -60,8 +60,8 @@ When a fragment is edited, `saveEdit()` sets `pendingSelectiveRender`, which `+p
 
 `src/lib/atomz.ts` — JSON format bundling `{ version, fragments, prose, rules, paraBreaks }`. Save/load/import via browser file picker. The import flow uploads text → `/api/atomize` → agent decomposes → populates stores.
 
-### Reactive Queue System
-All user actions (atom edits, feedback, rule changes, pin words) push to `actionQueue` in stores. The queue drains after 500ms of inactivity, batching changes into one agent call. No manual refresh needed.
+### Durable Sync Model
+The app persists unresolved `DocumentOp` entries to `.atomz-ops.jsonl` and replays them on refresh before resuming background processing. `DocumentOp` is the single durable intent model for both structural document mutations and durable feedback requests. Claude renders use `.atomz-render.atomz` as a working copy and only atomically commit back to `document.atomz` at the end of a successful render.
 
 ### Atom Features
 - **Add atom/group**: `+ Add atom` at bottom, `+ add sub-atom` inside groups

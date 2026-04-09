@@ -3,13 +3,13 @@
 	import { Editor } from '@tiptap/core';
 	import StarterKit from '@tiptap/starter-kit';
 	import Placeholder from '@tiptap/extension-placeholder';
+	import { commitRuntimeViewToCanonicalStores } from '$lib/runtime-canonical';
 	import { AtomPinned, EditorPinned, UserEdit } from './pinned-mark';
 import { SYNC_TIMING } from '$lib/sync-timing';
 	import type { Sentence, Action, Fragment, EditorPin, Section, Annotation } from '$lib/types';
 	import type { SentenceTransition } from '$lib/stores';
 	import {
 		prose,
-		pushAction,
 		pushDocumentOp,
 		pushHistory,
 		selectedAction,
@@ -19,6 +19,7 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 		trackActionUsage,
 		actionUsageCounts,
 		rules,
+		paraBreaks,
 		fragments,
 		editorPins,
 		sections,
@@ -91,14 +92,11 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 		const changes = buildDiffSummary(plaintextBaseline, plaintextValue);
 		const updatedProse = buildUpdatedProseFromPlaintext(plaintextValue);
 		prose.set(updatedProse);
+		syncCanonicalStoresFromLocalState({ prose: updatedProse });
 		pushDocumentOp({
 			type: 'replace_prose',
 			prose: updatedProse,
 			sections: currentSections
-		});
-		pushAction({
-			type: 'feedback',
-			description: `User edited prose directly.\n\nDiff:\n${changes.join('\n')}\n\nThe user's edits are FINAL — do NOT rewrite or revert them. Preserve the user's exact wording. Only update the corresponding atoms to reflect what the user wrote. Do NOT touch any other prose entries.`
 		});
 		plaintextBaseline = plaintextValue;
 		hasUnsavedEdits = false;
@@ -179,6 +177,36 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 	sections.subscribe((v) => {
 		currentSections = v;
 	});
+
+	let currentRules: typeof $rules = $state([]);
+	rules.subscribe((v) => {
+		currentRules = v;
+	});
+
+	let currentParaBreaks: Set<number> = $state(new Set());
+	paraBreaks.subscribe((v) => {
+		currentParaBreaks = v;
+	});
+
+	function syncCanonicalStoresFromLocalState(input?: {
+		fragments?: Fragment[];
+		prose?: Sentence[];
+		editorPins?: EditorPin[];
+		sections?: Section[];
+	}) {
+		const nextFragments = input?.fragments || currentFragments;
+		const nextProse = input?.prose || currentProse;
+		const nextEditorPins = input?.editorPins || currentEditorPins;
+		const nextSections = input?.sections || currentSections;
+		commitRuntimeViewToCanonicalStores({
+			fragments: nextFragments,
+			prose: nextProse,
+			rules: currentRules,
+			paraBreaks: currentParaBreaks,
+			editorPins: nextEditorPins,
+			sections: nextSections
+		});
+	}
 
 	let currentProse: Sentence[] = $state([]);
 	prose.subscribe((v) => {
@@ -454,6 +482,7 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 
 		const filtered = updated.filter(s => s.text.trim() !== '');
 		prose.set(filtered);
+		syncCanonicalStoresFromLocalState({ prose: filtered, sections: extractedSections });
 		pushDocumentOp({
 			type: 'replace_prose',
 			prose: filtered,
@@ -546,10 +575,6 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 
 				syncEditorToProse();
 
-				pushAction({
-					type: 'feedback',
-					description: `User edited prose directly.\n\nDiff:\n${changes.join('\n')}\n\nThe user's edits are FINAL — do NOT rewrite or revert them. Preserve the user's exact wording. Only update the corresponding atoms (subject/predicate) to reflect what the user wrote. Do NOT touch any other prose entries.`
-				});
 				lastContent = newText;
 			}
 			hasUnsavedEdits = false;
@@ -652,11 +677,10 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 		suppressUpdate = false;
 
 		// Add to editorPins store
-		editorPins.update((pins) =>
-			pins.some((pin) => pin.para === paraIndex && normalizePinnedText(pin.text) === normalizedSelectedText)
-				? pins
-				: [...pins, { text: normalizedSelectedText, para: paraIndex }]
-		);
+		const nextEditorPins = currentEditorPins.some((pin) => pin.para === paraIndex && normalizePinnedText(pin.text) === normalizedSelectedText)
+			? currentEditorPins
+			: [...currentEditorPins, { text: normalizedSelectedText, para: paraIndex }];
+		editorPins.set(nextEditorPins);
 		pushDocumentOp({
 			type: 'pin_prose_text',
 			text: normalizedSelectedText,
@@ -690,12 +714,9 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 				}
 				return existingFragments.map(updateFragmentPin);
 			});
+			syncCanonicalStoresFromLocalState({ editorPins: nextEditorPins });
 			const atomList = linkedFragIds.join(', ');
 			if (matchingAtomIds.length > 0) {
-				pushAction({
-					type: 'pin_word',
-					description: `[PIN_ACK] Prose pin "${normalizedSelectedText}" linked to atoms [${atomList}]. Matching linked atom text already contains this phrase, so pins were mirrored to atoms. Acknowledge only. Do not edit atoms or prose.`
-				});
 				pushHistory({
 					type: 'user_action',
 					timestamp: Date.now(),
@@ -704,10 +725,6 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 						: `Pinned "${normalizedSelectedText}" in prose (already mirrored in linked atoms)`
 				});
 			} else {
-				pushAction({
-					type: 'pin_word',
-					description: `[PIN_FIX_SYNC] Prose pin "${normalizedSelectedText}" linked to atoms [${atomList}]. This pinned phrase is not present in linked atom text. Minimally edit linked atoms or linked prose so "${normalizedSelectedText}" appears verbatim in both places while preserving meaning.`
-				});
 				pushHistory({
 					type: 'user_action',
 					timestamp: Date.now(),
@@ -715,6 +732,7 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 				});
 			}
 		} else {
+			syncCanonicalStoresFromLocalState({ editorPins: nextEditorPins });
 			pushHistory({
 				type: 'user_action',
 				timestamp: Date.now(),
@@ -747,7 +765,7 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 			const feedbackDesc = selected!.id === 'a_transition'
 				? `Fix the transition at: "${text.slice(0, 40)}..." — smooth the flow between this sentence and the next one`
 				: `Feedback "${selected!.label}" on: "${text.slice(0, 40)}..."`;
-			pushAction({ type: 'feedback', description: feedbackDesc });
+			pushDocumentOp({ type: 'feedback_request', description: feedbackDesc });
 			pushHistory({ type: 'user_action', timestamp: Date.now(), description: `Annotated "${text.slice(0, 30)}..." with "${selected!.label}"` });
 			sel!.removeAllRanges();
 		} else {
@@ -775,7 +793,7 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 			{ id: 'ann' + Date.now(), text: feedbackPopup!.text, action }
 		]);
 		trackActionUsage(label);
-		pushAction({ type: 'feedback', description: `Feedback "${label}" on: "${feedbackPopup!.text.slice(0, 40)}..."` });
+		pushDocumentOp({ type: 'feedback_request', description: `Feedback "${label}" on: "${feedbackPopup!.text.slice(0, 40)}..."` });
 		pushHistory({ type: 'user_action', timestamp: Date.now(), description: `Feedback: "${label}" on "${feedbackPopup!.text.slice(0, 30)}..."` });
 		if (!existing) {
 			recentActions.update((prev) => [action, ...prev].slice(0, 6));
@@ -792,7 +810,7 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 			{ id: 'ann' + Date.now(), text: feedbackPopup!.text, action }
 		]);
 		trackActionUsage(action.label);
-		pushAction({ type: 'feedback', description: `Feedback "${action.label}" on: "${feedbackPopup!.text.slice(0, 40)}..."` });
+		pushDocumentOp({ type: 'feedback_request', description: `Feedback "${action.label}" on: "${feedbackPopup!.text.slice(0, 40)}..."` });
 		pushHistory({ type: 'user_action', timestamp: Date.now(), description: `Annotated "${feedbackPopup!.text.slice(0, 30)}..." with "${action.label}"` });
 		if (!action.pinned) {
 			recentActions.update((prev) =>

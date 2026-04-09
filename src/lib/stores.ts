@@ -1,5 +1,6 @@
 import { writable } from 'svelte/store';
-import type { Fragment, Rule, Action, Annotation, Sentence, HistoryEntry, EditorPin, Section, QueueItem, DocumentOp, NewDocumentOp } from './types';
+import type { Fragment, Rule, Action, Annotation, Sentence, HistoryEntry, EditorPin, Section, DocumentOp, NewDocumentOp } from './types';
+import type { AtomzBlock, AtomzPin } from './atomz';
 
 // Document state — populated from .atomz file on load
 export const fragments = writable<Fragment[]>([]);
@@ -9,6 +10,8 @@ export const prose = writable<Sentence[]>([]);
 export const annotations = writable<Annotation[]>([]);
 export const editorPins = writable<EditorPin[]>([]);
 export const sections = writable<Section[]>([]);
+export const blocks = writable<AtomzBlock[]>([]);
+export const pins = writable<AtomzPin[]>([]);
 
 // Signal to clear UserEdit marks in the editor after agent processes edits
 export const clearUserEdits = writable<number>(0);
@@ -53,23 +56,7 @@ export interface SentenceTransition {
 }
 export const sentenceTransitions = writable<Map<number, SentenceTransition>>(new Map());
 
-
-export const actionQueue = writable<QueueItem[]>([]);
 export const documentOps = writable<DocumentOp[]>([]);
-
-function createQueueItemId(): string {
-	return `q_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-export function pushAction(item: Omit<QueueItem, 'id' | 'createdAt'> & Partial<Pick<QueueItem, 'id' | 'createdAt'>>) {
-	actionQueue.update((q) => [...q, {
-		id: item.id || createQueueItemId(),
-		createdAt: item.createdAt || Date.now(),
-		type: item.type,
-		description: item.description,
-		...(item.editedFragId ? { editedFragId: item.editedFragId } : {})
-	}]);
-}
 
 function createDocumentOpId(): string {
 	return `op_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -82,12 +69,6 @@ export function pushDocumentOp(item: NewDocumentOp) {
 		...item
 	} as unknown as DocumentOp;
 	documentOps.update((ops) => [...ops, op]);
-}
-
-export function drainQueue(): QueueItem[] {
-	let items: QueueItem[] = [];
-	actionQueue.update((q) => { items = q; return []; });
-	return items;
 }
 
 // Undo stack

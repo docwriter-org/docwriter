@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { X } from 'lucide-svelte';
-	import { rules, pushHistory, pushAction, pushDocumentOp } from '$lib/stores';
+	import { rules, pushHistory, pushDocumentOp } from '$lib/stores';
 
 	let rulesList: typeof $rules = $state([]);
 	rules.subscribe((v) => (rulesList = v));
@@ -20,7 +20,6 @@
 			rules: nextRules
 		});
 		pushHistory({ type: 'user_action', timestamp: Date.now(), description: `Added rule: "${text}"` });
-		pushAction({ type: 'rule_change', description: `Added rule: "${text}"` });
 		newRule = '';
 	}
 
@@ -37,7 +36,6 @@
 		});
 		if (rule) {
 			pushHistory({ type: 'user_action', timestamp: Date.now(), description: `Removed rule: "${rule.text}"` });
-			pushAction({ type: 'rule_change', description: `Removed rule: "${rule.text}"` });
 		}
 	}
 </script>

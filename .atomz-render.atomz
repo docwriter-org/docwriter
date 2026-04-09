@@ -51,7 +51,8 @@
     {
       "id": "f3",
       "subject": "conversation",
-      "predicate": "wrong paradigm for writing",
+      "predicate": "poor fit for writing",
+      "transition": "So, clearly",
       "children": [
         {
           "id": "f3a",
@@ -99,49 +100,41 @@
     "No generic AI openers",
     "No empty framing sentences"
   ],
-  "paraBreaks": [
-    2,
-    3
-  ],
   "prose": [
     {
       "id": 1,
+      "frags": [
+        "f1",
+        "f1a",
+        "f1b",
+        "f2",
+        "f2a",
+        "f2b",
+        "f2c"
+      ],
+      "para": 1,
+      "text": "Large language models have changed how people interact with computers. Users can express their intent in ordinary language and receive coherent responses. Yet the dominant interface for these models remains the chatbot. The chatbot is organized around sequential exchange: users must verbalize their intent precisely in each request, then mentally diff how each new output differs from the last."
+    },
+    {
+      "id": 2,
       "frags": [
         "f3",
         "f3a",
         "f3b"
       ],
-      "para": 1,
-      "text": "Conversation is the wrong paradigm for writing. Writers revise by acting on text directly, not by describing changes verbally."
+      "para": 2,
+      "text": "So, clearly, conversation is a poor fit for writing. Writers revise by acting on text directly, moving sentences, cutting phrases, and reshaping structure. They do not describe changes verbally and wait for a response."
     },
     {
-      "id": 2,
+      "id": 3,
       "frags": [
         "f4",
         "f4a",
         "f4b",
         "f4c"
       ],
-      "para": 2,
-      "text": "Our system replaces conversation with direct manipulation. Writers can select any passage to see alternative phrasings, or drag sections to restructure. The system surfaces feedback as inline annotations, not silent rewrites."
-    },
-    {
-      "id": 3,
-      "frags": [],
       "para": 3,
       "text": "Our system replaces conversational revision with direct manipulation of the document itself. Writers can select any passage to browse alternative phrasings, or drag sections into a new order. The system surfaces feedback as inline annotations anchored to specific spans of text, not silent rewrites."
-    }
-  ],
-  "editorPins": [
-    {
-      "text": "coherent",
-      "para": 1
-    }
-  ],
-  "sections": [
-    {
-      "title": "Here's a title",
-      "beforeAtomIndex": 0
     }
   ]
 }

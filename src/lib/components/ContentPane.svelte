@@ -1,8 +1,9 @@
 <script lang="ts">
 	import { GripVertical, Plus, Trash2, Sparkles, Pin, X as XIcon } from 'lucide-svelte';
+	import { commitRuntimeViewToCanonicalStores } from '$lib/runtime-canonical';
 	import type { Fragment, Section } from '$lib/types';
 	import { ATOM_CONSTRAINTS, TRANSITIONS } from '$lib/types';
-	import { fragments, highlightedFrags, highlightedSents, paraBreaks, prose, pushAction, pushDocumentOp, pushHistory, selectedModel, showHistory, sections } from '$lib/stores';
+	import { editorPins, fragments, highlightedFrags, highlightedSents, paraBreaks, prose, pushDocumentOp, pushHistory, rules, selectedModel, showHistory, sections } from '$lib/stores';
 
 	let fragList: Fragment[] = $state([]);
 	fragments.subscribe((v) => (fragList = v));
@@ -38,6 +39,7 @@
 				nextSections = ss.map((s) => s.beforeAtomIndex === idx ? { ...s, title } : s);
 				return nextSections;
 			});
+			syncCanonicalStoresFromLocalState({ sections: nextSections });
 			pushDocumentOp({
 				type: 'replace_sections',
 				sections: cloneSections(nextSections)
@@ -61,6 +63,12 @@
 
 	let currentProse: typeof $prose = $state([]);
 	prose.subscribe((v) => (currentProse = v));
+
+	let currentEditorPins = $state<import('$lib/types').EditorPin[]>([]);
+	editorPins.subscribe((v) => (currentEditorPins = v));
+
+	let currentRules = $state<typeof $rules>([]);
+	rules.subscribe((v) => (currentRules = v));
 
 	function getFragIds(f: Fragment): string[] {
 		return [f.id, ...(f.children || []).map((c) => c.id)];
@@ -105,12 +113,33 @@
 		return sectionListToClone.map((section) => ({ ...section }));
 	}
 
+	function syncCanonicalStoresFromLocalState(input?: {
+		fragments?: Fragment[];
+		prose?: typeof currentProse;
+		sections?: Section[];
+		editorPins?: typeof currentEditorPins;
+	}) {
+		const nextFragments = input?.fragments || fragList;
+		const nextProse = input?.prose || currentProse;
+		const nextSections = input?.sections || sectionList;
+		const nextEditorPins = input?.editorPins || currentEditorPins;
+		commitRuntimeViewToCanonicalStores({
+			fragments: nextFragments,
+			prose: nextProse,
+			rules: currentRules,
+			paraBreaks: breaks,
+			editorPins: nextEditorPins,
+			sections: nextSections
+		});
+	}
+
 	function setTransition(fragId: string, value: string) {
 		let nextFragments: Fragment[] = [];
 		fragments.update((fs) => {
 			nextFragments = fs.map((f) => f.id === fragId ? { ...f, transition: value || undefined } : f);
 			return nextFragments;
 		});
+		syncCanonicalStoresFromLocalState({ fragments: nextFragments });
 		pushDocumentOp({
 			type: 'replace_fragments',
 			fragments: cloneFragments(nextFragments)
@@ -119,11 +148,6 @@
 			type: 'user_action',
 			timestamp: Date.now(),
 			description: `Set transition on atom ${fragId} to "${value || 'none'}"`
-		});
-		pushAction({
-			type: 'atom_edit',
-			description: `Transition for atom ${fragId} changed to "${value || 'none'}"`,
-			editedFragId: fragId
 		});
 	}
 
@@ -222,7 +246,6 @@
 				timestamp: Date.now(),
 				description: `Edited atom ${changedId}: ${changes.join(', ')}`
 			});
-			pushAction({ type: 'atom_edit', description: `Atom ${changedId} edited`, editedFragId: changedId });
 		}
 	}
 
@@ -248,13 +271,13 @@
 			nextFragments = next;
 			return next;
 		});
+		syncCanonicalStoresFromLocalState({ fragments: nextFragments });
 		dragIdx = null;
 		overIdx = null;
 		pushDocumentOp({
 			type: 'replace_fragments',
 			fragments: cloneFragments(nextFragments)
 		});
-		pushAction({ type: 'atom_reorder', description: `Moved atom ${movedId} to position ${i}` });
 	}
 
 	// Child drag reorder
@@ -286,11 +309,11 @@
 			});
 			return nextFragments;
 		});
+		syncCanonicalStoresFromLocalState({ fragments: nextFragments });
 		pushDocumentOp({
 			type: 'replace_fragments',
 			fragments: cloneFragments(nextFragments)
 		});
-		pushAction({ type: 'atom_reorder', description: `Reordered atom within group ${parentId}` });
 		childDragIdx = null; childOverIdx = null; childDragParent = null;
 	}
 
@@ -327,6 +350,7 @@
 			return { ...s, para: isFinite(newPara) ? newPara : s.para };
 		});
 		prose.set(updated);
+		syncCanonicalStoresFromLocalState({ prose: updated });
 		pushDocumentOp({
 			type: 'replace_paragraph_structure',
 			paraBreaks: Array.from(nextBreaks).sort((a, b) => a - b),
@@ -379,13 +403,13 @@
 				return next;
 			});
 		}
+		syncCanonicalStoresFromLocalState({ fragments: nextFragments });
 
 		pushDocumentOp({
 			type: 'replace_fragments',
 			fragments: cloneFragments(nextFragments)
 		});
 		pushHistory({ type: 'user_action', timestamp: Date.now(), description: `Added atom ${id}: ${newSubject.trim()} | ${newPredicate.trim()}` });
-		pushAction({ type: 'atom_add', description: `Added atom ${id}`, editedFragId: id });
 		addingAtom = false;
 		addingChildOf = null;
 	}
@@ -408,12 +432,12 @@
 			}));
 			return nextFragments;
 		});
+		syncCanonicalStoresFromLocalState({ fragments: nextFragments });
 		pushDocumentOp({
 			type: 'replace_fragments',
 			fragments: cloneFragments(nextFragments)
 		});
 		pushHistory({ type: 'user_action', timestamp: Date.now(), description: `Deleted atom ${id}` });
-		pushAction({ type: 'atom_remove', description: `Removed atom ${id}` });
 	}
 
 	// Tabs
@@ -489,7 +513,6 @@
 			predicate: alt.predicate
 		});
 		pushHistory({ type: 'user_action', timestamp: Date.now(), description: `Adopted alternative for ${fragId}: ${alt.subject} | ${alt.predicate}` });
-		pushAction({ type: 'atom_edit', description: `Atom ${fragId} replaced with alternative`, editedFragId: fragId });
 		alternativesFor = null;
 	}
 
@@ -530,6 +553,7 @@
 				};
 			})
 		);
+		syncCanonicalStoresFromLocalState();
 		pushHistory({
 			type: 'user_action',
 			timestamp: Date.now(),
@@ -541,13 +565,6 @@
 			word: normalizedWord,
 			pinned: isPinnedAfterToggle
 		});
-		if (!isPinnedAfterToggle) return;
-		const linkedProse = currentProse.filter((sentence) => sentence.frags.includes(fragId));
-		const isWordAlreadyInLinkedProse = linkedProse.some((sentence) => hasPinnedText(sentence.text, normalizedWord));
-		const description = isWordAlreadyInLinkedProse
-			? `[PIN_ACK] Atom pin "${normalizedWord}" on atom "${fragId}". The pinned word already appears in linked prose. Acknowledge only. Do not edit atoms or prose.`
-			: `[PIN_FIX_PROSE] Atom pin "${normalizedWord}" on atom "${fragId}". The pinned word is missing from linked prose for this atom. Minimally edit only linked prose entries so "${normalizedWord}" appears verbatim.`;
-		pushAction({ type: 'pin_word', description });
 	}
 </script>
 

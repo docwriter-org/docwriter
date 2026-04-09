@@ -1,7 +1,8 @@
 import type { RequestHandler } from './$types';
 import { query } from '@anthropic-ai/claude-agent-sdk';
-import { readFileSync } from 'fs';
+import { readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
+import { deserialize, normalizeAtomzFile } from '$lib/atomz';
 
 const DOC_FILE = join(process.cwd(), 'document.atomz');
 
@@ -20,10 +21,24 @@ For each sentence or key claim, create an atom with:
 - label: MINIMAL predicate — compressed claim. e.g., "changed HCI" not "have fundamentally changed human-computer interaction"
 - children: sub-claims that elaborate
 
-Write a JSON file to ${DOC_FILE} with this format:
-{"atoms":[{"id":"f1","subject":"...","predicate":"...","children":[]}],"rules":[],"paraBreaks":[1,3],"prose":[{"id":0,"frags":["f1"],"para":0,"text":"Original sentence."}]}
+Write a JSON file to ${DOC_FILE} in this format:
+{
+  "version": 2,
+  "atoms": [{"id":"f1","subject":"...","predicate":"...","children":[]}],
+  "rules": [{"id":"r1","text":"..."}],
+  "blocks": [
+    {"id":"b1","type":"markdown","markdown":"Original sentence.","atomIds":["f1"]}
+  ],
+  "pins": []
+}
 
-paraBreaks is an array of atom indices where paragraph breaks occur. Map every original sentence to its atoms via the frags array.`;
+Use heading blocks for markdown headings:
+{"id":"b0","type":"heading","level":1,"text":"Title"}
+
+Use markdown blocks for paragraphs/lists/images/markdown content:
+{"id":"b1","type":"markdown","markdown":"Paragraph text","atomIds":["f1"]}
+
+Map every prose block to its atoms via atomIds.`;
 
 		const stream = new ReadableStream({
 			async start(controller) {
@@ -71,8 +86,15 @@ paraBreaks is an array of atom indices where paragraph breaks occur. Map every o
 				// Read the written file
 				try {
 					const content = readFileSync(DOC_FILE, 'utf-8');
-					const parsed = JSON.parse(content);
-					send('result', parsed);
+					const normalized = normalizeAtomzFile(content);
+					writeFileSync(DOC_FILE, JSON.stringify(normalized, null, 2));
+					const parsed = deserialize(JSON.stringify(normalized));
+					send('result', {
+						document: normalized,
+						fragments: parsed.fragments,
+						sentences: parsed.prose,
+						paraBreaks: parsed.paraBreaks
+					});
 				} catch (err) {
 					send('error', { error: 'Failed to read output: ' + String(err) });
 				}

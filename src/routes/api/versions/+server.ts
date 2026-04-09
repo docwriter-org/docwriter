@@ -2,6 +2,7 @@ import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
+import { mergeRenderDocumentIntoAtomzFile, normalizeAtomzFile, projectAtomzFileToRenderDocument } from '$lib/atomz';
 
 const DOC_FILE = join(process.cwd(), 'document.atomz');
 const HISTORY_FILE = join(process.cwd(), '.atomz-history.json');
@@ -31,17 +32,19 @@ export const POST: RequestHandler = async ({ request }) => {
 
 		const version = history[index];
 
-		// Read current document and replace prose
-		const doc = JSON.parse(readFileSync(DOC_FILE, 'utf-8'));
-		doc.prose = version.prose.map((p: any, i: number) => ({
+		// Read current canonical document, project to render doc, replace prose history snapshot, then merge back.
+		const canonical = normalizeAtomzFile(readFileSync(DOC_FILE, 'utf-8'));
+		const renderDocument = projectAtomzFileToRenderDocument(canonical);
+		renderDocument.prose = version.prose.map((p: any, i: number) => ({
 			id: i,
 			text: p.text,
 			frags: p.frags,
 			para: p.para
 		}));
-		writeFileSync(DOC_FILE, JSON.stringify(doc, null, 2));
+		const merged = mergeRenderDocumentIntoAtomzFile(canonical, renderDocument);
+		writeFileSync(DOC_FILE, JSON.stringify(merged, null, 2));
 
-		return json({ document: doc });
+		return json({ document: merged });
 	} catch (error) {
 		return json({ error: String(error) }, { status: 500 });
 	}

@@ -106,6 +106,8 @@ export function applyDocumentOp(state: DocumentState, op: DocumentOp): DocumentS
 				paraBreaks: new Set(op.paraBreaks),
 				prose: op.prose.map((sentence) => ({ ...sentence }))
 			};
+		case 'feedback_request':
+			return state;
 		default:
 			return state;
 	}

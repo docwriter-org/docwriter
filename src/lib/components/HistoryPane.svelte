@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { FileEdit, User, Bot, Play, CheckCircle, XCircle, Eye, X, Atom } from 'lucide-svelte';
 	import type { HistoryEntry, Annotation } from '$lib/types';
-	import { agentHistory, annotations, actionQueue, isRendering } from '$lib/stores';
+	import { agentHistory, annotations, documentOps, isRendering } from '$lib/stores';
 
 	let entries: HistoryEntry[] = $state([]);
 	agentHistory.subscribe((v) => (entries = v));
@@ -9,8 +9,8 @@
 	let annos: Annotation[] = $state([]);
 	annotations.subscribe((v) => (annos = v));
 
-	let queueLength = $state(0);
-	actionQueue.subscribe((q) => (queueLength = q.length));
+	let pendingOpCount = $state(0);
+	documentOps.subscribe((ops) => (pendingOpCount = ops.length));
 
 	let rendering = $state(false);
 	let renderStartTime = $state(0);
@@ -144,13 +144,13 @@
 			{/if}
 		{/each}
 
-		{#if queueLength > 0}
+		{#if pendingOpCount > 0}
 			<div class="queue-status">
-				<span>{queueLength} change{queueLength > 1 ? 's' : ''} queued...</span>
+				<span>{pendingOpCount} change{pendingOpCount > 1 ? 's' : ''} pending...</span>
 			</div>
 		{/if}
 
-		{#if rendering || queueLength > 0}
+		{#if rendering || pendingOpCount > 0}
 			<div class="bouncing-atom">
 				<Atom size={14} />
 			</div>

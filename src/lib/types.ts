@@ -58,24 +58,6 @@ export interface EditorPin {
 	para: number;
 }
 
-export type QueueItemType =
-	| 'atom_edit'
-	| 'atom_add'
-	| 'atom_remove'
-	| 'atom_reorder'
-	| 'feedback'
-	| 'pin_word'
-	| 'rule_change'
-	| 'para_break';
-
-export interface QueueItem {
-	id: string;
-	createdAt: number;
-	type: QueueItemType;
-	description: string;
-	editedFragId?: string;
-}
-
 interface DocumentOpBase {
 	id: string;
 	createdAt: number;
@@ -129,6 +111,11 @@ export interface ReplaceParagraphStructureOp extends DocumentOpBase {
 	prose: Sentence[];
 }
 
+export interface FeedbackRequestOp extends DocumentOpBase {
+	type: 'feedback_request';
+	description: string;
+}
+
 export type DocumentOp =
 	| EditAtomOp
 	| PinAtomWordOp
@@ -137,7 +124,8 @@ export type DocumentOp =
 	| ReplaceFragmentsOp
 	| ReplaceRulesOp
 	| ReplaceSectionsOp
-	| ReplaceParagraphStructureOp;
+	| ReplaceParagraphStructureOp
+	| FeedbackRequestOp;
 export type NewDocumentOp =
 	| (Omit<EditAtomOp, 'id' | 'createdAt'> & Partial<Pick<DocumentOpBase, 'id' | 'createdAt'>>)
 	| (Omit<PinAtomWordOp, 'id' | 'createdAt'> & Partial<Pick<DocumentOpBase, 'id' | 'createdAt'>>)
@@ -146,7 +134,8 @@ export type NewDocumentOp =
 	| (Omit<ReplaceFragmentsOp, 'id' | 'createdAt'> & Partial<Pick<DocumentOpBase, 'id' | 'createdAt'>>)
 	| (Omit<ReplaceRulesOp, 'id' | 'createdAt'> & Partial<Pick<DocumentOpBase, 'id' | 'createdAt'>>)
 	| (Omit<ReplaceSectionsOp, 'id' | 'createdAt'> & Partial<Pick<DocumentOpBase, 'id' | 'createdAt'>>)
-	| (Omit<ReplaceParagraphStructureOp, 'id' | 'createdAt'> & Partial<Pick<DocumentOpBase, 'id' | 'createdAt'>>);
+	| (Omit<ReplaceParagraphStructureOp, 'id' | 'createdAt'> & Partial<Pick<DocumentOpBase, 'id' | 'createdAt'>>)
+	| (Omit<FeedbackRequestOp, 'id' | 'createdAt'> & Partial<Pick<DocumentOpBase, 'id' | 'createdAt'>>);
 
 export interface Section {
 	title: string;
