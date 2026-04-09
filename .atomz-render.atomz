@@ -1,0 +1,147 @@
+{
+  "atoms": [
+    {
+      "id": "f1",
+      "subject": "LLMs",
+      "predicate": "changed human-computer interaction",
+      "children": [
+        {
+          "id": "f1a",
+          "subject": "users",
+          "predicate": "express intent naturally",
+          "children": []
+        },
+        {
+          "id": "f1b",
+          "subject": "users",
+          "predicate": "receive coherent responses",
+          "pinnedWords": [
+            "coherent"
+          ],
+          "children": []
+        }
+      ]
+    },
+    {
+      "id": "f2",
+      "subject": "interface",
+      "predicate": "is still the chatbot",
+      "transition": "Yet",
+      "children": [
+        {
+          "id": "f2a",
+          "subject": "chatbot",
+          "predicate": "sequential exchange",
+          "children": []
+        },
+        {
+          "id": "f2b",
+          "subject": "users",
+          "predicate": "verbalize intent precisely",
+          "children": []
+        },
+        {
+          "id": "f2c",
+          "subject": "users",
+          "predicate": "mentally diff outputs",
+          "children": []
+        }
+      ]
+    },
+    {
+      "id": "f3",
+      "subject": "conversation",
+      "predicate": "wrong paradigm for writing",
+      "children": [
+        {
+          "id": "f3a",
+          "subject": "writers",
+          "predicate": "act on text directly",
+          "children": []
+        },
+        {
+          "id": "f3b",
+          "subject": "writers",
+          "predicate": "not describe changes verbally",
+          "children": []
+        }
+      ]
+    },
+    {
+      "id": "f4",
+      "subject": "our system",
+      "predicate": "replaces conversation with direct manipulation",
+      "children": [
+        {
+          "id": "f4a",
+          "subject": "writers",
+          "predicate": "select text, see alternatives",
+          "children": []
+        },
+        {
+          "id": "f4b",
+          "subject": "writers",
+          "predicate": "drag to restructure",
+          "children": []
+        },
+        {
+          "id": "f4c",
+          "subject": "system",
+          "predicate": "inline annotations, not silent rewrites",
+          "children": []
+        }
+      ]
+    }
+  ],
+  "rules": [
+    "No em dashes",
+    "No word \"striking\"",
+    "No generic AI openers",
+    "No empty framing sentences"
+  ],
+  "paraBreaks": [
+    2,
+    3
+  ],
+  "prose": [
+    {
+      "id": 1,
+      "frags": [
+        "f3",
+        "f3a",
+        "f3b"
+      ],
+      "para": 1,
+      "text": "Conversation is the wrong paradigm for writing. Writers revise by acting on text directly, not by describing changes verbally."
+    },
+    {
+      "id": 2,
+      "frags": [
+        "f4",
+        "f4a",
+        "f4b",
+        "f4c"
+      ],
+      "para": 2,
+      "text": "Our system replaces conversation with direct manipulation. Writers can select any passage to see alternative phrasings, or drag sections to restructure. The system surfaces feedback as inline annotations, not silent rewrites."
+    },
+    {
+      "id": 3,
+      "frags": [],
+      "para": 3,
+      "text": "Our system replaces conversational revision with direct manipulation of the document itself. Writers can select any passage to browse alternative phrasings, or drag sections into a new order. The system surfaces feedback as inline annotations anchored to specific spans of text, not silent rewrites."
+    }
+  ],
+  "editorPins": [
+    {
+      "text": "coherent",
+      "para": 1
+    }
+  ],
+  "sections": [
+    {
+      "title": "Here's a title",
+      "beforeAtomIndex": 0
+    }
+  ]
+}
