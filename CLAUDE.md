@@ -16,6 +16,8 @@ No test framework is configured yet. Use `npm run check` for validation.
 
 ## Architecture
 
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system architecture, data flow, consistency model, and future directions. Below is a summary.
+
 **atomz** is a writing editor that separates content (atoms) from presentation (prose). Users define atomic claims in a left pane; an AI agent renders them into essay prose in the center pane.
 
 ### Core Concept: Atoms → Prose
@@ -32,7 +34,7 @@ An **atom** (Fragment) is an atomic claim with a `subject` (what the sentence is
 
 Both server endpoints use `@anthropic-ai/claude-agent-sdk`'s `query()` with built-in tools:
 
-- **`/api/render`** — Uses `Read` + `Edit` tools on `.atomz-render.atomz`, a temporary working copy derived from the current document snapshot. The server strips heading rows before Claude edits, then merges headings back in and atomically commits the final merged result to `document.atomz`. Session metadata lives in `.atomz-state.json`.
+- **`/api/render`** — Uses `Read` + `Edit` tools on `.atomz-render.json`, a temporary working copy derived from the current document snapshot. The server strips heading rows before Claude edits, then merges headings back in and atomically commits the final merged result to `document.atomz`. Session metadata lives in `.atomz-state.json`.
 
 - **`/api/atomize`** — Uses `Write` to create a fresh `document.atomz`-shaped result from raw text, then the client hydrates stores from the returned atoms/prose.
 
@@ -61,7 +63,7 @@ User actions now emit semantic `DocumentOp` entries rather than pushing directly
 `src/lib/atomz.ts` — JSON format bundling `{ version, fragments, prose, rules, paraBreaks }`. Save/load/import via browser file picker. The import flow uploads text → `/api/atomize` → agent decomposes → populates stores.
 
 ### Durable Sync Model
-The app persists unresolved `DocumentOp` entries to `.atomz-ops.jsonl` and replays them on refresh before resuming background processing. `DocumentOp` is the single durable intent model for both structural document mutations and durable feedback requests. Claude renders use `.atomz-render.atomz` as a working copy and only atomically commit back to `document.atomz` at the end of a successful render.
+The app persists unresolved `DocumentOp` entries to `.atomz-ops.jsonl` and replays them on refresh before resuming background processing. `DocumentOp` is the single durable intent model for both structural document mutations and durable feedback requests. Claude renders use `.atomz-render.json` as a working copy and only atomically commit back to `document.atomz` at the end of a successful render.
 
 ### Atom Features
 - **Add atom/group**: `+ Add atom` at bottom, `+ add sub-atom` inside groups

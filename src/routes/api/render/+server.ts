@@ -117,8 +117,16 @@ function buildValidationHooks(documentJson: any): { PostToolUse: Array<{ matcher
 	};
 }
 
-function buildPrompt(editedFragId?: string, changes?: string): string {
+function buildPrompt(editedFragId?: string, changes?: string, warmup?: boolean): string {
 	const targetFile = RENDER_DOC_FILE;
+
+	if (warmup) {
+		return `You are a prose editing agent for atomz, a writing tool. A new editing session is starting.
+
+Read ${targetFile} to understand the current document: its atoms (claims), prose (rendered text), rules, and structure. Also check if there are style reference files in .claude/skills/atomz-style/examples/ — if so, read them to understand the user's writing style.
+
+After reading, briefly acknowledge what the document is about and that you're ready to help edit. Keep it to 1-2 sentences. Do not make any edits yet.`;
+	}
 	if (changes?.includes('[PIN_ACK]')) {
 		return `Pin synchronization request:
 
@@ -154,18 +162,21 @@ Read ${targetFile} and resolve the mismatch with minimal changes.
 
 	// If we have a specific changes description from the queue, use it as a short delta
 	if (changes && getSessionId()) {
-		return `The user edited the prose directly. Here is what changed:
+		return `The user made changes. Here is what happened:
 
 ${changes}
 
 Read ${targetFile} and respond appropriately:
 
-1. **If the edit is prose** (the user rewrote a sentence, added text, etc.): The user's wording is FINAL. Preserve it exactly in the prose. Update the corresponding atom's subject/predicate to reflect the new meaning. Do NOT rewrite the user's text.
+1. **If the user edited prose** (rewrote a sentence, added text, etc.): The user's wording is FINAL. Preserve it exactly. Update the corresponding atom's subject/predicate in the "atoms" array to reflect the new meaning.
 
-2. **If the edit is an instruction** (e.g., "make this more concise", "add a paragraph about X", "rewrite this"): Follow the instruction. Apply the requested change to the prose, then remove the instruction text. Update atoms if meaning changed.
+2. **If the user wrote an instruction** (e.g., "make this more concise", "add a paragraph about X"): Follow the instruction. Apply the change to prose, remove the instruction text, and update atoms to match.
 
-In both cases:
-- Do NOT touch prose entries the user didn't edit.
+3. **If an atom was edited**: Update the linked prose to reflect the atom's new meaning. Keep changes minimal.
+
+In all cases:
+- Keep atoms and prose in sync — if one changes, update the other.
+- Do NOT touch entries the user didn't edit.
 - Do NOT write a summary. Just make the edits silently.`;
 	}
 
@@ -175,29 +186,32 @@ In both cases:
 
 	return `You are a prose editing agent for atomz, a writing tool.
 
-The file ${targetFile} is JSON with "atoms", "rules", and "prose". Each atom has a "subject" (the topic — preserve it as the grammatical subject or main topic of the sentence) and a "predicate" (the core claim to convey). Each prose entry maps to atoms via "frags".
+The file ${targetFile} is JSON with "atoms", "rules", and "prose".
 
-Prose "text" values can contain markdown (e.g., "# Heading", "**bold**", "- list item"). Entries with frags: [] and markdown headings are structural — preserve them exactly. Only edit text in entries linked to atoms.
+**Atoms** are the meaning layer. Each has a "subject" (topic) and "predicate" (the claim). Each prose entry maps to atoms via "frags" (atom IDs). You can and should edit atoms when prose changes meaning — keep atoms and prose in sync.
+
+**Prose** entries have "text" values. Entries with markdown headings (text starting with #) are section titles — you can edit or add them if needed. Each non-heading entry renders one atom's claim into a sentence.
 
 ${task}
 
 ## How to Write
 - **Preserve the subject**: The atom's subject must remain the topic/grammatical subject of its sentence. Don't shift focus to something else.
-- **Be concise**: Write clear, direct sentences. Each sentence should convey its atom's claim naturally — add just enough context for flow and transitions. Do NOT pad sentences with extra clauses, examples, or filler. One atom = roughly one sentence.
-- **Minimal changes**: When editing existing prose, change as little as possible. Preserve the user's existing wording and sentence structure. Only modify what's necessary to reflect the atom change.
-- **Match the style**: If style reference files exist in .claude/skills/atomz-style/examples/, read them and match the user's writing style (tone, sentence length, vocabulary).
+- **Be concise**: Write clear, direct sentences. Each sentence should convey its atom's claim naturally — add just enough context for flow and transitions. Do NOT pad with extra clauses, examples, or filler. One atom = roughly one sentence.
+- **Minimal changes**: When editing existing prose, change as little as possible. Only modify what's necessary.
+- **Keep atoms and prose in sync**: If you edit prose, update the corresponding atom's subject/predicate to match. If you edit an atom, update linked prose to match.
+- **Match the style**: If style reference files exist in .claude/skills/atomz-style/examples/, read them and match the user's writing style.
 - **Pinned words**: If an atom has "pinnedWords", those exact words MUST appear verbatim in the rendered sentence.
-- **Transitions**: If an atom has a "transition" field (e.g., "Yet", "However"), start that atom's sentence with that transition word. If you use a transition word in a sentence, set the "transition" field on that atom to match.
+- **Transitions**: If an atom has a "transition" field (e.g., "Yet", "However"), start that atom's sentence with that transition word.
 - **Obey all rules** listed in the document.
 - Use Edit to replace specific values in the JSON.
 - Do NOT write a summary of changes after editing. Just make the edits silently.
-- Do NOT make sentences longer than they need to be. Do NOT add qualifiers, hedges, or elaboration beyond what the atom states.`;
+- Do NOT make sentences longer than they need to be.`;
 }
 
 export const POST: RequestHandler = async ({ request }) => {
 	try {
 		const body = await request.json();
-		const { documentJson, editedFragId, model, changes } = body;
+		const { documentJson, editedFragId, model, changes, warmup } = body;
 		const canonicalFile = normalizeAtomzFile(documentJson);
 		const renderDocument = projectAtomzFileToRenderDocument(canonicalFile);
 
@@ -207,32 +221,17 @@ export const POST: RequestHandler = async ({ request }) => {
 			saveHistoryEntry(trigger, renderDocument.prose);
 		}
 
-		// Separate headings from prose — agent must not touch headings
-		const allProse: any[] = renderDocument.prose || [];
-		const headingEntries: { index: number; entry: any }[] = [];
-		const agentProse: any[] = [];
-		for (let i = 0; i < allProse.length; i++) {
-			if (typeof allProse[i].text === 'string' && allProse[i].text.match(/^#{1,3}\s/)) {
-				headingEntries.push({ index: i, entry: allProse[i] });
-			} else {
-				agentProse.push(allProse[i]);
-			}
-		}
-
-		// Write doc with headings stripped — agent only sees prose entries
+		// Write the full render document — agent sees everything including headings and atoms
 		const currentSessionId = getSessionId();
-		const docForAgent = {
-			...renderDocument,
-			prose: agentProse
-		};
-		writeJsonAtomic(RENDER_DOC_FILE, docForAgent);
+		writeJsonAtomic(RENDER_DOC_FILE, renderDocument);
 
-		const prompt = buildPrompt(editedFragId, changes);
+		const prompt = buildPrompt(editedFragId, changes, warmup);
 		const hooks = buildValidationHooks(renderDocument);
 		const abortController = new AbortController();
 
 		const isPinSync = typeof changes === 'string' && changes.includes('[PIN_');
 		const isUserEdit = !!(changes && currentSessionId) || isPinSync;
+		const isWarmup = !!warmup;
 
 		// Allow client to abort via request signal
 		request.signal.addEventListener('abort', () => abortController.abort());
@@ -262,9 +261,9 @@ export const POST: RequestHandler = async ({ request }) => {
 
 				try {
 					const queryOptions: any = {
-						allowedTools: isUserEdit ? ['Read', 'Edit'] : ['Read', 'Edit', 'Skill', 'Agent'],
+						allowedTools: isWarmup ? ['Read', 'Glob'] : isUserEdit ? ['Read', 'Edit'] : ['Read', 'Edit', 'Skill', 'Agent'],
 						settingSources: ['project'],
-						maxTurns: isUserEdit ? 3 : 8,
+						maxTurns: isWarmup ? 4 : isUserEdit ? 3 : 8,
 						permissionMode: 'acceptEdits',
 						includePartialMessages: true,
 						abortController,
@@ -374,21 +373,14 @@ ${pinnedWordsInfo || 'None'}
 					send('error', { error: String(err) });
 				}
 
-				// Read the edited file back and re-insert headings
+				// Read the edited file back, merge, persist, then send to client.
+				// Server writes document.atomz BEFORE sending the result.
+				// If client aborts after this point, document is already saved.
+				// The WAL handles replaying any user ops on top — they're idempotent.
 				try {
 					const content = readFileSync(RENDER_DOC_FILE, 'utf-8');
 					const parsed = JSON.parse(content);
-					// Re-insert heading entries at their original positions
-					const mergedProse = [...(parsed.prose || [])];
-					for (const h of headingEntries) {
-						const insertAt = Math.min(h.index, mergedProse.length);
-						mergedProse.splice(insertAt, 0, h.entry);
-					}
-					// Re-number IDs
-					mergedProse.forEach((p: any, i: number) => { p.id = i; });
-					parsed.prose = mergedProse;
 					const mergedCanonical = mergeRenderDocumentIntoAtomzFile(canonicalFile, parsed);
-					// Commit the full merged result atomically to the canonical snapshot.
 					writeJsonAtomic(DOC_FILE, mergedCanonical);
 					send('result', { document: mergedCanonical });
 				} catch (err) {

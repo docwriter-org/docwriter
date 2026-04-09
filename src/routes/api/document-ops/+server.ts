@@ -1,7 +1,7 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import type { DocumentOp } from '$lib/types';
-import { appendDocumentOps, getUnresolvedDocumentOps, resolveDocumentOps } from '$lib/server/document-op-log';
+import { appendDocumentOps, getUnresolvedDocumentOps, resolveDocumentOps, compactLog } from '$lib/server/document-op-log';
 
 export const GET: RequestHandler = async () => {
 	try {
@@ -27,6 +27,8 @@ export const PATCH: RequestHandler = async ({ request }) => {
 		const body = await request.json();
 		const ids = ((body.ids || []) as string[]).filter((id) => typeof id === 'string' && id.length > 0);
 		resolveDocumentOps(ids);
+		// Compact WAL after resolving to prevent unbounded growth
+		compactLog();
 		return json({ ok: true, count: ids.length });
 	} catch (error) {
 		return json({ error: String(error) }, { status: 500 });

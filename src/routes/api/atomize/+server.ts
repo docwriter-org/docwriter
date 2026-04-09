@@ -1,6 +1,7 @@
 import type { RequestHandler } from './$types';
 import { query } from '@anthropic-ai/claude-agent-sdk';
-import { readFileSync, writeFileSync } from 'fs';
+import { readFileSync } from 'fs';
+import { writeJsonAtomic } from '$lib/server/file-utils';
 import { join } from 'path';
 import { deserialize, normalizeAtomzFile } from '$lib/atomz';
 
@@ -87,11 +88,11 @@ Map every prose block to its atoms via atomIds.`;
 				try {
 					const content = readFileSync(DOC_FILE, 'utf-8');
 					const normalized = normalizeAtomzFile(content);
-					writeFileSync(DOC_FILE, JSON.stringify(normalized, null, 2));
+					writeJsonAtomic(DOC_FILE, normalized);
 					const parsed = deserialize(JSON.stringify(normalized));
 					send('result', {
 						document: normalized,
-						fragments: parsed.fragments,
+						fragments: parsed.atoms,
 						sentences: parsed.prose,
 						paraBreaks: parsed.paraBreaks
 					});

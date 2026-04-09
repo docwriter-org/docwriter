@@ -456,5 +456,470 @@
         "para": 3
       }
     ]
+  },
+  {
+    "timestamp": 1775719688244,
+    "trigger": "User edited prose directly. Preserve the current prose exactly and update atoms to match.",
+    "prose": [
+      {
+        "text": "# Here's a title",
+        "frags": [],
+        "para": 0
+      },
+      {
+        "text": "Large language models have changed how people interact with computers. Users can express their intent in ordinary language and receive coherent responses. Yet the dominant interface for these models remains the chatbot. The chatbot is organized around sequential exchange: users must verbalize their intent precisely in each request, then mentally diff how each new output differs from the last.",
+        "frags": [
+          "f1",
+          "f1a",
+          "f1b",
+          "f2",
+          "f2a",
+          "f2b",
+          "f2c"
+        ],
+        "para": 1
+      },
+      {
+        "text": "So, clearly, conversation is a poor fit for writing. Writers revise by acting on text directly, moving sentences, cutting phrases, and reshaping structure. They do not describe changes verbally and wait for a response.",
+        "frags": [
+          "f3",
+          "f3a",
+          "f3b"
+        ],
+        "para": 2
+      },
+      {
+        "text": "Our system replaces conversational revision with direct manipulation of the document itself. Writers can select any passage to browse alternative phrasings, or drag sections into a new order. The system surfaces feedback as inline annotations anchored to specific spans of text, not silent rewrites.",
+        "frags": [
+          "f4",
+          "f4a",
+          "f4b",
+          "f4c"
+        ],
+        "para": 3
+      }
+    ]
+  },
+  {
+    "timestamp": 1775720611626,
+    "trigger": "User edited prose directly. Examine the changes: if the user wrote or changed prose text, preserve it exactly and update atoms to match. If the user wrote a directive or instruction (e.g. \"make this more concise\", \"add an example here\"), follow the directive, update prose accordingly, and update atoms to match the new prose.",
+    "prose": [
+      {
+        "text": "# Here's a title",
+        "frags": [],
+        "para": 0
+      },
+      {
+        "text": "Large language models have changed how people interact with computers. Users can express their intent in ordinary language and receive coherent responses. Yet the dominant interface for these models remains the chatbot. The chatbot is organized around sequential exchange: users must verbalize their intent precisely in each request, then mentally diff how each new output differs from the last.",
+        "frags": [
+          "f1",
+          "f1a",
+          "f1b",
+          "f2",
+          "f2a",
+          "f2b",
+          "f2c"
+        ],
+        "para": 1
+      },
+      {
+        "text": "So, clearly, conversation is a poor fit for writing... Writers revise by acting on text directly, moving sentences, cutting phrases, and reshaping structure. They do not describe changes verbally and wait for a response. and here's some new text",
+        "frags": [
+          "f3",
+          "f3a",
+          "f3b"
+        ],
+        "para": 2
+      },
+      {
+        "text": "Our system replaces conversational revision with direct manipulation of the document itself. Writers can select any passage to browse alternative phrasings, or drag sections into a new order. The system surfaces feedback as inline annotations anchored to specific spans of text, not silent rewrites.",
+        "frags": [
+          "f4",
+          "f4a",
+          "f4b",
+          "f4c"
+        ],
+        "para": 3
+      }
+    ]
+  },
+  {
+    "timestamp": 1775753338311,
+    "trigger": "Full re-render",
+    "prose": [
+      {
+        "text": "# Here's a title",
+        "frags": [],
+        "para": 0
+      },
+      {
+        "text": "Large language models have changed how people interact with computers. Users can express their intent in ordinary language and receive coherent responses. Yet the dominant interface for these models remains the chatbot. The chatbot is organized around sequential exchange: users must verbalize their intent precisely in each request, then mentally diff how each new output differs from the last.",
+        "frags": [
+          "f1",
+          "f1a",
+          "f1b",
+          "f2",
+          "f2a",
+          "f2b",
+          "f2c"
+        ],
+        "para": 1
+      },
+      {
+        "text": "So, clearly, conversation is a poor fit for writing... Writers revise by acting on text directly, moving sentences, cutting phrases, and reshaping structure. They do not describe changes verbally and wait for a response. and here's some new text",
+        "frags": [
+          "f3",
+          "f3a",
+          "f3b"
+        ],
+        "para": 2
+      },
+      {
+        "text": "Our system replaces conversational revision with direct manipulation of the document itself. Writers can select any passage to browse alternative phrasings, or drag sections into a new order. The system surfaces feedback as inline annotations anchored to specific spans of text, not silent rewrites.",
+        "frags": [
+          "f4",
+          "f4a",
+          "f4b",
+          "f4c"
+        ],
+        "para": 3
+      }
+    ]
+  },
+  {
+    "timestamp": 1775765784908,
+    "trigger": "User edited prose directly. Examine the changes: if the user wrote or changed prose text, preserve it exactly and update atoms to match. If the user wrote a directive or instruction (e.g. \"make this more concise\", \"add an example here\"), follow the directive, update prose accordingly, and update atoms to match the new prose.",
+    "prose": [
+      {
+        "text": "# Here's a title",
+        "frags": [],
+        "para": 0
+      },
+      {
+        "text": "Large language models have changed how people interact with computers. Users can express their intent in ordinary language and receive coherent responses. Yet the dominant interface for these models remains the chatbot. The chatbot is organized around sequential exchange: users must verbalize their intent precisely in each request, then mentally diff how each new output differs from the last.",
+        "frags": [
+          "f1",
+          "f1a",
+          "f1b",
+          "f2",
+          "f2a",
+          "f2b",
+          "f2c"
+        ],
+        "para": 1
+      },
+      {
+        "text": "## Here's a little subtitle!",
+        "frags": [],
+        "para": 1
+      },
+      {
+        "text": "So, clearly, conversation is a poor fit for writing... Writers revise by acting on text directly, moving sentences, cutting phrases, and reshaping structure. They do not describe changes verbally and wait for a response. and here's some new text",
+        "frags": [
+          "f3",
+          "f3a",
+          "f3b"
+        ],
+        "para": 2
+      },
+      {
+        "text": "Our system replaces conversational revision with direct manipulation of the document itself. Writers can select any passage to browse alternative phrasings, or drag sections into a new order. The system surfaces feedback as inline annotations anchored to specific spans of text, not silent rewrites.",
+        "frags": [
+          "f4",
+          "f4a",
+          "f4b",
+          "f4c"
+        ],
+        "para": 3
+      }
+    ]
+  },
+  {
+    "timestamp": 1775766028893,
+    "trigger": "Atom \"f2\" was edited. New subject: \"interface\", new predicate: \"is still the chatbot\". Update only the prose sentences linked to this atom to reflect the new meaning.",
+    "prose": [
+      {
+        "text": "# Here's a title",
+        "frags": [],
+        "para": 0
+      },
+      {
+        "text": "Large language models have changed how people interact with computers. Users can express their intent in ordinary language and receive coherent responses. Yet the dominant interface for these models remains the chatbot. The chatbot is organized around sequential exchange: users must verbalize their intent precisely in each request, then mentally diff how each new output differs from the last.",
+        "frags": [
+          "f1",
+          "f1a",
+          "f1b",
+          "f2",
+          "f2a",
+          "f2b",
+          "f2c"
+        ],
+        "para": 1
+      },
+      {
+        "text": "## Here's a little subtitle!",
+        "frags": [],
+        "para": 1
+      },
+      {
+        "text": "So, clearly, conversation is a poor fit for writing... Writers revise by acting on text directly, moving sentences, cutting phrases, and reshaping structure. They do not describe changes verbally and wait for a response. and here's some new text",
+        "frags": [
+          "f3",
+          "f3a",
+          "f3b"
+        ],
+        "para": 2
+      },
+      {
+        "text": "Our system replaces conversational revision with direct manipulation of the document itself. Writers can select any passage to browse alternative phrasings, or drag sections into a new order. The system surfaces feedback as inline annotations anchored to specific spans of text, not silent rewrites.",
+        "frags": [
+          "f4",
+          "f4a",
+          "f4b",
+          "f4c"
+        ],
+        "para": 3
+      }
+    ]
+  },
+  {
+    "timestamp": 1775766469663,
+    "trigger": "Atom \"f2a\" moved from position 0 to position 2 within parent \"f2\". Reorder the corresponding prose to match the new atom order. Adjust transitions for natural flow.",
+    "prose": [
+      {
+        "text": "# Here's a title",
+        "frags": [],
+        "para": 0
+      },
+      {
+        "text": "Large language models have changed how people interact with computers. Users can express their intent in ordinary language and receive coherent responses. But the dominant interface for these models remains the chatbot. The chatbot is organized around sequential exchange: users must verbalize their intent precisely in each request, then mentally diff how each new output differs from the last.",
+        "frags": [
+          "f1",
+          "f1a",
+          "f1b",
+          "f2",
+          "f2a",
+          "f2b",
+          "f2c"
+        ],
+        "para": 1
+      },
+      {
+        "text": "## Here's a little subtitle!",
+        "frags": [],
+        "para": 1
+      },
+      {
+        "text": "So, clearly, conversation is a poor fit for writing... Writers revise by acting on text directly, moving sentences, cutting phrases, and reshaping structure. They do not describe changes verbally and wait for a response. and here's some new text",
+        "frags": [
+          "f3",
+          "f3a",
+          "f3b"
+        ],
+        "para": 2
+      },
+      {
+        "text": "Our system replaces conversational revision with direct manipulation of the document itself. Writers can select any passage to browse alternative phrasings, or drag sections into a new order. The system surfaces feedback as inline annotations anchored to specific spans of text, not silent rewrites.",
+        "frags": [
+          "f4",
+          "f4a",
+          "f4b",
+          "f4c"
+        ],
+        "para": 3
+      }
+    ]
+  },
+  {
+    "timestamp": 1775767228277,
+    "trigger": "[PIN_FIX_SYNC] Prose pin \"intent precisely\" linked to atoms [f1, f1a, f1b, f2, f2b, f2c, f2a]. This pinned phrase is not present in linked atom text. Minimally edit linked atoms or linked prose so \"intent precisely\" appears verbatim in both places while preserving meaning.",
+    "prose": [
+      {
+        "text": "# Here's a title",
+        "frags": [],
+        "para": 0
+      },
+      {
+        "text": "Large language models have changed how people interact with computers. Users can express their intent in ordinary language and receive coherent responses. But the dominant interface for these models remains the chatbot. Users must verbalize their intent precisely in each request, then mentally diff how each new output differs from the last. The chatbot reduces all of this to sequential exchange.",
+        "frags": [
+          "f1",
+          "f1a",
+          "f1b",
+          "f2",
+          "f2b",
+          "f2c",
+          "f2a"
+        ],
+        "para": 1
+      },
+      {
+        "text": "## Here's a little subtitle!",
+        "frags": [],
+        "para": 1
+      },
+      {
+        "text": "So, clearly, conversation is a poor fit for writing... Writers revise by acting on text directly, moving sentences, cutting phrases, and reshaping structure. They do not describe changes verbally and wait for a response. and here's some new text",
+        "frags": [
+          "f3",
+          "f3a",
+          "f3b"
+        ],
+        "para": 2
+      },
+      {
+        "text": "Our system replaces conversational revision with direct manipulation of the document itself. Writers can select any passage to browse alternative phrasings, or drag sections into a new order. The system surfaces feedback as inline annotations anchored to specific spans of text, not silent rewrites.",
+        "frags": [
+          "f4",
+          "f4a",
+          "f4b",
+          "f4c"
+        ],
+        "para": 3
+      }
+    ]
+  },
+  {
+    "timestamp": 1775768150271,
+    "trigger": "Atom \"f3\" was edited. New subject: \"conversation\", new predicate: \"poor fit for writing\". Update only the prose sentences linked to this atom to reflect the new meaning.",
+    "prose": [
+      {
+        "text": "# Here's a title",
+        "frags": [],
+        "para": 0
+      },
+      {
+        "text": "Large language models have changed how people interact with computers. Users can express their intent in ordinary language and receive coherent responses. But the dominant interface for these models remains the chatbot. Users must verbalize their intent precisely in each request, then mentally diff how each new output differs from the last. The chatbot reduces all of this to sequential exchange.",
+        "frags": [
+          "f1",
+          "f1a",
+          "f1b",
+          "f2",
+          "f2b",
+          "f2c",
+          "f2a"
+        ],
+        "para": 1
+      },
+      {
+        "text": "## Here's a little subtitle!",
+        "frags": [],
+        "para": 1
+      },
+      {
+        "text": "So, clearly, conversation is a poor fit for writing... Writers revise by acting on text directly, moving sentences, cutting phrases, and reshaping structure. They do not describe changes verbally and wait for a response. and here's some new text",
+        "frags": [
+          "f3",
+          "f3a",
+          "f3b"
+        ],
+        "para": 2
+      },
+      {
+        "text": "Our system replaces conversational revision with direct manipulation of the document itself. Writers can select any passage to browse alternative phrasings, or drag sections into a new order. The system surfaces feedback as inline annotations anchored to specific spans of text, not silent rewrites.",
+        "frags": [
+          "f4",
+          "f4a",
+          "f4b",
+          "f4c"
+        ],
+        "para": 3
+      }
+    ]
+  },
+  {
+    "timestamp": 1775768669891,
+    "trigger": "Document structure changed (section rename or paragraph break). Review the change and ensure prose still flows naturally. Adjust transitions if needed.",
+    "prose": [
+      {
+        "text": "# Here's a title",
+        "frags": [],
+        "para": 0
+      },
+      {
+        "text": "Large language models have changed how people interact with computers. Users can express their intent in ordinary language and receive coherent responses. But the dominant interface for these models remains the chatbot. Users must verbalize their intent precisely in each request, then mentally diff how each new output differs from the last. The chatbot reduces all of this to sequential exchange.",
+        "frags": [
+          "f1",
+          "f1a",
+          "f1b",
+          "f2",
+          "f2b",
+          "f2c",
+          "f2a"
+        ],
+        "para": 1
+      },
+      {
+        "text": "## Here's a little subtitle!",
+        "frags": [],
+        "para": 1
+      },
+      {
+        "text": "Conversation is a poor fit for writing. Writers revise by acting on text directly, moving sentences, cutting phrases, and reshaping structure. They do not describe changes verbally and wait for a response. and here's some new text",
+        "frags": [
+          "f3",
+          "f3a",
+          "f3b"
+        ],
+        "para": 2
+      },
+      {
+        "text": "Our system replaces conversational revision with direct manipulation of the document itself. Writers can select any passage to browse alternative phrasings, or drag sections into a new order. The system surfaces feedback as inline annotations anchored to specific spans of text, not silent rewrites.",
+        "frags": [
+          "f4",
+          "f4a",
+          "f4b",
+          "f4c"
+        ],
+        "para": 3
+      }
+    ]
+  },
+  {
+    "timestamp": 1775768681056,
+    "trigger": "Document structure changed (section rename or paragraph break). Review the change and ensure prose still flows naturally. Adjust transitions if needed.",
+    "prose": [
+      {
+        "text": "# Here's a title",
+        "frags": [],
+        "para": 0
+      },
+      {
+        "text": "Large language models have changed how people interact with computers. Users can express their intent in ordinary language and receive coherent responses. But the dominant interface for these models remains the chatbot. Users must verbalize their intent precisely in each request, then mentally diff how each new output differs from the last. The chatbot reduces all of this to sequential exchange.",
+        "frags": [
+          "f1",
+          "f1a",
+          "f1b",
+          "f2",
+          "f2b",
+          "f2c",
+          "f2a"
+        ],
+        "para": 1
+      },
+      {
+        "text": "## Here's a little subtitle!",
+        "frags": [],
+        "para": 1
+      },
+      {
+        "text": "Conversation is a poor fit for writing. Writers revise by acting on text directly, moving sentences, cutting phrases, and reshaping structure. They do not describe changes verbally and wait for a response. and here's some new text",
+        "frags": [
+          "f3",
+          "f3a",
+          "f3b"
+        ],
+        "para": 2
+      },
+      {
+        "text": "Our system replaces conversational revision with direct manipulation of the document itself. Writers can select any passage to browse alternative phrasings, or drag sections into a new order. The system surfaces feedback as inline annotations anchored to specific spans of text, not silent rewrites.",
+        "frags": [
+          "f4",
+          "f4a",
+          "f4b",
+          "f4c"
+        ],
+        "para": 3
+      }
+    ]
   }
 ]

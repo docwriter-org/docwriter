@@ -1,7 +1,8 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 import { DOC_FILE } from '$lib/server/document-files';
+import { writeJsonAtomic } from '$lib/server/file-utils';
 
 export const GET: RequestHandler = async () => {
 	try {
@@ -18,7 +19,7 @@ export const GET: RequestHandler = async () => {
 export const PUT: RequestHandler = async ({ request }) => {
 	try {
 		const body = await request.json();
-		writeFileSync(DOC_FILE, JSON.stringify(body, null, 2));
+		writeJsonAtomic(DOC_FILE, body);
 		return json({ ok: true });
 	} catch (e) {
 		return json({ error: String(e) }, { status: 500 });

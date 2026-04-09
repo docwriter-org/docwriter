@@ -64,3 +64,11 @@ export function getUnresolvedDocumentOps(): DocumentOp[] {
 	}
 	return [...unresolvedOps.values()].sort((a, b) => a.createdAt - b.createdAt);
 }
+
+/** Compact the WAL: rewrite with only unresolved ops. Reduces file size over time. */
+export function compactLog() {
+	const unresolved = getUnresolvedDocumentOps();
+	const { writeFileSync } = require('fs');
+	const lines = unresolved.map((op) => JSON.stringify({ event: 'enqueue_document_op', op } satisfies EnqueueDocumentOpEvent));
+	writeFileSync(OPS_FILE, lines.join('\n') + (lines.length ? '\n' : ''));
+}

@@ -26,24 +26,27 @@
       "id": "f2",
       "subject": "interface",
       "predicate": "is still the chatbot",
-      "transition": "Yet",
+      "transition": "But",
       "children": [
-        {
-          "id": "f2a",
-          "subject": "chatbot",
-          "predicate": "sequential exchange",
-          "children": []
-        },
         {
           "id": "f2b",
           "subject": "users",
           "predicate": "verbalize intent precisely",
+          "pinnedWords": [
+            "intent precisely"
+          ],
           "children": []
         },
         {
           "id": "f2c",
           "subject": "users",
           "predicate": "mentally diff outputs",
+          "children": []
+        },
+        {
+          "id": "f2a",
+          "subject": "chatbot",
+          "predicate": "sequential exchange",
           "children": []
         }
       ]
@@ -52,7 +55,6 @@
       "id": "f3",
       "subject": "conversation",
       "predicate": "poor fit for writing",
-      "transition": "So, clearly",
       "children": [
         {
           "id": "f3a",
@@ -102,31 +104,43 @@
   ],
   "prose": [
     {
-      "id": 1,
+      "id": "block_heading_1",
+      "frags": [],
+      "para": 0,
+      "text": "# Here's a title"
+    },
+    {
+      "id": "block_markdown_2",
       "frags": [
         "f1",
         "f1a",
         "f1b",
         "f2",
-        "f2a",
         "f2b",
-        "f2c"
+        "f2c",
+        "f2a"
       ],
       "para": 1,
-      "text": "Large language models have changed how people interact with computers. Users can express their intent in ordinary language and receive coherent responses. Yet the dominant interface for these models remains the chatbot. The chatbot is organized around sequential exchange: users must verbalize their intent precisely in each request, then mentally diff how each new output differs from the last."
+      "text": "Large language models have changed how people interact with computers. Users can express their intent in ordinary language and receive coherent responses. But the dominant interface for these models remains the chatbot. Users must verbalize their intent precisely in each request, then mentally diff how each new output differs from the last. The chatbot reduces all of this to sequential exchange."
     },
     {
-      "id": 2,
+      "id": "block_heading_2",
+      "frags": [],
+      "para": 1,
+      "text": "## Here's a little subtitle!"
+    },
+    {
+      "id": "block_markdown_3",
       "frags": [
         "f3",
         "f3a",
         "f3b"
       ],
       "para": 2,
-      "text": "So, clearly, conversation is a poor fit for writing... Writers revise by acting on text directly, moving sentences, cutting phrases, and reshaping structure. They do not describe changes verbally and wait for a response. and here's some new text"
+      "text": "Conversation is a poor fit for writing. Writers revise by acting on text directly, moving sentences, cutting phrases, and reshaping structure. They do not describe changes verbally and wait for a response. and here's some new text"
     },
     {
-      "id": 3,
+      "id": "block_markdown_4",
       "frags": [
         "f4",
         "f4a",

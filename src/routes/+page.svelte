@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { Settings, Undo2, MessageSquareText, FolderOpen, History, XCircle } from 'lucide-svelte';
-	import { normalizeAtomzFile, uploadText } from '$lib/atomz';
-	import { applyCanonicalFileToStores, buildCanonicalFileFromRuntimeState } from '$lib/runtime-canonical';
+	import { Settings, Undo2, MessageSquareText, FolderOpen, History, XCircle, RotateCcw } from 'lucide-svelte';
+	import { normalizeAtomzFile, uploadText, buildAtomzFileFromCanonicalState, buildBlocksFromRuntimeView, type AtomzBlock, type AtomzPin } from '$lib/atomz';
+	import { applyCanonicalFileToStores, reproject, getCanonicalRuntimeStateFromStores } from '$lib/runtime-canonical';
 import { applyDocumentOp } from '$lib/document-op-utils';
 import { buildDocumentOpProcessingPlan } from '$lib/document-op-processing';
 import { SYNC_TIMING } from '$lib/sync-timing';
@@ -16,6 +16,7 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 	import HistoryPane from '$lib/components/HistoryPane.svelte';
 	import PanelResizer from '$lib/components/PanelResizer.svelte';
 	import {
+		atoms,
 		fragments,
 		rules,
 		paraBreaks,
@@ -26,9 +27,9 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 		sentenceTransitions,
 		documentOps,
 		checkpoints,
-		proseHistory,
-		pushProseSnapshot,
-		undoProse,
+		blockHistory,
+		pushBlockSnapshot,
+		undoBlocks,
 		agentHistory,
 		showHistory,
 		pushHistory,
@@ -60,13 +61,31 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 		}
 	}
 
+	async function newSession() {
+		if (rendering) cancelRender();
+		// Cancel any pending op processing timer to prevent race with warmup
+		if (opDebounceTimer) { clearTimeout(opDebounceTimer); opDebounceTimer = null; }
+		// Wait for any in-flight processOps to finish
+		await waitForProcessing();
+		// Clear server session
+		await fetch('/api/session', { method: 'DELETE' });
+		// Clear client history
+		agentHistory.set([]);
+		// Clear pending ops
+		await resetPendingState();
+		showHistory.set(true);
+		pushHistory({ type: 'user_action', timestamp: Date.now(), description: 'Started new session' });
+		// Warmup: agent reads and understands the document
+		await doRender(undefined, undefined, false, true);
+	}
+
 	// Panel widths
 	let atomsWidth = $state(420); // px
 	let historyWidth = $state(380); // px
 	isRendering.subscribe((v) => (rendering = v));
 
 	let hasUndo = $state(false);
-	proseHistory.subscribe((v) => (hasUndo = v.length > 0));
+	blockHistory.subscribe((v) => (hasUndo = v.length > 0));
 
 	let historyVisible = $state(true);
 	showHistory.subscribe((v) => (historyVisible = v));
@@ -235,17 +254,19 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 						});
 					},
 					onResult: (data) => {
+						// Server already wrote document.atomz before sending this result.
 						if (data.document) {
 							applyCanonicalDocument(normalizeAtomzFile(data.document));
 							return;
 						}
-						if (data.fragments) fragments.set(data.fragments as Fragment[]);
-						if (data.sentences) prose.set(data.sentences);
-						if (data.paraBreaks) paraBreaks.set(new Set(data.paraBreaks as number[]));
-						rules.set([]);
-						editorPins.set([]);
-						sections.set([]);
-						refreshCanonicalStoresFromRuntime();
+						// Fallback: build blocks from returned atoms+sentences
+						const frags = (data.fragments as Fragment[]) || [];
+						const sents = data.sentences || [];
+						const newBlocks = buildBlocksFromRuntimeView({ atoms: frags, prose: sents });
+						atoms.set(frags);
+						blocks.set(newBlocks);
+						pins.set([]);
+						reproject();
 					}
 				});
 				await resetPendingState();
@@ -395,13 +416,6 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 		applyCanonicalFileToStores(file);
 	}
 
-	function refreshCanonicalStoresFromRuntime() {
-		const file = buildCanonicalFileFromRuntimeState(getCurrentDocumentState());
-		blocks.set(file.blocks);
-		pins.set(file.pins || []);
-		return file;
-	}
-
 	async function resetPendingState() {
 		documentOps.set([]);
 		persistedDocumentOpIds.clear();
@@ -417,54 +431,50 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 			const ops = ((data.ops || []) as DocumentOp[]).sort((a, b) => a.createdAt - b.createdAt);
 			persistedDocumentOpIds.clear();
 			for (const op of ops) persistedDocumentOpIds.add(op.id);
-			documentOps.set(ops);
-			if (ops.length === 0) return;
+			if (ops.length === 0) {
+				documentOps.set([]);
+				return;
+			}
 			hasReplayedOps = true;
+			// Set BEFORE documentOps.set so subscriptions see the flag
 			isReplayingDocumentOps = true;
-			let f: Fragment[], p: Sentence[], r: typeof $rules, b: Set<number>;
-			let ep: import('$lib/types').EditorPin[], sec: import('$lib/types').Section[];
-			fragments.subscribe((v) => (f = v))();
-			prose.subscribe((v) => (p = v))();
-			rules.subscribe((v) => (r = v))();
-			paraBreaks.subscribe((v) => (b = v))();
-			editorPins.subscribe((v) => (ep = v))();
-			sections.subscribe((v) => (sec = v))();
-			const replayed = ops.reduce((state, op) => applyDocumentOp(state, op), {
-				fragments: f!,
-				prose: p!,
-				rules: r!,
-				paraBreaks: b!,
-				editorPins: ep!,
-				sections: sec!
-			});
-			fragments.set(replayed.fragments);
-			prose.set(replayed.prose);
+			documentOps.set(ops);
+			const state = getCurrentDocumentState();
+			let currentBlk: AtomzBlock[] = [], currentPn: AtomzPin[] = [];
+			blocks.subscribe((v) => (currentBlk = v))();
+			pins.subscribe((v) => (currentPn = v))();
+			let replayed = { ...state, blocks: currentBlk, pins: currentPn };
+			for (const op of ops) {
+				replayed = { ...replayed, ...applyDocumentOp(replayed, op) };
+			}
+			blocks.set(replayed.blocks);
+			pins.set(replayed.pins);
+			atoms.set(replayed.atoms);
 			rules.set(replayed.rules);
-			paraBreaks.set(new Set(replayed.paraBreaks));
-			editorPins.set(replayed.editorPins);
-			sections.set(replayed.sections);
+			reproject();
 		} catch {
 			documentOps.set([]);
 		} finally {
 			isReplayingDocumentOps = false;
-			if (hasReplayedOps) {
-				scheduleSaveToDisk();
-			}
+			// Trigger op processing for any unresolved ops from the WAL
+			scheduleOpProcessing();
 		}
 	}
 
-	async function persistDocumentOp(op: DocumentOp) {
-		if (persistedDocumentOpIds.has(op.id) || pendingDocumentOpPersistIds.has(op.id)) return;
+	async function persistDocumentOp(op: DocumentOp): Promise<boolean> {
+		if (persistedDocumentOpIds.has(op.id) || pendingDocumentOpPersistIds.has(op.id)) return true;
 		pendingDocumentOpPersistIds.add(op.id);
 		try {
-			await fetch('/api/document-ops', {
+			const res = await fetch('/api/document-ops', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ ops: [op] })
 			});
+			if (!res.ok) return false;
 			persistedDocumentOpIds.add(op.id);
+			return true;
 		} catch {
-			// Best effort for now; unresolved ops remain in memory until next successful persist.
+			return false;
 		} finally {
 			pendingDocumentOpPersistIds.delete(op.id);
 		}
@@ -512,6 +522,8 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 					}
 				}
 				if (entries.length > 0) {
+					// Add a synthetic render_end so the "Done" bar shows on refresh
+					entries.push({ type: 'render_end', timestamp: 0, success: true });
 					agentHistory.set(entries);
 				}
 			}
@@ -521,46 +533,9 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 		await loadVersions();
 	});
 
-	// Save to disk — called when feedback queues up (10s idle) and after agent finishes
+	// document.atomz is ONLY written by the render endpoint after agent merge.
+	// Crash recovery relies on the WAL (.atomz-ops.jsonl) to replay unresolved ops.
 	let documentLoaded = false;
-	let saveTimer: ReturnType<typeof setTimeout> | null = null;
-	function scheduleSaveToDisk() {
-		if (!documentLoaded) return;
-		if (isReplayingDocumentOps) return;
-		if (saveTimer) clearTimeout(saveTimer);
-		saveTimer = setTimeout(() => {
-			saveToDisk();
-			saveTimer = null;
-		}, SYNC_TIMING.saveToDiskMs);
-	}
-	async function saveToDisk() {
-		if (currentAbort) return; // don't save while agent is editing the file
-		if (!documentLoaded) return; // don't save before document is loaded from disk
-		const doc = getDocumentJson();
-		let pendingDocumentOps: DocumentOp[] = [];
-		documentOps.subscribe((ops) => (pendingDocumentOps = ops))();
-		try {
-			await Promise.all(pendingDocumentOps.map((op) => persistDocumentOp(op)));
-			const currentState = getCurrentDocumentState();
-			const { localOnlyOps } = buildDocumentOpProcessingPlan(pendingDocumentOps, currentState);
-			await fetch('/api/document', {
-				method: 'PUT',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(doc)
-			});
-			await resolvePendingDocumentOps(localOnlyOps);
-		} catch {
-			// Best-effort persistence for now.
-		}
-	}
-	fragments.subscribe(() => { refreshCanonicalStoresFromRuntime(); scheduleSaveToDisk(); });
-	prose.subscribe(() => { refreshCanonicalStoresFromRuntime(); scheduleSaveToDisk(); });
-	rules.subscribe(() => { refreshCanonicalStoresFromRuntime(); scheduleSaveToDisk(); });
-	paraBreaks.subscribe(() => { refreshCanonicalStoresFromRuntime(); scheduleSaveToDisk(); });
-	editorPins.subscribe(() => { refreshCanonicalStoresFromRuntime(); scheduleSaveToDisk(); });
-	sections.subscribe(() => { refreshCanonicalStoresFromRuntime(); scheduleSaveToDisk(); });
-	blocks.subscribe(() => scheduleSaveToDisk());
-	pins.subscribe(() => scheduleSaveToDisk());
 	documentOps.subscribe((ops) => {
 		for (const op of ops) {
 			void persistDocumentOp(op);
@@ -570,14 +545,14 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 	function getCurrentDocumentState() {
 		let f: Fragment[], p: Sentence[], r: typeof $rules, b: Set<number>;
 		let ep: import('$lib/types').EditorPin[], sec: import('$lib/types').Section[];
-		fragments.subscribe((v) => (f = v))();
+		atoms.subscribe((v) => (f = v))();
 		prose.subscribe((v) => (p = v))();
 		rules.subscribe((v) => (r = v))();
 		paraBreaks.subscribe((v) => (b = v))();
 		editorPins.subscribe((v) => (ep = v))();
 		sections.subscribe((v) => (sec = v))();
 		return {
-			fragments: f!,
+			atoms: f!,
 			prose: p!,
 			rules: r!,
 			paraBreaks: b!,
@@ -586,23 +561,24 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 		};
 	}
 
-	// Build the unified document JSON for the agent
+	// Build the unified document JSON from canonical stores (blocks/pins are source of truth)
 	function getDocumentJson() {
-		return buildCanonicalFileFromRuntimeState(getCurrentDocumentState());
+		return buildAtomzFileFromCanonicalState(getCanonicalRuntimeStateFromStores());
 	}
 
-	function getRequestBody(editedFragId?: string, changes?: string, batched?: boolean) {
+	function getRequestBody(editedFragId?: string, changes?: string, batched?: boolean, warmup?: boolean) {
 		return {
 			documentJson: getDocumentJson(),
 			model,
 			...(editedFragId ? { editedFragId } : {}),
 			...(changes ? { changes } : {}),
-			...(batched ? { batched: true } : {})
+			...(batched ? { batched: true } : {}),
+			...(warmup ? { warmup: true } : {})
 		};
 	}
 
 	// Shared render logic
-	async function doRender(editedFragId?: string, trigger?: string, batched?: boolean): Promise<boolean> {
+	async function doRender(editedFragId?: string, trigger?: string, batched?: boolean, warmup?: boolean): Promise<boolean> {
 		let currentProse: Sentence[];
 		prose.subscribe((v) => (currentProse = v))();
 
@@ -612,7 +588,11 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 
 		if (editedFragId && targetIndices && targetIndices.length === 0) return false;
 
-		pushProseSnapshot(currentProse!);
+		// Snapshot blocks for undo before agent edits
+		let snapshotBlocks: AtomzBlock[] = [], snapshotPins: AtomzPin[] = [];
+		blocks.subscribe((v) => (snapshotBlocks = v))();
+		pins.subscribe((v) => (snapshotPins = v))();
+		pushBlockSnapshot(snapshotBlocks, snapshotPins);
 
 		isRendering.set(true);
 		if (targetIndices) {
@@ -632,6 +612,10 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 		let lastToolStartTime = 0;
 		let lastEventTime = Date.now();
 
+		// Track which ops existed before render so we can detect new ones after
+		let preRenderOpIds: Set<string>;
+		documentOps.subscribe((ops) => (preRenderOpIds = new Set(ops.map((o) => o.id))))();
+
 		// Cancel any previous render
 		if (currentAbort) currentAbort.abort();
 		currentAbort = new AbortController();
@@ -640,7 +624,7 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 			const res = await fetch('/api/render', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(getRequestBody(editedFragId, trigger, batched)),
+				body: JSON.stringify(getRequestBody(editedFragId, trigger, batched, warmup)),
 				signal: currentAbort.signal
 			});
 
@@ -744,10 +728,15 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 					checkpoints.update((cps) => [...cps, { ...data, description: trigger }]);
 				},
 				onResult: (data) => {
+					// Server already wrote document.atomz before sending this result.
+					// Client just applies to in-memory stores.
 					if (data.document) {
 						applyCanonicalDocument(normalizeAtomzFile(data.document));
 					} else if (data.sentences) {
-						prose.set(data.sentences);
+						const curAtoms = getCurrentDocumentState().atoms;
+						const newBlocks = buildBlocksFromRuntimeView({ atoms: curAtoms, prose: data.sentences });
+						blocks.set(newBlocks);
+						reproject();
 					}
 					success = true;
 				}
@@ -761,35 +750,68 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 			renderingSentences.set(new Set());
 			isRendering.set(false);
 			pushHistory({ type: 'render_end', timestamp: Date.now(), success, durationMs: Date.now() - renderStartTime });
-			if (success) clearUserEdits.set(Date.now());
+			if (success) {
+				clearUserEdits.set(Date.now());
+				// Replay any ops the user pushed while the agent was rendering
+				let currentOpsAfterRender: DocumentOp[] = [];
+				documentOps.subscribe((ops) => (currentOpsAfterRender = ops))();
+				const newOps = currentOpsAfterRender.filter((op) => !preRenderOpIds.has(op.id));
+				if (newOps.length > 0) {
+					const state = getCurrentDocumentState();
+					let currentBlk: AtomzBlock[] = [], currentPn: AtomzPin[] = [];
+					blocks.subscribe((v) => (currentBlk = v))();
+					pins.subscribe((v) => (currentPn = v))();
+					let replayed = { ...state, blocks: currentBlk, pins: currentPn };
+					for (const op of newOps) {
+						replayed = { ...replayed, ...applyDocumentOp(replayed, op) };
+					}
+					if (replayed.blocks) blocks.set(replayed.blocks);
+					if (replayed.pins) pins.set(replayed.pins);
+					atoms.set(replayed.atoms);
+					rules.set(replayed.rules);
+					reproject();
+				}
+			}
 			loadVersions();
-			// Now that agent is done, save the final state to disk
-			saveToDisk();
 			// Don't clear transitions immediately — let the diff animation finish
 		}
 		return success;
 	}
 
-	// Process unresolved semantic document ops in batches.
-	let documentOpTimer: ReturnType<typeof setTimeout> | null = null;
+	// Process document ops. Uses a debounce timer + processing loop.
+	// The loop keeps running as long as there are unresolved ops,
+	// so ops that arrive during a render are picked up in the next iteration.
+	let opDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 	let isProcessing = $state(false);
+	let processingDone: (() => void) | null = null; // resolve fn for waitForProcessing()
 
-	documentOps.subscribe((ops) => {
-		if (ops.length === 0 || isProcessing || isReplayingDocumentOps) return;
-		if (documentOpTimer) clearTimeout(documentOpTimer);
-		documentOpTimer = setTimeout(async () => {
-			if (isProcessing) return;
-			let currentOps: DocumentOp[] = [];
-			documentOps.subscribe((value) => (currentOps = value))();
-			if (currentOps.length === 0) return;
-			await Promise.all(currentOps.map((op) => persistDocumentOp(op)));
-			isProcessing = true;
-			const currentState = getCurrentDocumentState();
-			const plan = buildDocumentOpProcessingPlan(currentOps, currentState);
-			if (plan.localOnlyOps.length > 0) {
-				await saveToDisk();
-			}
-			if (plan.agentOps.length > 0) {
+	function scheduleOpProcessing() {
+		if (opDebounceTimer) clearTimeout(opDebounceTimer);
+		opDebounceTimer = setTimeout(() => processOps(), SYNC_TIMING.queueProcessMs);
+	}
+
+	function waitForProcessing(): Promise<void> {
+		if (!isProcessing) return Promise.resolve();
+		return new Promise((resolve) => { processingDone = resolve; });
+	}
+
+	async function processOps() {
+		if (isProcessing || isReplayingDocumentOps) return;
+		isProcessing = true;
+		try {
+			while (true) {
+				let currentOps: DocumentOp[] = [];
+				documentOps.subscribe((ops) => (currentOps = ops))();
+				if (currentOps.length === 0) break;
+
+				// Ensure all ops are in the WAL before processing.
+				// If any persist fails, don't process — retry next time.
+				const persistResults = await Promise.all(currentOps.map((op) => persistDocumentOp(op)));
+				if (persistResults.some((ok) => !ok)) break;
+				const currentState = getCurrentDocumentState();
+				const plan = buildDocumentOpProcessingPlan(currentOps, currentState);
+				if (plan.agentOps.length === 0) break;
+
 				const success = await doRender(
 					plan.editedFragId,
 					plan.trigger,
@@ -797,10 +819,19 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 				);
 				if (success) {
 					await resolvePendingDocumentOps(plan.agentOps);
+				} else {
+					break;
 				}
 			}
+		} finally {
 			isProcessing = false;
-		}, SYNC_TIMING.queueProcessMs);
+			if (processingDone) { processingDone(); processingDone = null; }
+		}
+	}
+
+	documentOps.subscribe((ops) => {
+		if (ops.length === 0 || isProcessing || isReplayingDocumentOps) return;
+		scheduleOpProcessing();
 	});
 
 	function handleGlobalClick(e: MouseEvent) {
@@ -816,7 +847,9 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 	function handleKeydown(e: KeyboardEvent) {
 		if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
 			e.preventDefault();
-			undoProse();
+			// Abort any in-flight render so the undo isn't overwritten by onResult
+			if (rendering) cancelRender();
+			undoBlocks();
 		}
 		if (e.key === 'Escape' && rendering) {
 			cancelRender();
@@ -829,7 +862,7 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 	<title>atomz</title>
 </svelte:head>
 
-<svelte:window onkeydown={handleKeydown} onclick={handleGlobalClick} onbeforeunload={saveToDisk} />
+<svelte:window onkeydown={handleKeydown} onclick={handleGlobalClick} />
 
 <div class="app">
 	<header class="header">
@@ -873,6 +906,9 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 			</select>
 		</div>
 		<div class="header-actions">
+			<button class="icon-btn" onclick={newSession} disabled={rendering} title="New session (clear agent context)">
+				<RotateCcw size={14} />
+			</button>
 			<div class="version-wrapper">
 				<button
 					class="icon-btn"
@@ -904,7 +940,7 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 					</div>
 				{/if}
 			</div>
-			<button class="icon-btn" onclick={() => undoProse()} disabled={!hasUndo} title="Undo (⌘Z)">
+			<button class="icon-btn" onclick={() => undoBlocks()} disabled={!hasUndo} title="Undo (⌘Z)">
 				<Undo2 size={14} />
 			</button>
 			{#if currentAbort}

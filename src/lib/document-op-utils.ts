@@ -1,12 +1,15 @@
 import type { DocumentOp, Fragment, Rule, Section, Sentence } from './types';
+import type { AtomzBlock, AtomzPin } from './atomz';
 
 interface DocumentState {
-	fragments: Fragment[];
+	atoms: Fragment[];
 	prose: Sentence[];
 	rules: Rule[];
 	paraBreaks: Set<number>;
 	editorPins: { text: string; para: number }[];
 	sections: Section[];
+	blocks?: AtomzBlock[];
+	pins?: AtomzPin[];
 }
 
 function normalizePinnedText(text: string): string {
@@ -47,7 +50,7 @@ export function applyDocumentOp(state: DocumentState, op: DocumentOp): DocumentS
 		case 'edit_atom':
 			return {
 				...state,
-				fragments: updateFragmentTree(state.fragments, op.fragId, (fragment) => ({
+				atoms: updateFragmentTree(state.atoms, op.fragId, (fragment) => ({
 					...fragment,
 					subject: op.subject,
 					predicate: op.predicate
@@ -56,7 +59,7 @@ export function applyDocumentOp(state: DocumentState, op: DocumentOp): DocumentS
 		case 'pin_atom_word':
 			return {
 				...state,
-				fragments: updateFragmentTree(state.fragments, op.fragId, (fragment) => {
+				atoms: updateFragmentTree(state.atoms, op.fragId, (fragment) => {
 					const normalizedWord = normalizePinnedText(op.word);
 					const pinnedWords = fragment.pinnedWords || [];
 					const nextPinnedWords = op.pinned
@@ -76,38 +79,70 @@ export function applyDocumentOp(state: DocumentState, op: DocumentOp): DocumentS
 			return {
 				...state,
 				editorPins: nextEditorPins,
-				fragments: mirrorPinnedTextToFragments(state.fragments, op.linkedFragIds, normalizedText)
+				atoms: mirrorPinnedTextToFragments(state.atoms, op.linkedFragIds, normalizedText)
 			};
 		}
-		case 'replace_prose':
-			return {
-				...state,
-				prose: op.prose.map((sentence) => ({ ...sentence })),
-				sections: op.sections.map((section) => ({ ...section }))
-			};
-		case 'replace_fragments':
-			return {
-				...state,
-				fragments: op.fragments.map((fragment) => ({ ...fragment }))
-			};
+		case 'add_atom': {
+			const newFrag: Fragment = { id: op.atom.id, subject: op.atom.subject, predicate: op.atom.predicate, children: [] };
+			if (op.parentId) {
+				return {
+					...state,
+					atoms: updateFragmentTree(state.atoms, op.parentId, (parent) => ({
+						...parent, children: [...(parent.children || []), newFrag]
+					}))
+				};
+			}
+			const next = [...state.atoms];
+			next.splice(op.index, 0, newFrag);
+			return { ...state, atoms: next };
+		}
+		case 'delete_atom': {
+			const targetId = op.atomId;
+			function removeFromTree(list: Fragment[]): Fragment[] {
+				return list.filter((f) => f.id !== targetId).map((f) => ({
+					...f, children: removeFromTree(f.children || [])
+				}));
+			}
+			return { ...state, atoms: removeFromTree(state.atoms) };
+		}
+		case 'reorder_atoms': {
+			if (op.parentId) {
+				return {
+					...state,
+					atoms: updateFragmentTree(state.atoms, op.parentId, (parent) => {
+						const kids = [...(parent.children || [])];
+						const fromIdx = kids.findIndex((c) => c.id === op.atomId);
+						if (fromIdx === -1) return parent;
+						const [moved] = kids.splice(fromIdx, 1);
+						kids.splice(op.toIndex, 0, moved);
+						return { ...parent, children: kids };
+					})
+				};
+			}
+			const next = [...state.atoms];
+			const fromIdx = next.findIndex((f) => f.id === op.atomId);
+			if (fromIdx === -1) return state;
+			const [moved] = next.splice(fromIdx, 1);
+			next.splice(op.toIndex, 0, moved);
+			return { ...state, atoms: next };
+		}
 		case 'replace_rules':
 			return {
 				...state,
 				rules: op.rules.map((rule) => ({ ...rule }))
 			};
-		case 'replace_sections':
-			return {
-				...state,
-				sections: op.sections.map((section) => ({ ...section }))
-			};
-		case 'replace_paragraph_structure':
-			return {
-				...state,
-				paraBreaks: new Set(op.paraBreaks),
-				prose: op.prose.map((sentence) => ({ ...sentence }))
-			};
 		case 'feedback_request':
 			return state;
+		case 'update_blocks':
+			return {
+				...state,
+				blocks: op.blocks.map((b) => ({ ...b }))
+			};
+		case 'update_pins':
+			return {
+				...state,
+				pins: op.pins.map((p) => ({ ...p, anchors: p.anchors.map((a) => ({ ...a })) }))
+			};
 		default:
 			return state;
 	}

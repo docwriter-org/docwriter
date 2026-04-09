@@ -1,17 +1,39 @@
-import { writable } from 'svelte/store';
-import type { Fragment, Rule, Action, Annotation, Sentence, HistoryEntry, EditorPin, Section, DocumentOp, NewDocumentOp } from './types';
+import { readonly, writable } from 'svelte/store';
+import type { Atom, Rule, Action, Annotation, Sentence, HistoryEntry, EditorPin, Section, DocumentOp, NewDocumentOp } from './types';
 import type { AtomzBlock, AtomzPin } from './atomz';
 
 // Document state — populated from .atomz file on load
-export const fragments = writable<Fragment[]>([]);
+export const atoms = writable<Atom[]>([]);
+/** @deprecated Use atoms instead */
+export const fragments = atoms;
 export const rules = writable<Rule[]>([]);
-export const paraBreaks = writable<Set<number>>(new Set());
-export const prose = writable<Sentence[]>([]);
+const projectedParaBreaks = writable<Set<number>>(new Set());
+const projectedProse = writable<Sentence[]>([]);
 export const annotations = writable<Annotation[]>([]);
-export const editorPins = writable<EditorPin[]>([]);
-export const sections = writable<Section[]>([]);
+const projectedEditorPins = writable<EditorPin[]>([]);
+const projectedSections = writable<Section[]>([]);
 export const blocks = writable<AtomzBlock[]>([]);
 export const pins = writable<AtomzPin[]>([]);
+export const paraBreaks = readonly(projectedParaBreaks);
+export const prose = readonly(projectedProse);
+export const editorPins = readonly(projectedEditorPins);
+export const sections = readonly(projectedSections);
+
+// Note: these four .set() calls fire subscribers sequentially. A subscriber on
+// prose that synchronously reads sections would see stale sections. Current
+// subscribers only set local vars, so this is safe. If that changes, batch with
+// a suppression flag.
+export function setProjectedRuntimeView(input: {
+	prose: Sentence[];
+	paraBreaks: Set<number>;
+	editorPins: EditorPin[];
+	sections: Section[];
+}) {
+	projectedProse.set(input.prose);
+	projectedParaBreaks.set(input.paraBreaks);
+	projectedEditorPins.set(input.editorPins);
+	projectedSections.set(input.sections);
+}
 
 // Signal to clear UserEdit marks in the editor after agent processes edits
 export const clearUserEdits = writable<number>(0);
@@ -71,27 +93,40 @@ export function pushDocumentOp(item: NewDocumentOp) {
 	documentOps.update((ops) => [...ops, op]);
 }
 
-// Undo stack
+// Undo stack (block-level, canonical)
 const MAX_UNDO_DEPTH = 20;
-export const proseHistory = writable<Sentence[][]>([]);
+interface BlockSnapshot {
+	blocks: AtomzBlock[];
+	pins: AtomzPin[];
+}
+export const blockHistory = writable<BlockSnapshot[]>([]);
 
-export function pushProseSnapshot(current: Sentence[]) {
-	proseHistory.update((stack) => {
-		const next = [...stack, current.map((s) => ({ ...s }))];
+export function pushBlockSnapshot(currentBlocks: AtomzBlock[], currentPins: AtomzPin[]) {
+	blockHistory.update((stack) => {
+		const next = [...stack, {
+			blocks: currentBlocks.map((b) => ({ ...b })),
+			pins: currentPins.map((p) => ({ ...p, anchors: p.anchors.map((a) => ({ ...a })) }))
+		}];
 		return next.length > MAX_UNDO_DEPTH ? next.slice(-MAX_UNDO_DEPTH) : next;
 	});
 }
 
-export function undoProse(): boolean {
+export async function undoBlocks(): Promise<boolean> {
 	let didUndo = false;
-	proseHistory.update((stack) => {
+	blockHistory.update((stack) => {
 		if (stack.length === 0) return stack;
 		const next = [...stack];
-		const prev = next.pop()!;
-		prose.set(prev);
+		const snapshot = next.pop()!;
+		blocks.set(snapshot.blocks);
+		pins.set(snapshot.pins);
 		didUndo = true;
 		return next;
 	});
+	if (didUndo) {
+		// Dynamic import to avoid circular dependency — runtime-canonical imports from stores.
+		const { reproject } = await import('./runtime-canonical');
+		reproject();
+	}
 	return didUndo;
 }
 
@@ -117,5 +152,11 @@ export const agentHistory = writable<HistoryEntry[]>([]);
 export const showHistory = writable<boolean>(true);
 
 export function pushHistory(entry: HistoryEntry) {
-	agentHistory.update((h) => [...h, entry]);
+	agentHistory.update((h) => {
+		// Deduplicate consecutive render_end entries
+		if (entry.type === 'render_end' && h.length > 0 && h[h.length - 1].type === 'render_end') {
+			return h;
+		}
+		return [...h, entry];
+	});
 }

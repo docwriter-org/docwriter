@@ -1,44 +1,33 @@
 import { Mark } from '@tiptap/core';
 
-// Atom-pinned words — indigo, non-editable
-export const AtomPinned = Mark.create({
-	name: 'atomPinned',
+// Single pinned mark — used for all pinned text (from atoms or prose)
+export const Pinned = Mark.create({
+	name: 'pinned',
 	addAttributes() {
 		return {
 			word: { default: null }
 		};
 	},
 	parseHTML() {
-		return [{ tag: 'span[data-atom-pinned]' }];
+		return [
+			{ tag: 'span[data-pinned]' },
+			{ tag: 'span[data-atom-pinned]' },
+			{ tag: 'span[data-editor-pinned]' }
+		];
 	},
 	renderHTML({ HTMLAttributes }) {
 		return ['span', {
 			...HTMLAttributes,
-			'data-atom-pinned': '',
-			style: 'border-bottom: 2px solid var(--accent); font-weight: 600; cursor: default;',
+			'data-pinned': '',
+			class: 'pinned-mark',
 			contenteditable: 'false'
 		}, 0];
 	}
 });
 
-// Editor-pinned words — amber, non-editable (user typed "Dear X" etc.)
-export const EditorPinned = Mark.create({
-	name: 'editorPinned',
-	addAttributes() {
-		return {};
-	},
-	parseHTML() {
-		return [{ tag: 'span[data-editor-pinned]' }];
-	},
-	renderHTML({ HTMLAttributes }) {
-		return ['span', {
-			...HTMLAttributes,
-			'data-editor-pinned': '',
-			style: 'border-bottom: 2px solid #f59e0b; font-weight: 500; cursor: default;',
-			contenteditable: 'false'
-		}, 0];
-	}
-});
+// Keep legacy exports so existing code doesn't break during migration
+export const AtomPinned = Pinned;
+export const EditorPinned = Pinned;
 
 // User-edit mark — shows text the user changed directly (suggesting mode)
 export const UserEdit = Mark.create({

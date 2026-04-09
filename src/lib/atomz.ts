@@ -61,11 +61,18 @@ export interface AtomzFileV2 {
 export interface RenderDocument {
 	atoms: Array<AtomzAtom & { pinnedWords?: string[] }>;
 	rules: string[];
-	prose: Array<{ id: number; frags: string[]; para: number; text: string }>;
+	prose: Array<{ id: string; frags: string[]; para: number; text: string }>;
+}
+
+export interface CanonicalRuntimeState {
+	atoms: Fragment[];
+	rules: Rule[];
+	blocks: AtomzBlock[];
+	pins: AtomzPin[];
 }
 
 export interface RuntimeDocumentState {
-	fragments: Fragment[];
+	atoms: Fragment[];
 	prose: Sentence[];
 	rules: Rule[];
 	paraBreaks: number[];
@@ -245,12 +252,12 @@ function toAtom(fragment: Fragment): AtomzAtom {
 }
 
 export function buildBlocksFromRuntimeView(data: {
-	fragments: Fragment[];
+	atoms: Fragment[];
 	prose: Sentence[];
 	sections?: Section[];
 }): AtomzBlock[] {
-	const atoms = data.fragments.map(toAtom);
-	const topLevelIndexMap = buildTopLevelIndexMap(atoms);
+	const atomList = data.atoms.map(toAtom);
+	const topLevelIndexMap = buildTopLevelIndexMap(atomList);
 	const proseBlocks: AtomzBlock[] = [];
 	let markdownCount = 0;
 	for (let i = 0; i < data.prose.length; i++) {
@@ -280,7 +287,7 @@ export function buildBlocksFromRuntimeView(data: {
 	for (let i = 0; i < blocks.length; i++) {
 		const block = blocks[i];
 		if (block.type !== 'heading') continue;
-		const beforeAtomIndex = deriveHeadingBeforeAtomIndex(blocks, i, atoms);
+		const beforeAtomIndex = deriveHeadingBeforeAtomIndex(blocks, i, atomList);
 		const sectionTitle = sectionsByIndex.get(beforeAtomIndex);
 		if (sectionTitle) {
 			block.text = sectionTitle;
@@ -307,61 +314,6 @@ export function buildBlocksFromRuntimeView(data: {
 	return blocks;
 }
 
-export function buildPinsFromRuntimeView(data: {
-	fragments: Fragment[];
-	editorPins?: EditorPin[];
-	prose: Sentence[];
-	sections?: Section[];
-}): AtomzPin[] {
-	const pins: AtomzPin[] = [];
-	const blocks = buildBlocksFromRuntimeView(data);
-	const markdownBlocks = blocks.filter((block): block is AtomzMarkdownBlock => block.type === 'markdown');
-	const paraToBlockId = new Map<number, string>();
-	let paraIndex = 0;
-	for (const block of markdownBlocks) {
-		paraIndex += 1;
-		paraToBlockId.set(paraIndex, block.id);
-	}
-
-	function createPin(value: string, anchors: AtomzPinAnchor[]): AtomzPin {
-		return {
-			id: `pin_${pins.length + 1}`,
-			kind: 'verbatim',
-			value,
-			anchors
-		};
-	}
-
-	function walk(fragment: Fragment) {
-		for (const pinnedWord of fragment.pinnedWords || []) {
-			pins.push(createPin(pinnedWord, [{ type: 'atom', atomId: fragment.id }]));
-		}
-		for (const child of fragment.children || []) walk(child);
-	}
-
-	for (const fragment of data.fragments) walk(fragment);
-
-	for (const editorPin of data.editorPins || []) {
-		const normalizedValue = normalizePinnedText(editorPin.text);
-		const blockId = paraToBlockId.get(editorPin.para);
-		if (!blockId) continue;
-		const matchingBlock = markdownBlocks.find((block) => block.id === blockId);
-		const linkedAtomIds = matchingBlock?.atomIds || [];
-		const existingPin = pins.find((pin) =>
-			normalizePinnedText(pin.value) === normalizedValue &&
-			pin.anchors.some((anchor) => anchor.type === 'atom' && linkedAtomIds.includes(anchor.atomId))
-		);
-		if (existingPin) {
-			if (!existingPin.anchors.some((anchor) => anchor.type === 'block' && anchor.blockId === blockId)) {
-				existingPin.anchors.push({ type: 'block', blockId });
-			}
-			continue;
-		}
-		pins.push(createPin(editorPin.text, [{ type: 'block', blockId }]));
-	}
-
-	return pins;
-}
 
 function isHeadingBlock(block: unknown): block is AtomzHeadingBlock {
 	return !!block && typeof block === 'object' && (block as AtomzHeadingBlock).type === 'heading';
@@ -430,12 +382,28 @@ function toAtomWithPins(fragment: Fragment): AtomzAtom & { pinnedWords?: string[
 
 export function projectAtomzFileToRenderDocument(file: AtomzFileV2): RenderDocument {
 	const atomsWithPins = buildFragmentsFromAtoms(file.atoms, file.pins || []).map(toAtomWithPins);
-	const prose = buildProseFromBlocks(file.blocks).map((sentence, index) => ({
-		id: index,
-		frags: sentence.frags,
-		para: sentence.para,
-		text: sentence.text
-	}));
+	// Build prose directly from blocks, carrying block IDs through as stable identifiers.
+	// The merge algorithm uses these IDs to match edited prose back to original blocks.
+	const prose: RenderDocument['prose'] = [];
+	let paraIndex = 0;
+	for (const block of file.blocks) {
+		if (block.type === 'heading') {
+			prose.push({
+				id: block.id,
+				frags: [],
+				para: paraIndex,
+				text: `${'#'.repeat(block.level)} ${block.text}`
+			});
+			continue;
+		}
+		paraIndex += 1;
+		prose.push({
+			id: block.id,
+			frags: block.atomIds,
+			para: paraIndex,
+			text: block.markdown
+		});
+	}
 	return {
 		atoms: atomsWithPins,
 		rules: file.rules.map((rule) => rule.text),
@@ -445,23 +413,46 @@ export function projectAtomzFileToRenderDocument(file: AtomzFileV2): RenderDocum
 
 export function mergeRenderDocumentIntoAtomzFile(baseFile: AtomzFileV2, renderDocument: RenderDocument): AtomzFileV2 {
 	const atoms = renderDocument.atoms.map((atom) => stripPinnedWords(atom));
-	const blocks: AtomzBlock[] = renderDocument.prose.map((sentence, index) => {
+
+	// Each prose entry carries an `id` that is the block ID it was projected from.
+	// The agent may have changed text, frags, or reordered entries — but the ID is stable.
+	// New entries added by the agent get a generated ID.
+	let newBlockCounter = 0;
+	const blocks: AtomzBlock[] = renderDocument.prose.map((sentence) => {
 		const headingMatch = sentence.text.match(/^(#{1,3})\s+(.+)/);
+		// Use the prose entry's ID (which is the original block ID).
+		// If the agent added a new entry, it won't have a valid block ID — generate one.
+		const blockId = sentence.id || `block_new_${++newBlockCounter}`;
 		if (headingMatch) {
 			return {
-				id: `block_heading_${index + 1}`,
-				type: 'heading',
+				id: blockId,
+				type: 'heading' as const,
 				level: headingMatch[1].length as 1 | 2 | 3,
 				text: headingMatch[2]
 			};
 		}
 		return {
-			id: `block_markdown_${index + 1}`,
-			type: 'markdown',
+			id: blockId,
+			type: 'markdown' as const,
 			markdown: sentence.text,
 			atomIds: sentence.frags
 		};
 	});
+
+	// Rebuild pins: preserve base pins but re-anchor block references to new block IDs
+	// and remove orphaned anchors
+	const blockIdSet = new Set(blocks.map((b) => b.id));
+	const atomIdSet = new Set<string>();
+	function walkAtoms(list: AtomzAtom[]) { for (const a of list) { atomIdSet.add(a.id); walkAtoms(a.children || []); } }
+	walkAtoms(atoms);
+	const pins: AtomzPin[] = (baseFile.pins || []).map((pin) => ({
+		...pin,
+		anchors: pin.anchors.filter((a) =>
+			(a.type === 'atom' && atomIdSet.has(a.atomId)) ||
+			(a.type === 'block' && blockIdSet.has(a.blockId))
+		).map((a) => ({ ...a }))
+	})).filter((pin) => pin.anchors.length > 0);
+
 	return {
 		version: 2,
 		...(baseFile.source ? { source: baseFile.source } : {}),
@@ -469,43 +460,30 @@ export function mergeRenderDocumentIntoAtomzFile(baseFile: AtomzFileV2, renderDo
 		atoms,
 		rules: baseFile.rules.map((rule) => ({ ...rule })),
 		blocks,
-		...(baseFile.pins?.length ? { pins: baseFile.pins.map((pin) => ({ ...pin, anchors: pin.anchors.map((anchor) => ({ ...anchor })) })) } : {})
+		...(pins.length ? { pins } : {})
 	};
 }
 
-export function serialize(data: {
-	fragments: Fragment[];
-	prose: Sentence[];
-	rules: Rule[];
-	paraBreaks: Set<number>;
-	editorPins?: EditorPin[];
-	sections?: Section[];
-}): string {
-	return JSON.stringify(buildAtomzFile(data), null, 2);
-}
-
-export function buildAtomzFile(data: {
-	fragments: Fragment[];
-	prose: Sentence[];
-	rules: Rule[];
-	paraBreaks: Set<number>;
-	editorPins?: EditorPin[];
-	sections?: Section[];
-}): AtomzFileV2 {
-	const blocks = buildBlocksFromRuntimeView(data);
-	const pins = buildPinsFromRuntimeView(data);
+export function buildAtomzFileFromCanonicalState(state: CanonicalRuntimeState): AtomzFileV2 {
 	return {
 		version: 2,
-		atoms: data.fragments.map(toAtom),
-		rules: data.rules.map((rule) => ({ id: rule.id, text: rule.text })),
-		blocks,
-		...(pins.length ? { pins } : {})
+		atoms: state.atoms.map(toAtom),
+		rules: state.rules.map((rule) => ({ id: rule.id, text: rule.text })),
+		blocks: state.blocks.map((block) => block.type === 'heading'
+			? { ...block }
+			: { ...block, atomIds: [...block.atomIds] }),
+		...(state.pins.length ? {
+			pins: state.pins.map((pin) => ({
+				...pin,
+				anchors: pin.anchors.map((anchor) => ({ ...anchor }))
+			}))
+		} : {})
 	};
 }
 
 export function projectAtomzFileToRuntimeState(file: AtomzFileV2): RuntimeDocumentState {
 	return {
-		fragments: buildFragmentsFromAtoms(file.atoms, file.pins || []),
+		atoms: buildFragmentsFromAtoms(file.atoms, file.pins || []),
 		prose: buildProseFromBlocks(file.blocks),
 		rules: file.rules.map((rule) => ({ id: rule.id, text: rule.text })),
 		paraBreaks: buildParaBreaksFromBlocks(file.blocks, file.atoms),
@@ -516,17 +494,6 @@ export function projectAtomzFileToRuntimeState(file: AtomzFileV2): RuntimeDocume
 
 export function deserialize(json: string): RuntimeDocumentState {
 	return projectAtomzFileToRuntimeState(normalizeAtomzFile(json));
-}
-
-export function downloadAtomz(data: Parameters<typeof serialize>[0], filename = 'untitled.atomz') {
-	const json = serialize(data);
-	const blob = new Blob([json], { type: 'application/json' });
-	const url = URL.createObjectURL(blob);
-	const a = document.createElement('a');
-	a.href = url;
-	a.download = filename;
-	a.click();
-	URL.revokeObjectURL(url);
 }
 
 export function uploadAtomz(): Promise<ReturnType<typeof deserialize>> {

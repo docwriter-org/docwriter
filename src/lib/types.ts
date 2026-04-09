@@ -1,11 +1,14 @@
-export interface Fragment {
+export interface Atom {
 	id: string;
 	subject: string;       // core noun — who/what the sentence is about
 	predicate: string;     // the claim — what's being said
-	children: Fragment[];
+	children: Atom[];
 	pinnedWords?: string[];
 	transition?: string;   // transition word/phrase before this atom's sentence (e.g., "Yet", "However")
 }
+
+/** @deprecated Use Atom instead */
+export type Fragment = Atom;
 
 export const TRANSITIONS = [
 	'', 'And', 'But', 'Yet', 'So', 'Or', 'Nor', 'For',
@@ -84,15 +87,26 @@ export interface PinProseTextOp extends DocumentOpBase {
 	linkedFragIds: string[];
 }
 
-export interface ReplaceProseOp extends DocumentOpBase {
-	type: 'replace_prose';
-	prose: Sentence[];
-	sections: Section[];
+export interface AddAtomOp extends DocumentOpBase {
+	type: 'add_atom';
+	atom: { id: string; subject: string; predicate: string };
+	parentId?: string;       // if sub-atom, the parent atom id
+	index: number;           // insertion position
 }
 
-export interface ReplaceFragmentsOp extends DocumentOpBase {
-	type: 'replace_fragments';
-	fragments: Fragment[];
+export interface DeleteAtomOp extends DocumentOpBase {
+	type: 'delete_atom';
+	atomId: string;
+	subject: string;         // for agent context
+	predicate: string;       // for agent context
+}
+
+export interface ReorderAtomsOp extends DocumentOpBase {
+	type: 'reorder_atoms';
+	atomId: string;
+	fromIndex: number;
+	toIndex: number;
+	parentId?: string;       // if reordering children within a parent
 }
 
 export interface ReplaceRulesOp extends DocumentOpBase {
@@ -100,42 +114,46 @@ export interface ReplaceRulesOp extends DocumentOpBase {
 	rules: Rule[];
 }
 
-export interface ReplaceSectionsOp extends DocumentOpBase {
-	type: 'replace_sections';
-	sections: Section[];
-}
-
-export interface ReplaceParagraphStructureOp extends DocumentOpBase {
-	type: 'replace_paragraph_structure';
-	paraBreaks: number[];
-	prose: Sentence[];
-}
-
 export interface FeedbackRequestOp extends DocumentOpBase {
 	type: 'feedback_request';
 	description: string;
+}
+
+export interface UpdateBlocksOp extends DocumentOpBase {
+	type: 'update_blocks';
+	blocks: import('$lib/atomz').AtomzBlock[];
+	source: 'editor' | 'structure';
+}
+
+export interface UpdatePinsOp extends DocumentOpBase {
+	type: 'update_pins';
+	pins: import('$lib/atomz').AtomzPin[];
 }
 
 export type DocumentOp =
 	| EditAtomOp
 	| PinAtomWordOp
 	| PinProseTextOp
-	| ReplaceProseOp
-	| ReplaceFragmentsOp
+	| AddAtomOp
+	| DeleteAtomOp
+	| ReorderAtomsOp
 	| ReplaceRulesOp
-	| ReplaceSectionsOp
-	| ReplaceParagraphStructureOp
-	| FeedbackRequestOp;
+	| FeedbackRequestOp
+	| UpdateBlocksOp
+	| UpdatePinsOp;
+
+type NewOp<T extends DocumentOpBase> = Omit<T, 'id' | 'createdAt'> & Partial<Pick<DocumentOpBase, 'id' | 'createdAt'>>;
 export type NewDocumentOp =
-	| (Omit<EditAtomOp, 'id' | 'createdAt'> & Partial<Pick<DocumentOpBase, 'id' | 'createdAt'>>)
-	| (Omit<PinAtomWordOp, 'id' | 'createdAt'> & Partial<Pick<DocumentOpBase, 'id' | 'createdAt'>>)
-	| (Omit<PinProseTextOp, 'id' | 'createdAt'> & Partial<Pick<DocumentOpBase, 'id' | 'createdAt'>>)
-	| (Omit<ReplaceProseOp, 'id' | 'createdAt'> & Partial<Pick<DocumentOpBase, 'id' | 'createdAt'>>)
-	| (Omit<ReplaceFragmentsOp, 'id' | 'createdAt'> & Partial<Pick<DocumentOpBase, 'id' | 'createdAt'>>)
-	| (Omit<ReplaceRulesOp, 'id' | 'createdAt'> & Partial<Pick<DocumentOpBase, 'id' | 'createdAt'>>)
-	| (Omit<ReplaceSectionsOp, 'id' | 'createdAt'> & Partial<Pick<DocumentOpBase, 'id' | 'createdAt'>>)
-	| (Omit<ReplaceParagraphStructureOp, 'id' | 'createdAt'> & Partial<Pick<DocumentOpBase, 'id' | 'createdAt'>>)
-	| (Omit<FeedbackRequestOp, 'id' | 'createdAt'> & Partial<Pick<DocumentOpBase, 'id' | 'createdAt'>>);
+	| NewOp<EditAtomOp>
+	| NewOp<PinAtomWordOp>
+	| NewOp<PinProseTextOp>
+	| NewOp<AddAtomOp>
+	| NewOp<DeleteAtomOp>
+	| NewOp<ReorderAtomsOp>
+	| NewOp<ReplaceRulesOp>
+	| NewOp<FeedbackRequestOp>
+	| NewOp<UpdateBlocksOp>
+	| NewOp<UpdatePinsOp>;
 
 export interface Section {
 	title: string;

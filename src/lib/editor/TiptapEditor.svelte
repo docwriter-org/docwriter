@@ -3,12 +3,15 @@
 	import { Editor } from '@tiptap/core';
 	import StarterKit from '@tiptap/starter-kit';
 	import Placeholder from '@tiptap/extension-placeholder';
-	import { commitRuntimeViewToCanonicalStores } from '$lib/runtime-canonical';
-	import { AtomPinned, EditorPinned, UserEdit } from './pinned-mark';
-import { SYNC_TIMING } from '$lib/sync-timing';
+	import { reproject } from '$lib/runtime-canonical';
+	import { Pinned, UserEdit } from './pinned-mark';
+	import { SYNC_TIMING } from '$lib/sync-timing';
 	import type { Sentence, Action, Fragment, EditorPin, Section, Annotation } from '$lib/types';
+	import type { AtomzPin, AtomzBlock } from '$lib/atomz';
 	import type { SentenceTransition } from '$lib/stores';
 	import {
+		blocks,
+		pins,
 		prose,
 		pushDocumentOp,
 		pushHistory,
@@ -28,7 +31,7 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 		sentenceTransitions,
 		renderingSentences,
 		clearUserEdits,
-		undoProse,
+		undoBlocks,
 		editorMode
 	} from '$lib/stores';
 
@@ -87,16 +90,49 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 		return text.toLowerCase().includes(normalizePinnedText(pinnedText));
 	}
 
+	function findFragmentById(frags: Fragment[], id: string): Fragment | null {
+		for (const f of frags) {
+			if (f.id === id) return f;
+			for (const c of f.children || []) {
+				if (c.id === id) return c;
+			}
+		}
+		return null;
+	}
+
 	function commitPlaintextEdits() {
 		if (plaintextValue === plaintextBaseline) return;
-		const changes = buildDiffSummary(plaintextBaseline, plaintextValue);
-		const updatedProse = buildUpdatedProseFromPlaintext(plaintextValue);
-		prose.set(updatedProse);
-		syncCanonicalStoresFromLocalState({ prose: updatedProse });
+		// Build blocks from plaintext lines
+		const lines = plaintextValue.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
+		const existingMdBlocks = currentBlocks.filter((b): b is import('$lib/atomz').AtomzMarkdownBlock => b.type === 'markdown');
+		const nextBlocks: AtomzBlock[] = [];
+		let mdIdx = 0;
+		for (const line of lines) {
+			const headingMatch = line.match(/^(#{1,3})\s+(.+)/);
+			if (headingMatch) {
+				nextBlocks.push({
+					id: `block_heading_${nextBlocks.length}`,
+					type: 'heading',
+					level: headingMatch[1].length as 1 | 2 | 3,
+					text: headingMatch[2]
+				});
+			} else {
+				const existing = existingMdBlocks[mdIdx];
+				nextBlocks.push({
+					id: existing?.id || `block_markdown_${mdIdx + 1}`,
+					type: 'markdown',
+					markdown: line,
+					atomIds: existing?.atomIds || []
+				});
+				mdIdx++;
+			}
+		}
+		blocks.set(nextBlocks);
+		reproject();
 		pushDocumentOp({
-			type: 'replace_prose',
-			prose: updatedProse,
-			sections: currentSections
+			type: 'update_blocks',
+			blocks: nextBlocks,
+			source: 'editor'
 		});
 		plaintextBaseline = plaintextValue;
 		hasUnsavedEdits = false;
@@ -164,14 +200,20 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 	let currentFragments: Fragment[] = $state([]);
 	fragments.subscribe((v) => {
 		currentFragments = v;
-		if (editor) applyPinnedWordMarks();
+		if (editor) applyPinMarks();
 	});
 
 	let currentEditorPins: EditorPin[] = $state([]);
 	editorPins.subscribe((v) => {
 		currentEditorPins = v;
-		if (editor) applyEditorPinMarks();
+		if (editor) applyPinMarks();
 	});
+
+	let currentPins: AtomzPin[] = $state([]);
+	pins.subscribe((v) => { currentPins = v; });
+
+	let currentBlocks: AtomzBlock[] = $state([]);
+	blocks.subscribe((v) => { currentBlocks = v; });
 
 	let currentSections: Section[] = $state([]);
 	sections.subscribe((v) => {
@@ -187,26 +229,6 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 	paraBreaks.subscribe((v) => {
 		currentParaBreaks = v;
 	});
-
-	function syncCanonicalStoresFromLocalState(input?: {
-		fragments?: Fragment[];
-		prose?: Sentence[];
-		editorPins?: EditorPin[];
-		sections?: Section[];
-	}) {
-		const nextFragments = input?.fragments || currentFragments;
-		const nextProse = input?.prose || currentProse;
-		const nextEditorPins = input?.editorPins || currentEditorPins;
-		const nextSections = input?.sections || currentSections;
-		commitRuntimeViewToCanonicalStores({
-			fragments: nextFragments,
-			prose: nextProse,
-			rules: currentRules,
-			paraBreaks: currentParaBreaks,
-			editorPins: nextEditorPins,
-			sections: nextSections
-		});
-	}
 
 	let currentProse: Sentence[] = $state([]);
 	prose.subscribe((v) => {
@@ -340,7 +362,7 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 	let hasPendingDiffs = $derived(transitions.size > 0 && [...transitions.values()].some(t => t.done));
 
 	function acceptAll() { sentenceTransitions.set(new Map()); }
-	function rejectAll() { sentenceTransitions.set(new Map()); undoProse(); }
+	function rejectAll() { sentenceTransitions.set(new Map()); undoBlocks(); }
 
 	// Feature 7: Annotation rendering
 	let annoList: Annotation[] = $state([]);
@@ -431,62 +453,53 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 		return html;
 	}
 
-	function syncEditorToProse() {
+	function syncEditorToBlocks() {
 		if (!editor) return;
 		const json = editor.getJSON();
-		const paragraphs: string[] = [];
-		const extractedSections: Section[] = [];
-		let paraCount = 0;
+		const nextBlocks: AtomzBlock[] = [];
+		let mdBlockIdx = 0;
+
+		// Build a list of existing markdown blocks for atomId preservation
+		const existingMdBlocks = currentBlocks.filter((b): b is import('$lib/atomz').AtomzMarkdownBlock => b.type === 'markdown');
+
 		for (const node of json.content || []) {
 			if (node.type === 'heading') {
 				const text = (node.content || []).map((c: any) => c.text || '').join('');
 				if (text.trim()) {
-					const level = node.attrs?.level || 1;
-					const prefix = '#'.repeat(level);
-					paragraphs.push(`${prefix} ${text.trim()}`);
-					extractedSections.push({ title: text.trim(), beforeAtomIndex: paraCount });
+					const level = (node.attrs?.level || 1) as 1 | 2 | 3;
+					// Try to match an existing heading block
+					const existingHeading = currentBlocks.find((b) =>
+						b.type === 'heading' && (b as import('$lib/atomz').AtomzHeadingBlock).level === level
+					);
+					nextBlocks.push({
+						id: existingHeading?.id || `block_heading_${nextBlocks.length}`,
+						type: 'heading',
+						level,
+						text: text.trim()
+					});
 				}
 			} else if (node.type === 'paragraph') {
 				const text = (node.content || []).map((c: any) => c.text || '').join('');
 				if (text.trim()) {
-					paragraphs.push(text.trim());
-					paraCount++;
+					const existing = existingMdBlocks[mdBlockIdx];
+					nextBlocks.push({
+						id: existing?.id || `block_markdown_${mdBlockIdx + 1}`,
+						type: 'markdown',
+						markdown: text.trim(),
+						atomIds: existing?.atomIds || []
+					});
+					mdBlockIdx++;
 				}
 			}
 		}
-		sections.set(extractedSections);
 
-		const proseByPara = new Map<number, Sentence[]>();
-		for (const s of currentProse) {
-			if (!proseByPara.has(s.para)) proseByPara.set(s.para, []);
-			proseByPara.get(s.para)!.push(s);
-		}
-		const paraKeys = [...proseByPara.keys()].sort((a, b) => a - b);
+		blocks.set(nextBlocks);
+		reproject();
 
-		const updated: Sentence[] = [];
-		for (let i = 0; i < paragraphs.length; i++) {
-			const paraIdx = i < paraKeys.length ? paraKeys[i] : i;
-			const existing = proseByPara.get(paraKeys[i]) || [];
-
-			if (existing.length === 1) {
-				updated.push({ ...existing[0], text: paragraphs[i] });
-			} else if (existing.length > 1) {
-				updated.push({ ...existing[0], text: paragraphs[i] });
-				for (let j = 1; j < existing.length; j++) {
-					updated.push({ ...existing[j], text: '' });
-				}
-			} else {
-				updated.push({ frags: [], para: paraIdx, text: paragraphs[i] });
-			}
-		}
-
-		const filtered = updated.filter(s => s.text.trim() !== '');
-		prose.set(filtered);
-		syncCanonicalStoresFromLocalState({ prose: filtered, sections: extractedSections });
 		pushDocumentOp({
-			type: 'replace_prose',
-			prose: filtered,
-			sections: extractedSections
+			type: 'update_blocks',
+			blocks: nextBlocks,
+			source: 'editor'
 		});
 		buildSentenceRanges();
 	}
@@ -500,8 +513,8 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 			lastContent = editor.getText();
 			hasUnsavedEdits = false;
 			clearCountdown();
-			applyPinnedWordMarks();
-			applyEditorPinMarks();
+			applyPinMarks();
+			applyPinMarks();
 			requestAnimationFrame(() => applyAnnotationStyles());
 		}
 		buildSentenceRanges();
@@ -573,7 +586,7 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 					changes.push(`Text changed (${lastContent.length} → ${newText.length} chars)`);
 				}
 
-				syncEditorToProse();
+				syncEditorToBlocks();
 
 				lastContent = newText;
 			}
@@ -590,57 +603,55 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 		suppressUpdate = false;
 	}
 
-	/** Collect all pinned words from fragments (including children) */
-	function collectPinnedWords(frags: Fragment[]): string[] {
-		const words: string[] = [];
-		for (const f of frags) {
-			if (f.pinnedWords) words.push(...f.pinnedWords);
-			if (f.children?.length) words.push(...collectPinnedWords(f.children));
+	/** Collect all pinned text from atoms (pinnedWords) and editor pins */
+	function collectAllPinnedText(): string[] {
+		const texts: string[] = [];
+		function walkAtoms(frags: Fragment[]) {
+			for (const f of frags) {
+				if (f.pinnedWords) texts.push(...f.pinnedWords);
+				if (f.children?.length) walkAtoms(f.children);
+			}
 		}
-		return words;
+		walkAtoms(currentFragments);
+		for (const pin of currentEditorPins) {
+			if (pin.text.trim()) texts.push(pin.text.trim());
+		}
+		// Deduplicate (case-insensitive)
+		const seen = new Set<string>();
+		return texts.filter((t) => {
+			const lower = t.toLowerCase();
+			if (seen.has(lower)) return false;
+			seen.add(lower);
+			return true;
+		});
 	}
 
-	/** Scan editor doc and apply atomPinned marks on words matching pinnedWords */
-	function applyPinnedWordMarks() {
+	/** Scan editor doc and apply pinned marks on all pinned text */
+	function applyPinMarks() {
 		if (!editor) return;
-		const pinnedWords = collectPinnedWords(currentFragments);
-		if (pinnedWords.length === 0) {
-			// Clear any existing atomPinned marks
-			suppressUpdate = true;
-			const { tr } = editor.state;
-			let changed = false;
-			editor.state.doc.descendants((node, pos) => {
-				if (!node.isText) return;
-				const markToRemove = node.marks.find(m => m.type.name === 'atomPinned');
-				if (markToRemove) {
-					tr.removeMark(pos, pos + node.nodeSize, editor!.schema.marks.atomPinned);
-					changed = true;
-				}
-			});
-			if (changed) editor.view.dispatch(tr);
+		const pinnedTexts = collectAllPinnedText();
+		const pinnedType = editor.schema.marks.pinned;
+
+		// Remove all existing pinned marks
+		suppressUpdate = true;
+		const { tr } = editor.state;
+		editor.state.doc.descendants((node, pos) => {
+			if (!node.isText) return;
+			if (node.marks.some((m) => m.type.name === 'pinned')) {
+				tr.removeMark(pos, pos + node.nodeSize, pinnedType);
+			}
+		});
+		editor.view.dispatch(tr);
+
+		if (pinnedTexts.length === 0) {
 			suppressUpdate = false;
 			return;
 		}
 
-		// Build a combined regex for all pinned words (case-insensitive, word boundary)
-		const escaped = pinnedWords.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-		const pattern = new RegExp(`\\b(${escaped.join('|')})\\b`, 'gi');
-
-		suppressUpdate = true;
-		const { tr } = editor.state;
-		const atomPinnedType = editor.schema.marks.atomPinned;
-
-		// First remove all existing atomPinned marks
-		editor.state.doc.descendants((node, pos) => {
-			if (!node.isText) return;
-			const markToRemove = node.marks.find(m => m.type.name === 'atomPinned');
-			if (markToRemove) {
-				tr.removeMark(pos, pos + node.nodeSize, atomPinnedType);
-			}
-		});
-
-		// Apply the transaction so we work on a clean slate, then re-scan
-		editor.view.dispatch(tr);
+		// Build regex matching all pinned texts (longest first to match phrases before words)
+		const sorted = [...pinnedTexts].sort((a, b) => b.length - a.length);
+		const escaped = sorted.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+		const pattern = new RegExp(`(${escaped.join('|')})`, 'gi');
 
 		const { tr: tr2 } = editor.state;
 		editor.state.doc.descendants((node, pos) => {
@@ -649,12 +660,10 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 			let match: RegExpExecArray | null;
 			pattern.lastIndex = 0;
 			while ((match = pattern.exec(text)) !== null) {
-				const from = pos + match.index;
-				const to = from + match[0].length;
-				tr2.addMark(from, to, atomPinnedType.create({ word: match[0].toLowerCase() }));
+				tr2.addMark(pos + match.index, pos + match.index + match[0].length, pinnedType.create({ word: match[0].toLowerCase() }));
 			}
 		});
-		editor.view.dispatch(tr2);
+		if (tr2.steps.length > 0) editor.view.dispatch(tr2);
 		suppressUpdate = false;
 	}
 
@@ -671,16 +680,51 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 		const linkedFragIds = linkedRange?.frags || [];
 		const paraIndex = linkedRange ? (currentProse[linkedRange.sentIdx]?.para ?? 0) : 0;
 
-		// Apply editorPinned mark
+		// Apply pinned mark
 		suppressUpdate = true;
-		editor.chain().setTextSelection({ from, to }).setMark('editorPinned').run();
+		editor.chain().setTextSelection({ from, to }).setMark('pinned').run();
 		suppressUpdate = false;
 
-		// Add to editorPins store
-		const nextEditorPins = currentEditorPins.some((pin) => pin.para === paraIndex && normalizePinnedText(pin.text) === normalizedSelectedText)
-			? currentEditorPins
-			: [...currentEditorPins, { text: normalizedSelectedText, para: paraIndex }];
-		editorPins.set(nextEditorPins);
+		// Build anchors for the new pin
+		const anchors: AtomzPin['anchors'] = [];
+
+		// Add atom anchors for linked fragments whose text contains the pinned text
+		const matchingAtomIds: string[] = [];
+		for (const fragId of linkedFragIds) {
+			const frag = findFragmentById(currentFragments, fragId);
+			if (frag && hasPinnedText(`${frag.subject} ${frag.predicate}`, normalizedSelectedText)) {
+				anchors.push({ type: 'atom', atomId: fragId });
+				matchingAtomIds.push(fragId);
+			}
+		}
+
+		// Add block anchor — find the markdown block for this paragraph
+		const mdBlocks = currentBlocks.filter((b): b is import('$lib/atomz').AtomzMarkdownBlock => b.type === 'markdown');
+		const targetBlock = mdBlocks[paraIndex - 1]; // paraIndex is 1-based in block ordering
+		if (targetBlock) {
+			anchors.push({ type: 'block', blockId: targetBlock.id });
+		}
+
+		// Check if pin already exists
+		const alreadyExists = currentPins.some((p) =>
+			normalizePinnedText(p.value) === normalizedSelectedText &&
+			anchors.some((a) => p.anchors.some((pa) =>
+				(a.type === 'atom' && pa.type === 'atom' && a.atomId === pa.atomId) ||
+				(a.type === 'block' && pa.type === 'block' && a.blockId === pa.blockId)
+			))
+		);
+
+		if (!alreadyExists && anchors.length > 0) {
+			const newPin: AtomzPin = {
+				id: `pin_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+				kind: 'verbatim',
+				value: normalizedSelectedText,
+				anchors
+			};
+			pins.set([...currentPins, newPin]);
+			reproject();
+		}
+
 		pushDocumentOp({
 			type: 'pin_prose_text',
 			text: normalizedSelectedText,
@@ -688,51 +732,19 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 			linkedFragIds
 		});
 
-		let matchingAtomIds: string[] = [];
-		let newlyMirroredAtomIds: string[] = [];
-		if (linkedFragIds.length > 0) {
-			const linkedSet = new Set(linkedFragIds);
-			fragments.update((existingFragments) => {
-				function updateFragmentPin(fragment: Fragment): Fragment {
-					const updatedChildren = (fragment.children || []).map(updateFragmentPin);
-					if (!linkedSet.has(fragment.id)) {
-						return { ...fragment, children: updatedChildren };
-					}
-					const atomText = `${fragment.subject} ${fragment.predicate}`;
-					if (!hasPinnedText(atomText, normalizedSelectedText)) {
-						return { ...fragment, children: updatedChildren };
-					}
-					matchingAtomIds.push(fragment.id);
-					const pinned = fragment.pinnedWords || [];
-					const isAlreadyPinned = pinned.some((value) => normalizePinnedText(value) === normalizedSelectedText);
-					if (!isAlreadyPinned) newlyMirroredAtomIds.push(fragment.id);
-					return {
-						...fragment,
-						children: updatedChildren,
-						pinnedWords: isAlreadyPinned ? pinned : [...pinned, normalizedSelectedText]
-					};
-				}
-				return existingFragments.map(updateFragmentPin);
+		if (matchingAtomIds.length > 0) {
+			pushHistory({
+				type: 'user_action',
+				timestamp: Date.now(),
+				description: `Pinned "${normalizedSelectedText}" in prose and mirrored to atoms ${matchingAtomIds.join(', ')}`
 			});
-			syncCanonicalStoresFromLocalState({ editorPins: nextEditorPins });
-			const atomList = linkedFragIds.join(', ');
-			if (matchingAtomIds.length > 0) {
-				pushHistory({
-					type: 'user_action',
-					timestamp: Date.now(),
-					description: newlyMirroredAtomIds.length > 0
-						? `Pinned "${normalizedSelectedText}" in prose and mirrored to atoms ${newlyMirroredAtomIds.join(', ')}`
-						: `Pinned "${normalizedSelectedText}" in prose (already mirrored in linked atoms)`
-				});
-			} else {
-				pushHistory({
-					type: 'user_action',
-					timestamp: Date.now(),
-					description: `Pinned "${normalizedSelectedText}" in prose (agent sync needed for atoms ${atomList})`
-				});
-			}
+		} else if (linkedFragIds.length > 0) {
+			pushHistory({
+				type: 'user_action',
+				timestamp: Date.now(),
+				description: `Pinned "${normalizedSelectedText}" in prose (agent sync needed for atoms ${linkedFragIds.join(', ')})`
+			});
 		} else {
-			syncCanonicalStoresFromLocalState({ editorPins: nextEditorPins });
 			pushHistory({
 				type: 'user_action',
 				timestamp: Date.now(),
@@ -829,56 +841,13 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 		feedbackText = '';
 	}
 
-	function applyEditorPinMarks() {
-		if (!editor) return;
-		suppressUpdate = true;
-		const editorPinnedType = editor.schema.marks.editorPinned;
-		const { tr } = editor.state;
-		let changed = false;
-		editor.state.doc.descendants((node, pos) => {
-			if (!node.isText) return;
-			const markToRemove = node.marks.find((mark) => mark.type.name === 'editorPinned');
-			if (!markToRemove) return;
-			tr.removeMark(pos, pos + node.nodeSize, editorPinnedType);
-			changed = true;
-		});
-		if (changed) editor.view.dispatch(tr);
-		const normalizedPins = currentEditorPins
-			.map((pin) => pin.text.trim())
-			.filter((pin) => pin.length > 0);
-		if (normalizedPins.length === 0) {
-			suppressUpdate = false;
-			return;
-		}
-		const usedPinIndexes = new Set<number>();
-		const { tr: tr2 } = editor.state;
-		editor.state.doc.descendants((node, pos) => {
-			if (!node.isText) return;
-			const text = node.text || '';
-			const lowerText = text.toLowerCase();
-			for (let i = 0; i < normalizedPins.length; i++) {
-				if (usedPinIndexes.has(i)) continue;
-				const pinText = normalizedPins[i];
-				const matchAt = lowerText.indexOf(pinText.toLowerCase());
-				if (matchAt === -1) continue;
-				const from = pos + matchAt;
-				const to = from + pinText.length;
-				tr2.addMark(from, to, editorPinnedType.create());
-				usedPinIndexes.add(i);
-			}
-		});
-		if (tr2.steps.length > 0) editor.view.dispatch(tr2);
-		suppressUpdate = false;
-	}
-
 	onMount(() => {
 		editor = new Editor({
 			element,
 			extensions: [
 				StarterKit.configure({ heading: { levels: [1, 2, 3] } }),
 				Placeholder.configure({ placeholder: 'Start writing or import a document...' }),
-				AtomPinned,
-				EditorPinned,
+				Pinned,
 				UserEdit
 			],
 			content: proseToHtml(currentProse),
@@ -891,8 +860,8 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 		plaintextValue = proseToPlaintext(currentProse);
 		plaintextBaseline = plaintextValue;
 		buildSentenceRanges();
-		applyPinnedWordMarks();
-		applyEditorPinMarks();
+		applyPinMarks();
+		applyPinMarks();
 	});
 
 	onDestroy(() => {
@@ -1039,14 +1008,21 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 		height: 0;
 	}
 
-	.tiptap-editor :global([data-atom-pinned]) {
-		border-bottom: 2px solid var(--accent);
-		font-weight: 600;
+	.tiptap-editor :global(.pinned-mark) {
+		background: color-mix(in srgb, var(--accent) 12%, transparent);
+		border-radius: 3px;
+		padding: 0 2px;
+		box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 25%, transparent);
 	}
-
-	.tiptap-editor :global([data-editor-pinned]) {
-		border-bottom: 2px solid #f59e0b;
-		font-weight: 500;
+	.tiptap-editor :global(.pinned-mark)::before {
+		content: '';
+		display: inline-block;
+		width: 10px;
+		height: 10px;
+		margin-right: 2px;
+		vertical-align: middle;
+		opacity: 0.5;
+		background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%237c3aed' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cline x1='12' y1='17' x2='12' y2='22'/%3E%3Cpath d='M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z'/%3E%3C/svg%3E") no-repeat center / contain;
 	}
 
 	/* Plaintext mode */

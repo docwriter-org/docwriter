@@ -1,15 +1,14 @@
 <script lang="ts">
-	import { GripVertical, Plus, Trash2, Sparkles, Pin, X as XIcon } from 'lucide-svelte';
-	import { commitRuntimeViewToCanonicalStores } from '$lib/runtime-canonical';
+	import { X as XIcon } from 'lucide-svelte';
+	import AtomNode from './AtomNode.svelte';
+	import { reproject } from '$lib/runtime-canonical';
 	import type { Fragment, Section } from '$lib/types';
 	import { ATOM_CONSTRAINTS, TRANSITIONS } from '$lib/types';
-	import { editorPins, fragments, highlightedFrags, highlightedSents, paraBreaks, prose, pushDocumentOp, pushHistory, rules, selectedModel, showHistory, sections } from '$lib/stores';
+	import { blocks, atoms, fragments, highlightedFrags, highlightedSents, paraBreaks, prose, pushDocumentOp, pushHistory, rules, selectedModel, showHistory, sections } from '$lib/stores';
 
 	let fragList: Fragment[] = $state([]);
 	fragments.subscribe((v) => (fragList = v));
 
-	let hlFrags: Set<string> = $state(new Set());
-	highlightedFrags.subscribe((v) => (hlFrags = v));
 
 	let breaks: Set<number> = $state(new Set());
 	paraBreaks.subscribe((v) => (breaks = v));
@@ -33,16 +32,23 @@
 		if (editingSectionIdx === null) return;
 		const idx = editingSectionIdx;
 		const title = editingSectionTitle.trim();
-		let nextSections = sectionList;
 		if (title) {
-			sections.update((ss) => {
-				nextSections = ss.map((s) => s.beforeAtomIndex === idx ? { ...s, title } : s);
-				return nextSections;
-			});
-			syncCanonicalStoresFromLocalState({ sections: nextSections });
+			// Find the heading block that corresponds to this section
+			const section = sectionList.find((s) => s.beforeAtomIndex === idx);
+			if (section) {
+				const headingBlock = currentBlocks.find((b) => b.type === 'heading' && (b as import('$lib/atomz').AtomzHeadingBlock).text === section.title);
+				if (headingBlock) {
+					const nextBlocks = currentBlocks.map((b) =>
+						b.id === headingBlock.id ? { ...b, text: title } : b
+					);
+					blocks.set(nextBlocks);
+					reproject();
+				}
+			}
 			pushDocumentOp({
-				type: 'replace_sections',
-				sections: cloneSections(nextSections)
+				type: 'update_blocks',
+				blocks: currentBlocks,
+				source: 'structure'
 			});
 			pushHistory({
 				type: 'user_action',
@@ -58,91 +64,36 @@
 	let editPredicate = $state('');
 	let editSubject = $state('');
 
-	let dragIdx: number | null = $state(null);
-	let overIdx: number | null = $state(null);
-
 	let currentProse: typeof $prose = $state([]);
 	prose.subscribe((v) => (currentProse = v));
-
-	let currentEditorPins = $state<import('$lib/types').EditorPin[]>([]);
-	editorPins.subscribe((v) => (currentEditorPins = v));
 
 	let currentRules = $state<typeof $rules>([]);
 	rules.subscribe((v) => (currentRules = v));
 
-	function getFragIds(f: Fragment): string[] {
-		return [f.id, ...(f.children || []).map((c) => c.id)];
-	}
+	let currentBlocks = $state<import('$lib/atomz').AtomzBlock[]>([]);
+	blocks.subscribe((v) => (currentBlocks = v));
 
-	const transitionWords = TRANSITIONS.filter(t => t !== '');
 
-	interface PredicateToken {
-		display: string;
-		normalized: string;
-	}
 
-	function normalizePinnedText(text: string): string {
-		const normalized = text.trim().replace(/^[^\w]+|[^\w]+$/g, '').toLowerCase();
-		return normalized || text.trim().toLowerCase();
-	}
-
-	function getPredicateTokens(predicate: string): PredicateToken[] {
-		return predicate
-			.split(/\s+/)
-			.filter((token) => token.length > 0)
-			.map((token) => ({
-				display: token,
-				normalized: normalizePinnedText(token)
-			}));
-	}
-
-	function isPinnedWord(pinnedWords: string[] | undefined, word: string): boolean {
-		const normalizedWord = normalizePinnedText(word);
-		return (pinnedWords || []).some((pinnedWord) => normalizePinnedText(pinnedWord) === normalizedWord);
-	}
-
-	function cloneFragments(fragmentList: Fragment[]): Fragment[] {
-		return fragmentList.map((fragment) => ({
-			...fragment,
-			...(fragment.pinnedWords ? { pinnedWords: [...fragment.pinnedWords] } : {}),
-			children: cloneFragments(fragment.children || [])
-		}));
-	}
 
 	function cloneSections(sectionListToClone: Section[]): Section[] {
 		return sectionListToClone.map((section) => ({ ...section }));
 	}
 
-	function syncCanonicalStoresFromLocalState(input?: {
-		fragments?: Fragment[];
-		prose?: typeof currentProse;
-		sections?: Section[];
-		editorPins?: typeof currentEditorPins;
-	}) {
-		const nextFragments = input?.fragments || fragList;
-		const nextProse = input?.prose || currentProse;
-		const nextSections = input?.sections || sectionList;
-		const nextEditorPins = input?.editorPins || currentEditorPins;
-		commitRuntimeViewToCanonicalStores({
-			fragments: nextFragments,
-			prose: nextProse,
-			rules: currentRules,
-			paraBreaks: breaks,
-			editorPins: nextEditorPins,
-			sections: nextSections
-		});
-	}
-
 	function setTransition(fragId: string, value: string) {
-		let nextFragments: Fragment[] = [];
-		fragments.update((fs) => {
-			nextFragments = fs.map((f) => f.id === fragId ? { ...f, transition: value || undefined } : f);
-			return nextFragments;
-		});
-		syncCanonicalStoresFromLocalState({ fragments: nextFragments });
+		let subject = '', predicate = '';
+		const old = findAtomInTree(fragList, fragId);
+		subject = old?.subject || '';
+		predicate = old?.predicate || '';
+		fragments.update((fs) => updateAtomInTree(fs, fragId, (a) => ({
+			...a, transition: value || undefined
+		})));
+		reproject();
 		pushDocumentOp({
-			type: 'replace_fragments',
-			fragments: cloneFragments(nextFragments)
+			type: 'edit_atom',
+			fragId,
+			subject,
+			predicate
 		});
 		pushHistory({
 			type: 'user_action',
@@ -151,86 +102,42 @@
 		});
 	}
 
-	function handleTransitionHover(f: Fragment) {
-		// Highlight the transition word in the prose
-		const ids = new Set(getFragIds(f));
-		highlightedFrags.set(ids);
-		const si = new Set<number>();
-		currentProse.forEach((s, i) => {
-			if (s.frags.some((fid) => ids.has(fid))) si.add(i);
-		});
-		highlightedSents.set(si);
-	}
-
-	function handleFragHover(f: Fragment) {
-		const ids = new Set(getFragIds(f));
-		highlightedFrags.set(ids);
-		const si = new Set<number>();
-		currentProse.forEach((s, i) => {
-			if (s.frags.some((fid) => ids.has(fid))) si.add(i);
-		});
-		highlightedSents.set(si);
-	}
-
-	function handleChildHover(cid: string) {
-		highlightedFrags.set(new Set([cid]));
-		const si = new Set<number>();
-		currentProse.forEach((s, i) => {
-			if (s.frags.includes(cid)) si.add(i);
-		});
-		highlightedSents.set(si);
-	}
-
-	function clearHL() {
-		highlightedFrags.set(new Set());
-		highlightedSents.set(new Set());
-	}
-
 	function startEdit(id: string, predicate: string, subject: string) {
 		editingId = id;
 		editPredicate = predicate;
 		editSubject = subject;
 	}
 
+	/** Recursively find an atom by ID in the tree */
+	function findAtomInTree(list: Fragment[], id: string): Fragment | null {
+		for (const f of list) {
+			if (f.id === id) return f;
+			const found = findAtomInTree(f.children || [], id);
+			if (found) return found;
+		}
+		return null;
+	}
+
+	/** Recursively update an atom by ID */
+	function updateAtomInTree(list: Fragment[], id: string, updater: (a: Fragment) => Fragment): Fragment[] {
+		return list.map((f) => {
+			if (f.id === id) return updater(f);
+			return { ...f, children: updateAtomInTree(f.children || [], id, updater) };
+		});
+	}
+
 	function saveEdit(parentId: string | null) {
 		const changedId = editingId!;
+		const old = findAtomInTree(fragList, changedId);
+		const oldSubject = old?.subject || '';
+		const oldPredicate = old?.predicate || '';
 
-		// Capture old values for history
-		let oldSubject = '';
-		let oldPredicate = '';
-		const findFrag = (id: string) => {
-			for (const f of fragList) {
-				if (f.id === id) return f;
-				for (const c of f.children || []) {
-					if (c.id === id) return c;
-				}
-			}
-			return null;
-		};
-		const old = findFrag(changedId);
-		if (old) { oldSubject = old.subject; oldPredicate = old.predicate; }
-
-		if (parentId) {
-			fragments.update((fs) =>
-				fs.map((f) =>
-					f.id === parentId
-						? {
-								...f,
-								children: (f.children || []).map((c) =>
-									c.id === editingId ? { ...c, predicate: editPredicate, subject: editSubject } : c
-								)
-							}
-						: f
-				)
-			);
-		} else {
-			fragments.update((fs) =>
-				fs.map((f) => (f.id === editingId ? { ...f, predicate: editPredicate, subject: editSubject } : f))
-			);
-		}
+		fragments.update((fs) => updateAtomInTree(fs, changedId, (a) => ({
+			...a, subject: editSubject, predicate: editPredicate
+		})));
 		editingId = null;
+		reproject();
 
-		// Only trigger if something actually changed
 		const changes: string[] = [];
 		if (oldSubject !== editSubject) changes.push(`subject "${oldSubject}" → "${editSubject}"`);
 		if (oldPredicate !== editPredicate) changes.push(`claim "${oldPredicate.slice(0, 30)}..." → "${editPredicate.slice(0, 30)}..."`);
@@ -249,129 +156,113 @@
 		}
 	}
 
-	function handleDragStart(i: number) {
-		dragIdx = i;
-	}
-	function handleDragOver(e: DragEvent, i: number) {
-		e.preventDefault();
-		overIdx = i;
-	}
-	function handleDrop(i: number) {
-		if (dragIdx === null || dragIdx === i) {
-			dragIdx = null;
-			overIdx = null;
-			return;
-		}
-		const movedId = fragList[dragIdx!].id;
-		let nextFragments: Fragment[] = [];
-		fragments.update((fs) => {
-			const next = [...fs];
-			const [m] = next.splice(dragIdx!, 1);
-			next.splice(i, 0, m);
-			nextFragments = next;
-			return next;
-		});
-		syncCanonicalStoresFromLocalState({ fragments: nextFragments });
-		dragIdx = null;
-		overIdx = null;
-		pushDocumentOp({
-			type: 'replace_fragments',
-			fragments: cloneFragments(nextFragments)
-		});
-	}
-
-	// Child drag reorder
-	let childDragParent: string | null = $state(null);
-	let childDragIdx: number | null = $state(null);
-	let childOverIdx: number | null = $state(null);
-
-	function handleChildDragStart(parentId: string, idx: number) {
-		childDragParent = parentId;
-		childDragIdx = idx;
-	}
-	function handleChildDragOver(e: DragEvent, idx: number) {
-		e.preventDefault();
-		childOverIdx = idx;
-	}
-	function handleChildDrop(parentId: string, idx: number) {
-		if (childDragParent !== parentId || childDragIdx === null || childDragIdx === idx) {
-			childDragIdx = null; childOverIdx = null; childDragParent = null;
-			return;
-		}
-		let nextFragments: Fragment[] = [];
-		fragments.update((fs) => {
-			nextFragments = fs.map((f) => {
-				if (f.id !== parentId) return f;
-				const kids = [...(f.children || [])];
-				const [moved] = kids.splice(childDragIdx!, 1);
-				kids.splice(idx, 0, moved);
-				return { ...f, children: kids };
+	/** Unified reorder — works at any depth */
+	function handleReorder(atomId: string, fromIndex: number, toIndex: number, parentId: string | null) {
+		if (parentId) {
+			fragments.update((fs) => updateAtomInTree(fs, parentId, (parent) => {
+				const kids = [...(parent.children || [])];
+				const [moved] = kids.splice(fromIndex, 1);
+				kids.splice(toIndex, 0, moved);
+				return { ...parent, children: kids };
+			}));
+		} else {
+			fragments.update((fs) => {
+				const next = [...fs];
+				const [m] = next.splice(fromIndex, 1);
+				next.splice(toIndex, 0, m);
+				return next;
 			});
-			return nextFragments;
-		});
-		syncCanonicalStoresFromLocalState({ fragments: nextFragments });
+		}
+		reproject();
 		pushDocumentOp({
-			type: 'replace_fragments',
-			fragments: cloneFragments(nextFragments)
+			type: 'reorder_atoms',
+			atomId,
+			fromIndex,
+			toIndex,
+			...(parentId ? { parentId } : {})
 		});
-		childDragIdx = null; childOverIdx = null; childDragParent = null;
 	}
 
 	function toggleBreak(i: number, add: boolean) {
-		let nextBreaks = new Set<number>();
-		paraBreaks.update((pb) => {
-			const next = new Set(pb);
-			if (add) next.add(i);
-			else next.delete(i);
-			nextBreaks = next;
-			return next;
+		// Build a map from atom ID to top-level fragment index
+		const atomToTopIdx = new Map<string, number>();
+		fragList.forEach((f, idx) => {
+			atomToTopIdx.set(f.id, idx);
+			for (const c of f.children || []) atomToTopIdx.set(c.id, idx);
 		});
 
-		// Recompute prose para values to match the new breaks
-		let currentBreaks: Set<number>;
-		paraBreaks.subscribe((v) => (currentBreaks = v))();
-		let curProse: import('$lib/types').Sentence[];
-		prose.subscribe((v) => (curProse = v))();
+		// Work with current blocks
+		const nextBlocks = [...currentBlocks];
 
-		// Build frag → para mapping from atoms + breaks
-		let curFrags: Fragment[] = [];
-		fragments.subscribe((v) => (curFrags = v))();
-		const fragParaMap: Record<string, number> = {};
-		let paraGroup = 0;
-		curFrags.forEach((f, idx) => {
-			if (idx > 0 && currentBreaks!.has(idx)) paraGroup++;
-			const ids = [f.id, ...(f.children || []).map((c) => c.id)];
-			ids.forEach((id) => { fragParaMap[id] = paraGroup; });
-		});
+		if (add) {
+			// Split: find the markdown block whose atomIds span across atom index i
+			for (let bi = 0; bi < nextBlocks.length; bi++) {
+				const block = nextBlocks[bi];
+				if (block.type !== 'markdown') continue;
+				const atomIndices = block.atomIds.map((aid) => atomToTopIdx.get(aid) ?? -1);
+				const hasBeforeBreak = atomIndices.some((idx) => idx < i);
+				const hasAtOrAfterBreak = atomIndices.some((idx) => idx >= i);
+				if (hasBeforeBreak && hasAtOrAfterBreak) {
+					// Split this block's atomIds
+					const beforeIds = block.atomIds.filter((aid) => (atomToTopIdx.get(aid) ?? -1) < i);
+					const afterIds = block.atomIds.filter((aid) => (atomToTopIdx.get(aid) ?? -1) >= i);
+					// Keep the existing block for "before" atoms, create a new block for "after"
+					nextBlocks[bi] = { ...block, atomIds: beforeIds, markdown: block.markdown };
+					const newBlock: import('$lib/atomz').AtomzMarkdownBlock = {
+						id: `block_markdown_split_${Date.now().toString(36)}`,
+						type: 'markdown',
+						markdown: '', // will be filled by agent render
+						atomIds: afterIds
+					};
+					nextBlocks.splice(bi + 1, 0, newBlock);
+					break;
+				}
+			}
+		} else {
+			// Merge: find two adjacent markdown blocks where the second starts at atom index i
+			for (let bi = 0; bi < nextBlocks.length - 1; bi++) {
+				const block = nextBlocks[bi];
+				const nextBlock = nextBlocks[bi + 1];
+				if (block.type !== 'markdown' || nextBlock.type !== 'markdown') continue;
+				const nextAtomIndices = nextBlock.atomIds.map((aid) => atomToTopIdx.get(aid) ?? -1);
+				if (nextAtomIndices.some((idx) => idx === i)) {
+					// Merge nextBlock into block
+					const merged: import('$lib/atomz').AtomzMarkdownBlock = {
+						...block,
+						atomIds: [...block.atomIds, ...nextBlock.atomIds],
+						markdown: [block.markdown, nextBlock.markdown].filter(Boolean).join(' ')
+					};
+					nextBlocks.splice(bi, 2, merged);
+					break;
+				}
+			}
+		}
 
-		// Update prose para values
-		const updated = curProse!.map((s) => {
-			const newPara = Math.min(...s.frags.map((fid) => fragParaMap[fid] ?? s.para));
-			return { ...s, para: isFinite(newPara) ? newPara : s.para };
-		});
-		prose.set(updated);
-		syncCanonicalStoresFromLocalState({ prose: updated });
+		blocks.set(nextBlocks);
+		reproject();
+
 		pushDocumentOp({
-			type: 'replace_paragraph_structure',
-			paraBreaks: Array.from(nextBreaks).sort((a, b) => a - b),
-			prose: updated
+			type: 'update_blocks',
+			blocks: nextBlocks,
+			source: 'structure'
 		});
 
-		// Paragraph breaks are structural — no agent needed, just save
 		pushHistory({ type: 'user_action', timestamp: Date.now(), description: `${add ? 'Added' : 'Removed'} paragraph break at position ${i}` });
 	}
 
 	// Add atom
 	let addingAtom = $state(false);
 	let addingChildOf: string | null = $state(null);
+	let addSiblingParentId: string | null = $state(null);
 	let newSubject = $state('');
 	let newPredicate = $state('');
 	let addAtIndex = $state(-1); // -1 = end
 
-	function startAddAtom(afterIndex: number) {
+	function handleAddSibling(afterIndex: number, parentId: string | null) {
 		addAtIndex = afterIndex;
-		addingAtom = true;
+		addSiblingParentId = parentId;
 		addingChildOf = null;
+		addingAtom = true;
 		newSubject = '';
 		newPredicate = '';
 	}
@@ -384,34 +275,46 @@
 	}
 
 	function confirmAddAtom() {
-		if (!newSubject.trim() || !newPredicate.trim()) return;
+		if (!newPredicate.trim()) return; // subject can be blank — agent will pick one
 		const id = 'f' + Date.now().toString(36);
 		const newFrag: Fragment = { id, subject: newSubject.trim(), predicate: newPredicate.trim(), children: [] };
-		let nextFragments: Fragment[] = [];
+
+		const insertIdx = addAtIndex >= 0 ? addAtIndex + 1 : -1;
 
 		if (addingChildOf) {
-			fragments.update((fs) => {
-				nextFragments = fs.map((f) => f.id === addingChildOf ? { ...f, children: [...(f.children || []), newFrag] } : f);
-				return nextFragments;
-			});
+			// Add as child of any atom at any depth
+			fragments.update((fs) => updateAtomInTree(fs, addingChildOf!, (parent) => ({
+				...parent, children: [...(parent.children || []), newFrag]
+			})));
+		} else if (addSiblingParentId) {
+			// Add as sibling inside a parent's children
+			fragments.update((fs) => updateAtomInTree(fs, addSiblingParentId!, (parent) => {
+				const kids = [...(parent.children || [])];
+				kids.splice(insertIdx, 0, newFrag);
+				return { ...parent, children: kids };
+			}));
 		} else {
+			// Add at top level
+			const idx = insertIdx >= 0 ? insertIdx : fragList.length;
 			fragments.update((fs) => {
 				const next = [...fs];
-				const idx = addAtIndex >= 0 ? addAtIndex + 1 : next.length;
 				next.splice(idx, 0, newFrag);
-				nextFragments = next;
 				return next;
 			});
 		}
-		syncCanonicalStoresFromLocalState({ fragments: nextFragments });
+		reproject();
 
+		const effectiveParentId = addingChildOf || addSiblingParentId || undefined;
 		pushDocumentOp({
-			type: 'replace_fragments',
-			fragments: cloneFragments(nextFragments)
+			type: 'add_atom',
+			atom: { id, subject: newSubject.trim(), predicate: newPredicate.trim() },
+			parentId: addingChildOf || undefined,
+			index: addingChildOf ? -1 : insertIdx
 		});
 		pushHistory({ type: 'user_action', timestamp: Date.now(), description: `Added atom ${id}: ${newSubject.trim()} | ${newPredicate.trim()}` });
 		addingAtom = false;
 		addingChildOf = null;
+		addSiblingParentId = null;
 	}
 
 	function cancelAddAtom() {
@@ -419,23 +322,24 @@
 		addingChildOf = null;
 	}
 
-	// Delete atom
+	// Delete atom (recursive — works at any depth)
+	function removeAtomFromTree(list: Fragment[], id: string): Fragment[] {
+		return list.filter((f) => f.id !== id).map((f) => ({
+			...f, children: removeAtomFromTree(f.children || [], id)
+		}));
+	}
+
 	function deleteAtom(id: string) {
-		let nextFragments: Fragment[] = [];
-		fragments.update((fs) => {
-			// Remove from top-level
-			const filtered = fs.filter((f) => f.id !== id);
-			// Remove from children
-			nextFragments = filtered.map((f) => ({
-				...f,
-				children: (f.children || []).filter((c) => c.id !== id)
-			}));
-			return nextFragments;
-		});
-		syncCanonicalStoresFromLocalState({ fragments: nextFragments });
+		const old = findAtomInTree(fragList, id);
+		const subject = old?.subject || '';
+		const predicate = old?.predicate || '';
+		fragments.update((fs) => removeAtomFromTree(fs, id));
+		reproject();
 		pushDocumentOp({
-			type: 'replace_fragments',
-			fragments: cloneFragments(nextFragments)
+			type: 'delete_atom',
+			atomId: id,
+			subject,
+			predicate
 		});
 		pushHistory({ type: 'user_action', timestamp: Date.now(), description: `Deleted atom ${id}` });
 	}
@@ -503,9 +407,10 @@
 	}
 
 	function adoptAlternative(fragId: string, alt: { subject: string; predicate: string }) {
-		fragments.update((fs) =>
-			fs.map((f) => f.id === fragId ? { ...f, subject: alt.subject, predicate: alt.predicate } : f)
-		);
+		fragments.update((fs) => updateAtomInTree(fs, fragId, (a) => ({
+			...a, subject: alt.subject, predicate: alt.predicate
+		})));
+		reproject();
 		pushDocumentOp({
 			type: 'edit_atom',
 			fragId,
@@ -516,56 +421,8 @@
 		alternativesFor = null;
 	}
 
-	// Pin word
-	function hasPinnedText(text: string, pinnedText: string): boolean {
-		return text.toLowerCase().includes(pinnedText.toLowerCase());
-	}
 
-	function togglePin(fragId: string, word: string) {
-		const normalizedWord = normalizePinnedText(word);
-		if (!normalizedWord) return;
-		let isPinnedAfterToggle = false;
-		fragments.update((fs) =>
-			fs.map((f) => {
-				if (f.id === fragId) {
-					const pinned = f.pinnedWords || [];
-					const wasPinned = isPinnedWord(pinned, normalizedWord);
-					const next = wasPinned
-						? pinned.filter((pinnedWord) => normalizePinnedText(pinnedWord) !== normalizedWord)
-						: [...pinned, normalizedWord];
-					isPinnedAfterToggle = !wasPinned;
-					return { ...f, pinnedWords: next };
-				}
-				return {
-					...f,
-					children: (f.children || []).map((c) => {
-						if (c.id === fragId) {
-							const pinned = c.pinnedWords || [];
-							const wasPinned = isPinnedWord(pinned, normalizedWord);
-							const next = wasPinned
-								? pinned.filter((pinnedWord) => normalizePinnedText(pinnedWord) !== normalizedWord)
-								: [...pinned, normalizedWord];
-							isPinnedAfterToggle = !wasPinned;
-							return { ...c, pinnedWords: next };
-						}
-						return c;
-					})
-				};
-			})
-		);
-		syncCanonicalStoresFromLocalState();
-		pushHistory({
-			type: 'user_action',
-			timestamp: Date.now(),
-			description: `${isPinnedAfterToggle ? 'Pinned' : 'Unpinned'} "${normalizedWord}" on atom ${fragId}`
-		});
-		pushDocumentOp({
-			type: 'pin_atom_word',
-			fragId,
-			word: normalizedWord,
-			pinned: isPinnedAfterToggle
-		});
-	}
+
 </script>
 
 <div class="content-pane">
@@ -654,197 +511,50 @@
 				{/if}
 			{/if}
 
-			<!-- Transition word -->
-			{#if i > 0}
-				<!-- svelte-ignore a11y_no_static_element_interactions -->
-				<div class="transition-row" onmouseenter={() => handleTransitionHover(f)} onmouseleave={clearHL}>
-					<select
-						class="transition-select"
-						class:has-value={!!f.transition}
-						value={f.transition || ''}
-						onchange={(e) => setTransition(f.id, e.currentTarget.value)}
-					>
-						<option value="">···</option>
-						{#each transitionWords as tw}
-							<option value={tw}>{tw}</option>
-						{/each}
-					</select>
+			<AtomNode
+				atom={f}
+				depth={0}
+				parentId={null}
+				index={i}
+				siblingCount={fragList.length}
+				{editingId} {editSubject} {editPredicate}
+				addingChildOf={addingChildOf}
+				{newSubject} {newPredicate}
+				{alternativesFor} {alternatives} {loadingAlts}
+				onStartEdit={startEdit}
+				onSaveEdit={saveEdit}
+				onCancelEdit={() => (editingId = null)}
+				onDelete={deleteAtom}
+				onSetTransition={setTransition}
+				onFetchAlternatives={fetchAlternatives}
+				onAdoptAlternative={adoptAlternative}
+				onStartAddChild={startAddChild}
+				onConfirmAddChild={confirmAddAtom}
+				onCancelAddChild={cancelAddAtom}
+				onReorder={handleReorder}
+				onBindNewSubject={(v) => (newSubject = v)}
+				onBindNewPredicate={(v) => (newPredicate = v)}
+				onBindEditSubject={(v) => (editSubject = v)}
+				onBindEditPredicate={(v) => (editPredicate = v)}
+			/>
+
+			<!-- Hover zone to add top-level atom after this one -->
+			{#if addingAtom && !addingChildOf && addAtIndex === i}
+				<div class="add-inline-form">
+					<input class="add-inline-input" bind:value={newSubject} placeholder="subject" onkeydown={(e) => e.key === 'Escape' && cancelAddAtom()} />
+					<input class="add-inline-input" bind:value={newPredicate} placeholder="claim" onkeydown={(e) => { if (e.key === 'Enter') confirmAddAtom(); if (e.key === 'Escape') cancelAddAtom(); }} />
+					<button class="add-inline-btn" onclick={confirmAddAtom}>Add</button>
+					<button class="add-inline-btn cancel" onclick={cancelAddAtom}>Esc</button>
+				</div>
+			{:else}
+				<div class="add-sibling-zone">
+					<button class="add-sibling-btn" onclick={() => handleAddSibling(i, null)}>+</button>
 				</div>
 			{/if}
-
-			<div class="fragment-group">
-				<!-- svelte-ignore a11y_no_static_element_interactions -->
-				<div
-					class="fragment-row"
-					class:highlighted={hlFrags.has(f.id)}
-					class:dragging={dragIdx === i}
-					class:drop-target={overIdx === i && dragIdx !== null}
-					draggable={editingId !== f.id}
-					ondragstart={() => handleDragStart(i)}
-					ondragover={(e) => handleDragOver(e, i)}
-					ondrop={() => handleDrop(i)}
-					ondragend={() => { dragIdx = null; overIdx = null; }}
-					onmouseenter={() => handleFragHover(f)}
-					onmouseleave={clearHL}
-				>
-					{#if editingId === f.id}
-						<div class="edit-form">
-							<div class="edit-row">
-								<input class="edit-subject" bind:value={editSubject} placeholder="subj" />
-								<input
-									class="edit-label"
-									bind:value={editPredicate}
-									onkeydown={(e) => { if (e.key === 'Enter') saveEdit(null); if (e.key === 'Escape') editingId = null; }}
-								/>
-							</div>
-							<div class="edit-actions">
-								<button class="save-btn" onclick={() => saveEdit(null)}>Save</button>
-								<button class="cancel-btn" onclick={() => (editingId = null)}>Esc</button>
-							</div>
-						</div>
-					{:else}
-						<!-- svelte-ignore a11y_click_events_have_key_events -->
-						<div class="fragment-content">
-							<span class="grip-handle" title="Drag to reorder"><GripVertical size={11} /></span>
-							<!-- svelte-ignore a11y_click_events_have_key_events -->
-							<!-- svelte-ignore a11y_no_static_element_interactions -->
-							<span class="frag-clickable" onclick={() => startEdit(f.id, f.predicate, f.subject)}>
-								<span class="frag-subject">{f.subject}</span>
-								<span class="frag-predicate">
-									{#each getPredicateTokens(f.predicate) as token, wi}
-										{#if wi > 0}{' '}{/if}
-										<span class="predicate-chip" class:pinned={isPinnedWord(f.pinnedWords, token.normalized)}>
-											<span class="predicate-word">{token.display}</span>
-											<button
-												class="pin-word-btn"
-												class:active={isPinnedWord(f.pinnedWords, token.normalized)}
-												onclick={(e) => { e.stopPropagation(); togglePin(f.id, token.normalized); }}
-												title={isPinnedWord(f.pinnedWords, token.normalized) ? `Unpin "${token.normalized}"` : `Pin "${token.normalized}"`}
-											>
-												<Pin size={9} />
-											</button>
-										</span>
-									{/each}
-								</span>
-							</span>
-							<span class="frag-actions">
-								<button class="frag-action-btn" title="Alternatives" onclick={(e) => { e.stopPropagation(); fetchAlternatives(f); }}>
-									<Sparkles size={11} />
-								</button>
-								<button class="frag-action-btn danger" title="Delete" onclick={(e) => { e.stopPropagation(); deleteAtom(f.id); }}>
-									<Trash2 size={11} />
-								</button>
-							</span>
-						</div>
-						{#if alternativesFor === f.id}
-							<div class="alts-carousel">
-								{#if loadingAlts}
-									<span class="alts-loading">Generating alternatives...</span>
-								{:else}
-									{#each alternatives as alt}
-										<!-- svelte-ignore a11y_click_events_have_key_events -->
-										<!-- svelte-ignore a11y_no_static_element_interactions -->
-										<div class="alt-card" onclick={() => adoptAlternative(f.id, alt)}>
-											<span class="alt-subject">{alt.subject}</span>
-											<span class="alt-predicate">{alt.predicate}</span>
-										</div>
-									{/each}
-									<button class="alt-close" onclick={() => (alternativesFor = null)}><XIcon size={10} /></button>
-								{/if}
-							</div>
-						{/if}
-					{/if}
-				</div>
-
-				{#each f.children || [] as c, ci}
-					<!-- svelte-ignore a11y_no_static_element_interactions -->
-					<div
-						class="child-row"
-						class:highlighted={hlFrags.has(c.id)}
-						class:drop-target={childOverIdx === ci && childDragParent === f.id}
-						draggable={editingId !== c.id}
-						ondragstart={() => handleChildDragStart(f.id, ci)}
-						ondragover={(e) => handleChildDragOver(e, ci)}
-						ondrop={() => handleChildDrop(f.id, ci)}
-						ondragend={() => { childDragIdx = null; childOverIdx = null; childDragParent = null; }}
-						onmouseenter={() => handleChildHover(c.id)}
-						onmouseleave={clearHL}
-					>
-						{#if editingId === c.id}
-							<div class="child-edit">
-								<input class="edit-subject small" bind:value={editSubject} placeholder="subj" />
-								<input
-									class="edit-label small"
-									bind:value={editPredicate}
-									onkeydown={(e) => { if (e.key === 'Enter') saveEdit(f.id); if (e.key === 'Escape') editingId = null; }}
-								/>
-								<button class="check-btn" onclick={() => saveEdit(f.id)}>✓</button>
-							</div>
-						{:else}
-							<!-- svelte-ignore a11y_click_events_have_key_events -->
-							<div class="child-content" onclick={() => startEdit(c.id, c.predicate, c.subject)}>
-								<span class="child-subject">{c.subject}</span>
-								<span class="child-predicate">
-									{#each getPredicateTokens(c.predicate) as token, wi}
-										{#if wi > 0}{' '}{/if}
-										<span class="predicate-chip child" class:pinned={isPinnedWord(c.pinnedWords, token.normalized)}>
-											<span class="predicate-word">{token.display}</span>
-											<button
-												class="pin-word-btn"
-												class:active={isPinnedWord(c.pinnedWords, token.normalized)}
-												onclick={(e) => { e.stopPropagation(); togglePin(c.id, token.normalized); }}
-												title={isPinnedWord(c.pinnedWords, token.normalized) ? `Unpin "${token.normalized}"` : `Pin "${token.normalized}"`}
-											>
-												<Pin size={8} />
-											</button>
-										</span>
-									{/each}
-								</span>
-								<span class="frag-actions">
-									<button class="frag-action-btn" title="Alternatives" onclick={(e) => { e.stopPropagation(); fetchAlternatives(c); }}>
-										<Sparkles size={10} />
-									</button>
-									<button class="frag-action-btn danger" title="Delete" onclick={(e) => { e.stopPropagation(); deleteAtom(c.id); }}>
-										<Trash2 size={10} />
-									</button>
-								</span>
-							</div>
-						{/if}
-					</div>
-				{/each}
-
-				<!-- Add child button -->
-				{#if addingAtom && addingChildOf === f.id}
-					<div class="add-atom-form child-add">
-						<input class="add-input" bind:value={newSubject} placeholder="subject subject"  onkeydown={(e) => e.key === 'Escape' && cancelAddAtom()} />
-						<input class="add-input" bind:value={newPredicate} placeholder="predicate"  onkeydown={(e) => { if (e.key === 'Enter') confirmAddAtom(); if (e.key === 'Escape') cancelAddAtom(); }} />
-						<button class="add-confirm" onclick={confirmAddAtom}>Add</button>
-					</div>
-				{:else}
-					<button class="add-child-btn" onclick={() => startAddChild(f.id)}>
-						+ atom
-					</button>
-				{/if}
-			</div>
 		{/each}
 
 	</div>
 
-	<!-- Pinned to bottom -->
-	{#if addingAtom && !addingChildOf}
-		<div class="add-atom-form bottom">
-			<input class="add-input" bind:value={newSubject} placeholder="subject subject"  onkeydown={(e) => e.key === 'Escape' && cancelAddAtom()} />
-			<input class="add-input" bind:value={newPredicate} placeholder="predicate"  onkeydown={(e) => { if (e.key === 'Enter') confirmAddAtom(); if (e.key === 'Escape') cancelAddAtom(); }} />
-			<div class="add-actions">
-				<button class="add-confirm" onclick={confirmAddAtom}>Add</button>
-				<button class="add-cancel" onclick={cancelAddAtom}>Cancel</button>
-			</div>
-		</div>
-	{:else}
-		<button class="add-atom-btn" onclick={() => startAddAtom(fragList.length - 1)}>
-			<Plus size={12} /> Add atom
-		</button>
-	{/if}
 {/if}
 </div>
 
@@ -994,7 +704,6 @@
 		padding: 8px 6px 4px;
 		margin-top: 4px;
 		margin-bottom: 2px;
-		border-bottom: 1px solid var(--border-light);
 	}
 	.section-title {
 		font-size: 13px;
@@ -1055,337 +764,54 @@
 		transition: opacity 0.1s;
 	}
 
-	.transition-row {
-		text-align: center;
-		margin: -2px 0 2px;
-	}
-	.transition-select {
-		border: none;
-		background: transparent;
-		color: var(--text-faint);
-		font-size: 12px;
-		font-family: inherit;
-		font-variant: small-caps;
-		letter-spacing: 0.1em;
-		cursor: pointer;
-		padding: 2px 4px;
-		outline: none;
-		text-align: center;
-		-webkit-appearance: none;
-		appearance: none;
-	}
-	.transition-select:hover {
-		color: var(--text-muted);
-		background: var(--bg-hover);
-		border-radius: 3px;
-	}
-	.transition-select.has-value {
-		color: var(--accent);
-		font-size: 13px;
-		font-weight: 600;
-	}
-	.fragment-group {
-		margin-bottom: 2px;
-	}
-	.fragment-row {
-		padding: 5px 6px;
-		border-radius: 4px;
-		border: 1.5px solid transparent;
-		cursor: grab;
-		transition: background 0.1s;
-	}
-	.fragment-row.highlighted {
-		background: var(--accent-bg);
-	}
-	.fragment-row.dragging {
-		background: #f4f5f7;
-	}
-	.fragment-row.drop-target {
-		border-color: var(--accent);
-	}
-
-	.fragment-content {
+	/* Top-level add sibling zone */
+	.add-sibling-zone {
+		height: 20px;
 		display: flex;
-		align-items: baseline;
-		gap: 5px;
-		cursor: pointer;
-	}
-	.frag-subject {
-		font-size: 14px;
-		font-weight: 600;
-		color: var(--accent-subject);
-		flex-shrink: 0;
-	}
-	.frag-predicate {
-		font-size: 14px;
-		font-weight: 500;
-		color: var(--text);
-	}
-
-	.child-row {
-		padding: 2px 6px 2px 24px;
-		display: flex;
-		align-items: baseline;
-		gap: 4px;
-		border-radius: 3px;
-		transition: background 0.1s;
-	}
-	.child-row.highlighted {
-		background: var(--accent-bg);
-	}
-	.child-content {
-		display: flex;
-		align-items: baseline;
-		gap: 4px;
-		flex: 1;
-		cursor: pointer;
-	}
-	.child-subject {
-		font-size: 13px;
-		color: var(--accent);
-		flex-shrink: 0;
-	}
-	.child-predicate {
-		font-size: 13px;
-		color: var(--text-secondary);
-	}
-
-	.edit-form {
-		display: flex;
-		flex-direction: column;
-		gap: 3px;
-	}
-	.edit-row {
-		display: flex;
-		gap: 3px;
-	}
-	.edit-subject {
-		width: 55px;
-		border: 1px solid #c7d2fe;
-		border-radius: 4px;
-		padding: 2px 5px;
-		font-size: 12px;
-		font-family: inherit;
-		font-weight: 600;
-		outline: none;
-		color: var(--accent-subject);
-	}
-	.edit-label {
-		flex: 1;
-		border: 1px solid #c7d2fe;
-		border-radius: 4px;
-		padding: 2px 5px;
-		font-size: 13px;
-		font-family: inherit;
-		outline: none;
-		color: var(--text);
-	}
-	.edit-subject.small {
-		width: 45px;
-		font-size: 11px;
-		padding: 1px 4px;
-		color: var(--accent);
-	}
-	.edit-label.small {
-		font-size: 12px;
-		padding: 1px 4px;
-		color: #374151;
-	}
-	.edit-actions {
-		display: flex;
-		gap: 4px;
-	}
-	.save-btn {
-		font-size: 11px;
-		padding: 2px 10px;
-		border-radius: 4px;
-		border: none;
-		background: #6366f1;
-		color: white;
-		cursor: pointer;
-		font-family: inherit;
-	}
-	.cancel-btn {
-		font-size: 11px;
-		padding: 2px 10px;
-		border-radius: 4px;
-		border: 1px solid #e5e7eb;
-		background: white;
-		color: #6b7280;
-		cursor: pointer;
-		font-family: inherit;
-	}
-	.check-btn {
-		font-size: 10px;
-		padding: 1px 6px;
-		border-radius: 3px;
-		border: none;
-		background: #6366f1;
-		color: white;
-		cursor: pointer;
-	}
-	.child-edit {
-		display: flex;
-		gap: 3px;
 		align-items: center;
-		flex: 1;
-	}
-	/* Fragment actions */
-	.frag-actions {
-		display: flex;
-		gap: 2px;
-		margin-left: auto;
-		flex-shrink: 0;
-		opacity: 0.5;
+		justify-content: center;
+		opacity: 0;
 		transition: opacity 0.15s;
 	}
-	.fragment-row:hover .frag-actions,
-	.child-row:hover .frag-actions {
-		opacity: 1;
-	}
-	.fragment-content {
-		display: flex;
-		align-items: baseline;
-		gap: 5px;
-		flex-wrap: nowrap;
-	}
-	.grip-handle {
-		cursor: grab;
-		color: var(--text-faint);
-		flex-shrink: 0;
-		padding: 2px;
-	}
-	.grip-handle:active {
-		cursor: grabbing;
-	}
-	.frag-clickable {
-		display: flex;
-		align-items: baseline;
-		gap: 5px;
-		flex: 1;
-		cursor: pointer;
-		min-width: 0;
-	}
-	.frag-action-btn {
-		width: 20px;
-		height: 20px;
+	.add-sibling-zone:hover { opacity: 1; }
+	.add-sibling-btn {
 		border: none;
 		background: none;
-		color: var(--text-faint);
-		cursor: pointer;
-		border-radius: 3px;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		padding: 0;
-	}
-	.frag-action-btn:hover {
-		background: var(--bg-hover);
 		color: var(--accent);
+		font-size: 20px;
+		cursor: pointer;
+		padding: 2px 12px;
+		line-height: 1;
+		font-family: inherit;
+		opacity: 0.6;
 	}
-	.frag-action-btn.danger:hover {
-		color: var(--diff-removed-color);
-	}
-
-	/* Alternatives carousel */
-	.alts-carousel {
+	.add-sibling-btn:hover { opacity: 1; }
+	.add-inline-form {
 		display: flex;
-		gap: 6px;
-		padding: 6px 6px 6px 20px;
-		overflow-x: auto;
+		gap: 4px;
+		padding: 4px 8px;
 		align-items: center;
 	}
-	.alts-loading {
-		font-size: 11px;
-		color: var(--text-faint);
-		padding: 4px;
-	}
-	.alt-card {
-		flex-shrink: 0;
-		padding: 5px 8px;
+	.add-inline-input {
 		border: 1px solid var(--border-light);
-		border-radius: 6px;
-		cursor: pointer;
-		background: var(--bg);
-		transition: border-color 0.1s;
-	}
-	.alt-card:hover {
-		border-color: var(--accent);
-		background: var(--accent-bg);
-	}
-	.alt-subject {
-		font-size: 11px;
-		font-weight: 600;
-		color: var(--accent-subject);
-		display: block;
-	}
-	.alt-predicate {
-		font-size: 11px;
-		color: var(--text-secondary);
-	}
-	.alt-close {
-		flex-shrink: 0;
-		width: 18px;
-		height: 18px;
-		border: none;
-		background: none;
-		color: var(--text-faint);
-		cursor: pointer;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-	}
-
-	/* Pin words */
-	.predicate-chip {
-		display: inline-flex;
-		align-items: center;
-		gap: 2px;
 		border-radius: 4px;
-		padding: 0 1px;
+		padding: 3px 6px;
+		font-size: 12px;
+		font-family: inherit;
+		outline: none;
+		flex: 1;
 	}
-	.predicate-chip:hover {
-		background: var(--bg-hover);
-	}
-	.predicate-chip.pinned .predicate-word {
-		font-weight: 700;
-		text-decoration: underline;
-		text-decoration-color: var(--accent);
-		text-underline-offset: 2px;
-	}
-	.predicate-chip.child {
-		gap: 1px;
-	}
-	.predicate-word {
-		border-radius: 2px;
-		padding: 0 1px;
-	}
-	.pin-word-btn {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		width: 14px;
-		height: 14px;
+	.add-inline-input:focus { border-color: var(--accent); }
+	.add-inline-btn {
 		border: none;
-		background: transparent;
-		color: var(--text-faint);
+		background: var(--accent);
+		color: white;
+		border-radius: 4px;
+		padding: 3px 8px;
+		font-size: 11px;
 		cursor: pointer;
-		border-radius: 999px;
-		padding: 0;
-		opacity: 0.45;
 	}
-	.predicate-chip:hover .pin-word-btn,
-	.pin-word-btn.active {
-		opacity: 1;
-	}
-	.pin-word-btn.active {
-		color: var(--accent);
-	}
-	.pin-word-btn:hover {
-		background: color-mix(in srgb, var(--accent) 10%, transparent);
-		color: var(--accent);
-	}
-
+	.add-inline-btn.cancel { background: transparent; color: var(--text-faint); }
 	/* Add atom */
 	.add-atom-form.bottom {
 		border-top: 1px solid var(--border-light);
