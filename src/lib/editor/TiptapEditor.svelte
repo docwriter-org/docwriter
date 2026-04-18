@@ -1,614 +1,324 @@
 <script lang="ts">
-	import { onMount, onDestroy } from 'svelte';
+	import { onMount, onDestroy, tick } from 'svelte';
 	import { Editor } from '@tiptap/core';
-	import StarterKit from '@tiptap/starter-kit';
-	import Placeholder from '@tiptap/extension-placeholder';
-	import { reproject } from '$lib/runtime-canonical';
-	import { Pinned, UserEdit } from './pinned-mark';
-	import { SYNC_TIMING } from '$lib/sync-timing';
-	import type { Sentence, Action, Fragment, EditorPin, Section, Annotation } from '$lib/types';
-	import type { AtomzPin, AtomzBlock } from '$lib/atomz';
-	import type { SentenceTransition } from '$lib/stores';
+	import { annotate } from 'rough-notation';
+	import type { RoughAnnotation } from 'rough-notation/lib/model';
+	import { ySyncPluginKey } from 'y-prosemirror';
+	import { DiffOverlay, setDiffState } from './diff-overlay';
+	import { collaborativeExtensions } from '$lib/editor-extensions';
+	import { getYDoc, whenYDocReady, isYDocEmpty, getCurrentTab } from '$lib/yjs-doc';
+	import { seedYDocFromContent } from '$lib/yjs-markdown';
+	import { disposeAgentUndo, isAgentApplyInProgress } from '$lib/yjs-agent';
 	import {
-		blocks,
-		pins,
-		prose,
-		pushDocumentOp,
-		pushHistory,
-		selectedAction,
-		annotations,
-		recentActions,
+		userMd,
+		reviewBaseline,
+		userEditRegions,
+		isRendering,
+		submitCountdown,
+		editorFontScale,
 		pinnedActions,
+		recentActions,
 		trackActionUsage,
-		actionUsageCounts,
-		rules,
-		paraBreaks,
-		fragments,
-		editorPins,
-		sections,
-		highlightedFrags,
-		highlightedSents,
-		sentenceTransitions,
-		renderingSentences,
-		clearUserEdits,
-		undoBlocks,
-		editorMode,
-		agentChangedBlockIds,
-		pendingEditBlockIds
+		pendingReviewRounds
 	} from '$lib/stores';
+	import type { UserEditRegion } from '$lib/stores';
+	import type { Action } from '$lib/types';
+
+	const IDLE_MS = 3_000;
+
+	interface Props {
+		onSubmit?: (trigger?: string) => void;
+		/** 'markdown' (default) = full StarterKit + markdown parsing.
+		 * 'plain' = minimal schema with no markdown rendering (for .txt,
+		 * .json, and other non-markdown text files). */
+		kind?: 'markdown' | 'plain';
+	}
+	let { onSubmit, kind = 'markdown' }: Props = $props();
 
 	let element: HTMLDivElement;
-	let editor: Editor | null = $state(null);
+	let editor: Editor | undefined = $state();
+	let writeDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 	let idleTimer: ReturnType<typeof setTimeout> | null = null;
 	let countdownInterval: ReturnType<typeof setInterval> | null = null;
-	let lastContent = '';
-	let hasUnsavedEdits = $state(false);
-	let countdownSeconds = $state(0);
-	let suppressUpdate = false;
+	let idleDeadline = 0;
+	let lastWrittenMd = '';
 
-	let currentMode: 'plaintext' | 'markdown' = $state('markdown');
-	let plaintextValue = $state('');
-	let plaintextBaseline = '';
+	let fontScale = $state(1.0);
+	editorFontScale.subscribe((v) => (fontScale = v));
 
-	function proseToPlaintext(sentences: Sentence[]): string {
-		return sentences.map((sentence) => sentence.text).join('\n');
-	}
-
-	function buildUpdatedProseFromPlaintext(text: string): Sentence[] {
-		const lines = text.split('\n').map((line) => line.trim()).filter((line) => line.length > 0);
-		const updated: Sentence[] = [];
-		for (let paraIdx = 0; paraIdx < lines.length; paraIdx++) {
-			const line = lines[paraIdx];
-			const existing = currentProse[paraIdx];
-			if (existing) {
-				updated.push({ ...existing, text: line });
-				continue;
-			}
-			updated.push({ frags: [], para: paraIdx, text: line });
-		}
-		return updated.filter((sentence) => sentence.text.trim().length > 0);
-	}
-
-	function buildDiffSummary(before: string, after: string): string[] {
-		const oldLines = new Set(before.split('\n').filter((line) => line.trim().length > 0));
-		const newLines = new Set(after.split('\n').filter((line) => line.trim().length > 0));
-		const added = [...newLines].filter((line) => !oldLines.has(line));
-		const removed = [...oldLines].filter((line) => !newLines.has(line));
-		const changes: string[] = [];
-		for (const line of added) changes.push(`Added: "${line.slice(0, 80)}"`);
-		for (const line of removed) changes.push(`Removed: "${line.slice(0, 80)}"`);
-		if (changes.length === 0) {
-			changes.push(`Text changed (${before.length} → ${after.length} chars)`);
-		}
-		return changes;
-	}
-
-	function normalizePinnedText(text: string): string {
-		const normalized = text.trim().replace(/^[^\w]+|[^\w]+$/g, '').toLowerCase();
-		return normalized || text.trim().toLowerCase();
-	}
-
-	function hasPinnedText(text: string, pinnedText: string): boolean {
-		return text.toLowerCase().includes(normalizePinnedText(pinnedText));
-	}
-
-	function findFragmentById(frags: Fragment[], id: string): Fragment | null {
-		for (const f of frags) {
-			if (f.id === id) return f;
-			for (const c of f.children || []) {
-				if (c.id === id) return c;
-			}
-		}
-		return null;
-	}
-
-	function commitPlaintextEdits() {
-		if (plaintextValue === plaintextBaseline) return;
-		// Build blocks from plaintext lines
-		const lines = plaintextValue.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
-		const existingMdBlocks = currentBlocks.filter((b): b is import('$lib/atomz').AtomzMarkdownBlock => b.type === 'markdown');
-		const nextBlocks: AtomzBlock[] = [];
-		let mdIdx = 0;
-		for (const line of lines) {
-			const headingMatch = line.match(/^(#{1,3})\s+(.+)/);
-			if (headingMatch) {
-				nextBlocks.push({
-					id: `block_heading_${nextBlocks.length}`,
-					type: 'heading',
-					level: headingMatch[1].length as 1 | 2 | 3,
-					text: headingMatch[2]
-				});
-			} else {
-				const existing = existingMdBlocks[mdIdx];
-				nextBlocks.push({
-					id: existing?.id || `block_markdown_${mdIdx + 1}`,
-					type: 'markdown',
-					markdown: line,
-					atomIds: existing?.atomIds || []
-				});
-				mdIdx++;
-			}
-		}
-		blocks.set(nextBlocks);
-		reproject();
-		pushDocumentOp({
-			type: 'update_blocks',
-			blocks: nextBlocks,
-			source: 'editor'
-		});
-		plaintextBaseline = plaintextValue;
-		hasUnsavedEdits = false;
-		clearCountdown();
-		if (idleTimer) {
-			clearTimeout(idleTimer);
-			idleTimer = null;
-		}
-	}
-
-	editorMode.subscribe((v) => {
-		const prev = currentMode;
-		currentMode = v;
-		if (prev === 'markdown' && v === 'plaintext') {
-			// Always use canonical prose source so markdown markers (#, etc.) are preserved.
-			plaintextValue = proseToPlaintext(currentProse);
-			plaintextBaseline = plaintextValue;
-			hasUnsavedEdits = false;
-			clearCountdown();
-			return;
-		}
-		if (prev === 'plaintext' && v === 'markdown' && editor) {
-			commitPlaintextEdits();
-			const html = proseToHtml(currentProse);
-			if (editor.getHTML() !== html) {
-				suppressUpdate = true;
-				editor.commands.setContent(html || '<p></p>', { emitUpdate: false });
-				suppressUpdate = false;
-			}
-			lastContent = editor.getText();
-			buildSentenceRanges();
-			if (hlSents.size > 0) applyEditorHighlight(hlSents);
-		}
-	});
-
-	function onPlaintextInput() {
-		// Same idle-timer logic as tiptap, but for the textarea
-		hasUnsavedEdits = plaintextValue !== plaintextBaseline;
-		if (!hasUnsavedEdits) {
-			clearCountdown();
-			if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
-			return;
-		}
-		if (idleTimer) clearTimeout(idleTimer);
-		startCountdown();
-		idleTimer = setTimeout(() => {
-			commitPlaintextEdits();
-		}, SYNC_TIMING.editorIdleMs);
-	}
-
-	// Feedback popup state
-	let feedbackPopup: { text: string; x: number; y: number } | null = $state(null);
-	let feedbackText = $state('');
+	// Feedback popup: floating toolbar when the user selects text. Shows
+	// pinned actions + LRU recent actions + an open-ended text input.
+	let feedbackPopup = $state<{ text: string; x: number; y: number; flipBelow: boolean } | null>(null);
 	let feedbackPopupEl: HTMLDivElement | null = $state(null);
-	let feedbackOpenedAt = $state(0);
-
-	let selected: Action | null = $state(null);
-	selectedAction.subscribe((v) => (selected = v));
-
+	let feedbackInput = $state('');
 	let recent: Action[] = $state([]);
 	recentActions.subscribe((v) => (recent = v));
 
-	let allActions = $derived([...pinnedActions, ...recent]);
-
-	let currentFragments: Fragment[] = $state([]);
-	fragments.subscribe((v) => {
-		currentFragments = v;
-		if (editor) applyPinMarks();
-	});
-
-	let currentEditorPins: EditorPin[] = $state([]);
-	editorPins.subscribe((v) => {
-		currentEditorPins = v;
-		if (editor) applyPinMarks();
-	});
-
-	let currentPins: AtomzPin[] = $state([]);
-	pins.subscribe((v) => { currentPins = v; });
-
-	let currentBlocks: AtomzBlock[] = $state([]);
-	blocks.subscribe((v) => { currentBlocks = v; });
-
-	let currentSections: Section[] = $state([]);
-	sections.subscribe((v) => {
-		currentSections = v;
-	});
-
-	let currentRules: typeof $rules = $state([]);
-	rules.subscribe((v) => {
-		currentRules = v;
-	});
-
-	let currentParaBreaks: Set<number> = $state(new Set());
-	paraBreaks.subscribe((v) => {
-		currentParaBreaks = v;
-	});
-
-	let currentProse: Sentence[] = $state([]);
-	prose.subscribe((v) => {
-		currentProse = v;
-		if (currentMode === 'plaintext' && !hasUnsavedEdits) {
-			plaintextValue = proseToPlaintext(v);
-			plaintextBaseline = plaintextValue;
-		}
-		if (editor && !editor.isFocused) {
-			updateEditorFromProse(v);
+	function updateFeedbackPopup() {
+		if (!editor || !editor.isFocused) return;
+		const { from, to, empty } = editor.state.selection;
+		if (empty || to - from < 2) {
+			feedbackPopup = null;
+			feedbackInput = '';
+			feedbackSelectionRange = null;
+			updateDiff();
+			void refreshFeedbackOverlay();
 			return;
 		}
-		if (editor) {
-			buildSentenceRanges();
-			if (hlSents.size > 0) applyEditorHighlight(hlSents);
+		const selectedText = editor.state.doc.textBetween(from, to, ' ');
+		if (!selectedText.trim()) {
+			feedbackPopup = null;
+			feedbackInput = '';
+			feedbackSelectionRange = null;
+			updateDiff();
+			void refreshFeedbackOverlay();
+			return;
 		}
-	});
-
-	// Bidirectional highlighting: sentence range map
-	interface SentenceRange {
-		from: number;
-		to: number;
-		sentIdx: number;
-		frags: string[];
+		const start = editor.view.coordsAtPos(from);
+		const end = editor.view.coordsAtPos(to);
+		const x = (start.left + end.right) / 2;
+		const POPUP_H_APPROX = 140;
+		const flipBelow = start.top < POPUP_H_APPROX + 20;
+		const y = flipBelow ? end.bottom + 8 : start.top - 8;
+		feedbackPopup = { text: selectedText, x, y, flipBelow };
+		feedbackSelectionRange = { from, to };
+		updateDiff();
+		void refreshFeedbackOverlay();
 	}
-	let sentenceRanges: SentenceRange[] = $state([]);
 
-	/** Build a mapping from ProseMirror positions to sentence indices */
-	function buildSentenceRanges() {
-		if (!editor || currentProse.length === 0) {
-			sentenceRanges = [];
-			return;
+	function handleSelectionChange() {
+		updateFeedbackPopup();
+	}
+
+	function sendFeedback(action: Action) {
+		if (!feedbackPopup) return;
+		const text = feedbackPopup.text;
+		trackActionUsage(action.label);
+		if (!action.pinned) {
+			recentActions.update((prev) => [action, ...prev.filter((x) => x.id !== action.id)].slice(0, 6));
 		}
-		const ranges: SentenceRange[] = [];
-		const blockNodes: { pos: number; textStart: number }[] = [];
-		editor.state.doc.descendants((node, pos) => {
-			if ((node.type.name !== 'paragraph' && node.type.name !== 'heading') || !node.textContent.trim()) return;
-			blockNodes.push({ pos, textStart: pos + 1 });
-			return false;
-		});
-		type RenderedBlock = {
-			type: 'paragraph' | 'heading';
-			para: number;
-			entries: { sentIdx: number; text: string; frags: string[] }[];
+		feedbackPopup = null;
+		feedbackInput = '';
+		feedbackSelectionRange = null;
+		updateDiff();
+		void refreshFeedbackOverlay();
+		if (onSubmit) onSubmit(`Feedback "${action.label}" on this passage: "${text.slice(0, 300)}"`);
+	}
+
+	function sendCustomFeedback() {
+		if (!feedbackPopup || !feedbackInput.trim()) return;
+		const text = feedbackPopup.text;
+		const fb = feedbackInput.trim();
+		// Preserve the full label — CSS truncates long text with an ellipsis
+		// inside the button, and `title={label}` lets the user see the whole
+		// thing on hover. Slicing here used to destroy the original text.
+		const customAction: Action = {
+			id: 'custom_' + Date.now(),
+			label: fb,
+			icon: 'message-square',
+			pinned: false,
+			color: '#7c3aed'
 		};
-		const renderedBlocks: RenderedBlock[] = [];
-		for (let sentIdx = 0; sentIdx < currentProse.length; sentIdx++) {
-			const sentence = currentProse[sentIdx];
-			const headingMatch = sentence.text.match(/^(#{1,3})\s+(.+)/);
-			if (headingMatch) {
-				renderedBlocks.push({
-					type: 'heading',
-					para: sentence.para,
-					entries: [{ sentIdx, text: headingMatch[2], frags: sentence.frags }]
-				});
-				continue;
-			}
-			const prevBlock = renderedBlocks[renderedBlocks.length - 1];
-			if (prevBlock && prevBlock.type === 'paragraph' && prevBlock.para === sentence.para) {
-				prevBlock.entries.push({ sentIdx, text: sentence.text, frags: sentence.frags });
-				continue;
-			}
-			renderedBlocks.push({
-				type: 'paragraph',
-				para: sentence.para,
-				entries: [{ sentIdx, text: sentence.text, frags: sentence.frags }]
-			});
-		}
-		const blockCount = Math.min(blockNodes.length, renderedBlocks.length);
-		for (let blockIdx = 0; blockIdx < blockCount; blockIdx++) {
-			const blockNode = blockNodes[blockIdx];
-			const rendered = renderedBlocks[blockIdx];
-			let relPos = 0;
-			for (let entryIdx = 0; entryIdx < rendered.entries.length; entryIdx++) {
-				const entry = rendered.entries[entryIdx];
-				const text = entry.text.trim();
-				if (!text) continue;
-				const from = blockNode.textStart + relPos;
-				ranges.push({
-					from,
-					to: from + text.length,
-					sentIdx: entry.sentIdx,
-					frags: entry.frags
-				});
-				relPos += text.length;
-				if (entryIdx < rendered.entries.length - 1) relPos += 1;
-			}
-		}
-		sentenceRanges = ranges;
+		trackActionUsage(customAction.label);
+		recentActions.update((prev) => [customAction, ...prev.filter((x) => x.label !== customAction.label)].slice(0, 6));
+		feedbackPopup = null;
+		feedbackInput = '';
+		feedbackSelectionRange = null;
+		updateDiff();
+		void refreshFeedbackOverlay();
+		if (onSubmit) onSubmit(`Feedback "${fb}" on this passage: "${text.slice(0, 300)}"`);
 	}
 
-	/** Handle mousemove over the editor to highlight corresponding atoms */
-	function handleEditorMouseMove(e: MouseEvent) {
-		// Don't highlight while user is selecting text (dragging)
-		if (e.buttons !== 0) return;
-		if (!editor || sentenceRanges.length === 0) return;
-		const coords = editor.view.posAtCoords({ left: e.clientX, top: e.clientY });
-		if (!coords) return;
-		const pos = coords.pos;
-
-		for (const range of sentenceRanges) {
-			if (pos >= range.from && pos <= range.to) {
-				highlightedSents.set(new Set([range.sentIdx]));
-				highlightedFrags.set(new Set(range.frags));
-				return;
-			}
+	/** Serialize editor content for the autosave / render flow.
+	 *  - Markdown mode uses tiptap-markdown's serializer (preserves headings,
+	 *    bullets, bold, etc.).
+	 *  - Plain mode uses Tiptap's `getText({ blockSeparator: '\n' })` which
+	 *    renders paragraphs as '\n'-joined lines — a 1:1 round-trip with
+	 *    files on disk. */
+	function getEditorMarkdown(): string {
+		if (!editor) return '';
+		if (kind === 'plain') {
+			return editor.getText({ blockSeparator: '\n' });
 		}
-		highlightedSents.set(new Set());
-		highlightedFrags.set(new Set());
+		return (editor.storage as any).markdown?.getMarkdown?.() || '';
 	}
 
-	/** Clear highlights when mouse leaves the editor */
-	function handleEditorMouseLeave() {
-		highlightedSents.set(new Set());
-		highlightedFrags.set(new Set());
+	let inFlightWrite: Promise<void> = Promise.resolve();
+
+	function writeToDisk(md: string): Promise<void> {
+		if (md === lastWrittenMd) return inFlightWrite;
+		lastWrittenMd = md;
+		// Include the tab id explicitly so the autosave can never route to
+		// the wrong file if the server's "active tab" pointer is momentarily
+		// out of sync with what the editor is showing.
+		const tabId = getCurrentTab();
+		const q = tabId ? `?tab=${encodeURIComponent(tabId)}` : '';
+		inFlightWrite = fetch(`/api/document${q}`, {
+			method: 'PUT',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ userMd: md })
+		}).then(() => undefined);
+		return inFlightWrite;
 	}
 
-	// Subscribe to highlightedSents for atoms pane -> editor highlighting
-	let hlSents: Set<number> = $state(new Set());
-	highlightedSents.subscribe((v) => {
-		hlSents = v;
-		applyEditorHighlight(v);
+	/** Synchronously fire any pending debounced write and return the in-flight
+	 * Promise. Awaiting this guarantees notes/<tab>.md reflects every keystroke
+	 * before the caller proceeds — used by submit() so the agent never sees a
+	 * stale file. */
+	export function flushAutosave(): Promise<void> {
+		if (writeDebounceTimer) {
+			clearTimeout(writeDebounceTimer);
+			writeDebounceTimer = null;
+			const md = getEditorMarkdown();
+			return writeToDisk(md);
+		}
+		return inFlightWrite;
+	}
+
+	// Diff overlay state — baseline changes when a review starts/ends.
+	let currentBaseline: string | null = null;
+	reviewBaseline.subscribe((v) => {
+		currentBaseline = v;
+		updateDiff();
 	});
 
-	// Feature 4: Clear UserEdit marks when agent finishes processing
-	clearUserEdits.subscribe((v) => { if (v > 0 && editor) clearUserEditMarks(); });
-
-	// Agent edit highlights — apply after a short delay to let DOM settle
-	agentChangedBlockIds.subscribe(() => {
-		if (!editor || !element) return;
-		requestAnimationFrame(() => applyAgentHighlights());
+	let currentRegions: UserEditRegion[] = [];
+	userEditRegions.subscribe((v) => {
+		currentRegions = v;
+		updateDiff();
 	});
 
-	// Pending user edit highlights — amber indicator on blocks awaiting agent
-	pendingEditBlockIds.subscribe(() => {
-		if (!editor || !element) return;
-		requestAnimationFrame(() => applyPendingHighlights());
+	/** True when every pending round is a tiny (<THRESHOLD char) edit.
+	 * Drives a softer ghost style on the diff overlay so a one-word tweak
+	 * doesn't look like a paragraph rewrite. */
+	let allRoundsTiny = false;
+	pendingReviewRounds.subscribe((v) => {
+		allRoundsTiny = v.length > 0 && v.every((r) => r.kind === 'tiny');
+		updateDiff();
 	});
 
-	function applyPendingHighlights() {
-		if (!editor || !element) return;
-		let pendingIds: Set<string> = new Set();
-		pendingEditBlockIds.subscribe((v) => (pendingIds = v))();
-		element.querySelectorAll('.pending-edit').forEach((el) => el.classList.remove('pending-edit'));
-		if (pendingIds.size === 0) return;
-		let currentBlockList: import('$lib/atomz').AtomzBlock[] = [];
-		blocks.subscribe((v) => (currentBlockList = v))();
-		const pendingIndices = new Set<number>();
-		currentBlockList.forEach((block, idx) => {
-			if (pendingIds.has(block.id)) pendingIndices.add(idx);
-		});
-		let blockIdx = 0;
-		editor.state.doc.descendants((node, pos) => {
-			if (node.type.name !== 'paragraph' && node.type.name !== 'heading') return;
-			if (pendingIndices.has(blockIdx)) {
-				try {
-					const dom = editor!.view.nodeDOM(pos);
-					if (dom instanceof HTMLElement) dom.classList.add('pending-edit');
-				} catch {}
-			}
-			blockIdx++;
-			return false;
-		});
+	/** PM range currently highlighted as "what the user is giving feedback
+	 * on". Set when the feedback popup opens, cleared when it closes.
+	 * `$state` so the `.feedback-active` class on the wrapper reacts. */
+	let feedbackSelectionRange: { from: number; to: number } | null = $state(null);
+	/** rough-notation annotations for the overlay spans. Kept around so we
+	 * can `.remove()` them when the selection clears. */
+	let feedbackAnnotations: RoughAnnotation[] = [];
+	/** Overlay element: sibling of the editor, populated by
+	 * refreshFeedbackOverlay with absolutely-positioned spans at each client
+	 * rect of the current selection. rough-notation annotates those spans;
+	 * since they live outside PM's DOM, PM won't wipe them. */
+	let feedbackOverlayEl: HTMLDivElement | null = $state(null);
+
+	/** Append an alpha channel to a CSS color string. Handles `rgb(r g b)` /
+	 * `rgb(r, g, b)` / `#rrggbb` / `#rgb`. Falls back to the raw string if we
+	 * can't parse it (rough-notation will still render, just opaque). */
+	function withAlpha(color: string, alpha: number): string {
+		const c = color.trim();
+		// `rgb(r, g, b)` or `rgb(r g b)` — insert alpha.
+		const rgbMatch = c.match(/^rgb\(\s*([0-9.]+)[\s,]+([0-9.]+)[\s,]+([0-9.]+)\s*\)$/i);
+		if (rgbMatch) {
+			return `rgba(${rgbMatch[1]}, ${rgbMatch[2]}, ${rgbMatch[3]}, ${alpha})`;
+		}
+		// `#rrggbb` → rgba.
+		const hex6 = c.match(/^#([0-9a-f]{6})$/i);
+		if (hex6) {
+			const n = parseInt(hex6[1], 16);
+			return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+		}
+		const hex3 = c.match(/^#([0-9a-f]{3})$/i);
+		if (hex3) {
+			const [r, g, b] = hex3[1].split('').map((x) => parseInt(x + x, 16));
+			return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+		}
+		return c;
 	}
 
-	// Feature 6: Diff transitions
-	let transitions: Map<number, SentenceTransition> = $state(new Map());
-	sentenceTransitions.subscribe((v) => { transitions = v; });
-	let hasPendingDiffs = $derived(transitions.size > 0 && [...transitions.values()].some(t => t.done));
-
-	function acceptAll() { sentenceTransitions.set(new Map()); }
-	function rejectAll() { sentenceTransitions.set(new Map()); undoBlocks(); }
-
-	// Feature 7: Annotation rendering
-	let annoList: Annotation[] = $state([]);
-	annotations.subscribe((v) => { annoList = v; if (typeof requestAnimationFrame !== 'undefined') requestAnimationFrame(() => applyAnnotationStyles()); });
-
-	/** Apply/remove highlight on editor DOM for highlighted sentences */
-	function applyEditorHighlight(sents: Set<number>) {
-		const cssHighlights = (globalThis as any).CSS?.highlights;
-		if (cssHighlights?.delete) cssHighlights.delete('sentence-hover-highlight');
-		if (!editor || sents.size === 0 || sentenceRanges.length === 0) return;
-		const HighlightCtor = (globalThis as any).Highlight;
-		if (!HighlightCtor || !cssHighlights?.set) return;
-		const inlineRanges: Range[] = [];
-		for (const range of sentenceRanges) {
-			if (!sents.has(range.sentIdx)) continue;
+	async function refreshFeedbackOverlay() {
+		// Tear down any prior annotations and clear overlay contents.
+		for (const a of feedbackAnnotations) a.remove();
+		feedbackAnnotations = [];
+		if (feedbackOverlayEl) feedbackOverlayEl.innerHTML = '';
+		if (!feedbackSelectionRange || !editor || !feedbackOverlayEl || !element) return;
+		await tick();
+		await new Promise((r) => requestAnimationFrame(r));
+		// Turn the PM range into screen-space client rects (one per line).
+		const { from, to } = feedbackSelectionRange;
+		const domStart = editor.view.domAtPos(from);
+		const domEnd = editor.view.domAtPos(to);
+		const range = document.createRange();
+		try {
+			range.setStart(domStart.node, domStart.offset);
+			range.setEnd(domEnd.node, domEnd.offset);
+		} catch {
+			return;
+		}
+		const clientRects = Array.from(range.getClientRects()).filter(
+			(r) => r.width > 0 && r.height > 0
+		);
+		if (clientRects.length === 0) return;
+		// Overlay is positioned relative to the tiptap-wrapper, so subtract
+		// the wrapper's own screen offset from each client rect.
+		const wrapperRect = feedbackOverlayEl.getBoundingClientRect();
+		const scrollTop = feedbackOverlayEl.parentElement?.scrollTop ?? 0;
+		// Resolve --accent and add alpha — rough-notation's `highlight` type
+		// draws a near-full-height stroke, so a fully opaque color comes out
+		// as a solid block. Translucency gives the proper marker look.
+		const rawAccent =
+			getComputedStyle(element).getPropertyValue('--accent').trim() || 'rgb(124, 58, 237)';
+		const accent = withAlpha(rawAccent, 0.1);
+		for (const r of clientRects) {
+			const span = document.createElement('span');
+			span.className = 'feedback-overlay-rect';
+			span.style.position = 'absolute';
+			span.style.left = r.left - wrapperRect.left + 'px';
+			span.style.top = r.top - wrapperRect.top + scrollTop + 'px';
+			span.style.width = r.width + 'px';
+			span.style.height = r.height + 'px';
+			span.style.pointerEvents = 'none';
+			feedbackOverlayEl.appendChild(span);
 			try {
-				const start = editor.view.domAtPos(range.from);
-				const end = editor.view.domAtPos(range.to);
-				const domRange = document.createRange();
-				domRange.setStart(start.node, start.offset);
-				domRange.setEnd(end.node, end.offset);
-				inlineRanges.push(domRange);
-			} catch { /* stale position */ }
-		}
-		if (inlineRanges.length === 0) return;
-		cssHighlights.set('sentence-hover-highlight', new HighlightCtor(...inlineRanges));
-	}
-
-	/** Apply annotation styles (colored underlines) to annotated text in the editor */
-	let prevAnnoElements: HTMLElement[] = [];
-	function applyAnnotationStyles() {
-		// Clear previous
-		for (const el of prevAnnoElements) {
-			el.style.borderBottom = '';
-			el.style.paddingBottom = '';
-			el.removeAttribute('title');
-		}
-		prevAnnoElements = [];
-
-		if (!editor || !element || annoList.length === 0) return;
-
-		// Walk text nodes in the editor and check against annotations
-		const contentEl = element.querySelector('.tiptap-content');
-		if (!contentEl) return;
-		const walker = document.createTreeWalker(contentEl, NodeFilter.SHOW_TEXT);
-		let node: Text | null;
-		while ((node = walker.nextNode() as Text | null)) {
-			const text = node.textContent || '';
-			for (const anno of annoList) {
-				if (text.includes(anno.text)) {
-					const parent = node.parentElement;
-					if (parent) {
-						parent.style.borderBottom = `2px solid ${anno.action.color}`;
-						parent.style.paddingBottom = '1px';
-						parent.setAttribute('title', anno.action.label);
-						prevAnnoElements.push(parent);
-					}
-				}
+				const a = annotate(span, {
+					type: 'highlight',
+					color: accent,
+					strokeWidth: 1.5,
+					iterations: 1,
+					animationDuration: 0,
+					animate: false,
+					multiline: false
+				});
+				a.show();
+				feedbackAnnotations.push(a);
+			} catch (e) {
+				console.error('[roughAnnot] annotate failed', e);
 			}
 		}
 	}
 
-	function proseToHtml(sentences: Sentence[]): string {
-		if (sentences.length === 0) return '<p></p>';
-		let html = '';
-		let currentPara = -1;
-		for (const s of sentences) {
-			// Check if text is a markdown heading
-			const hMatch = s.text.match(/^(#{1,3})\s+(.+)/);
-			if (hMatch) {
-				if (currentPara >= 0) html += '</p>';
-				const level = hMatch[1].length;
-				html += `<h${level}>${hMatch[2]}</h${level}>`;
-				currentPara = -1; // reset so next paragraph opens fresh
-				continue;
-			}
-
-			if (s.para !== currentPara) {
-				if (currentPara >= 0) html += '</p>';
-				html += '<p>';
-				currentPara = s.para;
-			} else {
-				html += ' ';
-			}
-			html += s.text;
-		}
-		if (currentPara >= 0) html += '</p>';
-		return html;
-	}
-
-	function syncEditorToBlocks() {
+	function updateDiff() {
 		if (!editor) return;
-		const json = editor.getJSON();
-		const nextBlocks: AtomzBlock[] = [];
-		let mdBlockIdx = 0;
-
-		// Build a list of existing markdown blocks for atomId preservation
-		const existingMdBlocks = currentBlocks.filter((b): b is import('$lib/atomz').AtomzMarkdownBlock => b.type === 'markdown');
-
-		for (const node of json.content || []) {
-			if (node.type === 'heading') {
-				const text = (node.content || []).map((c: any) => c.text || '').join('');
-				if (text.trim()) {
-					const level = (node.attrs?.level || 1) as 1 | 2 | 3;
-					// Try to match an existing heading block
-					const existingHeading = currentBlocks.find((b) =>
-						b.type === 'heading' && (b as import('$lib/atomz').AtomzHeadingBlock).level === level
-					);
-					nextBlocks.push({
-						id: existingHeading?.id || `block_heading_${nextBlocks.length}`,
-						type: 'heading',
-						level,
-						text: text.trim()
-					});
-				}
-			} else if (node.type === 'paragraph') {
-				const text = (node.content || []).map((c: any) => c.text || '').join('');
-				if (text.trim()) {
-					const existing = existingMdBlocks[mdBlockIdx];
-					nextBlocks.push({
-						id: existing?.id || `block_markdown_${mdBlockIdx + 1}`,
-						type: 'markdown',
-						markdown: text.trim(),
-						atomIds: existing?.atomIds || []
-					});
-					mdBlockIdx++;
-				}
-			}
-		}
-
-		// Detect which blocks changed
-		const changedIds = new Set<string>();
-		for (const nb of nextBlocks) {
-			const ob = currentBlocks.find((b) => b.id === nb.id);
-			if (!ob) { changedIds.add(nb.id); continue; }
-			if (nb.type === 'heading' && ob.type === 'heading' && nb.text !== ob.text) changedIds.add(nb.id);
-			if (nb.type === 'markdown' && ob.type === 'markdown' && nb.markdown !== ob.markdown) changedIds.add(nb.id);
-		}
-
-		blocks.set(nextBlocks);
-		reproject();
-
-		// Mark changed blocks as pending agent review
-		if (changedIds.size > 0) {
-			pendingEditBlockIds.update((existing) => {
-				const next = new Set(existing);
-				for (const id of changedIds) next.add(id);
-				return next;
-			});
-		}
-
-		pushDocumentOp({
-			type: 'update_blocks',
-			blocks: nextBlocks,
-			source: 'editor'
+		setDiffState({
+			baseline: currentBaseline,
+			userEditRegions: currentRegions,
+			feedbackSelection: feedbackSelectionRange,
+			allRoundsTiny
 		});
-		buildSentenceRanges();
+		// Kick the plugin so it re-renders decorations with the new state.
+		editor.view.dispatch(editor.state.tr.setMeta('diffOverlay', true));
 	}
 
-	function updateEditorFromProse(sentences: Sentence[]) {
-		if (!editor) return;
-		const html = proseToHtml(sentences);
-		const currentHtml = editor.getHTML();
-		if (html !== currentHtml) {
-			editor.commands.setContent(html, { emitUpdate: false });
-			lastContent = editor.getText();
-			hasUnsavedEdits = false;
-			clearCountdown();
-			applyPinMarks();
-			requestAnimationFrame(() => {
-				applyAnnotationStyles();
-				applyAgentHighlights();
-			});
-		}
-		buildSentenceRanges();
-		if (hlSents.size > 0) applyEditorHighlight(hlSents);
-	}
-
-	/** Apply green glow to paragraphs the agent edited */
-	function applyAgentHighlights() {
-		if (!editor || !element) return;
-		let changedIds: Set<string> = new Set();
-		agentChangedBlockIds.subscribe((v) => (changedIds = v))();
-		// Remove old highlights
-		element.querySelectorAll('.agent-edited').forEach((el) => el.classList.remove('agent-edited'));
-		if (changedIds.size === 0) return;
-		// Map block IDs to indices
-		let currentBlockList: import('$lib/atomz').AtomzBlock[] = [];
-		blocks.subscribe((v) => (currentBlockList = v))();
-		const changedIndices = new Set<number>();
-		currentBlockList.forEach((block, idx) => {
-			if (changedIds.has(block.id)) changedIndices.add(idx);
-		});
-		// Apply to matching editor nodes
-		let blockIdx = 0;
-		editor.state.doc.descendants((node, pos) => {
-			if (node.type.name !== 'paragraph' && node.type.name !== 'heading') return;
-			if (changedIndices.has(blockIdx)) {
-				try {
-					const dom = editor!.view.nodeDOM(pos);
-					if (dom instanceof HTMLElement) dom.classList.add('agent-edited');
-				} catch {}
+	function startCountdown() {
+		idleDeadline = Date.now() + IDLE_MS;
+		submitCountdown.set(Math.ceil(IDLE_MS / 1000));
+		if (countdownInterval) clearInterval(countdownInterval);
+		countdownInterval = setInterval(() => {
+			const remaining = Math.max(0, Math.ceil((idleDeadline - Date.now()) / 1000));
+			submitCountdown.set(remaining);
+			if (remaining === 0) {
+				if (countdownInterval) clearInterval(countdownInterval);
+				countdownInterval = null;
 			}
-			blockIdx++;
-			return false;
-		});
+		}, 200);
 	}
 
 	function clearCountdown() {
@@ -616,423 +326,286 @@
 			clearInterval(countdownInterval);
 			countdownInterval = null;
 		}
-		countdownSeconds = 0;
+		submitCountdown.set(0);
 	}
 
-	function startCountdown() {
-		clearCountdown();
-		countdownSeconds = Math.ceil(SYNC_TIMING.editorIdleMs / 1000);
-		countdownInterval = setInterval(() => {
-			countdownSeconds--;
-			if (countdownSeconds <= 0) clearCountdown();
-		}, 1000);
-	}
+	function onEditorUpdate({ transaction }: { transaction: any }) {
+		if (!editor) return;
 
-	function onEditorUpdate() {
-		if (!editor || suppressUpdate) return;
-		const text = editor.getText();
+		// Skip ALL side effects for Yjs-sync-originated transactions. These
+		// fire during initial Y.Doc hydration (sometimes before state has
+		// fully applied, returning an empty markdown) and during remote
+		// updates. If we touch userMd or writeToDisk here, we can wipe
+		// document.md mid-hydration. The post-mount code handles the initial
+		// userMd seed; subsequent sync transactions from the network don't
+		// need a write-through since the sending client is already persisting.
+		const fromYjsSync = transaction.getMeta(ySyncPluginKey) !== undefined;
+		if (fromYjsSync) return;
 
-		if (text === lastContent) {
-			// User undid all changes — cancel everything and clear marks
-			hasUnsavedEdits = false;
-			clearCountdown();
-			if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
-			clearUserEditMarks();
+		const md = getEditorMarkdown();
+
+		// Push current markdown to the store (for Outline, render submission)
+		// and debounce a write-through to document.md.
+		userMd.set(md);
+		if (writeDebounceTimer) clearTimeout(writeDebounceTimer);
+		writeDebounceTimer = setTimeout(() => writeToDisk(md), 50);
+
+		// applyAgentMarkdown dispatches via editor.view.dispatch — that's NOT
+		// a sync transaction, so it passes the filter above and reaches the
+		// autosave path (good — we want to persist agent edits). But it
+		// should NOT restart the idle countdown, otherwise every agent
+		// render would queue another one ten seconds later in a loop.
+		if (isAgentApplyInProgress()) {
+			// Agent op (apply or undo) just changed the doc. The plaintext
+			// char indices we stored in `userEditRegions` are now stale —
+			// their positions have shifted. Clear them so the diff overlay
+			// doesn't exclude the wrong spots on the next render. Small
+			// cost: user typing that happened BEFORE this agent op is no
+			// longer known, but it also no longer needs exclusion because
+			// it's either still in the doc (and part of whatever diff we
+			// compute) or replaced by the agent.
+			userEditRegions.set([]);
 			return;
 		}
 
-		hasUnsavedEdits = true;
-
-		// Feature 4: Apply UserEdit mark to the paragraph being edited
-		try {
-			const { from } = editor.state.selection;
-			const resolvedPos = editor.state.doc.resolve(from);
-			const start = resolvedPos.start();
-			const end = resolvedPos.end();
-			suppressUpdate = true;
-			editor.chain().setTextSelection({ from: start, to: end }).setMark('userEdit', { timestamp: Date.now() }).setTextSelection(from).run();
-			suppressUpdate = false;
-		} catch { suppressUpdate = false; }
+		// Track user-typed ranges in plaintext coordinates so the diff
+		// overlay can subtract them from its "agent added" (green)
+		// decorations. Without this, the user's own keystrokes during a
+		// pending review get painted green alongside the agent's text.
+		if (transaction.docChanged) {
+			recordUserEdit(transaction);
+		}
 
 		if (idleTimer) clearTimeout(idleTimer);
 		startCountdown();
-
 		idleTimer = setTimeout(() => {
-			const newText = editor!.getText();
-			if (newText !== lastContent) {
-				const oldLines = new Set(lastContent.split('\n').filter(l => l.trim()));
-				const newLines = new Set(newText.split('\n').filter(l => l.trim()));
-
-				// Find actually added/removed lines (not just shifted)
-				const added = [...newLines].filter(l => !oldLines.has(l));
-				const removed = [...oldLines].filter(l => !newLines.has(l));
-
-				const changes: string[] = [];
-				for (const l of added) changes.push(`Added: "${l.slice(0, 80)}"`);
-				for (const l of removed) changes.push(`Removed: "${l.slice(0, 80)}"`);
-
-				// If no clear add/remove, fall back to a simple summary
-				if (changes.length === 0) {
-					changes.push(`Text changed (${lastContent.length} → ${newText.length} chars)`);
-				}
-
-				syncEditorToBlocks();
-
-				lastContent = newText;
-			}
-			hasUnsavedEdits = false;
 			clearCountdown();
-			clearUserEditMarks();
-		}, SYNC_TIMING.editorIdleMs);
+			if (onSubmit) onSubmit();
+		}, IDLE_MS);
 	}
 
-	function clearUserEditMarks() {
+	/** Walk a user transaction's ReplaceStep mappings, convert each inserted
+	 * range to plaintext indices, and push an entry onto userEditRegions.
+	 * We only track INSERTS — deletes don't show up as `diff-added` anyway.
+	 *
+	 * Plaintext indices are what `diff-overlay.ts` uses (it walks
+	 * `state.doc.descendants` and counts characters in text nodes). We do
+	 * the same count here on the doc AFTER the transaction. */
+	function recordUserEdit(transaction: any) {
 		if (!editor) return;
-		suppressUpdate = true;
-		editor.chain().selectAll().unsetMark('userEdit').setTextSelection(editor.state.selection.from).run();
-		suppressUpdate = false;
-	}
-
-	/** Collect all pinned text from atoms (pinnedWords) and editor pins */
-	function collectAllPinnedText(): string[] {
-		const texts: string[] = [];
-		function walkAtoms(frags: Fragment[]) {
-			for (const f of frags) {
-				if (f.pinnedWords) texts.push(...f.pinnedWords);
-				if (f.children?.length) walkAtoms(f.children);
+		const doc = editor.state.doc;
+		// Build plaintext index from PM position — same walk the overlay does.
+		function plainIndexAt(pmPos: number): number {
+			let idx = 0;
+			let found = -1;
+			doc.descendants((node: any, pos: number) => {
+				if (found >= 0) return false;
+				if (node.isText) {
+					const text = node.text || '';
+					for (let i = 0; i < text.length; i++) {
+						if (pos + i >= pmPos) {
+							found = idx;
+							return false;
+						}
+						idx++;
+					}
+				}
+				return true;
+			});
+			return found >= 0 ? found : idx;
+		}
+		const newRegions: UserEditRegion[] = [];
+		const now = Date.now();
+		for (const step of transaction.steps as any[]) {
+			// ReplaceStep-ish: has from/to (old range) and slice (new content).
+			const from: number = step.from ?? -1;
+			const sliceSize: number = step.slice?.content?.size ?? 0;
+			if (from < 0 || sliceSize === 0) continue;
+			// After the transaction, inserted content occupies [from, from+sliceSize)
+			// in the new doc positions.
+			const startIdx = plainIndexAt(from);
+			const endIdx = plainIndexAt(from + sliceSize);
+			if (endIdx > startIdx) {
+				newRegions.push({ from: startIdx, to: endIdx, timestamp: now });
 			}
 		}
-		walkAtoms(currentFragments);
-		for (const pin of currentEditorPins) {
-			if (pin.text.trim()) texts.push(pin.text.trim());
-		}
-		// Deduplicate (case-insensitive)
-		const seen = new Set<string>();
-		return texts.filter((t) => {
-			const lower = t.toLowerCase();
-			if (seen.has(lower)) return false;
-			seen.add(lower);
-			return true;
-		});
-	}
-
-	/** Scan editor doc and apply pinned marks on all pinned text */
-	function applyPinMarks() {
-		if (!editor) return;
-		const pinnedTexts = collectAllPinnedText();
-		const pinnedType = editor.schema.marks.pinned;
-
-		// Remove all existing pinned marks
-		suppressUpdate = true;
-		const { tr } = editor.state;
-		editor.state.doc.descendants((node, pos) => {
-			if (!node.isText) return;
-			if (node.marks.some((m) => m.type.name === 'pinned')) {
-				tr.removeMark(pos, pos + node.nodeSize, pinnedType);
-			}
-		});
-		editor.view.dispatch(tr);
-
-		if (pinnedTexts.length === 0) {
-			suppressUpdate = false;
-			return;
-		}
-
-		// Build regex matching all pinned texts (longest first to match phrases before words)
-		const sorted = [...pinnedTexts].sort((a, b) => b.length - a.length);
-		const escaped = sorted.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-		const pattern = new RegExp(`(${escaped.join('|')})`, 'gi');
-
-		const { tr: tr2 } = editor.state;
-		editor.state.doc.descendants((node, pos) => {
-			if (!node.isText) return;
-			const text = node.text || '';
-			let match: RegExpExecArray | null;
-			pattern.lastIndex = 0;
-			while ((match = pattern.exec(text)) !== null) {
-				tr2.addMark(pos + match.index, pos + match.index + match[0].length, pinnedType.create({ word: match[0].toLowerCase() }));
-			}
-		});
-		if (tr2.steps.length > 0) editor.view.dispatch(tr2);
-		suppressUpdate = false;
-	}
-
-	/** Pin the currently selected text in the editor */
-	function pinSelectedText() {
-		if (!editor || !feedbackPopup) return;
-		const { from, to } = editor.state.selection;
-		if (from === to) return;
-		const selectedText = feedbackPopup.text.trim();
-		const normalizedSelectedText = normalizePinnedText(selectedText);
-		if (!normalizedSelectedText) return;
-		buildSentenceRanges();
-		const linkedRange = sentenceRanges.find((range) => from <= range.to && to >= range.from);
-		const linkedFragIds = linkedRange?.frags || [];
-		const paraIndex = linkedRange ? (currentProse[linkedRange.sentIdx]?.para ?? 0) : 0;
-
-		// Apply pinned mark
-		suppressUpdate = true;
-		editor.chain().setTextSelection({ from, to }).setMark('pinned').run();
-		suppressUpdate = false;
-
-		// Build anchors for the new pin
-		const anchors: AtomzPin['anchors'] = [];
-
-		// Add atom anchors for linked fragments whose text contains the pinned text
-		const matchingAtomIds: string[] = [];
-		for (const fragId of linkedFragIds) {
-			const frag = findFragmentById(currentFragments, fragId);
-			if (frag && hasPinnedText(`${frag.subject} ${frag.predicate}`, normalizedSelectedText)) {
-				anchors.push({ type: 'atom', atomId: fragId });
-				matchingAtomIds.push(fragId);
-			}
-		}
-
-		// Add block anchor — find the markdown block for this paragraph
-		const mdBlocks = currentBlocks.filter((b): b is import('$lib/atomz').AtomzMarkdownBlock => b.type === 'markdown');
-		const targetBlock = mdBlocks[paraIndex - 1]; // paraIndex is 1-based in block ordering
-		if (targetBlock) {
-			anchors.push({ type: 'block', blockId: targetBlock.id });
-		}
-
-		// Check if pin already exists
-		const alreadyExists = currentPins.some((p) =>
-			normalizePinnedText(p.value) === normalizedSelectedText &&
-			anchors.some((a) => p.anchors.some((pa) =>
-				(a.type === 'atom' && pa.type === 'atom' && a.atomId === pa.atomId) ||
-				(a.type === 'block' && pa.type === 'block' && a.blockId === pa.blockId)
-			))
+		if (newRegions.length === 0) return;
+		// Keep only regions from the last 90s to bound memory and stale
+		// matches — 90s is well past any realistic "typed during review"
+		// window and covers the 3s idle + agent round time.
+		const cutoff = now - 90_000;
+		userEditRegions.update((prev) =>
+			[...prev.filter((r) => r.timestamp >= cutoff), ...newRegions]
 		);
-
-		if (!alreadyExists && anchors.length > 0) {
-			const newPin: AtomzPin = {
-				id: `pin_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
-				kind: 'verbatim',
-				value: normalizedSelectedText,
-				anchors
-			};
-			pins.set([...currentPins, newPin]);
-			reproject();
-		}
-
-		pushDocumentOp({
-			type: 'pin_prose_text',
-			text: normalizedSelectedText,
-			para: paraIndex,
-			linkedFragIds
-		});
-
-		if (matchingAtomIds.length > 0) {
-			pushHistory({
-				type: 'user_action',
-				timestamp: Date.now(),
-				description: `Pinned "${normalizedSelectedText}" in prose and mirrored to atoms ${matchingAtomIds.join(', ')}`
-			});
-		} else if (linkedFragIds.length > 0) {
-			pushHistory({
-				type: 'user_action',
-				timestamp: Date.now(),
-				description: `Pinned "${normalizedSelectedText}" in prose (agent sync needed for atoms ${linkedFragIds.join(', ')})`
-			});
-		} else {
-			pushHistory({
-				type: 'user_action',
-				timestamp: Date.now(),
-				description: `Pinned "${normalizedSelectedText}" in prose`
-			});
-		}
-
-		// Close popup
-		feedbackPopup = null;
-		feedbackText = '';
-		window.getSelection()?.removeAllRanges();
 	}
 
-	// Text selection → feedback popup
-	function handleMouseUp() {
-		const sel = window.getSelection();
-		const text = sel?.toString()?.trim();
-		if (!text || text.length < 2) return;
+	onMount(async () => {
+		// Wait for IndexedDB to hydrate the Y.Doc from any previously persisted
+		// state. If it's the very first mount (or IndexedDB was cleared), the
+		// Y.Doc will be empty and we seed it from the server's document.md.
+		const ydoc = getYDoc();
+		await whenYDocReady();
 
-		// Make sure selection is inside our editor
-		if (!element?.contains(sel?.anchorNode as Node)) return;
-
-		if (selected) {
-			// Apply pinned action directly
-			annotations.update((prev) => [
-				...prev,
-				{ id: 'ann' + Date.now(), text, action: selected! }
-			]);
-			trackActionUsage(selected!.label);
-			const feedbackDesc = selected!.id === 'a_transition'
-				? `Fix the transition at: "${text.slice(0, 40)}..." — smooth the flow between this sentence and the next one`
-				: `Feedback "${selected!.label}" on: "${text.slice(0, 40)}..."`;
-			pushDocumentOp({ type: 'feedback_request', description: feedbackDesc });
-			pushHistory({ type: 'user_action', timestamp: Date.now(), description: `Annotated "${text.slice(0, 30)}..." with "${selected!.label}"` });
-			sel!.removeAllRanges();
-		} else {
-			const range = sel!.getRangeAt(0);
-			const rect = range.getBoundingClientRect();
-			feedbackPopup = { text, x: rect.left, y: rect.bottom + 4 };
-			feedbackOpenedAt = Date.now();
-			feedbackText = '';
+		if (isYDocEmpty()) {
+			// `userMd` should already have been populated by +page.svelte's
+			// loadTab() before we mounted. Seed the Y.Doc from it, using the
+			// right parser for the tab kind so plain-text files don't get
+			// turned into markdown headings etc.
+			let initialMd = '';
+			userMd.subscribe((v) => (initialMd = v))();
+			if (initialMd) seedYDocFromContent(initialMd, kind);
 		}
-	}
 
-	function submitInlineFeedback() {
-		if (!feedbackText.trim() || !feedbackPopup) return;
-		const label = feedbackText.trim();
-		const existing = allActions.find((a) => a.label.toLowerCase() === label.toLowerCase());
-		const action: Action = existing || {
-			id: 'a_' + Date.now(),
-			label,
-			icon: 'message-square',
-			pinned: false,
-			color: '#6366f1'
-		};
-		annotations.update((prev) => [
-			...prev,
-			{ id: 'ann' + Date.now(), text: feedbackPopup!.text, action }
-		]);
-		trackActionUsage(label);
-		pushDocumentOp({ type: 'feedback_request', description: `Feedback "${label}" on: "${feedbackPopup!.text.slice(0, 40)}..."` });
-		pushHistory({ type: 'user_action', timestamp: Date.now(), description: `Feedback: "${label}" on "${feedbackPopup!.text.slice(0, 30)}..."` });
-		if (!existing) {
-			recentActions.update((prev) => [action, ...prev].slice(0, 6));
-		}
-		feedbackPopup = null;
-		feedbackText = '';
-		window.getSelection()?.removeAllRanges();
-	}
-
-	function applyQuickAction(action: Action) {
-		if (!feedbackPopup) return;
-		annotations.update((prev) => [
-			...prev,
-			{ id: 'ann' + Date.now(), text: feedbackPopup!.text, action }
-		]);
-		trackActionUsage(action.label);
-		pushDocumentOp({ type: 'feedback_request', description: `Feedback "${action.label}" on: "${feedbackPopup!.text.slice(0, 40)}..."` });
-		pushHistory({ type: 'user_action', timestamp: Date.now(), description: `Annotated "${feedbackPopup!.text.slice(0, 30)}..." with "${action.label}"` });
-		if (!action.pinned) {
-			recentActions.update((prev) =>
-				[action, ...prev.filter((x) => x.id !== action.id)].slice(0, 6)
-			);
-		}
-		feedbackPopup = null;
-		window.getSelection()?.removeAllRanges();
-	}
-
-	function handleWindowClick(e: MouseEvent) {
-		if (!feedbackPopup) return;
-		if (Date.now() - feedbackOpenedAt < 200) return;
-		if (feedbackPopupEl && feedbackPopupEl.contains(e.target as Node)) return;
-		feedbackPopup = null;
-		feedbackText = '';
-	}
-
-	onMount(() => {
 		editor = new Editor({
 			element,
 			extensions: [
-				StarterKit.configure({ heading: { levels: [1, 2, 3] } }),
-				Placeholder.configure({ placeholder: 'Start writing or import a document...' }),
-				Pinned,
-				UserEdit
+				...collaborativeExtensions(ydoc, { placeholder: 'Start writing...', kind }),
+				DiffOverlay
 			],
-			content: proseToHtml(currentProse),
-			editorProps: { attributes: { class: 'tiptap-content' } },
-			enableInputRules: currentMode === 'markdown',
-			enablePasteRules: currentMode === 'markdown',
-			onUpdate: () => onEditorUpdate()
+			// Collaboration provides initial content from the Y.Doc; do NOT
+			// pass a string `content` here (doing so would wipe the Y.Doc).
+			editorProps: {
+				attributes: { class: `tiptap-content ${kind === 'plain' ? 'tiptap-plain' : ''}` },
+				// Cmd/Ctrl+Enter wakes the agent immediately, skipping the
+				// idle countdown. Plain Enter still inserts a new line.
+				handleKeyDown: (_view, event) => {
+					if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+						event.preventDefault();
+						if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+						clearCountdown();
+						if (onSubmit) onSubmit();
+						return true;
+					}
+					return false;
+				}
+			},
+			onUpdate: ({ transaction }) => onEditorUpdate({ transaction }),
+			onSelectionUpdate: () => handleSelectionChange(),
+			onBlur: () => {
+				setTimeout(() => {
+					if (feedbackPopupEl && feedbackPopupEl.contains(document.activeElement)) return;
+					feedbackPopup = null;
+					feedbackInput = '';
+				}, 150);
+			}
 		});
-		lastContent = editor.getText();
-		plaintextValue = proseToPlaintext(currentProse);
-		plaintextBaseline = plaintextValue;
-		buildSentenceRanges();
-		applyPinMarks();
-		applyPinMarks();
+
+		// Prime the store and the write-through tracker with the Y.Doc's
+		// current content, so we don't re-save unchanged text on first tick.
+		const initialMd = getEditorMarkdown();
+		userMd.set(initialMd);
+		lastWrittenMd = initialMd;
+		updateDiff();
+
+		// Dev-only: expose the editor on window for stress tests and
+		// interactive debugging via devtools. Guarded so production bundles
+		// don't leak a global.
+		if (import.meta.env.DEV && typeof window !== 'undefined') {
+			(window as any).__docwriterEditor = editor;
+		}
 	});
 
 	onDestroy(() => {
+		// Fire any pending debounced write before tearing down — switching
+		// tabs fast (within the 50ms debounce) used to drop the last few
+		// keystrokes since onDestroy ran before the timer fired.
+		if (writeDebounceTimer) {
+			clearTimeout(writeDebounceTimer);
+			writeDebounceTimer = null;
+			void writeToDisk(getEditorMarkdown());
+		}
+		// Tear down any rough-notation annotations so their SVGs don't leak.
+		for (const a of feedbackAnnotations) a.remove();
+		feedbackAnnotations = [];
 		if (editor) editor.destroy();
+		// Clear the dev-only window handle so tests (or anyone polling on it)
+		// don't see a destroyed editor between tab switches.
+		if (import.meta.env.DEV && typeof window !== 'undefined') {
+			if ((window as any).__docwriterEditor === editor) {
+				(window as any).__docwriterEditor = null;
+			}
+		}
+		disposeAgentUndo();
 		if (idleTimer) clearTimeout(idleTimer);
-		clearCountdown();
+		if (countdownInterval) clearInterval(countdownInterval);
 	});
+
+	let rendering = $state(false);
+	isRendering.subscribe((v) => {
+		rendering = v;
+		if (v) {
+			if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+			clearCountdown();
+		}
+	});
+
+	// Export the live editor instance so +page.svelte can apply agent
+	// markdown via applyAgentMarkdown(). We expose it via the reviewBaseline
+	// callback path rather than a global to keep ownership clear.
+	export function getEditor(): Editor | undefined {
+		return editor;
+	}
 </script>
 
-<svelte:window onclick={handleWindowClick} />
-
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="tiptap-wrapper" onmouseup={handleMouseUp}>
-	<div class="plaintext-editor" class:hidden={currentMode !== 'plaintext'}>
-		<textarea
-			class="plaintext-textarea"
-			bind:value={plaintextValue}
-			oninput={onPlaintextInput}
-			placeholder="Start writing..."
-			spellcheck="false"
-		></textarea>
-	</div>
-	<!-- svelte-ignore a11y_no_static_element_interactions -->
-	<div class="tiptap-editor" class:hidden={currentMode !== 'markdown'} bind:this={element} onmousemove={handleEditorMouseMove} onmouseleave={handleEditorMouseLeave}></div>
-
-	<!-- Feature 6: Accept/Reject bar for agent diffs -->
-	{#if hasPendingDiffs}
-		<div class="accept-all-bar">
-			<span class="accept-all-label">{transitions.size} pending {transitions.size === 1 ? 'edit' : 'edits'}</span>
-			<button class="accept-all-btn" onclick={acceptAll}>Accept all</button>
-			<button class="reject-all-btn" onclick={rejectAll}>Reject all</button>
-		</div>
-	{/if}
-
-	{#if hasUnsavedEdits}
-		<div class="edit-indicator">
-			<span class="edit-dot"></span>
-			{#if countdownSeconds > 0}
-				Queuing feedback in {countdownSeconds}s
-			{:else}
-				Queuing...
-			{/if}
-		</div>
-	{/if}
-
-	<!-- Inline feedback popup on text selection -->
+<div
+	class="tiptap-wrapper"
+	class:feedback-active={feedbackSelectionRange !== null}
+	style:--font-scale={fontScale}
+>
+	<div class="tiptap-editor" bind:this={element}></div>
+	<!-- Feedback selection overlay: absolutely positioned above the editor,
+	     outside PM's DOM tree so rough-notation's SVG isn't clobbered by
+	     PM's state-sync. refreshFeedbackOverlay fills this with empty spans
+	     sized to the selection's client rects, then annotates each. -->
+	<div class="feedback-overlay" bind:this={feedbackOverlayEl} aria-hidden="true"></div>
 	{#if feedbackPopup}
 		<div
 			class="feedback-popup"
-			bind:this={feedbackPopupEl}
-			style:left="{Math.min(feedbackPopup.x, (typeof window !== 'undefined' ? window.innerWidth : 800) - 420)}px"
+			class:flip-below={feedbackPopup.flipBelow}
+			style:left="{feedbackPopup.x}px"
 			style:top="{feedbackPopup.y}px"
+			bind:this={feedbackPopupEl}
+			role="toolbar"
 		>
 			<div class="feedback-quote">
-				"{feedbackPopup.text.slice(0, 50)}{feedbackPopup.text.length > 50 ? '...' : ''}"
+				"{feedbackPopup.text.slice(0, 200)}{feedbackPopup.text.length > 200 ? '…' : ''}"
 			</div>
-			<button class="pin-btn" onclick={pinSelectedText}>
-				<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V5a1 1 0 0 1 1-1 1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v1a1 1 0 0 0 1 1 1 1 0 0 1 1 1z"/></svg>
-				Pin this text
-			</button>
 			<div class="feedback-input-row">
 				<textarea
 					class="feedback-input"
-					bind:value={feedbackText}
+					bind:value={feedbackInput}
 					oninput={(e) => {
 						const el = e.currentTarget;
 						el.style.height = 'auto';
 						el.style.height = el.scrollHeight + 'px';
 					}}
 					onkeydown={(e) => {
-						if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitInlineFeedback(); }
-						if (e.key === 'Escape') { feedbackPopup = null; window.getSelection()?.removeAllRanges(); }
+						if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendCustomFeedback(); }
+						if (e.key === 'Escape') { feedbackPopup = null; feedbackInput = ''; }
 					}}
 					placeholder="What's wrong with this?"
 					rows={1}
 				></textarea>
-				<button class="feedback-submit" onclick={submitInlineFeedback}>Go</button>
+				<button class="feedback-submit" onclick={sendCustomFeedback}>Go</button>
 			</div>
 			<div class="quick-actions">
-				{#each allActions.slice(0, 6) as action}
-					<button class="quick-btn" onclick={() => applyQuickAction(action)}>
+				{#each pinnedActions as action}
+					<button
+						class="quick-btn pinned"
+						style:--action-color={action.color}
+						onclick={() => sendFeedback(action)}
+						title={action.label}
+					>
+						{action.label}
+					</button>
+				{/each}
+				{#each recent.slice(0, 4) as action}
+					<button
+						class="quick-btn"
+						style:--action-color={action.color}
+						onclick={() => sendFeedback(action)}
+						title={action.label}
+					>
 						{action.label}
 					</button>
 				{/each}
@@ -1043,303 +616,317 @@
 
 <style>
 	.tiptap-wrapper {
-		flex: 1;
 		position: relative;
-		height: 100%;
-		display: flex;
-		flex-direction: column;
-	}
-	.tiptap-editor {
 		flex: 1;
+		min-width: 0;
 		overflow-y: auto;
-		padding: 32px 48px 80px;
-		background: var(--prose-bg);
+		padding: 48px 32px;
+		background: var(--bg);
 	}
-
+	/* Feedback overlay sits on top of the prose but doesn't intercept clicks.
+	 * refreshFeedbackOverlay() fills this with absolutely-positioned empty
+	 * spans sized to each client rect of the current selection, then calls
+	 * rough-notation's annotate() on them. */
+	.feedback-overlay {
+		position: absolute;
+		inset: 0;
+		pointer-events: none;
+		z-index: 2;
+	}
+	/* When feedback overlay is active, suppress the browser's native
+	 * ::selection color inside the prose — otherwise it stacks with
+	 * rough-notation's marker tint. Selection is still logically active
+	 * (cursor state, copy/paste work); just the color goes transparent. */
+	.tiptap-wrapper.feedback-active :global(.tiptap-content ::selection) {
+		background: transparent;
+	}
+	.tiptap-wrapper.feedback-active :global(.tiptap-content *::selection) {
+		background: transparent;
+	}
 	.tiptap-editor :global(.tiptap-content) {
-		max-width: 600px;
+		max-width: 680px;
 		margin: 0 auto;
 		outline: none;
-		font-size: 15px;
-		line-height: 1.85;
+		font-family: 'Lora', Georgia, serif;
+		font-size: calc(17px * var(--font-scale, 1));
+		line-height: 1.75;
 		color: var(--prose-text);
+		overflow-wrap: break-word;
 	}
-
-	.tiptap-editor :global(.tiptap-content p) {
-		margin: 0 0 24px;
+	/* Plain-text mode: Geist Mono — clean, modern, narrow letterforms that
+	 * read like a writing app rather than a code editor. Tight line-height
+	 * + narrow column for focus; ui-monospace is the OS fallback. */
+	.tiptap-editor :global(.tiptap-plain) {
+		font-family: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+		font-size: calc(15px * var(--font-scale, 1));
+		line-height: 1.45;
+		max-width: 760px;
+		white-space: pre-wrap;
+		tab-size: 2;
 	}
-
-	.tiptap-editor :global(.tiptap-content h1) {
-		font-size: 24px;
-		font-weight: 700;
-		margin: 32px 0 16px;
-		color: var(--text);
+	/* Zero out paragraph margins — every line is its own paragraph in plain
+	 * mode, so any vertical margin becomes visible blank-line gaps. Empty
+	 * paragraphs need a min-height to stay visible (the ProseMirror
+	 * trailing break adds the space, but we ensure a consistent one). */
+	.tiptap-editor :global(.tiptap-plain p) {
+		margin: 0;
+		min-height: 1em;
 	}
+	.tiptap-editor :global(.tiptap-content p) { margin: 0 0 10px; }
 
-	.tiptap-editor :global(.tiptap-content h2) {
-		font-size: 20px;
+	/* When the magic-highlighter decoration is painting a selection for
+	 * feedback, hide the browser's native ::selection color inside that
+	 * range so the two don't stack into a double-tint. Browser selection
+	 * still applies outside the decorated range. */
+	.tiptap-editor :global(.tiptap-content .feedback-select::selection) {
+		background: transparent;
+	}
+	/* `<mark>` from the Highlight extension: theme-aware flat tint (no
+	 * rough-notation for persistent marks since they can be many). */
+	.tiptap-editor :global(.tiptap-content mark) {
+		background: color-mix(in srgb, var(--accent) 26%, transparent);
+		color: inherit;
+		padding: 0 2px;
+		border-radius: 2px;
+	}
+	/* Feedback-selected text gets the rough-notation marker stroke via JS
+	 * (see refreshFeedbackOverlay) — this class only exists to give us
+	 * a queryable hook; it intentionally has no background. */
+	.tiptap-editor :global(.tiptap-content .feedback-select) {
+		color: inherit;
+	}
+	.tiptap-editor :global(.tiptap-content h1) { font-size: calc(28px * var(--font-scale, 1)); font-weight: 700; margin: 32px 0 16px; color: var(--text); }
+	.tiptap-editor :global(.tiptap-content h2) { font-size: calc(22px * var(--font-scale, 1)); font-weight: 600; margin: 28px 0 12px; color: var(--text); }
+	.tiptap-editor :global(.tiptap-content h3) { font-size: calc(18px * var(--font-scale, 1)); font-weight: 600; margin: 24px 0 8px; color: var(--text); }
+	.tiptap-editor :global(.tiptap-content ul),
+	.tiptap-editor :global(.tiptap-content ol) { padding-left: 24px; margin: 4px 0 10px; }
+	.tiptap-editor :global(.tiptap-content li) { margin-bottom: 4px; }
+	.tiptap-editor :global(.tiptap-content li p) { margin: 0; }
+	.tiptap-editor :global(.tiptap-content blockquote) {
+		border-left: 3px solid var(--border-light);
+		padding-left: 12px;
+		margin: 4px 0 10px;
+		color: var(--text-muted);
+	}
+	.tiptap-editor :global(.tiptap-content hr) {
+		border: none;
+		border-top: 1px solid var(--border-light);
+		margin: 24px 0;
+	}
+	.tiptap-editor :global(.tiptap-content img) {
+		max-width: 100%;
+		height: auto;
+		border-radius: 4px;
+		margin: 8px 0;
+	}
+	.tiptap-editor :global(.tiptap-content .md-table),
+	.tiptap-editor :global(.tiptap-content table) {
+		border-collapse: collapse;
+		margin: 8px 0 16px;
+		width: 100%;
+		overflow: hidden;
+		font-size: calc(15px * var(--font-scale, 1));
+	}
+	.tiptap-editor :global(.tiptap-content th),
+	.tiptap-editor :global(.tiptap-content td) {
+		border: 1px solid var(--border-light);
+		padding: 6px 10px;
+		text-align: left;
+		vertical-align: top;
+	}
+	.tiptap-editor :global(.tiptap-content th) {
+		background: var(--bg-surface);
 		font-weight: 600;
-		margin: 28px 0 12px;
-		color: var(--text);
 	}
-
-	.tiptap-editor :global(.tiptap-content h3) {
-		font-size: 17px;
-		font-weight: 600;
-		margin: 24px 0 8px;
-		color: var(--text);
+	/* Task list: tiptap renders each TaskItem as a <li data-checked="...">
+	 * containing a <label><input type="checkbox">...</label> and a <div>
+	 * with the content. Use a grid so the checkbox lives in a fixed
+	 * column and the first line of text center-aligns with it cleanly. */
+	.tiptap-editor :global(.tiptap-content ul[data-type="taskList"]) {
+		list-style: none;
+		padding-left: 8px;
 	}
-
+	.tiptap-editor :global(.tiptap-content ul[data-type="taskList"] li) {
+		display: grid;
+		grid-template-columns: auto 1fr;
+		align-items: start;
+		column-gap: 8px;
+		margin-bottom: 3px;
+	}
+	.tiptap-editor :global(.tiptap-content ul[data-type="taskList"] li > label) {
+		/* Line the checkbox up with the text baseline of the first line of
+		 * the item. The first-line leading is (line-height - 1em) / 2, which
+		 * at line-height: 1.75 works out to ~0.375em of space above the
+		 * cap-height; translating the checkbox down by that amount centers
+		 * it on the x-height of the first line. */
+		display: flex;
+		align-items: center;
+		height: 1.75em;
+	}
+	.tiptap-editor :global(.tiptap-content ul[data-type="taskList"] li > label input[type="checkbox"]) {
+		margin: 0;
+	}
+	.tiptap-editor :global(.tiptap-content ul[data-type="taskList"] li[data-checked="true"] > div) {
+		color: var(--text-faint);
+		text-decoration: line-through;
+	}
 	.tiptap-editor :global(.tiptap-content .is-editor-empty:first-child::before) {
 		content: attr(data-placeholder);
-		float: left;
 		color: var(--text-faint);
-		pointer-events: none;
+		float: left;
 		height: 0;
+		pointer-events: none;
 	}
-
-	/* Pending user edit — amber left border, waiting for agent */
-	.tiptap-editor :global(.pending-edit) {
-		border-left: 3px solid #f59e0b;
-		padding-left: 8px;
-		position: relative;
+	/* Diff decoration classes, applied by the DiffOverlay extension */
+	.tiptap-editor :global(.diff-added) {
+		color: var(--diff-added-color);
+		background: var(--diff-added-bg);
 	}
-	.tiptap-editor :global(.pending-edit)::after {
-		content: 'queued';
-		position: absolute;
-		right: 0;
-		top: 0;
-		font-size: 9px;
-		color: #f59e0b;
-		opacity: 0.6;
-		font-family: inherit;
+	.tiptap-editor :global(.diff-removed) {
+		color: var(--diff-removed-color);
+		text-decoration: line-through;
+		opacity: 0.7;
 	}
-
-	/* Agent edit highlights */
-	.tiptap-editor :global(.agent-edited) {
-		background: color-mix(in srgb, #10b981 12%, transparent);
-		border-radius: 4px;
-		box-shadow: 0 0 12px color-mix(in srgb, #10b981 20%, transparent);
-		position: relative;
-		animation: agent-fade 5s ease-out forwards;
-	}
-	.tiptap-editor :global(.agent-edited)::before {
-		content: '';
-		position: absolute;
-		left: -4px;
-		top: 0;
-		width: 3px;
-		height: 100%;
-		background: #10b981;
-		border-radius: 2px;
-		animation: agent-cursor-fade 5s ease-out forwards;
-	}
-	@keyframes agent-fade {
-		0% { background: color-mix(in srgb, #10b981 15%, transparent); box-shadow: 0 0 12px color-mix(in srgb, #10b981 25%, transparent); }
-		70% { background: color-mix(in srgb, #10b981 10%, transparent); box-shadow: 0 0 8px color-mix(in srgb, #10b981 15%, transparent); }
-		100% { background: transparent; box-shadow: none; }
-	}
-	@keyframes agent-cursor-fade {
-		0% { opacity: 1; }
-		70% { opacity: 0.6; }
-		100% { opacity: 0; }
-	}
-
-	.tiptap-editor :global(.pinned-mark) {
-		background: color-mix(in srgb, var(--accent) 12%, transparent);
+	/* Ghost strikethrough widget for agent removals. The removed text isn't
+	 * in the editor's doc tree (the editor displays the live Y.Doc state),
+	 * so we inject this inline span at the position the text used to occupy. */
+	.tiptap-editor :global(.diff-removed-widget) {
+		color: var(--diff-removed-color);
+		background: color-mix(in srgb, var(--diff-removed-color) 12%, transparent);
+		text-decoration: line-through;
+		opacity: 0.75;
+		padding: 0 3px;
 		border-radius: 3px;
-		padding: 0 2px;
-		box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 25%, transparent);
+		user-select: none;
 	}
-	.tiptap-editor :global(.pinned-mark)::before {
-		content: '';
-		display: inline-block;
-		width: 10px;
-		height: 10px;
-		margin-right: 2px;
-		vertical-align: middle;
-		opacity: 0.5;
-		background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%237c3aed' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cline x1='12' y1='17' x2='12' y2='22'/%3E%3Cpath d='M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z'/%3E%3C/svg%3E") no-repeat center / contain;
-	}
-
-	/* Plaintext mode */
-	.plaintext-editor {
-		flex: 1;
-		overflow-y: auto;
-		padding: 32px 48px 80px;
-		background: var(--prose-bg);
-	}
-	.plaintext-editor.hidden,
-	.tiptap-editor.hidden {
-		display: none;
-	}
-	.plaintext-textarea {
-		width: 100%;
-		max-width: 600px;
-		margin: 0 auto;
-		display: block;
-		min-height: calc(100vh - 200px);
-		border: none;
-		outline: none;
-		resize: none;
+	/* Tiny-edit variants: when every pending round is small (< ~25 chars
+	 * delta, e.g. a typo fix), drop the solid green/red treatment and use
+	 * a ghost-like muted style so the diff reads as "a small suggestion"
+	 * rather than "the agent rewrote a paragraph". Background gone; text
+	 * takes just a subtle color + thin underline/strike. */
+	.tiptap-editor :global(.diff-added.diff-added-tiny) {
+		color: var(--diff-added-color);
 		background: transparent;
-		font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-		font-size: 14px;
-		line-height: 1.7;
-		color: var(--prose-text);
-		tab-size: 4;
+		border-bottom: 1px dotted color-mix(in srgb, var(--diff-added-color) 60%, transparent);
 	}
-
-	/* User-edited text gets a subtle colored left border + background */
-	.tiptap-editor :global([data-user-edit]) {
-		background: color-mix(in srgb, var(--accent) 8%, transparent);
-		border-left: 2px solid var(--accent);
-		padding-left: 3px;
-		margin-left: -5px;
-		border-radius: 2px;
+	.tiptap-editor :global(.diff-removed-widget.diff-removed-tiny) {
+		background: transparent;
+		color: color-mix(in srgb, var(--diff-removed-color) 70%, var(--text-faint));
+		opacity: 0.6;
+		padding: 0 1px;
 	}
-
-	/* Sentence highlight when hovering atoms or editor text */
-	:global(::highlight(sentence-hover-highlight)) {
-		background: color-mix(in srgb, var(--accent) 16%, transparent);
-	}
-
-	/* Accept/Reject bar */
-	.accept-all-bar { position: absolute; bottom: 90px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; padding: 8px 14px; background: var(--bg-elevated); border: 1px solid var(--border-light); border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.08); z-index: 35; white-space: nowrap; }
-	.accept-all-label { font-size: 13px; color: var(--text-muted); }
-	.accept-all-btn { padding: 6px 14px; border-radius: 6px; border: 1px solid #bbf7d0; background: #f0fdf4; color: #16a34a; font-size: 12px; font-weight: 500; cursor: pointer; font-family: inherit; }
-	.accept-all-btn:hover { background: #dcfce7; }
-	.reject-all-btn { padding: 6px 14px; border-radius: 6px; border: 1px solid #fecaca; background: #fef2f2; color: #dc2626; font-size: 12px; font-weight: 500; cursor: pointer; font-family: inherit; }
-	.reject-all-btn:hover { background: #fee2e2; }
-
-	.edit-indicator {
-		position: absolute;
-		bottom: 60px;
-		left: 50%;
-		transform: translateX(-50%);
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		padding: 6px 14px;
-		background: var(--bg-elevated);
-		border: 1px solid var(--border-light);
-		border-radius: 20px;
-		font-size: 12px;
-		color: var(--text-muted);
-		box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-		z-index: 30;
-		white-space: nowrap;
-		animation: fadeIn 0.2s ease;
-	}
-	.edit-dot {
-		width: 6px;
-		height: 6px;
-		border-radius: 50%;
-		background: var(--accent);
-		animation: pulse 1.5s ease-in-out infinite;
-	}
-	@keyframes fadeIn {
-		from { opacity: 0; transform: translateX(-50%) translateY(4px); }
-		to { opacity: 1; transform: translateX(-50%) translateY(0); }
-	}
-	@keyframes pulse {
-		0%, 100% { opacity: 1; }
-		50% { opacity: 0.4; }
-	}
-
-	/* Feedback popup */
 	.feedback-popup {
 		position: fixed;
-		z-index: 200;
+		transform: translate(-50%, -100%);
 		background: var(--bg-elevated);
-		border: 1px solid var(--border);
-		border-radius: 12px;
-		box-shadow: 0 12px 36px rgba(0, 0, 0, 0.12);
-		padding: 16px 18px;
-		width: 400px;
+		border: 1px solid var(--border-light);
+		border-radius: 8px;
+		box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12), 0 1px 3px rgba(0, 0, 0, 0.06);
+		padding: 10px 10px 8px;
+		width: 340px;
+		max-width: calc(100vw - 32px);
+		box-sizing: border-box;
+		font-family: 'Inter', -apple-system, sans-serif;
+		z-index: 100;
+		/* Hard clip in case any child escapes its bounds (long unbreakable
+		 * words in the quoted passage or a feedback label). */
+		overflow: hidden;
+	}
+	.feedback-popup.flip-below {
+		transform: translate(-50%, 0);
 	}
 	.feedback-quote {
-		font-size: 13px;
+		font-size: 12px;
 		color: var(--text-faint);
-		margin-bottom: 10px;
-		line-height: 1.4;
-	}
-	.pin-btn {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		width: 100%;
-		padding: 8px 12px;
-		margin-bottom: 10px;
-		border-radius: 8px;
-		border: 1px solid #f59e0b40;
-		background: #f59e0b10;
-		color: #b45309;
-		font-size: 13px;
-		font-weight: 500;
-		cursor: pointer;
-		font-family: inherit;
-		transition: background 0.15s, border-color 0.15s;
-	}
-	.pin-btn:hover {
-		background: #f59e0b20;
-		border-color: #f59e0b80;
+		margin-bottom: 7px;
+		padding: 0 2px;
+		line-height: 1.35;
+		font-style: italic;
+		/* Wrap long selections onto up to 3 lines, then truncate. Using
+		 * -webkit-line-clamp (works in Chrome/Safari/Firefox as of 2024). */
+		display: -webkit-box;
+		-webkit-line-clamp: 3;
+		line-clamp: 3;
+		-webkit-box-orient: vertical;
+		overflow: hidden;
+		word-break: break-word;
+		overflow-wrap: anywhere;
+		max-width: 100%;
+		min-width: 0;
 	}
 	.feedback-input-row {
 		display: flex;
 		gap: 6px;
+		align-items: stretch;
 	}
 	.feedback-input {
 		flex: 1;
+		min-width: 0;
+		max-width: 100%;
+		box-sizing: border-box;
 		border: 1px solid var(--border-light);
-		border-radius: 8px;
-		padding: 10px 14px;
-		font-size: 15px;
+		border-radius: 6px;
+		padding: 7px 10px;
+		font-size: 13px;
 		font-family: inherit;
 		outline: none;
 		color: var(--text);
 		background: var(--bg);
 		resize: none;
 		overflow: hidden;
-		line-height: 1.5;
-		min-height: 42px;
-		max-height: 200px;
+		line-height: 1.4;
+		min-height: 32px;
+		max-height: 120px;
+		word-break: break-word;
+		overflow-wrap: anywhere;
+	}
+	.feedback-input::placeholder {
+		color: var(--text-faint);
 	}
 	.feedback-input:focus {
-		border-color: var(--accent-light);
-		box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.08);
+		border-color: var(--accent);
 	}
 	.feedback-submit {
-		padding: 10px 20px;
-		border-radius: 8px;
+		padding: 0 14px;
+		border-radius: 6px;
 		border: none;
 		background: var(--accent);
 		color: white;
-		font-size: 14px;
+		font-size: 13px;
 		font-weight: 500;
 		cursor: pointer;
 		font-family: inherit;
-		align-self: flex-end;
 	}
+	.feedback-submit:hover { filter: brightness(0.92); }
 	.quick-actions {
 		display: flex;
-		gap: 5px;
+		gap: 4px;
 		flex-wrap: wrap;
-		margin-top: 12px;
+		margin-top: 7px;
 	}
 	.quick-btn {
-		padding: 6px 12px;
-		border-radius: 6px;
+		padding: 3px 9px;
+		border-radius: 4px;
 		border: 1px solid var(--border-light);
 		background: var(--bg-surface);
 		color: var(--text-muted);
-		font-size: 13px;
+		font-size: 12px;
 		cursor: pointer;
 		font-family: inherit;
+		/* Long custom-feedback labels truncate with an ellipsis; full text is
+		 * surfaced by the `title` attribute on hover. */
+		max-width: 180px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.quick-btn.pinned {
+		color: var(--action-color);
+		border-color: color-mix(in srgb, var(--action-color) 30%, var(--border-light));
 	}
 	.quick-btn:hover {
-		background: var(--accent-bg);
-		border-color: var(--accent-light);
-		color: var(--accent);
+		background: color-mix(in srgb, var(--action-color) 10%, transparent);
+		border-color: var(--action-color);
+		color: var(--action-color);
 	}
 </style>

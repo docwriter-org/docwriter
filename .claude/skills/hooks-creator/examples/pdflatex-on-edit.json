@@ -1,0 +1,6 @@
+{
+  "event": "PostToolUse",
+  "matcher": "Edit|Write",
+  "command": "pdflatex -interaction=nonstopmode main.tex",
+  "reason": "Rebuilds main.tex into a PDF after any file mutation."
+}

@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code when working on **DocWriter**.
 
 ## Commands
 
@@ -12,73 +12,107 @@ npm run check        # TypeScript + Svelte type checking
 npm run check:watch  # Watch mode type checking
 ```
 
-No test framework is configured yet. Use `npm run check` for validation.
+No test framework is configured. Use `npm run check` for validation.
 
-## Architecture
+## What DocWriter is
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system architecture, data flow, consistency model, and future directions. Below is a summary.
+A plain-markdown writing editor with an AI side-channel. The user writes
+markdown in a Tiptap editor; an agent proposes edits that merge into the live
+document via Yjs operations the user can review (accept/reject) or let merge
+silently. The data model is flat markdown — no atoms, no blocks, no pins.
 
-**atomz** is a writing editor that separates content (atoms) from presentation (prose). Users define atomic claims in a left pane; an AI agent renders them into essay prose in the center pane.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system.
 
-### Core Concept: Atoms → Prose
+## The one big idea
 
-An **atom** (Fragment) is an atomic claim with a `subject` (what the sentence is about) and a `label` (the claim). Atoms are compressed notes, NOT literal text. The agent expands them into natural essay prose. The prompt explicitly instructs: "A sentence should say MUCH MORE than its atom."
+**The Y.Doc is canonical editor state.** Both user keystrokes and agent
+writes flow into it as CRDT operations, which merge deterministically. The
+on-disk `document.md` is a backing store for portability and git, not the
+source of truth. The `.docwriter/agent.md` shadow file exists only because
+the Claude Agent SDK's `Edit` tool requires a real filesystem path.
 
-### Three-Pane Layout
+## Persistence layout
 
-- **Left (ContentPane, 360px)**: Hierarchical atom editor with drag-to-reorder, inline edit, paragraph break toggles
-- **Center (ProsePane, flex)**: Rendered prose with bidirectional highlighting, inline feedback/annotations, word-level diffs with accept/reject
-- **Right (HistoryPane, 300px, toggleable)**: Read-only agent activity log with collapsible tool calls and timing
+```
+project-root/
+  document.md          ← user-facing markdown (git-friendly)
+  .docwriter/
+    agent.md           ← agent's shadow copy during a render (transient)
+    state.json         ← sessionId, rules, userEditRegions, agentSettings,
+                         recentActions, actionUsageCounts
+```
 
-### Agent SDK Integration
+Plus IndexedDB `docwriter-doc` on the client for the Y.Doc itself (edit
+state, undo history, review snapshots — persisted by y-indexeddb).
 
-Both server endpoints use `@anthropic-ai/claude-agent-sdk`'s `query()` with built-in tools:
+## Three-pane layout
 
-- **`/api/render`** — Uses `Read` + `Edit` tools on `.atomz-render.json`, a temporary working copy derived from the current document snapshot. The server strips heading rows before Claude edits, then merges headings back in and atomically commits the final merged result to `document.atomz`. Session metadata lives in `.atomz-state.json`.
+- **Left (`OutlinePane`, 260px):** auto-generated TOC from headings, plus the
+  pending-edit card with Accept / Reject when a review is active.
+- **Center:** Tiptap editor + `AgentDock` in the top-right (Wake up button,
+  sleeping-cat mascot, gear-icon settings popover).
+- **Right (`HistoryPane`, 340px, toggleable):** agent tool-call log.
 
-- **`/api/atomize`** — Uses `Write` to create a fresh `document.atomz`-shaped result from raw text, then the client hydrates stores from the returned atoms/prose.
+## Agent SDK integration
 
-Both endpoints stream responses as SSE with events: `tool_call_start`, `text_streaming`, `tool_call`, `assistant_text`, `result`, `error`, `done`.
+`/api/render` streams a single `query()` call over SSE:
 
-### State Management
+1. `resetAgentDoc()` — copy `document.md` → `.docwriter/agent.md`.
+2. `startRender()` — set `renderActive = true`.
+3. Build prompt (agency level rewrites the "how to decide whether to edit"
+   section via `agencyGuidance()`).
+4. `query()` with a PreToolUse hook that syncs user deltas into the shadow
+   before each agent `Edit`/`Write`.
+5. Stream SSE: `tool_call_start`, `tool_call`, `assistant_text`, `result`.
+6. `result` carries `agentMd`; client calls `applyAgentMarkdown(editor, md,
+   trackChanges)`.
+7. `endRender()`.
 
-All state is in Svelte writable stores (`src/lib/stores.ts`). Key stores:
-- `fragments`, `prose`, `rules`, `paraBreaks` — document state
-- `renderingSentences`, `sentenceTransitions` — rendering UI state
-- `agentHistory` — agent activity log
-- `documentOps` — durable semantic document changes and reconciliation requests
+## Agent reconciliation
 
-User actions now emit semantic `DocumentOp` entries rather than pushing directly into a separate action queue. `+page.svelte` processes unresolved ops, resolves purely local ones after save, and runs `/api/render` only for ops that still require Claude reconciliation.
+`src/lib/yjs-agent.ts:applyAgentMarkdown`:
 
-### Diff & Transitions
+1. Clone the Y.Doc from a baseline snapshot captured at render start.
+2. Run `setContent(agentMd)` on a headless editor bound to the clone; the
+   ySyncPlugin translates that to minimal Yjs ops on the clone.
+3. `Y.encodeStateAsUpdate(clone, liveStateVector)` produces the agent's
+   delta.
+4. `liveDoc.transact(() => Y.applyUpdate(liveDoc, delta), origin)` — CRDT
+   merges with any user ops that happened during the render.
 
-`src/lib/diff.ts` implements word-level LCS diff. During rendering, the `Edit` tool's `new_string` is extracted from streaming `input_json_delta` events and fed into `sentenceTransitions` for word-by-word typewriter display. Diffs persist with accept/reject buttons until the user acts.
+Origin is `'agent'` in review mode (UndoManager captures → Accept/Reject
+works) or `ySyncPluginKey` in silent mode (no review UI, user undo stack).
 
-### Theme System
+## Agent settings
 
-`src/lib/themes.ts` defines 5 themes (Light, Dark, Solarized Light/Dark, Monokai) as CSS variable maps. `applyTheme()` sets variables on `document.documentElement`. Components use `var(--text)`, `var(--bg)`, etc. Not all component styles are fully converted to CSS variables yet.
+`AgentSettings` in `src/lib/types.ts`, persisted to `state.json`:
+- **autonomy** (`agency: 'conservative' | 'balanced' | 'aggressive'`) —
+  prompt rewiring.
+- **trackChanges** — review mode on/off.
 
-### File Format (.atomz)
+Edited via the `AgentDock` settings popover (click the gear icon pinned to
+the mascot card).
 
-`src/lib/atomz.ts` — JSON format bundling `{ version, fragments, prose, rules, paraBreaks }`. Save/load/import via browser file picker. The import flow uploads text → `/api/atomize` → agent decomposes → populates stores.
+## Conventions
 
-### Durable Sync Model
-The app persists unresolved `DocumentOp` entries to `.atomz-ops.jsonl` and replays them on refresh before resuming background processing. `DocumentOp` is the single durable intent model for both structural document mutations and durable feedback requests. Claude renders use `.atomz-render.json` as a working copy and only atomically commit back to `document.atomz` at the end of a successful render.
+- **Svelte 5 runes** (`$state`, `$derived`, `$effect`) in components. Stores
+  are subscribed manually with `.subscribe()`, not `$store` syntax.
+- **Font:** Lora (serif) for editor prose, Inter for UI.
+- **Model selection:** Opus / Sonnet / Haiku, passed as `model` in request
+  bodies.
+- **Playwright MCP** configured for browser testing.
+- **Timing:** 3s idle countdown to auto-submit, ~50ms autosave debounce,
+  Cmd/Ctrl+Enter skips the countdown.
 
-### Atom Features
-- **Add atom/group**: `+ Add atom` at bottom, `+ add sub-atom` inside groups
-- **Pin words**: Click words in predicates to pin them (must appear verbatim in prose)
-- **Alternatives carousel**: Sparkle icon on atoms → generates 4 alternative phrasings via Haiku
-- **Delete**: Trash icon on hover
+## Gotchas
 
-### Onboarding / Style References
-- Upload reference writing via "Style" button → `/api/import-reference` → saved to `.claude/skills/atomz-style/examples/`
-- Render endpoint loads the Skill via `settingSources: ['project']` so the agent matches style
-
-## Key Conventions
-
-- Svelte 5 runes (`$state`, `$derived`, `$effect`) — NOT Svelte 4 stores syntax in components
-- Stores are subscribed manually in components (`.subscribe()`) rather than using `$store` syntax
-- Font: Lora (Google Fonts, serif)
-- Model selection: Opus (default), Sonnet, Haiku — passed as `model` in request bodies
-- Playwright MCP is configured for browser testing (`claude mcp add playwright`)
+- `undoRedo: false` in StarterKit — Collaboration ships its own Yjs undo and
+  double-registering corrupts plugin state.
+- `Link` bundled via StarterKit — don't import `@tiptap/extension-link`
+  separately.
+- Initial render gates on `docLoaded` before mounting `TiptapEditor` so the
+  Y.Doc has `userMd` to seed from.
+- In `onEditorUpdate`, skip side effects when
+  `transaction.getMeta(ySyncPluginKey) !== undefined` — those are Yjs hydration
+  transactions, and touching `userMd`/autosave during them can wipe
+  `document.md` with an empty string.

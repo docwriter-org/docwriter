@@ -1,57 +1,101 @@
-import { readonly, writable } from 'svelte/store';
-import type { Atom, Rule, Action, Annotation, Sentence, HistoryEntry, EditorPin, Section, DocumentOp, NewDocumentOp } from './types';
-import type { AtomzBlock, AtomzPin } from './atomz';
+import { writable } from 'svelte/store';
+import type {
+	Rule,
+	Action,
+	Annotation,
+	HistoryEntry,
+	AgentSettings,
+	ProposedRule,
+	ProposedHook,
+	PendingReviewRound
+} from './types';
 
-// Document state — populated from .atomz file on load
-export const atoms = writable<Atom[]>([]);
-/** @deprecated Use atoms instead */
-export const fragments = atoms;
+// ── Document state ────────────────────────────────────────────────────
+// The canonical client state is a Y.Doc (see src/lib/yjs-doc.ts) bound into
+// the Tiptap editor via @tiptap/extension-collaboration. The stores below
+// are derived projections used by components that don't touch the editor
+// directly (the Outline pane, the server autosave loop, the diff overlay).
+
+/** Current editor markdown, projected from the live Y.Doc after each update.
+ * Used for: outline TOC, server autosave, `lastMarkdown` on render submit. */
+export const userMd = writable<string>('');
+
+/** Snapshot of `userMd` captured at render start. The diff overlay compares
+ * the current editor content against this baseline to highlight what the
+ * agent changed. Null when no review is pending.
+ *
+ * Accept: set to null (changes are already in the Y.Doc; nothing to commit).
+ * Reject: rewind agent-origin Yjs ops via the agent UndoManager, then null. */
+export const reviewBaseline = writable<string | null>(null);
+
+/** Pending agent-edit rounds for the ACTIVE tab, oldest first. Each round
+ * shows as its own card in the OutlinePane; the editor's diff overlay
+ * composes them all (anchored at rounds[0].beforeMd). Accepting a round
+ * removes just that round; rejecting a round rewinds to its beforeMd
+ * (also dropping all later rounds). */
+export const pendingReviewRounds = writable<PendingReviewRound[]>([]);
+
+/** Snapshot of the editor's markdown captured right before applyAgentMarkdown
+ * dispatches its PM replace. Includes any user edits made DURING the render
+ * (which the bare baseline does not). Used as the restore target for
+ * reject-after-refresh, because the in-memory Y.UndoManager has no history
+ * after a page reload. Null when no review is pending. Persisted to the
+ * server via PUT /api/document { preAgentMd } and read back on boot. */
+export const preAgentSnapshot = writable<string | null>(null);
+
+/** Writing rules (mirror of document.meta.json rules). */
 export const rules = writable<Rule[]>([]);
-const projectedParaBreaks = writable<Set<number>>(new Set());
-const projectedProse = writable<Sentence[]>([]);
-export const annotations = writable<Annotation[]>([]);
-const projectedEditorPins = writable<EditorPin[]>([]);
-const projectedSections = writable<Section[]>([]);
-export const blocks = writable<AtomzBlock[]>([]);
-export const pins = writable<AtomzPin[]>([]);
-export const paraBreaks = readonly(projectedParaBreaks);
-export const prose = readonly(projectedProse);
-export const editorPins = readonly(projectedEditorPins);
-export const sections = readonly(projectedSections);
 
-// Note: these four .set() calls fire subscribers sequentially. A subscriber on
-// prose that synchronously reads sections would see stale sections. Current
-// subscribers only set local vars, so this is safe. If that changes, batch with
-// a suppression flag.
-export function setProjectedRuntimeView(input: {
-	prose: Sentence[];
-	paraBreaks: Set<number>;
-	editorPins: EditorPin[];
-	sections: Section[];
-}) {
-	projectedProse.set(input.prose);
-	projectedParaBreaks.set(input.paraBreaks);
-	projectedEditorPins.set(input.editorPins);
-	projectedSections.set(input.sections);
+/** Rules the agent has proposed during a render, awaiting user Accept/Reject.
+ * Accepted proposals are appended to `rules` and persisted; rejected ones
+ * are simply removed from this list. */
+export const proposedRules = writable<ProposedRule[]>([]);
+
+/** Shell hooks the agent has proposed during a render, awaiting user
+ * Accept/Reject. Accepted proposals are appended to `.docwriter/hooks.json`
+ * via /api/hooks; rejected ones are removed. */
+export const proposedHooks = writable<ProposedHook[]>([]);
+
+/** The agent's built-in AskUserQuestion tool call — a multiple-choice
+ * clarifying question it paused to ask. Shape matches the SDK's
+ * AskUserQuestionInput.questions. Each card renders in the OutlinePane;
+ * answering POSTs to /api/ask-user-reply and unblocks the agent. */
+export interface PendingUserQuestion {
+	id: string;
+	questions: Array<{
+		question: string;
+		header: string;
+		options: Array<{ label: string; description?: string }>;
+		multiSelect?: boolean;
+	}>;
 }
+export const pendingUserQuestions = writable<PendingUserQuestion[]>([]);
 
-// Signal to clear UserEdit marks in the editor after agent processes edits
-export const clearUserEdits = writable<number>(0);
+/** Regions of userMd that have been recently typed by the user (for orange highlighting). */
+export interface UserEditRegion { from: number; to: number; timestamp: number; }
+export const userEditRegions = writable<UserEditRegion[]>([]);
 
-// Actions toolbar
+// ── UI state ──────────────────────────────────────────────────────────
+
+export const isRendering = writable(false);
+export const annotations = writable<Annotation[]>([]);
+export const showHistory = writable(true);
+
+/** Seconds remaining until the editor auto-submits after user stops typing.
+ * 0 means no countdown active. Updated by the editor's idle timer. */
+export const submitCountdown = writable<number>(0);
+
+/** User preference: editor font size scale (1.0 = default 17px). */
+export const editorFontScale = writable<number>(1.0);
+
+// ── Actions toolbar ───────────────────────────────────────────────────
+
 export const pinnedActions: Action[] = [
 	{ id: 'a_verbose', label: 'Too verbose', icon: 'scissors', pinned: true, color: '#8b5cf6' },
-	{ id: 'a_ai', label: 'AI smell', icon: 'bot', pinned: true, color: '#f43f5e' },
-	{ id: 'a_clunky', label: 'Clunky', icon: 'wrench', pinned: true, color: '#f59e0b' },
-	{ id: 'a_inaccurate', label: 'Inaccurate', icon: 'x-circle', pinned: true, color: '#ef4444' },
-	{ id: 'a_example', label: 'Add example', icon: 'lightbulb', pinned: true, color: '#10b981' },
-	{ id: 'a_transition', label: 'Fix transition', icon: 'arrow-right', pinned: true, color: '#0891b2' }
+	{ id: 'a_ai', label: 'AI smell', icon: 'bot', pinned: true, color: '#f43f5e' }
 ];
-
 export const recentActions = writable<Action[]>([]);
 export const selectedAction = writable<Action | null>(null);
-
-// Action usage tracking for rule promotion
 export const actionUsageCounts = writable<Record<string, number>>({});
 
 export function trackActionUsage(actionLabel: string) {
@@ -61,109 +105,133 @@ export function trackActionUsage(actionLabel: string) {
 	}));
 }
 
-// UI state
-export const highlightedFrags = writable<Set<string>>(new Set());
-export const highlightedSents = writable<Set<number>>(new Set());
-export const isRendering = writable(false);
+// ── Agent activity log ────────────────────────────────────────────────
 
-// Selective rendering
-export const renderingSentences = writable<Set<number>>(new Set());
-
-// Sentence transitions: word-by-word typewriter with diff
-export interface SentenceTransition {
-	oldText: string;
-	newText: string;
-	wordsRevealed: number;
-	done: boolean;
-}
-export const sentenceTransitions = writable<Map<number, SentenceTransition>>(new Map());
-
-export const documentOps = writable<DocumentOp[]>([]);
-
-// Agent edit highlights — temporarily show which blocks/atoms the agent changed
-export const agentChangedBlockIds = writable<Set<string>>(new Set());
-export const agentChangedAtomIds = writable<Set<string>>(new Set());
-
-// Queued edit highlights — show which blocks have pending user edits awaiting agent
-export const pendingEditBlockIds = writable<Set<string>>(new Set());
-
-function createDocumentOpId(): string {
-	return `op_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-export function pushDocumentOp(item: NewDocumentOp) {
-	const op = {
-		id: item.id || createDocumentOpId(),
-		createdAt: item.createdAt || Date.now(),
-		...item
-	} as unknown as DocumentOp;
-	documentOps.update((ops) => [...ops, op]);
-}
-
-// Undo stack (block-level, canonical)
-const MAX_UNDO_DEPTH = 20;
-interface BlockSnapshot {
-	blocks: AtomzBlock[];
-	pins: AtomzPin[];
-}
-export const blockHistory = writable<BlockSnapshot[]>([]);
-
-export function pushBlockSnapshot(currentBlocks: AtomzBlock[], currentPins: AtomzPin[]) {
-	blockHistory.update((stack) => {
-		const next = [...stack, {
-			blocks: currentBlocks.map((b) => ({ ...b })),
-			pins: currentPins.map((p) => ({ ...p, anchors: p.anchors.map((a) => ({ ...a })) }))
-		}];
-		return next.length > MAX_UNDO_DEPTH ? next.slice(-MAX_UNDO_DEPTH) : next;
-	});
-}
-
-export async function undoBlocks(): Promise<boolean> {
-	let didUndo = false;
-	blockHistory.update((stack) => {
-		if (stack.length === 0) return stack;
-		const next = [...stack];
-		const snapshot = next.pop()!;
-		blocks.set(snapshot.blocks);
-		pins.set(snapshot.pins);
-		didUndo = true;
-		return next;
-	});
-	if (didUndo) {
-		// Dynamic import to avoid circular dependency — runtime-canonical imports from stores.
-		const { reproject } = await import('./runtime-canonical');
-		reproject();
-	}
-	return didUndo;
-}
-
-// Model & theme
-export const selectedModel = writable<string>('opus');
-export const selectedTheme = writable<string>('light');
-
-// Editor mode: 'plaintext' or 'markdown'
-export const editorMode = writable<'plaintext' | 'markdown'>('markdown');
-
-// Version history (checkpoints from Agent SDK file checkpointing)
-export interface Checkpoint {
-	id: string;
-	sessionId: string;
-	timestamp: number;
-	description?: string;
-	prose?: Sentence[]; // snapshot of prose at this checkpoint
-}
-export const checkpoints = writable<Checkpoint[]>([]);
-
-// Agent history
 export const agentHistory = writable<HistoryEntry[]>([]);
-export const showHistory = writable<boolean>(true);
 
+/** Session-wide cost + usage accumulator. The SDK reports per-round via a
+ * `result` message; we sum into this store. Reset when the user starts a
+ * new session. See https://code.claude.com/docs/en/agent-sdk/cost-tracking
+ */
+export interface SessionCost {
+	totalCostUsd: number;
+	inputTokens: number;
+	outputTokens: number;
+	cacheCreationTokens: number;
+	cacheReadTokens: number;
+	rounds: number;
+}
+const EMPTY_COST: SessionCost = {
+	totalCostUsd: 0,
+	inputTokens: 0,
+	outputTokens: 0,
+	cacheCreationTokens: 0,
+	cacheReadTokens: 0,
+	rounds: 0
+};
+const SESSION_COST_KEY = 'docwriter.sessionCost';
+function readPersistedCost(): SessionCost {
+	if (typeof window === 'undefined') return { ...EMPTY_COST };
+	try {
+		const raw = window.localStorage.getItem(SESSION_COST_KEY);
+		if (!raw) return { ...EMPTY_COST };
+		const parsed = JSON.parse(raw);
+		return {
+			totalCostUsd: Number(parsed.totalCostUsd) || 0,
+			inputTokens: Number(parsed.inputTokens) || 0,
+			outputTokens: Number(parsed.outputTokens) || 0,
+			cacheCreationTokens: Number(parsed.cacheCreationTokens) || 0,
+			cacheReadTokens: Number(parsed.cacheReadTokens) || 0,
+			rounds: Number(parsed.rounds) || 0
+		};
+	} catch {
+		return { ...EMPTY_COST };
+	}
+}
+export const sessionCost = writable<SessionCost>(readPersistedCost());
+if (typeof window !== 'undefined') {
+	sessionCost.subscribe((v) =>
+		window.localStorage.setItem(SESSION_COST_KEY, JSON.stringify(v))
+	);
+}
+export function resetSessionCost() {
+	sessionCost.set({ ...EMPTY_COST });
+}
+export function addRoundCost(delta: {
+	totalCostUsd?: number;
+	usage?: {
+		input_tokens?: number;
+		output_tokens?: number;
+		cache_creation_input_tokens?: number;
+		cache_read_input_tokens?: number;
+	};
+}) {
+	const u = delta.usage ?? {};
+	sessionCost.update((prev) => ({
+		totalCostUsd: prev.totalCostUsd + (delta.totalCostUsd ?? 0),
+		inputTokens: prev.inputTokens + (u.input_tokens ?? 0),
+		outputTokens: prev.outputTokens + (u.output_tokens ?? 0),
+		cacheCreationTokens: prev.cacheCreationTokens + (u.cache_creation_input_tokens ?? 0),
+		cacheReadTokens: prev.cacheReadTokens + (u.cache_read_input_tokens ?? 0),
+		rounds: prev.rounds + 1
+	}));
+}
 export function pushHistory(entry: HistoryEntry) {
 	agentHistory.update((h) => {
-		// Deduplicate consecutive render_end entries
 		if (entry.type === 'render_end' && h.length > 0 && h[h.length - 1].type === 'render_end') {
 			return h;
 		}
 		return [...h, entry];
 	});
 }
+
+// ── Tabs ──────────────────────────────────────────────────────────────
+//
+// Each tab is a markdown file under `notes/`. The active tab's Y.Doc is
+// bound into the editor; switching tabs tears down the editor and rebuilds
+// it against the new tab's Y.Doc (with its own IndexedDB store, undo
+// history, and review state).
+
+export type TabKind = 'markdown' | 'plain';
+export interface TabInfo {
+	/** Workspace-relative path — e.g. "drafts/chapter-1.md", "script.py". */
+	id: string;
+	kind: TabKind;
+}
+
+/** Ordered list of tab descriptors (id + kind). Kind drives editor mode:
+ * `.md` tabs render as markdown; other text extensions render as plain. */
+export const tabs = writable<TabInfo[]>([]);
+/** Which tab the editor is currently showing. null on a fresh install with
+ * no tabs yet — the bootstrap flow creates a default tab. */
+export const activeTab = writable<string | null>(null);
+/** Kind of the currently active tab (derived from the tabs list + activeTab).
+ * Components read this to pick the editor extension set. */
+export const activeTabKind = writable<TabKind>('markdown');
+
+// ── Preferences ───────────────────────────────────────────────────────
+
+export const selectedModel = writable<string>('opus');
+export const selectedTheme = writable<string>('light');
+
+/** History pane verbosity. `verbose` = every tool call, assistant monologue,
+ * render marker. `minimal` = just user prompts + actual edits + hook runs.
+ * Persisted to localStorage so it survives reloads. */
+export type HistoryVerbosity = 'verbose' | 'minimal';
+const HISTORY_VERBOSITY_KEY = 'docwriter.historyVerbosity';
+function readVerbosity(): HistoryVerbosity {
+	if (typeof window === 'undefined') return 'verbose';
+	const v = window.localStorage.getItem(HISTORY_VERBOSITY_KEY);
+	return v === 'minimal' ? 'minimal' : 'verbose';
+}
+export const historyVerbosity = writable<HistoryVerbosity>(readVerbosity());
+if (typeof window !== 'undefined') {
+	historyVerbosity.subscribe((v) => window.localStorage.setItem(HISTORY_VERBOSITY_KEY, v));
+}
+
+/** Agent behavior settings. Mirrored into `.docwriter/state.json` by
+ * +page.svelte whenever the user changes them via the AgentDock popover. */
+export const agentSettings = writable<AgentSettings>({
+	agency: 'conservative',
+	trackChanges: true
+});

@@ -1,55 +1,44 @@
+import { diffWords, createTwoFilesPatch } from 'diff';
+
 export type DiffPart = { text: string; type: 'same' | 'added' | 'removed' };
 
-// Simple word-level diff using longest common subsequence
+/** Word-level diff. Wraps the `diff` package's diffWords. */
 export function wordDiff(oldText: string, newText: string): DiffPart[] {
-	const oldWords = oldText.split(/(\s+)/); // preserve whitespace
-	const newWords = newText.split(/(\s+)/);
+	return diffWords(oldText, newText).map((change) => ({
+		text: change.value,
+		type: change.added ? 'added' : change.removed ? 'removed' : 'same'
+	}));
+}
 
-	// LCS table
-	const m = oldWords.length;
-	const n = newWords.length;
-	const dp: number[][] = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+/**
+ * Unified-diff-style line diff between two texts. Returns the unified diff
+ * format the agent already understands well. Returns empty string if texts are identical.
+ */
+export function unifiedLineDiff(oldText: string, newText: string, contextLines = 3): string {
+	if (oldText === newText) return '';
+	const patch = createTwoFilesPatch('a', 'b', oldText, newText, '', '', { context: contextLines });
+	// Strip the file header lines (--- a, +++ b) for cleaner output
+	return patch.split('\n').slice(2).join('\n').trim();
+}
 
-	for (let i = 1; i <= m; i++) {
-		for (let j = 1; j <= n; j++) {
-			if (oldWords[i - 1] === newWords[j - 1]) {
-				dp[i][j] = dp[i - 1][j - 1] + 1;
-			} else {
-				dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
-			}
-		}
-	}
-
-	// Backtrack to build diff
-	const parts: DiffPart[] = [];
-	let i = m,
-		j = n;
-
-	const stack: DiffPart[] = [];
-	while (i > 0 || j > 0) {
-		if (i > 0 && j > 0 && oldWords[i - 1] === newWords[j - 1]) {
-			stack.push({ text: oldWords[i - 1], type: 'same' });
-			i--;
-			j--;
-		} else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
-			stack.push({ text: newWords[j - 1], type: 'added' });
-			j--;
-		} else {
-			stack.push({ text: oldWords[i - 1], type: 'removed' });
-			i--;
-		}
-	}
-
-	stack.reverse();
-
-	// Merge adjacent same-type parts
-	for (const part of stack) {
-		if (parts.length > 0 && parts[parts.length - 1].type === part.type) {
-			parts[parts.length - 1].text += part.text;
-		} else {
-			parts.push({ ...part });
-		}
-	}
-
-	return parts;
+/**
+ * Strip markdown formatting to get the plain text characters, in the same
+ * order PM's `node.textContent` would produce them. Used to compare baseline
+ * markdown against the editor's current text content for diff highlighting.
+ *
+ * Removes: heading markers, list bullets, blockquote markers, bold/italic/code/link
+ * syntax, and newlines (since PM textContent has no separators between flat children).
+ */
+export function markdownToPlainText(md: string): string {
+	return md
+		.replace(/^#{1,6}\s+/gm, '')              // headings: # foo
+		.replace(/^[-*+]\s+/gm, '')               // bullet lists: - item
+		.replace(/^\d+\.\s+/gm, '')               // numbered lists: 1. item
+		.replace(/^>\s*/gm, '')                   // blockquotes: > quote
+		.replace(/\*\*(.+?)\*\*/g, '$1')          // bold
+		.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '$1') // italic *foo*
+		.replace(/(?<!_)_(?!_)(.+?)(?<!_)_(?!_)/g, '$1')      // italic _foo_
+		.replace(/`(.+?)`/g, '$1')                // inline code
+		.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')  // [text](url)
+		.replace(/\n+/g, '');                     // collapse newlines (PM joins flat)
 }

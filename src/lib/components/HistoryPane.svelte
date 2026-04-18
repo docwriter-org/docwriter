@@ -1,7 +1,16 @@
 <script lang="ts">
-	import { FileEdit, User, Bot, Play, CheckCircle, XCircle, Eye, X, Atom } from 'lucide-svelte';
+	import { fly } from 'svelte/transition';
+	import { cubicOut } from 'svelte/easing';
+	import { FileEdit, User, Bot, Play, CheckCircle, XCircle, Eye, X, Terminal } from 'lucide-svelte';
 	import type { HistoryEntry, Annotation } from '$lib/types';
-	import { agentHistory, annotations, documentOps, isRendering } from '$lib/stores';
+	import { agentHistory, annotations, isRendering, historyVerbosity } from '$lib/stores';
+	import type { HistoryVerbosity } from '$lib/stores';
+	import { onMount, onDestroy } from 'svelte';
+
+	interface Props {
+		onNewSession?: () => void | Promise<void>;
+	}
+	let { onNewSession }: Props = $props();
 
 	let entries: HistoryEntry[] = $state([]);
 	agentHistory.subscribe((v) => (entries = v));
@@ -10,33 +19,77 @@
 	annotations.subscribe((v) => (annos = v));
 
 	let pendingOpCount = $state(0);
-	documentOps.subscribe((ops) => (pendingOpCount = ops.length));
 
 	let rendering = $state(false);
-	let renderStartTime = $state(0);
-	let lastElapsed = $state('');
 	isRendering.subscribe((v) => {
 		rendering = v;
-		if (v) {
-			renderStartTime = Date.now();
-			lastElapsed = '';
-		} else if (renderStartTime > 0) {
-			const ms = Date.now() - renderStartTime;
-			lastElapsed = ms > 60000
-				? `${Math.floor(ms / 60000)}m ${Math.floor((ms % 60000) / 1000)}s`
-				: `${(ms / 1000).toFixed(1)}s`;
-		}
 	});
 
-	let scrollContainer: HTMLDivElement | null = $state(null);
-
-	$effect(() => {
-		if (entries.length && scrollContainer) {
-			requestAnimationFrame(() => {
-				scrollContainer!.scrollTop = scrollContainer!.scrollHeight;
-			});
-		}
+	/** Tick 30s to recompute relative "Xs ago" labels. Driven by a reactive
+	 * state var so `relativeTime()` recomputes when it bumps. */
+	let nowTick = $state(Date.now());
+	let tickHandle: ReturnType<typeof setInterval> | null = null;
+	onMount(() => {
+		tickHandle = setInterval(() => {
+			nowTick = Date.now();
+		}, 30_000);
 	});
+	onDestroy(() => {
+		if (tickHandle) clearInterval(tickHandle);
+	});
+
+	function relativeTime(ts: number): string {
+		// Read nowTick so Svelte knows this function depends on it and
+		// recomputes templates that call it when the tick changes.
+		const elapsedMs = nowTick - ts;
+		if (elapsedMs < 5_000) return 'just now';
+		if (elapsedMs < 60_000) return `${Math.floor(elapsedMs / 1000)}s ago`;
+		if (elapsedMs < 3_600_000) return `${Math.floor(elapsedMs / 60_000)}m ago`;
+		if (elapsedMs < 86_400_000) return `${Math.floor(elapsedMs / 3_600_000)}h ago`;
+		return new Date(ts).toLocaleDateString();
+	}
+
+	// Newest-first. The underlying store appends in chronological order;
+	// we reverse for display so new entries slide in at the top and older
+	// ones push down — matches the magicui animated-list vibe.
+	let verbosity = $state<HistoryVerbosity>('verbose');
+	historyVerbosity.subscribe((v) => (verbosity = v));
+
+	/** Minimal-mode filter: keep only user actions WITH an explicit trigger,
+	 * actual file mutations (Edit/Write tool calls), hook runs, and
+	 * render_end markers. Hide the intermediate noise (Read/Glob/Grep/Bash/
+	 * Skill exploration, assistant prose, render_start) AND the implicit
+	 * "Review document and improve" user_action that fires on bare Wake Up
+	 * (it adds no information — the edit itself tells the story). */
+	function keepInMinimal(e: HistoryEntry): boolean {
+		if (e.type === 'user_action') {
+			// Drop the default / housekeeping descriptions that are just
+			// "agent woke up" signals with no real content.
+			const d = e.description;
+			if (
+				d === 'Review document and improve' ||
+				d === 'Accepted agent\'s edit' ||
+				d === 'Rejected agent\'s edit' ||
+				/^Accepted \d+ agent edit/.test(d) ||
+				/^Rejected \d+ agent edit/.test(d)
+			) {
+				return false;
+			}
+			return true;
+		}
+		if (e.type === 'hook_run') return true;
+		if (e.type === 'tool_call') {
+			return /^(Edit|Write)$/.test(e.tool_name);
+		}
+		// Skip render_end / render_start / assistant_text in minimal.
+		return false;
+	}
+
+	const displayed = $derived(
+		verbosity === 'minimal'
+			? [...entries].filter(keepInMinimal).reverse()
+			: [...entries].reverse()
+	);
 
 	function removeAnnotation(id: string) {
 		annotations.update((a) => a.filter((x) => x.id !== id));
@@ -60,6 +113,15 @@
 		if (!ms) return '';
 		if (ms < 1000) return `${ms}ms`;
 		return `${(ms / 1000).toFixed(1)}s`;
+	}
+
+	/** Collapsed-state label for an assistant_text entry — one short line
+	 * so long explanations don't visually drown the log. Expand to read
+	 * the full content (markdown-rendered). */
+	function assistantPreview(text: string): string {
+		const trimmed = text.trim().replace(/\s+/g, ' ');
+		if (trimmed.length <= 80) return trimmed;
+		return trimmed.slice(0, 80) + '…';
 	}
 
 	function summarizeToolInput(input: Record<string, unknown>): string {
@@ -88,35 +150,104 @@
 <div class="history-pane">
 	<div class="pane-header">
 		<span class="pane-title">Agent History</span>
-		<button class="clear-btn" onclick={() => agentHistory.set([])}>Clear</button>
+		<button
+			class="clear-btn"
+			onclick={() => (onNewSession ? onNewSession() : agentHistory.set([]))}
+			title="Start a fresh agent session — clears history and the SDK session id"
+		>New agent session</button>
 	</div>
 
-
-	<div class="entries" bind:this={scrollContainer}>
-		{#if entries.length === 0}
-			<div class="empty">No activity yet. Edit an atom to see agent actions here.</div>
+	<div class="entries">
+		{#if rendering}
+			<div class="thinking-indicator" aria-label="Agent is working">
+				<span class="dot"></span>
+				<span class="dot"></span>
+				<span class="dot"></span>
+			</div>
 		{/if}
-		{#each entries as entry}
+		{#if displayed.length === 0}
+			<div class="empty">No activity yet. Wake up the agent to see what it does.</div>
+		{/if}
+		{#each displayed as entry, idx (entry.timestamp + '-' + idx)}
+			{@const depth = Math.min(idx, 6)}
+			<div
+				class="entry-slot"
+				style:--depth={depth}
+				in:fly={{ y: -8, duration: 220, easing: cubicOut }}
+			>
 			{#if entry.type === 'user_action'}
-				<div class="entry user-action">
-					<User size={11} color="#9ca3af" />
-					<span class="user-text">{entry.description}</span>
-				</div>
+				{#if entry.tabDiffs && Object.keys(entry.tabDiffs).length > 0}
+					{@const changedCount = Object.keys(entry.tabDiffs).length}
+					<details class="entry user-action expandable">
+						<summary class="user-summary">
+							<User size={11} color="#9ca3af" />
+							<span class="user-text">{entry.description}</span>
+							<span class="user-hint">
+								{changedCount === 1
+									? `1 file changed`
+									: `${changedCount} files changed`}
+							</span>
+							<span class="entry-time">{relativeTime(entry.timestamp)}</span>
+						</summary>
+						<div class="user-diffs">
+							{#each Object.entries(entry.tabDiffs) as [tabId, diff]}
+								<div class="user-diff">
+									<div class="user-diff-tab">{tabId}</div>
+									<pre class="user-diff-body">{diff}</pre>
+								</div>
+							{/each}
+						</div>
+					</details>
+				{:else}
+					<div class="entry user-action">
+						<User size={11} color="#9ca3af" />
+						<span class="user-text">{entry.description}</span>
+						<span class="entry-time">{relativeTime(entry.timestamp)}</span>
+					</div>
+				{/if}
 			{:else if entry.type === 'tool_call'}
-				<details class="entry tool-call" class:subagent={entry.subagent}>
-					<summary class="tool-summary">
-						<FileEdit size={11} color="#7c3aed" />
-						<span class="tool-name">{entry.tool_name}</span>
-						<span class="tool-hint">{summarizeToolInput(entry.input)}</span>
+				{#if entry.subagent}
+					<div class="entry subagent-call">
+						<span class="subagent-icon">🤖</span>
+						<span class="subagent-label">Subagent: {(entry.input as any)?.description || entry.tool_name}</span>
+						{#if entry.durationMs}<span class="duration">{formatDuration(entry.durationMs)}</span>{/if}
+					</div>
+				{:else}
+					<details class="entry tool-call">
+						<summary class="tool-summary">
+							<FileEdit size={11} color="#7c3aed" />
+							<span class="tool-name">{entry.tool_name}</span>
+							<span class="tool-hint">{summarizeToolInput(entry.input)}</span>
+							{#if entry.durationMs}<span class="duration">{formatDuration(entry.durationMs)}</span>{/if}
+						</summary>
+						<pre class="tool-detail">{formatToolInput(entry.input)}</pre>
+					</details>
+				{/if}
+			{:else if entry.type === 'assistant_text'}
+				<details class="entry assistant-text">
+					<summary class="assistant-summary">
+						<Bot size={11} color="#16a34a" />
+						<span class="assistant-preview">{assistantPreview(entry.text)}</span>
+					</summary>
+					<div class="assistant-body">{@html renderMarkdown(entry.text)}</div>
+				</details>
+			{:else if entry.type === 'hook_run'}
+				<details class="entry hook-run" class:running={entry.status === 'running'} class:failed={entry.status === 'failed'}>
+					<summary class="hook-summary" title={entry.command}>
+						<Terminal size={11} color={entry.status === 'failed' ? '#ef4444' : '#0891b2'} />
+						<span class="hook-tag">{entry.event}</span>
+						<code class="hook-command">{entry.command}</code>
+						{#if entry.status === 'running'}
+							<span class="hook-running-tag">running…</span>
+						{:else if entry.exitCode !== undefined && entry.exitCode !== 0}
+							<span class="hook-exit-bad">exit {entry.exitCode}</span>
+						{/if}
 						{#if entry.durationMs}<span class="duration">{formatDuration(entry.durationMs)}</span>{/if}
 					</summary>
-					<pre class="tool-detail">{formatToolInput(entry.input)}</pre>
+					{#if entry.stdout || entry.stderr}
+						<pre class="tool-detail">{entry.stdout || ''}{entry.stderr ? '\n[stderr]\n' + entry.stderr : ''}</pre>
+					{/if}
 				</details>
-			{:else if entry.type === 'assistant_text'}
-				<div class="entry assistant-text">
-					<Bot size={11} color="#16a34a" />
-					<div class="assistant-body">{@html renderMarkdown(entry.text)}</div>
-				</div>
 			{:else if entry.type === 'render_start'}
 				<div class="entry render-line">
 					<Play size={9} color="#6366f1" />
@@ -142,25 +273,8 @@
 					{/if}
 				</div>
 			{/if}
+			</div>
 		{/each}
-
-		{#if pendingOpCount > 0}
-			<div class="queue-status">
-				<span>{pendingOpCount} change{pendingOpCount > 1 ? 's' : ''} pending...</span>
-			</div>
-		{/if}
-
-		{#if rendering || pendingOpCount > 0}
-			<div class="bouncing-atom">
-				<Atom size={14} />
-			</div>
-		{:else if lastElapsed}
-			<div class="elapsed-footer">
-				<CheckCircle size={12} color="#10b981" />
-				<span>Done</span>
-				<span class="elapsed-time">{lastElapsed}</span>
-			</div>
-		{/if}
 	</div>
 </div>
 
@@ -170,78 +284,36 @@
 		height: 100%;
 		border-left: 1px solid var(--border-light);
 		background: var(--pane-bg);
+		color: var(--text);
 		display: flex;
 		flex-direction: column;
 		flex-shrink: 0;
+		font-family: 'Inter', -apple-system, sans-serif;
+		font-size: 13px;
 	}
 	.pane-header {
-		padding: 10px 12px 8px;
-		border-bottom: 1px solid #f0f0f0;
+		padding: 12px 14px 10px;
+		border-bottom: 1px solid var(--border-light);
 		display: flex;
 		justify-content: space-between;
 		align-items: center;
 	}
 	.pane-title {
-		font-size: 11px;
+		font-size: 12px;
 		font-weight: 600;
-		letter-spacing: 0.06em;
+		letter-spacing: 0.05em;
 		text-transform: uppercase;
-		color: #9ca3af;
+		color: var(--text-faint);
 	}
 	.clear-btn {
-		font-size: 11px;
-		color: #d1d5db;
+		font-size: 12px;
+		color: var(--text-faint);
 		background: none;
 		border: none;
 		cursor: pointer;
 		font-family: inherit;
 	}
-	.clear-btn:hover { color: #9ca3af; }
-
-	/* Feedback section */
-	.feedback-section {
-		padding: 8px 10px;
-		border-bottom: 1px solid var(--border-light);
-		background: var(--feedback-bg);
-	}
-	.feedback-header {
-		font-size: 10px;
-		font-weight: 600;
-		letter-spacing: 0.05em;
-		text-transform: uppercase;
-		color: #b45309;
-		margin-bottom: 4px;
-	}
-	.feedback-row {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		padding: 3px 0;
-		font-size: 11px;
-	}
-	.feedback-tag {
-		padding: 1px 6px;
-		border-radius: 4px;
-		white-space: nowrap;
-		font-size: 10px;
-		font-weight: 500;
-	}
-	.feedback-text {
-		color: #6b7280;
-		flex: 1;
-		min-width: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	.feedback-remove {
-		background: none;
-		border: none;
-		color: #d1d5db;
-		cursor: pointer;
-		flex-shrink: 0;
-		padding: 2px;
-	}
+	.clear-btn:hover { color: var(--text-secondary); }
 
 	/* Entries */
 	.entries {
@@ -250,29 +322,110 @@
 		padding: 6px 8px;
 	}
 	.empty {
-		font-size: 12px;
-		color: #d1d5db;
+		font-size: 13px;
+		color: var(--text-faint);
 		padding: 16px 4px;
 		line-height: 1.5;
 	}
 	.entry {
-		margin-bottom: 2px;
+		margin-bottom: 4px;
 	}
 
 	/* User actions */
 	.user-action {
+		padding: 6px 8px;
+		background: var(--bg-surface);
+		border-radius: 5px;
+		font-size: 13px;
+	}
+	.user-action:not(.expandable) {
 		display: flex;
 		align-items: flex-start;
 		gap: 6px;
-		padding: 4px 6px;
-		background: #f9fafb;
-		border-radius: 5px;
-		font-size: 11px;
 	}
 	.user-text {
 		color: var(--text-secondary);
 		line-height: 1.4;
 		font-size: 13px;
+	}
+	.user-summary {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		cursor: pointer;
+		list-style: none;
+	}
+	.user-summary::-webkit-details-marker { display: none; }
+	.user-summary::before {
+		content: '▸';
+		color: var(--text-faint);
+		font-size: 9px;
+		transition: transform 0.12s;
+	}
+	.user-action[open] .user-summary::before { transform: rotate(90deg); }
+	.user-hint {
+		margin-left: auto;
+		color: var(--text-faint);
+		font-size: 11px;
+	}
+	.entry-slot {
+		/* Wrapper for the fly transition — gives each history row its own
+		 * transition context without interfering with the entry's layout.
+		 *
+		 * MagicUI animated-list treatment: newest entry (depth 0) is full
+		 * emphasis; older entries fade and shrink progressively. Capped at
+		 * depth 6 so the stack stays readable instead of disappearing. */
+		margin-bottom: 4px;
+		opacity: calc(1 - var(--depth, 0) * 0.11);
+		transform: scale(calc(1 - var(--depth, 0) * 0.018));
+		transform-origin: center top;
+		transition: opacity 0.25s ease, transform 0.25s ease;
+	}
+	/* Let hover/focus temporarily restore full emphasis so older entries
+	 * stay readable when you interact with them. */
+	.entry-slot:hover,
+	.entry-slot:focus-within {
+		opacity: 1;
+		transform: none;
+	}
+	.entry-time {
+		margin-left: 8px;
+		color: var(--text-faint);
+		font-size: 10.5px;
+		font-variant-numeric: tabular-nums;
+		flex-shrink: 0;
+	}
+	.user-hint + .entry-time {
+		margin-left: 8px;
+	}
+	.user-action:not(.expandable) .entry-time {
+		margin-left: auto;
+	}
+	.user-diffs {
+		margin-top: 8px;
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+	.user-diff-tab {
+		font-size: 11px;
+		font-weight: 600;
+		color: var(--text-muted);
+		letter-spacing: 0.03em;
+		margin-bottom: 4px;
+	}
+	.user-diff-body {
+		font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+		font-size: 11px;
+		line-height: 1.4;
+		margin: 0;
+		padding: 8px;
+		background: var(--bg-elevated);
+		border: 1px solid var(--border-light);
+		border-radius: 4px;
+		white-space: pre-wrap;
+		overflow-x: auto;
+		color: var(--text-secondary);
 	}
 
 	/* Tool calls — collapsible */
@@ -285,17 +438,18 @@
 	.tool-summary {
 		display: flex;
 		align-items: center;
-		gap: 5px;
-		padding: 5px 8px;
-		font-size: 11px;
+		gap: 6px;
+		padding: 6px 10px;
+		font-size: 13px;
 		cursor: pointer;
 		list-style: none;
 	}
 	.tool-summary::-webkit-details-marker { display: none; }
 	.tool-summary::before {
 		content: '▸';
-		font-size: 9px;
-		color: #c4b5fd;
+		font-size: 10px;
+		color: var(--accent);
+		opacity: 0.6;
 		transition: transform 0.15s;
 	}
 	details[open] .tool-summary::before {
@@ -303,23 +457,23 @@
 	}
 	.tool-name {
 		font-weight: 600;
-		color: #6d28d9;
-		font-size: 11px;
+		color: var(--tool-accent);
+		font-size: 13px;
 	}
 	.tool-hint {
-		color: #a78bfa;
-		font-size: 10px;
+		color: var(--text-muted);
+		font-size: 12px;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 		flex: 1;
 	}
 	.tool-detail {
-		padding: 6px 8px;
-		font-size: 10px;
-		color: #4b5563;
-		background: #f5f3ff;
-		border-top: 1px solid #ede9fe;
+		padding: 8px 10px;
+		font-size: 12px;
+		color: var(--text-secondary);
+		background: var(--bg-surface);
+		border-top: 1px solid var(--border-light);
 		white-space: pre-wrap;
 		word-break: break-word;
 		font-family: 'SF Mono', 'Menlo', monospace;
@@ -329,32 +483,60 @@
 		margin: 0;
 	}
 
-	/* Assistant text */
+	/* Assistant text — collapsible <details>. Collapsed state shows a single
+	 * preview line so the activity log stays scannable. Expand to read. */
 	.assistant-text {
-		display: flex;
-		align-items: flex-start;
-		gap: 6px;
-		padding: 5px 8px;
+		padding: 6px 10px;
 		background: var(--assistant-bg);
 		border-radius: 5px;
 		border: 1px solid var(--assistant-border);
-		font-size: 11px;
+		font-size: 13px;
+	}
+	.assistant-summary {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		cursor: pointer;
+		list-style: none;
+		min-width: 0;
+	}
+	.assistant-summary::-webkit-details-marker { display: none; }
+	.assistant-summary::before {
+		content: '▸';
+		color: var(--text-faint);
+		font-size: 9px;
+		flex-shrink: 0;
+		transition: transform 0.12s;
+	}
+	.assistant-text[open] .assistant-summary::before { transform: rotate(90deg); }
+	.assistant-preview {
+		color: var(--text-secondary);
+		font-size: 13px;
+		line-height: 1.4;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		min-width: 0;
+		flex: 1;
 	}
 	.assistant-body {
 		color: var(--text);
-		line-height: 1.5;
+		line-height: 1.55;
 		word-break: break-word;
-		flex: 1;
 		font-size: 13px;
+		margin-top: 6px;
+		padding-top: 6px;
+		border-top: 1px solid var(--assistant-border);
 	}
 	.assistant-body :global(strong) {
 		font-weight: 600;
-		color: #111;
+		color: var(--text);
 	}
 	.assistant-body :global(code) {
 		font-family: 'SF Mono', 'Menlo', monospace;
-		font-size: 10px;
-		background: #f3f4f6;
+		font-size: 12px;
+		background: var(--bg-surface);
+		color: var(--text-secondary);
 		padding: 1px 4px;
 		border-radius: 3px;
 	}
@@ -367,13 +549,13 @@
 		content: '•';
 		position: absolute;
 		left: 0;
-		color: #9ca3af;
+		color: var(--text-faint);
 	}
 
 	.duration {
 		font-size: 10px;
-		color: #9ca3af;
-		background: #f3f4f6;
+		color: var(--text-faint);
+		background: var(--bg-surface);
 		padding: 1px 5px;
 		border-radius: 3px;
 		margin-left: auto;
@@ -381,29 +563,96 @@
 		font-family: 'SF Mono', 'Menlo', monospace;
 	}
 
-	.queue-status {
-		padding: 6px 10px;
-		font-size: 11px;
-		color: var(--accent);
-		background: var(--accent-bg);
-		border-radius: 5px;
-		text-align: center;
+	/* Hook runs are background signals (user's own shell commands firing on
+	 * agent events) — they shouldn't compete visually with agent output.
+	 * No box, just a subtle left accent to mark the row. */
+	.hook-run {
+		border: none;
+		background: transparent;
+		border-left: 2px solid color-mix(in srgb, #0891b2 60%, var(--border-light));
+		padding-left: 4px;
 	}
-	.bouncing-atom {
+	.hook-run.failed {
+		border-left-color: color-mix(in srgb, #ef4444 70%, var(--border-light));
+	}
+	/* Hook summary — let the command wrap instead of ellipsizing so the
+	 * user can read it inline without having to hover. */
+	.hook-summary {
 		display: flex;
-		justify-content: center;
-		padding: 8px;
-		color: var(--accent);
-		animation: bounce 1s ease-in-out infinite;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 6px;
+		padding: 4px 6px;
+		font-size: 12px;
+		cursor: pointer;
+		list-style: none;
+		line-height: 1.4;
 	}
-	@keyframes bounce {
-		0%, 100% { transform: translateY(0); }
-		50% { transform: translateY(-4px); }
+	.hook-summary::-webkit-details-marker { display: none; }
+	.hook-summary::before {
+		content: '▸';
+		font-size: 10px;
+		color: var(--text-faint);
+		transition: transform 0.15s;
+	}
+	details[open] .hook-summary::before { transform: rotate(90deg); }
+	.hook-tag {
+		font-size: 10px;
+		font-weight: 600;
+		letter-spacing: 0.04em;
+		color: #0891b2;
+		text-transform: uppercase;
+	}
+	.hook-run.failed .hook-tag {
+		color: #ef4444;
+	}
+	.hook-command {
+		flex: 1 1 100%;
+		min-width: 0;
+		font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+		font-size: 11.5px;
+		color: var(--text-secondary);
+		background: transparent;
+		padding: 0;
+		line-height: 1.35;
+		word-break: break-word;
+		overflow-wrap: anywhere;
+		white-space: pre-wrap;
+	}
+	.hook-running-tag {
+		font-size: 10px;
+		color: #0891b2;
+		font-family: 'SF Mono', 'Menlo', monospace;
+		padding: 1px 6px;
+		border: 1px solid color-mix(in srgb, #0891b2 40%, transparent);
+		border-radius: 3px;
+		flex-shrink: 0;
+	}
+	.hook-exit-bad {
+		font-size: 10px;
+		color: #ef4444;
+		font-family: 'SF Mono', 'Menlo', monospace;
+		padding: 1px 6px;
+		border: 1px solid color-mix(in srgb, #ef4444 40%, transparent);
+		border-radius: 3px;
+		flex-shrink: 0;
 	}
 
-	.tool-call.subagent {
-		margin-left: 12px;
-		border-left: 2px solid var(--accent-light);
+	.subagent-call {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		padding: 6px 10px;
+		background: color-mix(in srgb, #0891b2 8%, transparent);
+		border-radius: 6px;
+		border-left: 3px solid #0891b2;
+	}
+	.subagent-icon { font-size: 13px; }
+	.subagent-label {
+		flex: 1;
+		font-size: 12px;
+		color: #0891b2;
+		font-weight: 500;
 	}
 
 	/* Render markers */
@@ -414,20 +663,6 @@
 		padding: 3px 6px;
 		font-size: 10px;
 		color: #9ca3af;
-	}
-	.elapsed-footer {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		padding: 10px 12px;
-		font-size: 13px;
-		color: #10b981;
-		border-top: 1px solid var(--border-light);
-	}
-	.elapsed-footer .elapsed-time {
-		margin-left: auto;
-		color: var(--text-faint);
-		font-size: 12px;
 	}
 	.render-end-line {
 		display: flex;
@@ -445,5 +680,30 @@
 		margin-left: auto;
 		color: var(--text-faint);
 		font-size: 11px;
+	}
+
+	/* Bouncing-dots "thinking" indicator, rendered at the bottom of the log
+	 * while a render is in progress. Gives the user a visual heartbeat even
+	 * when the agent hasn't emitted any text or tool calls yet. */
+	.thinking-indicator {
+		display: flex;
+		align-items: center;
+		gap: 5px;
+		padding: 10px 14px;
+	}
+	.thinking-indicator .dot {
+		width: 6px;
+		height: 6px;
+		border-radius: 50%;
+		background: var(--text-muted);
+		opacity: 0.6;
+		animation: dot-bounce 1.2s infinite ease-in-out;
+	}
+	.thinking-indicator .dot:nth-child(2) { animation-delay: 0.15s; }
+	.thinking-indicator .dot:nth-child(3) { animation-delay: 0.3s; }
+
+	@keyframes dot-bounce {
+		0%, 60%, 100% { transform: translateY(0); opacity: 0.35; }
+		30% { transform: translateY(-4px); opacity: 0.9; }
 	}
 </style>

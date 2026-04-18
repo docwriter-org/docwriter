@@ -1,0 +1,5 @@
+{
+  "event": "Stop",
+  "command": "typst compile manuscript.typ build/manuscript.pdf",
+  "reason": "Recompiles the Typst manuscript after the agent finishes a response."
+}

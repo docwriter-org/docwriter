@@ -1,411 +1,1195 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { Settings, Undo2, MessageSquareText, FolderOpen, History, XCircle, RotateCcw } from 'lucide-svelte';
-	import { normalizeAtomzFile, uploadText, buildAtomzFileFromCanonicalState, buildBlocksFromRuntimeView, type AtomzBlock, type AtomzPin } from '$lib/atomz';
-	import { applyCanonicalFileToStores, reproject, getCanonicalRuntimeStateFromStores } from '$lib/runtime-canonical';
-import { applyDocumentOp } from '$lib/document-op-utils';
-import { buildDocumentOpProcessingPlan } from '$lib/document-op-processing';
-import { SYNC_TIMING } from '$lib/sync-timing';
-	import { themes, applyTheme } from '$lib/themes';
-	import { wordDiff } from '$lib/diff';
-	import type { DiffPart } from '$lib/diff';
-	import ActionToolbar from '$lib/components/ActionToolbar.svelte';
-	import RulesPanel from '$lib/components/RulesPanel.svelte';
-	import ContentPane from '$lib/components/ContentPane.svelte';
+	import { ScrollText } from 'lucide-svelte';
+	import MenuBar, { type MenuSpec } from '$lib/components/MenuBar.svelte';
+	import OutlinePane from '$lib/components/OutlinePane.svelte';
+	import FileTree from '$lib/components/FileTree.svelte';
+	import type { FileEntry } from '$lib/components/FileTree.svelte';
 	import TiptapEditor from '$lib/editor/TiptapEditor.svelte';
 	import HistoryPane from '$lib/components/HistoryPane.svelte';
+	import RulesPanel from '$lib/components/RulesPanel.svelte';
 	import PanelResizer from '$lib/components/PanelResizer.svelte';
+	import AgentDock from '$lib/components/AgentDock.svelte';
+	import AgentSettingsPanel from '$lib/components/AgentSettingsPanel.svelte';
+	import HooksPanel from '$lib/components/HooksPanel.svelte';
+	import ChatPanel from '$lib/components/ChatPanel.svelte';
+	import { themes, applyTheme } from '$lib/themes';
+	import { unifiedLineDiff } from '$lib/diff';
+	import { diffWords } from 'diff';
+	import { TINY_EDIT_THRESHOLD } from '$lib/types';
+
+	/** Turn a submit trigger into a compact description for the history
+	 * pane. Full text of long prompts (including feedback-on-passage quotes)
+	 * becomes a single-line label; the agent still gets the full prompt.
+	 * When no trigger is given, describe the default "review and improve"
+	 * prompt the agent actually receives, not a vague "Submitted". */
+	function shortDescription(trigger: string | undefined): string {
+		if (!trigger) return 'Review document and improve';
+		// `Feedback "Too verbose" on this passage: "…"` → `Feedback: Too verbose`
+		const feedbackMatch = trigger.match(/^Feedback "([^"]+)" on this passage:/);
+		if (feedbackMatch) return `Feedback: ${feedbackMatch[1]}`;
+		// Apply-rules trigger: "Review the document against the following rules…"
+		if (/^Review the document against the following rules/.test(trigger)) {
+			return 'Apply rules';
+		}
+		// Reject-and-reconsider trigger starts with "The user just rejected"
+		if (/^The user just rejected/.test(trigger)) {
+			return 'Reconsider after rejection';
+		}
+		if (trigger.length > 80) return trigger.slice(0, 77) + '…';
+		return trigger;
+	}
+
+	/** Classify a round's size by summing added+removed char counts. */
+	function classifyRoundKind(beforeMd: string, afterMd: string): 'tiny' | 'big' {
+		let totalDelta = 0;
+		for (const part of diffWords(beforeMd, afterMd)) {
+			if (part.added || part.removed) totalDelta += part.value.length;
+		}
+		return totalDelta < TINY_EDIT_THRESHOLD ? 'tiny' : 'big';
+	}
 	import {
-		atoms,
-		fragments,
+		applyAgentMarkdown,
+		undoAgentChanges,
+		captureBaselineForAgent,
+		clearAgentBaseline,
+		clearAllAgentBaselines
+	} from '$lib/yjs-agent';
+	import {
+		getReviewMap,
+		getReviewMapForTab,
+		whenYDocReady,
+		setCurrentTab,
+		destroyTab,
+		renameTab
+	} from '$lib/yjs-doc';
+	import type { Editor } from '@tiptap/core';
+	import {
+		userMd,
+		reviewBaseline,
+		preAgentSnapshot,
+		pendingReviewRounds,
 		rules,
-		agentChangedBlockIds,
-		agentChangedAtomIds,
-		pendingEditBlockIds,
-		paraBreaks,
-		prose,
+		proposedRules,
+		proposedHooks,
+		pendingUserQuestions,
+		userEditRegions,
 		isRendering,
-		annotations,
-		renderingSentences,
-		sentenceTransitions,
-		documentOps,
-		checkpoints,
-		blockHistory,
-		pushBlockSnapshot,
-		undoBlocks,
 		agentHistory,
 		showHistory,
 		pushHistory,
 		selectedModel,
 		selectedTheme,
-		blocks,
-		editorPins,
-		pins,
-		sections,
-		clearUserEdits,
-		editorMode
+		submitCountdown,
+		editorFontScale,
+		historyVerbosity,
+		agentSettings,
+		tabs,
+		activeTab,
+		activeTabKind,
+		recentActions,
+		addRoundCost,
+		resetSessionCost,
+		actionUsageCounts,
+		type TabInfo
 	} from '$lib/stores';
-	import type { Fragment, Sentence, DocumentOp } from '$lib/types';
+	import TabBar from '$lib/components/TabBar.svelte';
+	import type { AgentSettings, HistoryEntry, PendingReviewRound } from '$lib/types';
 
-	let showRules = $state(false);
+	type EditorRef = {
+		getEditor: () => Editor | undefined;
+		flushAutosave: () => Promise<void>;
+	};
+
 	let rendering = $state(false);
-	let currentAbort: AbortController | null = $state(null);
-	const persistedDocumentOpIds = new Set<string>();
-	const pendingDocumentOpPersistIds = new Set<string>();
-	let isReplayingDocumentOps = $state(false);
+	isRendering.subscribe((v) => (rendering = v));
+
+	// Synchronous guard: set to true the moment submit() is entered, before any
+	// await. Prevents two concurrent calls from the same event loop tick (e.g.
+	// a button click firing just as the idle timer callback is about to run).
+	let submitInFlight = false;
+
+	let currentAbort: AbortController | null = null;
+	/** Per-tab: the last agentMd the client applied to each tab. Passed to
+	 * the server so it can build a per-tab "what the user changed since the
+	 * last round" diff. */
+	let lastRenderMarkdownByTab: Record<string, string> = $state({});
+	/** Which tabs currently have a pending review (drives the tab dot badges
+	 * and gates the Accept/Reject UI in the OutlinePane). */
+	/** Map tabId → pending round count. Drives the numbered badge on
+	 * each tab. 0 / absent means no pending review on that tab. */
+	let pendingReviewTabs: Map<string, number> = $state(new Map());
+	/** Per-tab pre-render markdown snapshot (for the diff overlay baseline). */
+	let preRenderMdByTab: Record<string, string> = {};
+	/** Per-tab pre-agent-apply snapshot (for reject-after-refresh restore). */
+	let preAgentMdByTab: Record<string, string> = {};
+
+	function getCurrentTabList(): string[] {
+		let v: TabInfo[] = [];
+		tabs.subscribe((x) => (v = x))();
+		return v.map((t) => t.id);
+	}
+
+	function getTabKind(tabId: string): 'markdown' | 'plain' {
+		let v: TabInfo[] = [];
+		tabs.subscribe((x) => (v = x))();
+		const match = v.find((t) => t.id === tabId);
+		return match?.kind ?? 'markdown';
+	}
+
+	/** Fetch a tab's current markdown from the server. Used to snapshot
+	 * pre-render content for tabs other than the active one. */
+	async function fetchTabMd(tabId: string): Promise<string> {
+		try {
+			const res = await fetch(`/api/document?tab=${encodeURIComponent(tabId)}`);
+			const data = await res.json();
+			return data.userMd || '';
+		} catch (e) {
+			console.error(`Failed to fetch md for tab "${tabId}":`, e);
+			return '';
+		}
+	}
+
+	let editorRef: EditorRef | undefined = $state();
+
+	/** Load the tab list from the server and bootstrap a default tab if none
+	 * exist. Returns the chosen active tab ID. */
+	async function loadTabs(): Promise<string | null> {
+		try {
+			const res = await fetch('/api/tabs');
+			const data = await res.json();
+			let tabInfo: TabInfo[] =
+				(data.tabs as TabInfo[] | undefined) ??
+				(data.order || []).map((id: string) => ({ id, kind: 'markdown' as const }));
+			let active: string | null = data.active ?? null;
+			if (tabInfo.length === 0) {
+				// Fresh install: create the default tab so the user has something
+				// to open. The server's POST /api/tabs also seeds the file.
+				const createRes = await fetch('/api/tabs', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ id: 'document.txt' })
+				});
+				const created = await createRes.json();
+				// Re-fetch to get kinds
+				const refreshed = await fetch('/api/tabs').then((r) => r.json());
+				tabInfo = refreshed.tabs || [{ id: 'document.txt', kind: 'plain' }];
+				active = created.active || 'document.txt';
+			}
+			tabs.set(tabInfo);
+			activeTab.set(active);
+			if (active) activeTabKind.set(getTabKind(active));
+			const pending = new Map<string, number>();
+			for (const info of tabInfo) {
+				const map = getReviewMapForTab(info.id);
+				const rounds = map.get('pendingRounds');
+				const legacyBaseline = map.get('baseline');
+				if (Array.isArray(rounds) && rounds.length > 0) {
+					pending.set(info.id, rounds.length);
+				} else if (typeof legacyBaseline === 'string') {
+					pending.set(info.id, 1);
+				}
+			}
+			pendingReviewTabs = pending;
+			return active;
+		} catch (e) {
+			console.error('Failed to load tabs:', e);
+			return null;
+		}
+	}
+
+	/** Load a single tab's markdown + meta, and hydrate the per-tab review
+	 * state from its Y.Doc. Must be called after `setCurrentTab(tabId)` so
+	 * `getReviewMap()` operates on the right Y.Doc. */
+	async function loadTab(tabId: string) {
+		try {
+			const res = await fetch(`/api/document?tab=${encodeURIComponent(tabId)}`);
+			const data = await res.json();
+			// userMd seeds the Y.Doc via TiptapEditor's mount/remount flow.
+			userMd.set(data.userMd || '');
+			rules.set(data.meta?.rules || []);
+			userEditRegions.set(data.meta?.userEditRegions || []);
+			if (data.meta?.agentSettings) {
+				agentSettings.set(data.meta.agentSettings);
+			}
+			// Hydrate review stores from this tab's Y.Doc review map.
+			await whenYDocReady();
+			const reviewMap = getReviewMap();
+			const persistedRounds = reviewMap.get('pendingRounds');
+			const persistedLastAgentMd = reviewMap.get('lastAgentMd');
+			// `pendingRounds` is the authoritative source in the new per-round
+			// model. `baseline` / `preAgent` are legacy single-round fields
+			// we still read for backward compat (old review maps written
+			// before the composition refactor). If we find them, convert
+			// into a synthetic single-round array so the UI still lights up.
+			let rounds: PendingReviewRound[] = Array.isArray(persistedRounds)
+				? (persistedRounds as PendingReviewRound[]).map((r) => ({
+						...r,
+						// Backfill `kind` on rounds written before the tiny/big
+						// classification existed.
+						kind: r.kind ?? classifyRoundKind(r.beforeMd, r.afterMd)
+				  }))
+				: [];
+			if (rounds.length === 0) {
+				const legacyBaseline = reviewMap.get('baseline');
+				if (typeof legacyBaseline === 'string') {
+					const after = data.userMd || '';
+					rounds = [
+						{
+							id: 'legacy_' + Date.now(),
+							beforeMd: legacyBaseline,
+							afterMd: after,
+							timestamp: Date.now(),
+							kind: classifyRoundKind(legacyBaseline, after)
+						}
+					];
+				}
+			}
+			pendingReviewRounds.set(rounds);
+			reviewBaseline.set(rounds.length > 0 ? rounds[0].beforeMd : null);
+			preAgentSnapshot.set(rounds.length > 0 ? rounds[0].beforeMd : null);
+			// Restore the "what the agent last saw" snapshot for this tab so
+			// the next submit's user_action diff has a real baseline to compare
+			// against, not "first render" after every reload.
+			if (typeof persistedLastAgentMd === 'string') {
+				lastRenderMarkdownByTab[tabId] = persistedLastAgentMd;
+				lastRenderMarkdownByTab = { ...lastRenderMarkdownByTab };
+			}
+		} catch (e) {
+			console.error(`Failed to load tab "${tabId}":`, e);
+		}
+	}
+
+	/** Switch the editor to a different tab. Tears down the editor, sets
+	 * the current tab on the Y.Doc layer, loads the new tab's content, then
+	 * remounts the editor against the new Y.Doc. */
+	async function switchTab(tabId: string) {
+		const current = getCurrentActiveTab();
+		if (tabId === current) return;
+		docLoaded = false; // unmounts TiptapEditor
+		setCurrentTab(tabId);
+		activeTab.set(tabId);
+		activeTabKind.set(getTabKind(tabId));
+		try {
+			await fetch('/api/tabs', {
+				method: 'PATCH',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ id: tabId, active: true })
+			});
+		} catch (e) {
+			console.error('Failed to persist active tab:', e);
+		}
+		await loadTab(tabId);
+		docLoaded = true;
+	}
+
+	async function createTab(id: string) {
+		const res = await fetch('/api/tabs', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ id })
+		});
+		if (!res.ok) {
+			const err = await res.text();
+			throw new Error(err || 'Failed to create tab');
+		}
+		const data = await res.json();
+		// Refetch the full tab list to get kinds for every tab (including the new one).
+		const listRes = await fetch('/api/tabs');
+		const listData = await listRes.json();
+		tabs.set(listData.tabs || []);
+		await switchTab(data.active);
+	}
+
+	async function closeTab(id: string) {
+		// Just drop the tab from the registry. File stays on disk; the
+		// user can reopen it from the FileTree later.
+		await removeTab(id, /* deleteFile */ false);
+	}
+
+	async function deleteTab(id: string) {
+		// Destructive: close the tab AND unlink the file.
+		await removeTab(id, /* deleteFile */ true);
+	}
+
+	async function removeTab(id: string, deleteFile: boolean) {
+		const qs = new URLSearchParams({ id });
+		if (deleteFile) qs.set('deleteFile', 'true');
+		const res = await fetch(`/api/tabs?${qs.toString()}`, { method: 'DELETE' });
+		if (!res.ok) throw new Error(await res.text());
+		const data = await res.json();
+		// Destroy this tab's Y.Doc binding regardless of whether the file
+		// was unlinked — we don't want a stale in-memory doc if the tab
+		// gets re-opened.
+		await destroyTab(id);
+		const listData = await fetch('/api/tabs').then((r) => r.json());
+		tabs.set(listData.tabs || []);
+		if (data.active && data.active !== getCurrentActiveTab()) {
+			await switchTab(data.active);
+		} else if (!data.active) {
+			docLoaded = false;
+			activeTab.set(null);
+		}
+	}
+
+	async function renameTabAction(oldId: string, newId: string) {
+		const res = await fetch('/api/tabs', {
+			method: 'PATCH',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ id: oldId, newId })
+		});
+		if (!res.ok) throw new Error(await res.text());
+		const data = await res.json();
+		await renameTab(oldId, newId);
+		const listData = await fetch('/api/tabs').then((r) => r.json());
+		tabs.set(listData.tabs || []);
+		if (getCurrentActiveTab() === oldId) {
+			activeTab.set(newId);
+			activeTabKind.set(getTabKind(newId));
+		}
+	}
+
+	function getCurrentActiveTab(): string | null {
+		let v: string | null = null;
+		activeTab.subscribe((x) => (v = x))();
+		return v;
+	}
+
+	/** Path of the currently active tab — same as its id. Used by the
+	 * FileTree to highlight the active file. */
+	let activeTabFilePath = $state<string | null>(null);
+	$effect(() => {
+		activeTabFilePath = getCurrentActiveTab();
+	});
+
+	/** Open a file from the FileTree. Any text file becomes an agent-
+	 * editable tab: either switch to it (if already open) or register it
+	 * via POST /api/tabs (which creates the file if missing). */
+	async function onFileOpened(entry: FileEntry) {
+		if (entry.kind !== 'file') return;
+		const existing = getCurrentTabList();
+		if (existing.includes(entry.path)) {
+			await switchTab(entry.path);
+		} else {
+			await createTab(entry.path);
+		}
+	}
+
+	/** Reconcile open tabs after a FileTree rename. */
+	async function onFileTreeRenamed(fromPath: string, toPath: string) {
+		const existing = getCurrentTabList();
+		if (existing.includes(fromPath)) {
+			try {
+				await renameTabAction(fromPath, toPath);
+			} catch (e) {
+				console.error('Renaming open tab failed:', e);
+			}
+		}
+	}
+
+	/** After a FileTree delete, close any open tab whose path is (under)
+	 * the deleted one. Matches both the file itself and any files under a
+	 * deleted folder. */
+	async function onFileTreeDeleted(path: string) {
+		const prefix = path + '/';
+		const toClose = getCurrentTabList().filter(
+			(id) => id === path || id.startsWith(prefix)
+		);
+		for (const id of toClose) {
+			try {
+				await deleteTab(id);
+			} catch {
+				// File may already be gone on disk; ignore.
+			}
+		}
+	}
+
+	/**
+	 * Write the pending-rounds array for a specific tab into its Y.Doc
+	 * review map (persisted by y-indexeddb). If the tab is the currently
+	 * active one, mirror into the live stores so the diff overlay and the
+	 * OutlinePane cards update immediately.
+	 *
+	 * Also clears the legacy `baseline`/`preAgent` keys when the new rounds
+	 * array is empty, so a fully-accepted tab doesn't flicker back on reload.
+	 */
+	function writeTabRounds(tabId: string, rounds: PendingReviewRound[]) {
+		const map = getReviewMapForTab(tabId);
+		map.set('pendingRounds', rounds);
+		// Keep legacy keys in sync so older code paths / tests that still
+		// read `baseline`/`preAgent` see a sane value. Earliest round's
+		// beforeMd doubles as both.
+		if (rounds.length === 0) {
+			map.set('baseline', null);
+			map.set('preAgent', null);
+		} else {
+			map.set('baseline', rounds[0].beforeMd);
+			map.set('preAgent', rounds[0].beforeMd);
+		}
+		if (tabId === getCurrentActiveTab()) {
+			pendingReviewRounds.set(rounds);
+			reviewBaseline.set(rounds.length > 0 ? rounds[0].beforeMd : null);
+			preAgentSnapshot.set(rounds.length > 0 ? rounds[0].beforeMd : null);
+		}
+		// Tab-bar badge bookkeeping — count reflects rounds length.
+		const nextPending = new Map(pendingReviewTabs);
+		if (rounds.length > 0) nextPending.set(tabId, rounds.length);
+		else nextPending.delete(tabId);
+		pendingReviewTabs = nextPending;
+	}
+
+	/** Persist agent settings through `/api/document` so the server can read
+	 * them at render time (for agency-level prompt injection). */
+	async function persistAgentSettings(next: AgentSettings) {
+		try {
+			const tabId = getCurrentActiveTab();
+			const q = tabId ? `?tab=${encodeURIComponent(tabId)}` : '';
+			await fetch(`/api/document${q}`, {
+				method: 'PUT',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ meta: { agentSettings: next } })
+			});
+		} catch (e) {
+			console.error('Failed to persist agent settings:', e);
+		}
+	}
+
+	async function submit(trigger?: string) {
+		if (rendering || submitInFlight) return;
+		submitInFlight = true;
+
+		// Diff composition: if there's an existing pending review, we do NOT
+		// wipe it. The next agent edit stacks on top, and the diff overlay
+		// keeps comparing current editor state to the original baseline, so
+		// the user sees every agent change since the last Accept — across
+		// multiple rounds. Only Accept/Reject (or "New session") clears the
+		// review state. `pendingReviewTabs` stays as-is for the same reason.
+
+		// Flush the active editor's pending autosave so the file on disk
+		// reflects every keystroke before we read it back. Without this,
+		// submitting within ~50ms of typing reads stale content and the
+		// "what changed since last render" diff comes back empty.
+		try {
+			await editorRef?.flushAutosave();
+		} catch (e) {
+			console.error('flushAutosave failed:', e);
+		}
+
+		// Capture the pre-render markdown AND the Y.Doc state per tab so
+		// applyAgentMarkdown can merge via CRDT against the right baseline
+		// and the diff overlay can compare against the pre-render text.
+		const tabList = getCurrentTabList();
+		preRenderMdByTab = {};
+		preAgentMdByTab = {};
+		for (const id of tabList) {
+			const md = await fetchTabMd(id);
+			preRenderMdByTab[id] = md;
+			captureBaselineForAgent(id);
+		}
+
+		// Lead the history with a user_action entry summarising what the
+		// agent received this round: the trigger message plus unified diffs
+		// for any tabs whose content has actually changed since the last
+		// round. Unchanged tabs and first-render tabs are intentionally
+		// omitted — we don't need "0/4 changed" noise, just the real diffs.
+		const diffLinesByTab: Record<string, string> = {};
+		for (const id of tabList) {
+			const prev = lastRenderMarkdownByTab[id];
+			const curr = preRenderMdByTab[id] ?? '';
+			if (typeof prev === 'string' && prev !== curr) {
+				diffLinesByTab[id] = unifiedLineDiff(prev, curr, 1);
+			}
+		}
+		pushHistory({
+			type: 'user_action',
+			timestamp: Date.now(),
+			description: shortDescription(trigger),
+			tabDiffs: diffLinesByTab
+		});
+
+		isRendering.set(true);
+		const renderStart = Date.now();
+
+		currentAbort = new AbortController();
+		let success = true;
+
+		// Streaming state: each incremental_apply increments a per-tab
+		// counter and adds to `incrementalAppliedTabs`. At result time these
+		// feed into the new PendingReviewRound's stepCount so reject knows
+		// how many undo steps to pop (one per Edit/Write tool call).
+		const incrementalAppliedTabs = new Set<string>();
+		const incrementalStepCountByTab: Record<string, number> = {};
+
+		try {
+			let model = 'opus';
+			selectedModel.subscribe((v) => (model = v))();
+
+			const tabId = getCurrentActiveTab();
+			const res = await fetch('/api/render', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					userMessage: trigger,
+					model,
+					lastMarkdownByTab: lastRenderMarkdownByTab,
+					tab: tabId
+				}),
+				signal: currentAbort.signal
+			});
+
+			if (!res.body) throw new Error('No response body');
+
+			const reader = res.body.getReader();
+			const decoder = new TextDecoder();
+			let buffer = '';
+
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				buffer += decoder.decode(value, { stream: true });
+
+				let lineEnd: number;
+				while ((lineEnd = buffer.indexOf('\n\n')) !== -1) {
+					const chunk = buffer.slice(0, lineEnd);
+					buffer = buffer.slice(lineEnd + 2);
+
+					let event = '';
+					let data = '';
+					for (const line of chunk.split('\n')) {
+						if (line.startsWith('event: ')) event = line.slice(7);
+						else if (line.startsWith('data: ')) data = line.slice(6);
+					}
+
+					if (!event || !data) continue;
+					let parsed: any;
+					try { parsed = JSON.parse(data); } catch { continue; }
+
+					if (event === 'tool_call_start') {
+						pushHistory({
+							type: 'tool_call',
+							timestamp: Date.now(),
+							tool_name: parsed.tool_name,
+							input: {},
+							subagent: parsed.subagent
+						});
+					} else if (event === 'tool_call') {
+						agentHistory.update((h) => {
+							const last = h[h.length - 1];
+							if (last && last.type === 'tool_call' && last.tool_name === parsed.tool_name) {
+								return [...h.slice(0, -1), { ...last, input: parsed.input }];
+							}
+							return h;
+						});
+					} else if (event === 'assistant_text') {
+						agentHistory.update((h) => {
+							const last = h[h.length - 1];
+							if (last && last.type === 'assistant_text') {
+								return [...h.slice(0, -1), { ...last, text: last.text + parsed.text }];
+							}
+							return [...h, { type: 'assistant_text', timestamp: Date.now(), text: parsed.text }];
+						});
+					} else if (event === 'incremental_apply') {
+						// Streaming partial apply: the server's internal
+						// PostToolUse hook fired after an agent Edit/Write.
+						// Apply the shadow's current content to the target
+						// tab's Y.Doc so the user sees each edit land in
+						// real time instead of in one lump at `result`.
+						//
+						// We apply with trackChanges=true (AGENT_ORIGIN) so
+						// each incremental apply creates its own step on the
+						// tab's UndoManager — rejecting the round later will
+						// undo that many steps via `round.stepCount`.
+						const iTabId: string = parsed.tabId;
+						const iAgentMd: string = parsed.agentMd;
+						if (typeof iTabId === 'string' && typeof iAgentMd === 'string') {
+							const activeTabId = getCurrentActiveTab();
+							const activeEditor = editorRef?.getEditor();
+							// Capture baseline on the first stream of a round so
+							// the CRDT merge anchors at the right pre-round state.
+							if (!incrementalAppliedTabs.has(iTabId)) {
+								captureBaselineForAgent(iTabId);
+								incrementalAppliedTabs.add(iTabId);
+							}
+							applyAgentMarkdown(
+								iTabId,
+								iAgentMd,
+								true,
+								iTabId === activeTabId ? activeEditor : undefined,
+								getTabKind(iTabId)
+							);
+							incrementalStepCountByTab[iTabId] =
+								(incrementalStepCountByTab[iTabId] ?? 0) + 1;
+						}
+					} else if (event === 'result') {
+						// Multi-tab result: parsed.edits is an array of
+						// { tabId, agentMd } for every tab the agent touched.
+						let currentSettings: AgentSettings = {
+							agency: 'conservative',
+							trackChanges: true
+						};
+						agentSettings.subscribe((v) => (currentSettings = v))();
+
+						const edits: Array<{ tabId: string; agentMd: string }> =
+							Array.isArray(parsed.edits) ? parsed.edits : [];
+						const activeTabId = getCurrentActiveTab();
+						const activeEditor = editorRef?.getEditor();
+
+						for (const { tabId, agentMd } of edits) {
+							if (typeof agentMd !== 'string') continue;
+							if (currentSettings.trackChanges) {
+								// Track-changes mode: append a new round to this
+								// tab's pending list. Every round gets its own
+								// OutlinePane card; the editor's composite diff
+								// overlay anchors at rounds[0].beforeMd so all
+								// accumulated agent changes show at once.
+								const preRender = preRenderMdByTab[tabId] ?? '';
+								const reviewMap = getReviewMapForTab(tabId);
+								const existing = reviewMap.get('pendingRounds');
+								const prior: PendingReviewRound[] = Array.isArray(existing)
+									? (existing as PendingReviewRound[])
+									: [];
+								// If streaming already landed intermediate edits
+								// for this tab, the Y.Doc has them. Final apply
+								// still runs so the `afterMd` is canonical, and
+								// it adds one more undo step (or a no-op if
+								// content already matches). Total step count
+								// for this round = stream count + 1.
+								const streamedSteps =
+									incrementalStepCountByTab[tabId] ?? 0;
+								const newRound: PendingReviewRound = {
+									id:
+										'rr_' +
+										Date.now().toString(36) +
+										Math.random().toString(36).slice(2, 6),
+									beforeMd: preRender,
+									afterMd: agentMd,
+									trigger: trigger || undefined,
+									timestamp: Date.now(),
+									kind: classifyRoundKind(preRender, agentMd),
+									stepCount: streamedSteps + 1
+								};
+								writeTabRounds(tabId, [...prior, newRound]);
+								applyAgentMarkdown(
+									tabId,
+									agentMd,
+									true,
+									tabId === activeTabId ? activeEditor : undefined,
+									getTabKind(tabId)
+								);
+							} else {
+								// Silent mode: apply to the target tab's Y.Doc
+								// without any review UI. Clean up the server
+								// shadow for that tab since there's no Accept.
+								applyAgentMarkdown(
+									tabId,
+									agentMd,
+									false,
+									tabId === activeTabId ? activeEditor : undefined,
+									getTabKind(tabId)
+								);
+								const q = `?tab=${encodeURIComponent(tabId)}`;
+								void fetch(`/api/document${q}`, {
+									method: 'POST',
+									headers: { 'Content-Type': 'application/json' },
+									body: JSON.stringify({ action: 'accept' })
+								});
+							}
+							lastRenderMarkdownByTab[tabId] = agentMd;
+							// Persist the per-tab "last agent saw" snapshot in the
+							// tab's review map so a page refresh doesn't reset it
+							// to "first render". y-indexeddb takes care of survival.
+							getReviewMapForTab(tabId).set('lastAgentMd', agentMd);
+						}
+						lastRenderMarkdownByTab = { ...lastRenderMarkdownByTab };
+					} else if (event === 'hook_run') {
+						// Hook execution notification. `running` creates a new
+						// entry; `done`/`failed` find the matching running
+						// entry by hookId+command and update it in place so we
+						// don't double-log each hook.
+						agentHistory.update((h) => {
+							if (parsed.status === 'running') {
+								return [...h, {
+									type: 'hook_run',
+									timestamp: Date.now(),
+									hookId: parsed.hookId,
+									event: parsed.event,
+									command: parsed.command,
+									status: 'running'
+								}];
+							}
+							// Update the most recent running entry with matching ids.
+							for (let i = h.length - 1; i >= 0; i--) {
+								const e = h[i];
+								if (
+									e.type === 'hook_run' &&
+									e.hookId === parsed.hookId &&
+									e.command === parsed.command &&
+									e.status === 'running'
+								) {
+									const next = [...h];
+									next[i] = {
+										...e,
+										status: parsed.status,
+										exitCode: parsed.exitCode,
+										stdout: parsed.stdout,
+										stderr: parsed.stderr,
+										durationMs: parsed.durationMs
+									};
+									return next;
+								}
+							}
+							// No matching running entry (shouldn't happen) —
+							// append a terminal entry as a fallback.
+							return [...h, {
+								type: 'hook_run',
+								timestamp: Date.now(),
+								hookId: parsed.hookId,
+								event: parsed.event,
+								command: parsed.command,
+								status: parsed.status,
+								exitCode: parsed.exitCode,
+								stdout: parsed.stdout,
+								stderr: parsed.stderr,
+								durationMs: parsed.durationMs
+							}];
+						});
+					} else if (event === 'rule_proposal') {
+						// Agent invoked the propose_rule MCP tool. Push into the
+						// proposedRules store; OutlinePane renders the card with
+						// Accept/Reject next to any pending edit.
+						if (typeof parsed.text === 'string' && parsed.text.trim()) {
+							proposedRules.update((list) => [
+								...list,
+								{
+									id: 'pr_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+									text: parsed.text.trim(),
+									reason: typeof parsed.reason === 'string' ? parsed.reason : undefined,
+									timestamp: Date.now()
+								}
+							]);
+						}
+					} else if (event === 'hook_proposal') {
+						// Agent invoked the propose_hook MCP tool (via the
+						// hooks-creator skill). Show a pending card in the
+						// OutlinePane — accept appends to .docwriter/hooks.json.
+						if (typeof parsed.command === 'string' && parsed.command.trim()) {
+							proposedHooks.update((list) => [
+								...list,
+								{
+									id: 'ph_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+									event: parsed.event,
+									matcher: typeof parsed.matcher === 'string' && parsed.matcher ? parsed.matcher : undefined,
+									command: parsed.command.trim(),
+									reason: typeof parsed.reason === 'string' ? parsed.reason : undefined,
+									timestamp: Date.now()
+								}
+							]);
+						}
+					} else if (event === 'user_question') {
+						// Agent invoked AskUserQuestion. Render a card in the
+						// outline pane; the user's answer comes back via
+						// POST /api/ask-user-reply which unblocks the agent.
+						if (typeof parsed.id === 'string' && Array.isArray(parsed.questions)) {
+							pendingUserQuestions.update((list) => [
+								...list,
+								{ id: parsed.id, questions: parsed.questions }
+							]);
+						}
+					} else if (event === 'cost') {
+						// Per-round cost + usage from the SDK. Accumulated
+						// into the sessionCost store; shown in the agent dock.
+						addRoundCost({
+							totalCostUsd: parsed.totalCostUsd,
+							usage: parsed.usage
+						});
+					} else if (event === 'error') {
+						success = false;
+						pushHistory({
+							type: 'assistant_text',
+							timestamp: Date.now(),
+							text: `Error: ${parsed.error}`
+						});
+					}
+				}
+			}
+		} catch (e) {
+			console.error('Render failed:', e);
+			success = false;
+		} finally {
+			currentAbort = null;
+			submitInFlight = false;
+			isRendering.set(false);
+			// If the render failed, push one visible error entry. Otherwise
+			// the mascot already tells the user it's done.
+			if (!success) {
+				pushHistory({
+					type: 'assistant_text',
+					timestamp: Date.now(),
+					text: `Render failed after ${Math.round((Date.now() - renderStart) / 100) / 10}s.`
+				});
+			}
+		}
+	}
+
+	/** Read the pending-rounds array for the active tab from the store. */
+	function currentRounds(): PendingReviewRound[] {
+		let rounds: PendingReviewRound[] = [];
+		pendingReviewRounds.subscribe((v) => (rounds = v))();
+		return rounds;
+	}
+
+	/**
+	 * Accept the earliest pending round. The OutlinePane only surfaces the
+	 * Accept button on the first round in the list, enforcing FIFO order —
+	 * this sidesteps the "accept round 2 while round 1 still pending"
+	 * ambiguity (the composite diff overlay would keep showing round 2's
+	 * text as unresolved green). The monotonic fallback below (accepts
+	 * rounds 0..=idx) is kept as a safety net in case something triggers
+	 * this with a non-first id.
+	 *
+	 * Nothing to do on the Yjs side — agent ops stay in the doc as-is;
+	 * we just drop the cards and let the diff overlay re-anchor at the
+	 * next pending round's `beforeMd` (or clear entirely if none left).
+	 */
+	async function acceptAgentEdit(roundId?: string) {
+		const tabId = getCurrentActiveTab();
+		if (!tabId) return;
+		const rounds = currentRounds();
+		// No id → accept all (legacy call sites, "Accept all" button).
+		let next: PendingReviewRound[];
+		if (!roundId) {
+			next = [];
+		} else {
+			const idx = rounds.findIndex((r) => r.id === roundId);
+			if (idx < 0) return;
+			// Monotonic: drop rounds[0..=idx]. Leaves rounds[idx+1..] pending.
+			next = rounds.slice(idx + 1);
+		}
+		const acceptedCount = rounds.length - next.length;
+		writeTabRounds(tabId, next);
+		if (next.length === 0) {
+			clearAgentBaseline(tabId);
+			userEditRegions.set([]);
+		}
+		try {
+			const q = `?tab=${encodeURIComponent(tabId)}`;
+			await fetch(`/api/document${q}`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ action: 'accept' })
+			});
+		} catch (e) {
+			console.error('Accept (server cleanup) failed:', e);
+		}
+		pushHistory({
+			type: 'user_action',
+			timestamp: Date.now(),
+			description:
+				acceptedCount === rounds.length
+					? `Accepted all ${rounds.length} agent edit${rounds.length === 1 ? '' : 's'}`
+					: `Accepted ${acceptedCount} agent edit${acceptedCount === 1 ? '' : 's'}`
+		});
+	}
+
+	/**
+	 * Reject one round by id: rewinds that round's agent ops AND every
+	 * later round's agent ops (later rounds built on this one, so they no
+	 * longer make sense).
+	 *
+	 * Uses the per-tab Yjs UndoManager, which only tracks `AGENT_ORIGIN`
+	 * transactions — so user keystrokes made between / after agent rounds
+	 * are PRESERVED (they're never in the undo stack). Hard-reset via
+	 * `applyAgentMarkdown(beforeMd)` is the fallback for cases where the
+	 * UndoManager has no in-memory history (reject-after-refresh).
+	 *
+	 * UX: for non-latest rejections (drops N>0 later rounds), confirms with
+	 * the user first.
+	 */
+	async function rejectAgentEdit(roundId?: string) {
+		const tabId = getCurrentActiveTab();
+		if (!tabId) return;
+		const rounds = currentRounds();
+
+		// How many rounds (from the tail) does this reject invalidate?
+		let firstIdx: number;
+		if (!roundId) {
+			firstIdx = 0; // reject-all
+		} else {
+			firstIdx = rounds.findIndex((r) => r.id === roundId);
+			if (firstIdx < 0) return;
+		}
+		const droppedCount = rounds.length - firstIdx;
+		const laterCount = droppedCount - 1;
+
+		// Non-latest rejection: dropping later rounds feels like wasted
+		// work. Instead, after rewinding, re-run the agent with the
+		// rejection as explicit feedback so it can re-propose edits
+		// that take the rejection into account.
+		const shouldReconsider = laterCount > 0;
+
+		// Pop the right number of agent-op steps. With incremental streaming
+		// each round contributes `stepCount` steps (one per Edit/Write +
+		// one final apply). Sum across the rejected rounds and pop that
+		// many — captureTimeout:0 makes every tracked transaction its own
+		// step, so the math is direct.
+		let stepsToPop = 0;
+		for (let i = firstIdx; i < rounds.length; i++) {
+			stepsToPop += rounds[i].stepCount ?? 1;
+		}
+		let rewoundCount = 0;
+		for (let i = 0; i < stepsToPop; i++) {
+			if (undoAgentChanges(tabId)) rewoundCount++;
+			else break;
+		}
+
+		// Fallback: UndoManager had fewer steps than we needed (typically
+		// after a page refresh, where the in-memory stack is empty). Hard-
+		// reset to the earliest-rejected round's beforeMd. User edits made
+		// before that round still apply (they're in the Y.Doc history but
+		// not reversible from this path).
+		if (rewoundCount < stepsToPop && rounds.length > 0) {
+			const ed = editorRef?.getEditor();
+			applyAgentMarkdown(
+				tabId,
+				rounds[firstIdx].beforeMd,
+				true,
+				ed,
+				getTabKind(tabId)
+			);
+		}
+
+		const keep = rounds.slice(0, firstIdx);
+		writeTabRounds(tabId, keep);
+		if (keep.length === 0) {
+			clearAgentBaseline(tabId);
+			// Clear stale user-edit regions; they're indexed on pre-reject
+			// positions and would paint wrong spots orange now.
+			userEditRegions.set([]);
+		}
+
+		try {
+			const q = `?tab=${encodeURIComponent(tabId)}`;
+			await fetch(`/api/document${q}`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ action: 'reject' })
+			});
+		} catch (e) {
+			console.error('Reject (server cleanup) failed:', e);
+		}
+		pushHistory({
+			type: 'user_action',
+			timestamp: Date.now(),
+			description:
+				droppedCount === rounds.length
+					? `Rejected all ${rounds.length} agent edit${rounds.length === 1 ? '' : 's'}`
+					: `Rejected ${droppedCount} agent edit${droppedCount === 1 ? '' : 's'}`
+		});
+
+		// If we cascade-dropped later rounds, re-run the agent so it can
+		// reconsider those pending edits in light of the rejection, rather
+		// than throwing away the work entirely. The new render produces
+		// fresh rounds that replace the discarded ones.
+		if (shouldReconsider) {
+			const rejected = rounds[firstIdx];
+			const droppedLater = rounds.slice(firstIdx + 1);
+			const rejectedDiff = unifiedLineDiff(rejected.beforeMd, rejected.afterMd, 1);
+			const lines: string[] = [
+				`The user just rejected your previous edit on \`${tabId}\`:`,
+				'',
+				'```diff',
+				rejectedDiff,
+				'```',
+				'',
+				"Do not make that same change again. Take this rejection as feedback on what the user wants different in that area of the file."
+			];
+			if (droppedLater.length > 0) {
+				lines.push(
+					'',
+					`Because accept/reject applies in order, rejecting that edit also dropped ${droppedLater.length} later edit${droppedLater.length === 1 ? '' : 's'} you had proposed. For each one, decide whether it still makes sense given the rejection — if yes, re-propose (possibly adjusted); if no, skip:`
+				);
+				droppedLater.forEach((r, i) => {
+					const d = unifiedLineDiff(r.beforeMd, r.afterMd, 1);
+					lines.push('', `Dropped edit ${i + 1}:`, '```diff', d, '```');
+				});
+			}
+			lines.push('', 'Propose a new set of edits that takes the rejection into account.');
+			const followup = lines.join('\n');
+			// Defer to next tick so all state updates settle before the new
+			// submit() re-enters the render loop.
+			setTimeout(() => void submit(followup), 50);
+		}
+	}
+
+	/** Accept a rule the agent proposed: append it to the rules list and
+	 * persist via /api/document. Removes the proposal from the pending set. */
+	async function acceptProposedRule(id: string) {
+		let proposal: { id: string; text: string } | undefined;
+		proposedRules.update((list) => {
+			proposal = list.find((p) => p.id === id);
+			return list.filter((p) => p.id !== id);
+		});
+		if (!proposal) return;
+		const rule = { id: 'r' + Date.now(), text: proposal.text };
+		let currentRules: { id: string; text: string }[] = [];
+		rules.subscribe((v) => (currentRules = v))();
+		const nextRules = [...currentRules, rule];
+		rules.set(nextRules);
+		try {
+			await fetch('/api/document', {
+				method: 'PUT',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ meta: { rules: nextRules } })
+			});
+		} catch (e) {
+			console.error('Failed to persist rule:', e);
+		}
+		pushHistory({
+			type: 'user_action',
+			timestamp: Date.now(),
+			description: `Accepted rule: "${proposal.text}"`
+		});
+	}
+
+	/** Dismiss a proposed rule without saving. */
+	function rejectProposedRule(id: string) {
+		let proposal: { id: string; text: string } | undefined;
+		proposedRules.update((list) => {
+			proposal = list.find((p) => p.id === id);
+			return list.filter((p) => p.id !== id);
+		});
+		if (proposal) {
+			pushHistory({
+				type: 'user_action',
+				timestamp: Date.now(),
+				description: `Rejected rule: "${proposal.text}"`
+			});
+		}
+	}
+
+	/** Accept a hook the agent proposed: append to .docwriter/hooks.json via
+	 * /api/hooks. Removes the proposal from the pending set. */
+	async function acceptProposedHook(id: string) {
+		let proposal:
+			| {
+					id: string;
+					event: import('$lib/types').ProposedHookEvent;
+					matcher?: string;
+					command: string;
+			  }
+			| undefined;
+		proposedHooks.update((list) => {
+			proposal = list.find((p) => p.id === id);
+			return list.filter((p) => p.id !== id);
+		});
+		if (!proposal) return;
+		try {
+			// GET current hooks, append, PUT back. Server is source of truth.
+			const current = await fetch('/api/hooks').then((r) => r.json());
+			const existing: Array<Record<string, unknown>> = Array.isArray(current?.hooks)
+				? current.hooks
+				: [];
+			const hook = {
+				id: 'h_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+				event: proposal.event,
+				matcher: proposal.matcher,
+				command: proposal.command,
+				enabled: true
+			};
+			const next = [...existing, hook];
+			await fetch('/api/hooks', {
+				method: 'PUT',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ hooks: next })
+			});
+			pushHistory({
+				type: 'user_action',
+				timestamp: Date.now(),
+				description: `Accepted hook: ${proposal.event} — ${proposal.command}`
+			});
+		} catch (e) {
+			console.error('Failed to save proposed hook:', e);
+		}
+	}
+
+	/** Send the user's selections for an AskUserQuestion card back to the
+	 * server, which resolves the SDK's paused tool call and lets the
+	 * agent continue with the answers in context. */
+	async function answerUserQuestion(id: string, answers: string[]) {
+		pendingUserQuestions.update((list) => list.filter((q) => q.id !== id));
+		try {
+			await fetch('/api/ask-user-reply', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ id, answers })
+			});
+		} catch (e) {
+			console.error('Answer failed:', e);
+		}
+		pushHistory({
+			type: 'user_action',
+			timestamp: Date.now(),
+			description: `Answered: ${answers.join(', ')}`
+		});
+	}
+
+	function rejectProposedHook(id: string) {
+		let proposal: { id: string; command: string } | undefined;
+		proposedHooks.update((list) => {
+			proposal = list.find((p) => p.id === id);
+			return list.filter((p) => p.id !== id);
+		});
+		if (proposal) {
+			pushHistory({
+				type: 'user_action',
+				timestamp: Date.now(),
+				description: `Rejected hook: ${proposal.command}`
+			});
+		}
+	}
 
 	function cancelRender() {
 		if (currentAbort) {
 			currentAbort.abort();
 			currentAbort = null;
-			isRendering.set(false);
-			renderingSentences.set(new Set());
-			pushHistory({ type: 'render_end', timestamp: Date.now(), success: false, durationMs: 0 });
 		}
 	}
 
 	async function newSession() {
 		if (rendering) cancelRender();
-		// Cancel any pending op processing timer to prevent race with warmup
-		if (opDebounceTimer) { clearTimeout(opDebounceTimer); opDebounceTimer = null; }
-		// Wait for any in-flight processOps to finish
-		await waitForProcessing();
-		// Clear server session
-		await fetch('/api/session', { method: 'DELETE' });
-		// Clear client history
-		agentHistory.set([]);
-		// Clear pending ops
-		await resetPendingState();
-		showHistory.set(true);
-		pushHistory({ type: 'user_action', timestamp: Date.now(), description: 'Started new session' });
-		// Warmup: agent reads and understands the document
-		await doRender(undefined, undefined, false, true);
-	}
-
-	// Panel widths
-	let atomsWidth = $state(480); // px
-	let historyWidth = $state(380); // px
-	isRendering.subscribe((v) => (rendering = v));
-
-	let hasUndo = $state(false);
-	blockHistory.subscribe((v) => (hasUndo = v.length > 0));
-
-	let historyVisible = $state(true);
-	showHistory.subscribe((v) => (historyVisible = v));
-
-	let currentProse: Sentence[] = $state([]);
-	prose.subscribe((v) => (currentProse = v));
-
-	// Version history — backed by .atomz-history.json on disk (persists across refreshes)
-	let showVersions = $state(false);
-	let versionOpenedAt = $state(0);
-	let diffVersionIndex: number | null = $state(null); // index into versions array
-
-	interface VersionEntry {
-		prose: Sentence[];
-		timestamp: number;
-		trigger: string;
-		index: number;
-	}
-	let versions: VersionEntry[] = $state([]);
-
-	async function loadVersions() {
 		try {
-			const res = await fetch('/api/versions');
-			const data = await res.json();
-			versions = (data.versions || []).map((v: any, i: number) => ({
-				prose: v.prose.map((p: any) => ({ text: p.text, frags: p.frags, para: p.para })),
-				timestamp: v.timestamp,
-				trigger: v.trigger || '',
-				index: i
-			})).reverse(); // newest first
-		} catch { versions = []; }
-	}
-
-	function selectVersionForDiff(idx: number) {
-		diffVersionIndex = idx;
-		showVersions = false;
-	}
-
-	async function restoreVersion() {
-		if (diffVersionIndex === null) return;
-		try {
-			const res = await fetch('/api/versions', {
+			await fetch('/api/session', { method: 'DELETE' });
+			agentHistory.set([]);
+			// Also reject any pending agent edits — fresh start across all tabs.
+			for (const id of getCurrentTabList()) {
+				undoAgentChanges(id);
+				writeTabRounds(id, []);
+				// Reset the per-tab "what the agent last saw" snapshot too, so
+				// the next submit really shows "first render" — matching the
+				// fact that the SDK session is gone.
+				getReviewMapForTab(id).set('lastAgentMd', null);
+			}
+			pendingReviewTabs = new Map();
+			lastRenderMarkdownByTab = {};
+			proposedRules.set([]);
+			proposedHooks.set([]);
+			pendingUserQuestions.set([]);
+			recentActions.set([]);
+			actionUsageCounts.set({});
+			resetSessionCost();
+			clearAllAgentBaselines();
+			const tabId = getCurrentActiveTab();
+			const q = tabId ? `?tab=${encodeURIComponent(tabId)}` : '';
+			await fetch(`/api/document${q}`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ index: diffVersionIndex })
+				body: JSON.stringify({ action: 'reject' })
 			});
-			const data = await res.json();
-			if (data.document) {
-				await resetPendingState();
-				applyCanonicalDocument(normalizeAtomzFile(data.document));
-				pushHistory({ type: 'user_action', timestamp: Date.now(), description: `Restored version from ${formatTime(versions.find(v => v.index === diffVersionIndex)?.timestamp ?? 0)}` });
-			}
+			pushHistory({ type: 'user_action', timestamp: Date.now(), description: 'Started new session' });
 		} catch (e) {
-			console.error('Failed to restore version:', e);
-		}
-		diffVersionIndex = null;
-	}
-
-	function closeDiffView() {
-		diffVersionIndex = null;
-	}
-
-	// Compute paragraph diffs between selected old version and current prose
-	let paragraphDiffs = $derived.by(() => {
-		if (diffVersionIndex === null) return [];
-		const version = versions.find(v => v.index === diffVersionIndex);
-		if (!version) return [];
-
-		function groupByPara(sentences: Sentence[]): string[] {
-			const paras: Map<number, string[]> = new Map();
-			for (const s of sentences) {
-				if (!paras.has(s.para)) paras.set(s.para, []);
-				paras.get(s.para)!.push(s.text);
-			}
-			return [...paras.values()].map(texts => texts.join(' '));
-		}
-
-		const oldParas = groupByPara(version.prose);
-		const newParas = groupByPara(currentProse);
-		const maxLen = Math.max(oldParas.length, newParas.length);
-
-		const diffs: { parts: DiffPart[]; changed: boolean }[] = [];
-		for (let i = 0; i < maxLen; i++) {
-			const oldP = oldParas[i] || '';
-			const newP = newParas[i] || '';
-			if (oldP === newP) {
-				diffs.push({ parts: [{ text: newP, type: 'same' }], changed: false });
-			} else {
-				diffs.push({ parts: wordDiff(oldP, newP), changed: true });
-			}
-		}
-		return diffs;
-	});
-
-	function formatTime(ts: number): string {
-		const now = Date.now();
-		const diffMs = now - ts;
-		if (diffMs < 60000) return 'just now';
-		if (diffMs < 3600000) return `${Math.floor(diffMs / 60000)}m ago`;
-		if (diffMs < 86400000) return `${Math.floor(diffMs / 3600000)}h ago`;
-		return new Date(ts).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-	}
-
-	function getVersionDiffSummary(versionProse: Sentence[]): string {
-		const oldWords = versionProse.map(s => s.text).join(' ').split(/\s+/).length;
-		const newWords = currentProse.map(s => s.text).join(' ').split(/\s+/).length;
-		const diff = newWords - oldWords;
-		if (diff > 0) return `+${diff} words since`;
-		if (diff < 0) return `${diff} words since`;
-		return 'no change';
-	}
-
-	function handleVersionClick(e: MouseEvent) {
-		if (showVersions) {
-			const wrapper = document.querySelector('.version-wrapper');
-			if (wrapper && !wrapper.contains(e.target as Node) && Date.now() - versionOpenedAt > 200) {
-				showVersions = false;
-			}
+			console.error('New session failed:', e);
 		}
 	}
-
-	// Open — handles both .atomz files and raw text
-	let importing = $state(false);
-
-	async function handleOpen() {
-		try {
-			// Try as .atomz first
-			const input = document.createElement('input');
-			input.type = 'file';
-			input.accept = '.atomz,.json,.txt,.md';
-
-			const file = await new Promise<File>((resolve, reject) => {
-				input.onchange = () => input.files?.[0] ? resolve(input.files[0]) : reject();
-				input.click();
-			});
-
-			const text = await file.text();
-			const isAtomz = file.name.endsWith('.atomz') || file.name.endsWith('.json');
-
-			if (isAtomz) {
-				// Load directly
-				await resetPendingState();
-				applyCanonicalDocument(normalizeAtomzFile(text));
-				pushHistory({ type: 'user_action', timestamp: Date.now(), description: `Opened ${file.name}` });
-			} else {
-				// Atomize raw text
-				importing = true;
-				showHistory.set(true);
-				pushHistory({ type: 'render_start', timestamp: Date.now(), trigger: `Atomize: ${file.name}` });
-
-				const res = await fetch('/api/atomize', {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ text, model })
-				});
-
-				await readSSE(res, {
-					onToolCall: (data) => {
-						pushHistory({ type: 'tool_call', timestamp: Date.now(), tool_name: data.tool_name, input: data.input });
-					},
-					onAssistantText: (data) => {
-						agentHistory.update((h) => {
-							const last = h[h.length - 1];
-							if (last && last.type === 'assistant_text') return [...h.slice(0, -1), { ...last, text: last.text + data.text }];
-							return [...h, { type: 'assistant_text' as const, timestamp: Date.now(), text: data.text }];
-						});
-					},
-					onResult: (data) => {
-						// Server already wrote document.atomz before sending this result.
-						if (data.document) {
-							applyCanonicalDocument(normalizeAtomzFile(data.document));
-							return;
-						}
-						// Fallback: build blocks from returned atoms+sentences
-						const frags = (data.fragments as Fragment[]) || [];
-						const sents = data.sentences || [];
-						const newBlocks = buildBlocksFromRuntimeView({ atoms: frags, prose: sents });
-						atoms.set(frags);
-						blocks.set(newBlocks);
-						pins.set([]);
-						reproject();
-					}
-				});
-				await resetPendingState();
-
-				pushHistory({ type: 'render_end', timestamp: Date.now(), success: true });
-				importing = false;
-			}
-		} catch { /* cancelled */ }
-	}
-
-	// Reference import popover state
-	let refPopover: 'own' | 'inspo' | null = $state(null);
-	let refText = $state('');
-	let refUrl = $state('');
-
-	async function submitReference() {
-		if (!refText.trim() && !refUrl.trim()) return;
-		const tag = refPopover!;
-		const url = refUrl.trim();
-		const rawText = refText.trim();
-		refPopover = null;
-		refText = '';
-		refUrl = '';
-
-		const text = url
-			? `Fetch and analyze the writing at: ${url}\nIf it's a blog, follow 2-3 relevant links by the same author.`
-			: rawText;
-		let name: string;
-		try { name = url ? new URL(url).hostname : `${tag}-${Date.now()}`; } catch { name = url || `${tag}-${Date.now()}`; }
-
-		showHistory.set(true);
-		pushHistory({ type: 'render_start', timestamp: Date.now(), trigger: `Reference (${tag}): ${name}` });
-
-		try {
-			const body = { text, name, tag, model };
-
-			const res = await fetch('/api/import-reference', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(body)
-			});
-
-			await readSSE(res, {
-				onToolCall: (data) => {
-					pushHistory({ type: 'tool_call', timestamp: Date.now(), tool_name: data.tool_name, input: data.input });
-				},
-				onAssistantText: (data) => {
-					agentHistory.update((h) => {
-						const last = h[h.length - 1];
-						if (last && last.type === 'assistant_text') return [...h.slice(0, -1), { ...last, text: last.text + data.text }];
-						return [...h, { type: 'assistant_text' as const, timestamp: Date.now(), text: data.text }];
-					});
-				},
-				onResult: () => {}
-			});
-			pushHistory({ type: 'render_end', timestamp: Date.now(), success: true });
-		} catch (e) {
-			console.error('Import reference failed:', e);
-			pushHistory({ type: 'render_end', timestamp: Date.now(), success: false });
-		}
-	}
-
-	async function attachRefFile() {
-		try {
-			const { text } = await uploadText();
-			refText = text;
-		} catch { /* cancelled */ }
-	}
-
-	// SSE reader
-	async function readSSE(
-		res: Response,
-		callbacks: {
-			onResult: (data: { sentences?: Sentence[]; document?: unknown; selective?: boolean; fragments?: unknown[]; paraBreaks?: number[] }) => void;
-			onToolCall?: (data: { tool_name: string; input: Record<string, unknown> }) => void;
-			onToolCallStart?: (data: { tool_name: string }) => void;
-			onAssistantText?: (data: { text: string }) => void;
-			onTextStreaming?: (data: { new_text: string; old_text: string }) => void;
-			onCheckpoint?: (data: { id: string; sessionId: string; timestamp: number }) => void;
-		}
-	) {
-		const reader = res.body!.getReader();
-		const decoder = new TextDecoder();
-		let buffer = '';
-
-		while (true) {
-			const { done, value } = await reader.read();
-			if (done) break;
-
-			buffer += decoder.decode(value, { stream: true });
-			const lines = buffer.split('\n');
-			buffer = lines.pop() || '';
-
-			let eventType = '';
-			for (const line of lines) {
-				if (line.startsWith('event: ')) {
-					eventType = line.slice(7);
-				} else if (line.startsWith('data: ') && eventType) {
-					const data = JSON.parse(line.slice(6));
-					if (eventType === 'result' && (data.document || data.sentences || data.fragments)) {
-						callbacks.onResult(data);
-					} else if (eventType === 'tool_call_start' && callbacks.onToolCallStart) {
-						callbacks.onToolCallStart(data);
-					} else if (eventType === 'tool_call' && callbacks.onToolCall) {
-						callbacks.onToolCall(data);
-					} else if (eventType === 'assistant_text' && callbacks.onAssistantText) {
-						callbacks.onAssistantText(data);
-					} else if (eventType === 'text_streaming' && callbacks.onTextStreaming) {
-						callbacks.onTextStreaming(data);
-					} else if (eventType === 'checkpoint' && callbacks.onCheckpoint) {
-						callbacks.onCheckpoint(data);
-					}
-					eventType = '';
-				}
-			}
-		}
-	}
-
-	// Clear annotations whose text no longer appears in current prose
-	function clearStaleAnnotations() {
-		let currentProse: Sentence[];
-		prose.subscribe((v) => (currentProse = v))();
-		const allText = currentProse!.map((s) => s.text).join(' ');
-		annotations.update((annos) =>
-			annos.filter((a) => allText.includes(a.text))
-		);
-	}
-
-	let model = $state('opus');
-	selectedModel.subscribe((v) => (model = v));
-
-	let themeName = $state('light');
-	selectedTheme.subscribe((v) => (themeName = v));
-
-	let edMode = $state('markdown');
-	editorMode.subscribe((v) => (edMode = v));
 
 	function setTheme(name: string) {
 		const theme = themes.find((t) => t.name === name);
@@ -415,1070 +1199,544 @@ import { SYNC_TIMING } from '$lib/sync-timing';
 		}
 	}
 
-	function applyCanonicalDocument(file: ReturnType<typeof normalizeAtomzFile>) {
-		applyCanonicalFileToStores(file);
+	let model = $state('opus');
+	selectedModel.subscribe((v) => (model = v));
+
+	let themeName = $state('light');
+	selectedTheme.subscribe((v) => (themeName = v));
+
+	let historyVisible = $state(true);
+	showHistory.subscribe((v) => (historyVisible = v));
+
+	let currentVerbosity = $state<'verbose' | 'minimal'>('verbose');
+	historyVerbosity.subscribe((v) => (currentVerbosity = v));
+
+	let countdown = $state(0);
+	submitCountdown.subscribe((v) => (countdown = v));
+
+	let fontScale = $state(1.0);
+	editorFontScale.subscribe((v) => (fontScale = v));
+
+	// Preset font sizes exposed in the View → Font size submenu. The inline
+	// keyboard path (Ctrl+/Ctrl-) still bumps by 0.1.
+	const FONT_PRESETS: Array<{ label: string; scale: number }> = [
+		{ label: 'Small (85%)', scale: 0.85 },
+		{ label: 'Default (100%)', scale: 1.0 },
+		{ label: 'Large (115%)', scale: 1.15 },
+		{ label: 'Extra large (130%)', scale: 1.3 },
+		{ label: 'Huge (150%)', scale: 1.5 }
+	];
+
+	/**
+	 * Top menu bar spec. `$derived` so checkmarks track the live stores
+	 * (selected model / theme / font scale / history pane visibility) and
+	 * each open/close of a submenu picks up current state.
+	 */
+	const menus = $derived<MenuSpec[]>([
+		{
+			label: 'Settings',
+			items: [
+				{ kind: 'panel', label: 'Send message', panelKey: 'chat' },
+				{ kind: 'divider' },
+				{
+					kind: 'submenu',
+					label: 'Model',
+					items: [
+						{ kind: 'action', label: 'Opus', checked: model === 'opus', onClick: () => selectedModel.set('opus') },
+						{ kind: 'action', label: 'Sonnet', checked: model === 'sonnet', onClick: () => selectedModel.set('sonnet') },
+						{ kind: 'action', label: 'Haiku', checked: model === 'haiku', onClick: () => selectedModel.set('haiku') }
+					]
+				},
+				{ kind: 'panel', label: 'Agent behavior', panelKey: 'agentSettings' },
+				{
+					kind: 'submenu',
+					label: 'Theme',
+					items: themes.map((t) => ({
+						kind: 'action' as const,
+						label: t.label,
+						checked: themeName === t.name,
+						onClick: () => setTheme(t.name)
+					}))
+				},
+				{
+					kind: 'submenu',
+					label: 'Font size',
+					items: FONT_PRESETS.map((p) => ({
+						kind: 'action' as const,
+						label: p.label,
+						checked: Math.abs(fontScale - p.scale) < 0.01,
+						onClick: () => editorFontScale.set(p.scale)
+					}))
+				},
+				{ kind: 'panel', label: 'Writing rules', panelKey: 'rules' },
+				{ kind: 'panel', label: 'Hooks', panelKey: 'hooks' },
+				{ kind: 'divider' },
+				{
+					kind: 'submenu',
+					label: 'History detail',
+					items: [
+						{
+							kind: 'action',
+							label: 'Verbose',
+							checked: currentVerbosity === 'verbose',
+							onClick: () => historyVerbosity.set('verbose')
+						},
+						{
+							kind: 'action',
+							label: 'Minimal',
+							checked: currentVerbosity === 'minimal',
+							onClick: () => historyVerbosity.set('minimal')
+						}
+					]
+				},
+				{
+					kind: 'action',
+					label: historyVisible ? 'Hide history pane' : 'Show history pane',
+					onClick: () => showHistory.set(!historyVisible)
+				},
+				{ kind: 'action', label: 'New session', onClick: () => void newSession() }
+			]
+		}
+	]);
+
+	// Pane widths (resizable)
+	let leftWidth = $state(260);
+	let rightWidth = $state(340);
+	const MIN_PANE_WIDTH = 180;
+	const MAX_PANE_WIDTH = 560;
+	function resizeLeft(delta: number) {
+		leftWidth = Math.max(MIN_PANE_WIDTH, Math.min(MAX_PANE_WIDTH, leftWidth + delta));
+	}
+	function resizeRight(delta: number) {
+		rightWidth = Math.max(MIN_PANE_WIDTH, Math.min(MAX_PANE_WIDTH, rightWidth - delta));
 	}
 
-	async function resetPendingState() {
-		documentOps.set([]);
-		persistedDocumentOpIds.clear();
-		pendingDocumentOpPersistIds.clear();
-		await fetch('/api/document-ops', { method: 'DELETE' }).catch(() => {});
-	}
+	let docLoaded = $state(false);
+	let currentTabKind = $state<'markdown' | 'plain'>('markdown');
+	activeTabKind.subscribe((v) => (currentTabKind = v));
 
-	async function loadPendingDocumentOps() {
-		let hasReplayedOps = false;
+	/**
+	 * Load the persisted selection-toolbar state (recent actions + LRU usage
+	 * counts) from /api/session and hydrate the stores. Refresh would
+	 * otherwise wipe both back to empty arrays/objects.
+	 */
+	async function restoreSessionState() {
 		try {
-			const res = await fetch('/api/document-ops');
+			const res = await fetch('/api/session');
+			if (!res.ok) return;
 			const data = await res.json();
-			const ops = ((data.ops || []) as DocumentOp[]).sort((a, b) => a.createdAt - b.createdAt);
-			persistedDocumentOpIds.clear();
-			for (const op of ops) persistedDocumentOpIds.add(op.id);
-			if (ops.length === 0) {
-				documentOps.set([]);
-				return;
+			if (Array.isArray(data.recentActions)) recentActions.set(data.recentActions);
+			if (data.actionUsageCounts && typeof data.actionUsageCounts === 'object') {
+				actionUsageCounts.set(data.actionUsageCounts);
 			}
-			hasReplayedOps = true;
-			// Set BEFORE documentOps.set so subscriptions see the flag
-			isReplayingDocumentOps = true;
-			documentOps.set(ops);
-			const state = getCurrentDocumentState();
-			let currentBlk: AtomzBlock[] = [], currentPn: AtomzPin[] = [];
-			blocks.subscribe((v) => (currentBlk = v))();
-			pins.subscribe((v) => (currentPn = v))();
-			let replayed = { ...state, blocks: currentBlk, pins: currentPn };
-			for (const op of ops) {
-				replayed = { ...replayed, ...applyDocumentOp(replayed, op) };
-			}
-			blocks.set(replayed.blocks);
-			pins.set(replayed.pins);
-			atoms.set(replayed.atoms);
-			rules.set(replayed.rules);
-			reproject();
-		} catch {
-			documentOps.set([]);
-		} finally {
-			isReplayingDocumentOps = false;
-			// Trigger op processing for any unresolved ops from the WAL
-			scheduleOpProcessing();
+		} catch (e) {
+			console.error('Failed to restore session state:', e);
 		}
 	}
 
-	async function persistDocumentOp(op: DocumentOp): Promise<boolean> {
-		if (persistedDocumentOpIds.has(op.id) || pendingDocumentOpPersistIds.has(op.id)) return true;
-		pendingDocumentOpPersistIds.add(op.id);
-		try {
-			const res = await fetch('/api/document-ops', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ ops: [op] })
-			});
-			if (!res.ok) return false;
-			persistedDocumentOpIds.add(op.id);
-			return true;
-		} catch {
-			return false;
-		} finally {
-			pendingDocumentOpPersistIds.delete(op.id);
-		}
-	}
-
-	async function resolvePendingDocumentOps(ops: DocumentOp[]) {
-		if (ops.length === 0) return;
-		await fetch('/api/document-ops', {
-			method: 'PATCH',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ ids: ops.map((op) => op.id) })
-		}).catch(() => {});
-		documentOps.update((existingOps) => existingOps.filter((op) => !ops.some((resolvedOp) => resolvedOp.id === op.id)));
+	/**
+	 * Persist selection-toolbar state to the server. Debounced so rapid
+	 * action clicks coalesce into one write. Called from the store
+	 * subscriptions below.
+	 */
+	let persistTimer: ReturnType<typeof setTimeout> | null = null;
+	function schedulePersistSession() {
+		if (persistTimer) clearTimeout(persistTimer);
+		persistTimer = setTimeout(async () => {
+			persistTimer = null;
+			let recent: unknown[] = [];
+			recentActions.subscribe((v) => (recent = v))();
+			let counts: Record<string, number> = {};
+			actionUsageCounts.subscribe((v) => (counts = v))();
+			try {
+				await fetch('/api/session', {
+					method: 'PUT',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ recentActions: recent, actionUsageCounts: counts })
+				});
+			} catch (e) {
+				console.error('Failed to persist session state:', e);
+			}
+		}, 400);
 	}
 
 	onMount(async () => {
-		applyTheme(themes[0]);
+		const initialTheme = themes.find((t) => t.name === themeName) || themes[0];
+		applyTheme(initialTheme);
+		// HMR safety: if the module was hot-reloaded during a render, the
+		// store could still say we're rendering. Clamp it to false so the
+		// submit button unlocks.
+		isRendering.set(false);
 
-		// Load document from file
-		try {
-			const res = await fetch('/api/document');
-			const doc = await res.json();
-			if (doc) {
-				applyCanonicalDocument(normalizeAtomzFile(doc));
+		// Load the tab list, pick or create an active tab, bind its Y.Doc
+		// as current, then hydrate its content. TiptapEditor mounts after
+		// docLoaded flips true, so by then the right Y.Doc is registered.
+		const active = await loadTabs();
+		if (active) {
+			setCurrentTab(active);
+			await loadTab(active);
+		}
+		docLoaded = true;
+
+		// Rehydrate the Agent History pane from the SDK's persisted session
+		// transcript so refresh doesn't wipe the activity log. The SDK
+		// writes every session to disk keyed by sessionId; we just read it
+		// back and convert to our HistoryEntry format.
+		void restoreAgentHistory();
+
+		// Restore the selection-toolbar recents + LRU usage counts from
+		// state.json so refresh doesn't wipe the cached-pill feedback list.
+		// Must complete BEFORE we attach the persist subscribers, otherwise
+		// the initial `set([])` would persist empty arrays over the real data.
+		await restoreSessionState();
+
+		// Now that stores are populated, attach persist-on-change subscribers.
+		// The debounced write coalesces bursts of clicks into one PUT.
+		recentActions.subscribe(() => schedulePersistSession());
+		actionUsageCounts.subscribe(() => schedulePersistSession());
+
+		// Subscribe to the file-watcher event bus (used by `docwriter --watch`).
+		// When the bin's fs.watch sees external changes it POSTs to /api/live,
+		// which streams a `reload` event here and we refresh the active tab.
+		void connectLive();
+
+		// Dev-only test seam: lets Playwright simulate an agent edit without
+		// hitting the Claude SDK. Mirrors what the /api/render result handler
+		// does locally — capture baseline, apply markdown, set review state.
+		if (import.meta.env.DEV && typeof window !== 'undefined') {
+			(window as any).__docwriterTest = {
+				fakeAgentEdit(content: string) {
+					const tabId = getCurrentActiveTab();
+					if (!tabId) return;
+					const ed = editorRef?.getEditor();
+					const before = getEditorMarkdownNow();
+					captureBaselineForAgent(tabId);
+					applyAgentMarkdown(tabId, content, true, ed, getTabKind(tabId));
+					const existing = getReviewMapForTab(tabId).get('pendingRounds');
+					const prior: PendingReviewRound[] = Array.isArray(existing)
+						? (existing as PendingReviewRound[])
+						: [];
+					const newRound: PendingReviewRound = {
+						id: 'rr_fake_' + Date.now().toString(36),
+						beforeMd: before,
+						afterMd: content,
+						timestamp: Date.now(),
+						kind: classifyRoundKind(before, content)
+					};
+					writeTabRounds(tabId, [...prior, newRound]);
+					// Mirror the result handler: stash this as the "last agent
+					// saw" snapshot, both in memory and persisted to the
+					// per-tab review map so it survives a refresh.
+					lastRenderMarkdownByTab[tabId] = content;
+					lastRenderMarkdownByTab = { ...lastRenderMarkdownByTab };
+					getReviewMapForTab(tabId).set('lastAgentMd', content);
+				},
+				accept: acceptAgentEdit,
+				reject: rejectAgentEdit,
+				/** Read in-memory state for assertions. */
+				inspectLastRenderMap: () => ({ ...lastRenderMarkdownByTab }),
+				/** Mark the current tab's content as "what the agent last saw"
+				 * without going through fakeAgentEdit (which no-ops when the
+				 * passed content equals the live content). Mirrors only the
+				 * lastAgentMd half of the result handler — useful for tests
+				 * that just need a baseline for the next submit's diff. */
+				seedLastAgentMd(content: string) {
+					const tabId = getCurrentActiveTab();
+					if (!tabId) return;
+					lastRenderMarkdownByTab[tabId] = content;
+					lastRenderMarkdownByTab = { ...lastRenderMarkdownByTab };
+					getReviewMapForTab(tabId).set('lastAgentMd', content);
+				}
+			};
+		}
+	});
+
+	/**
+	 * Subscribe to /api/live (the CLI file-watcher event bus). Reconnects
+	 * automatically every 5 s if the connection drops. Each `reload` event
+	 * re-fetches the active tab from disk so externally-edited files appear
+	 * immediately without a manual browser refresh.
+	 */
+	async function connectLive() {
+		const connect = () => {
+			let es: EventSource;
+			try {
+				es = new EventSource('/api/live');
+			} catch {
+				return;
 			}
-			documentLoaded = true;
-		} catch { /* no doc yet — start empty */ }
+			es.addEventListener('reload', async () => {
+				const tabId = getCurrentActiveTab();
+				if (!tabId) return;
+				await loadTab(tabId);
+				// If the editor is already mounted, force it to pick up the new
+				// userMd by doing a brief unmount/remount cycle.
+				docLoaded = false;
+				await new Promise((r) => setTimeout(r, 0));
+				docLoaded = true;
+			});
+			es.onerror = () => {
+				es.close();
+				// Reconnect after 5 s.
+				setTimeout(connect, 5_000);
+			};
+		};
+		connect();
+	}
 
-		await loadPendingDocumentOps();
-		// Load session history
+	/** Read the *current* on-disk markdown for the active tab. Used by the
+	 * dev test seam to capture a baseline before faking an agent edit. */
+	function getEditorMarkdownNow(): string {
+		let md = '';
+		userMd.subscribe((v) => (md = v))();
+		return md;
+	}
+
+	/** Pull the last session's messages from the SDK and convert them into
+	 * HistoryEntry rows matching what we show live. Best-effort: if the
+	 * endpoint fails or the session is empty, we leave the pane empty. */
+	async function restoreAgentHistory() {
 		try {
 			const res = await fetch('/api/history');
 			const data = await res.json();
-			if (data.messages?.length > 0) {
-				const entries: import('$lib/types').HistoryEntry[] = [];
-				for (const msg of data.messages) {
-					if (msg.type === 'assistant' && msg.message?.content) {
-						for (const block of msg.message.content) {
-							if (block.type === 'text' && block.text) {
-								entries.push({ type: 'assistant_text', timestamp: 0, text: block.text });
-							} else if (block.type === 'tool_use') {
-								entries.push({ type: 'tool_call', timestamp: 0, tool_name: block.name, input: block.input || {} });
+			if (!Array.isArray(data.messages) || data.messages.length === 0) return;
+			const restored: HistoryEntry[] = [];
+			for (const m of data.messages) {
+				const msg = m?.message;
+				if (!msg) continue;
+				if (m.type === 'user') {
+					// User messages can be strings or arrays of content blocks.
+					// The agent's prompt lives here as free text.
+					const content = msg.content;
+					let text = '';
+					if (typeof content === 'string') {
+						text = content;
+					} else if (Array.isArray(content)) {
+						for (const block of content) {
+							if (block?.type === 'text' && typeof block.text === 'string') {
+								text += block.text;
 							}
 						}
 					}
-				}
-				if (entries.length > 0) {
-					// Add a synthetic render_end so the "Done" bar shows on refresh
-					entries.push({ type: 'render_end', timestamp: 0, success: true });
-					agentHistory.set(entries);
-				}
-			}
-		} catch { /* no session yet */ }
-
-		// Load version history
-		await loadVersions();
-	});
-
-	// document.atomz is ONLY written by the render endpoint after agent merge.
-	// Crash recovery relies on the WAL (.atomz-ops.jsonl) to replay unresolved ops.
-	let documentLoaded = false;
-	documentOps.subscribe((ops) => {
-		for (const op of ops) {
-			void persistDocumentOp(op);
-		}
-	});
-
-	function getCurrentDocumentState() {
-		let f: Fragment[], p: Sentence[], r: typeof $rules, b: Set<number>;
-		let ep: import('$lib/types').EditorPin[], sec: import('$lib/types').Section[];
-		atoms.subscribe((v) => (f = v))();
-		prose.subscribe((v) => (p = v))();
-		rules.subscribe((v) => (r = v))();
-		paraBreaks.subscribe((v) => (b = v))();
-		editorPins.subscribe((v) => (ep = v))();
-		sections.subscribe((v) => (sec = v))();
-		return {
-			atoms: f!,
-			prose: p!,
-			rules: r!,
-			paraBreaks: b!,
-			editorPins: ep!,
-			sections: sec!
-		};
-	}
-
-	// Build the unified document JSON from canonical stores (blocks/pins are source of truth)
-	function getDocumentJson() {
-		return buildAtomzFileFromCanonicalState(getCanonicalRuntimeStateFromStores());
-	}
-
-	function getRequestBody(editedFragId?: string, changes?: string, batched?: boolean, warmup?: boolean) {
-		return {
-			documentJson: getDocumentJson(),
-			model,
-			...(editedFragId ? { editedFragId } : {}),
-			...(changes ? { changes } : {}),
-			...(batched ? { batched: true } : {}),
-			...(warmup ? { warmup: true } : {})
-		};
-	}
-
-	// Shared render logic
-	async function doRender(editedFragId?: string, trigger?: string, batched?: boolean, warmup?: boolean): Promise<boolean> {
-		let currentProse: Sentence[];
-		prose.subscribe((v) => (currentProse = v))();
-
-		const targetIndices = editedFragId
-			? currentProse!.map((s, i) => (s.frags.includes(editedFragId) ? i : -1)).filter((i) => i !== -1)
-			: null;
-
-		if (editedFragId && targetIndices && targetIndices.length === 0) return false;
-
-		// Snapshot blocks for undo before agent edits
-		let snapshotBlocks: AtomzBlock[] = [], snapshotPins: AtomzPin[] = [];
-		blocks.subscribe((v) => (snapshotBlocks = v))();
-		pins.subscribe((v) => (snapshotPins = v))();
-		pushBlockSnapshot(snapshotBlocks, snapshotPins);
-
-		isRendering.set(true);
-		if (targetIndices) {
-			renderingSentences.set(new Set(targetIndices));
-		}
-
-		// Show history immediately so user sees activity
-		showHistory.set(true);
-		const renderStartTime = Date.now();
-		pushHistory({
-			type: 'render_start',
-			timestamp: renderStartTime,
-			trigger: trigger || (editedFragId ? `Selective: atom ${editedFragId}` : 'Full re-render')
-		});
-
-		let success = false;
-		let lastToolStartTime = 0;
-		let lastEventTime = Date.now();
-
-		// Track which ops existed before render so we can detect new ones after
-		let preRenderOpIds: Set<string>;
-		documentOps.subscribe((ops) => (preRenderOpIds = new Set(ops.map((o) => o.id))))();
-
-		// Cancel any previous render
-		if (currentAbort) currentAbort.abort();
-		currentAbort = new AbortController();
-
-		try {
-			const res = await fetch('/api/render', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(getRequestBody(editedFragId, trigger, batched, warmup)),
-				signal: currentAbort.signal
-			});
-
-			// Find which sentence index matches a given old text
-			function findSentenceIndex(oldText: string): number {
-				let curProse: Sentence[];
-				prose.subscribe((v) => (curProse = v))();
-				const trimmed = oldText.trim();
-				for (let i = 0; i < curProse!.length; i++) {
-					if (curProse![i].text.trim() === trimmed) return i;
-				}
-				// Partial match
-				for (let i = 0; i < curProse!.length; i++) {
-					if (trimmed.includes(curProse![i].text.trim()) || curProse![i].text.trim().includes(trimmed)) return i;
-				}
-				return -1;
-			}
-
-			let currentEditIdx = -1;
-			let currentEditOldText = '';
-
-			await readSSE(res, {
-				onToolCallStart: (data) => {
-					currentEditIdx = -1;
-					currentEditOldText = '';
-					lastToolStartTime = Date.now();
-					lastEventTime = Date.now();
-				},
-				onTextStreaming: (data) => {
-					// Edit tool: old_text tells us which sentence, new_text streams in
-					if (data.old_text && currentEditIdx === -1) {
-						currentEditIdx = findSentenceIndex(data.old_text);
-						currentEditOldText = data.old_text;
-						if (currentEditIdx >= 0) {
-							renderingSentences.update((s) => {
-								const next = new Set(s);
-								next.delete(currentEditIdx);
-								return next;
+					if (!text.trim()) continue;
+					// The full prompt is huge; surface a single "Submitted"-style line
+					// with the raw prompt tucked behind an expand for parity with
+					// live submits. The "What the user wants" section is the useful bit.
+					const wantIdx = text.indexOf('## What the user wants');
+					const rulesIdx = text.indexOf('## Rules to obey');
+					let trigger = text.trim().slice(0, 200);
+					if (wantIdx >= 0 && rulesIdx > wantIdx) {
+						trigger = text
+							.slice(wantIdx + '## What the user wants'.length, rulesIdx)
+							.trim();
+					}
+					restored.push({
+						type: 'user_action',
+						timestamp: 0,
+						description: shortDescription(trigger || undefined)
+					});
+				} else if (m.type === 'assistant' && Array.isArray(msg.content)) {
+					for (const block of msg.content) {
+						if (block?.type === 'text' && typeof block.text === 'string' && block.text.trim()) {
+							restored.push({
+								type: 'assistant_text',
+								timestamp: 0,
+								text: block.text
+							});
+						} else if (block?.type === 'tool_use' && typeof block.name === 'string') {
+							restored.push({
+								type: 'tool_call',
+								timestamp: 0,
+								tool_name: block.name,
+								input: (block.input as Record<string, unknown>) || {}
 							});
 						}
 					}
-
-					if (currentEditIdx >= 0 && data.new_text) {
-						const words = data.new_text.split(/\s+/);
-						sentenceTransitions.update((m) => {
-							const next = new Map(m);
-							next.set(currentEditIdx, {
-								oldText: currentEditOldText,
-								newText: data.new_text,
-								wordsRevealed: words.length,
-								done: false
-							});
-							return next;
-						});
-					}
-				},
-				onToolCall: (data) => {
-					const now = Date.now();
-					lastEventTime = now;
-					pushHistory({
-						type: 'tool_call',
-						timestamp: now,
-						tool_name: data.tool_name,
-						input: data.input,
-						durationMs: lastToolStartTime ? now - lastToolStartTime : undefined
-					});
-
-					// When Edit completes, mark transition done (show diff)
-					if (data.tool_name === 'Edit' && currentEditIdx >= 0) {
-						const newText = (data.input.new_string as string) || '';
-						sentenceTransitions.update((m) => {
-							const next = new Map(m);
-							next.set(currentEditIdx, {
-								oldText: currentEditOldText,
-								newText: newText.trim(),
-								wordsRevealed: newText.trim().split(/\s+/).length,
-								done: true
-							});
-							return next;
-						});
-						currentEditIdx = -1;
-						currentEditOldText = '';
-					}
-				},
-				onAssistantText: (data) => {
-					const now = Date.now();
-					const gap = now - lastEventTime;
-					lastEventTime = now;
-
-					agentHistory.update((h) => {
-						const last = h[h.length - 1];
-						if (last && last.type === 'assistant_text') {
-							return [...h.slice(0, -1), { ...last, text: last.text + data.text }];
-						}
-						// If there was a gap > 2s before this text, the agent was thinking
-						const prefix = gap > 2000 ? `*[thought ${(gap / 1000).toFixed(1)}s]* ` : '';
-						return [...h, { type: 'assistant_text' as const, timestamp: now, text: prefix + data.text }];
-					});
-				},
-				onCheckpoint: (data) => {
-					checkpoints.update((cps) => [...cps, { ...data, description: trigger }]);
-				},
-				onResult: (data) => {
-					// Server already wrote document.atomz before sending this result.
-					// Client just applies to in-memory stores.
-					if (data.document) {
-						applyCanonicalDocument(normalizeAtomzFile(data.document));
-					} else if (data.sentences) {
-						const curAtoms = getCurrentDocumentState().atoms;
-						const newBlocks = buildBlocksFromRuntimeView({ atoms: curAtoms, prose: data.sentences });
-						blocks.set(newBlocks);
-						reproject();
-					}
-					// Clear pending edit indicators — agent has processed them
-					pendingEditBlockIds.set(new Set());
-					// Highlight agent changes for 5 seconds
-					const cblocks = (data as any).changedBlockIds as string[] | undefined;
-					const catoms = (data as any).changedAtomIds as string[] | undefined;
-					if (cblocks?.length || catoms?.length) {
-						agentChangedBlockIds.set(new Set(cblocks || []));
-						agentChangedAtomIds.set(new Set(catoms || []));
-						setTimeout(() => {
-							agentChangedBlockIds.set(new Set());
-							agentChangedAtomIds.set(new Set());
-						}, 5000);
-					}
-					success = true;
 				}
-			});
-
-			clearStaleAnnotations();
+			}
+			// The SDK transcript can contain hundreds of messages from every
+			// resumed session. Trim to the tail — most users care about "what
+			// did the agent just do" not "everything ever." If they want more
+			// they can scroll up in the SDK's raw files.
+			const MAX_RESTORED = 20;
+			const tail = restored.slice(-MAX_RESTORED);
+			if (tail.length > 0) agentHistory.set(tail);
 		} catch (e) {
-			console.error('Render failed:', e);
-		} finally {
-			currentAbort = null;
-			renderingSentences.set(new Set());
-			isRendering.set(false);
-			pushHistory({ type: 'render_end', timestamp: Date.now(), success, durationMs: Date.now() - renderStartTime });
-			if (success) {
-				clearUserEdits.set(Date.now());
-				// Replay any ops the user pushed while the agent was rendering
-				let currentOpsAfterRender: DocumentOp[] = [];
-				documentOps.subscribe((ops) => (currentOpsAfterRender = ops))();
-				const newOps = currentOpsAfterRender.filter((op) => !preRenderOpIds.has(op.id));
-				if (newOps.length > 0) {
-					const state = getCurrentDocumentState();
-					let currentBlk: AtomzBlock[] = [], currentPn: AtomzPin[] = [];
-					blocks.subscribe((v) => (currentBlk = v))();
-					pins.subscribe((v) => (currentPn = v))();
-					let replayed = { ...state, blocks: currentBlk, pins: currentPn };
-					for (const op of newOps) {
-						replayed = { ...replayed, ...applyDocumentOp(replayed, op) };
-					}
-					if (replayed.blocks) blocks.set(replayed.blocks);
-					if (replayed.pins) pins.set(replayed.pins);
-					atoms.set(replayed.atoms);
-					rules.set(replayed.rules);
-					reproject();
-				}
-			}
-			loadVersions();
-			// Don't clear transitions immediately — let the diff animation finish
-		}
-		return success;
-	}
-
-	// Process document ops. Uses a debounce timer + processing loop.
-	// The loop keeps running as long as there are unresolved ops,
-	// so ops that arrive during a render are picked up in the next iteration.
-	let opDebounceTimer: ReturnType<typeof setTimeout> | null = null;
-	let isProcessing = $state(false);
-	let processingDone: (() => void) | null = null; // resolve fn for waitForProcessing()
-
-	function scheduleOpProcessing() {
-		if (opDebounceTimer) clearTimeout(opDebounceTimer);
-		opDebounceTimer = setTimeout(() => processOps(), SYNC_TIMING.queueProcessMs);
-	}
-
-	function waitForProcessing(): Promise<void> {
-		if (!isProcessing) return Promise.resolve();
-		return new Promise((resolve) => { processingDone = resolve; });
-	}
-
-	async function processOps() {
-		if (isProcessing || isReplayingDocumentOps) return;
-		isProcessing = true;
-		try {
-			while (true) {
-				let currentOps: DocumentOp[] = [];
-				documentOps.subscribe((ops) => (currentOps = ops))();
-				if (currentOps.length === 0) break;
-
-				// Ensure all ops are in the WAL before processing.
-				// If any persist fails, don't process — retry next time.
-				const persistResults = await Promise.all(currentOps.map((op) => persistDocumentOp(op)));
-				if (persistResults.some((ok) => !ok)) break;
-				const currentState = getCurrentDocumentState();
-				const plan = buildDocumentOpProcessingPlan(currentOps, currentState);
-				if (plan.agentOps.length === 0) break;
-
-				const success = await doRender(
-					plan.editedFragId,
-					plan.trigger,
-					plan.agentOps.length > 1
-				);
-				if (success) {
-					await resolvePendingDocumentOps(plan.agentOps);
-				} else {
-					break;
-				}
-			}
-		} finally {
-			isProcessing = false;
-			if (processingDone) { processingDone(); processingDone = null; }
-		}
-	}
-
-	documentOps.subscribe((ops) => {
-		if (ops.length === 0 || isProcessing || isReplayingDocumentOps) return;
-		scheduleOpProcessing();
-	});
-
-	function handleGlobalClick(e: MouseEvent) {
-		if (showRules) {
-			const wrapper = document.querySelector('.rules-wrapper');
-			if (wrapper && !wrapper.contains(e.target as Node)) {
-				showRules = false;
-			}
-		}
-		handleVersionClick(e);
-	}
-
-	function handleKeydown(e: KeyboardEvent) {
-		if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
-			e.preventDefault();
-			// Abort any in-flight render so the undo isn't overwritten by onResult
-			if (rendering) cancelRender();
-			undoBlocks();
-		}
-		if (e.key === 'Escape' && rendering) {
-			cancelRender();
+			console.error('Failed to restore agent history:', e);
 		}
 	}
 </script>
 
-<svelte:head>
-	<link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet" />
-	<title>atomz</title>
-</svelte:head>
-
-<svelte:window onkeydown={handleKeydown} onclick={handleGlobalClick} />
-
 <div class="app">
 	<header class="header">
 		<div class="header-left">
-			<button class="text-btn" onclick={handleOpen} title="Open .atomz or import text">
-				<FolderOpen size={14} /> Open
-			</button>
-			<div class="ref-wrapper">
-				<button class="text-btn" onclick={() => (refPopover = refPopover ? null : 'inspo')}>
-					+ Reference
-				</button>
-				{#if refPopover}
-					<div class="ref-popover">
-						<div class="ref-popover-title">Add reference</div>
-						<input class="ref-url-input" bind:value={refUrl} placeholder="Paste a URL (blog, article...)" />
-						<textarea class="ref-text-input" bind:value={refText} placeholder="Or paste text directly..." rows={3}></textarea>
-						<div class="ref-actions">
-							<label class="ref-mine-toggle">
-								<input type="checkbox" checked={refPopover === 'own'} onchange={(e) => (refPopover = e.currentTarget.checked ? 'own' : 'inspo')} />
-								This is my writing
-							</label>
-							<button class="ref-attach" onclick={attachRefFile}>Attach file</button>
-							<button class="ref-submit" onclick={submitReference}>Add</button>
-						</div>
-					</div>
-				{/if}
-			</div>
-			<select class="header-select" bind:value={model} onchange={(e) => selectedModel.set(e.currentTarget.value)}>
-				<option value="opus">Opus</option>
-				<option value="sonnet">Sonnet</option>
-				<option value="haiku">Haiku</option>
-			</select>
-			<select class="header-select" bind:value={edMode} onchange={(e) => editorMode.set(e.currentTarget.value as any)}>
-				<option value="markdown">Markdown</option>
-				<option value="plaintext">Plain text</option>
-			</select>
-			<select class="header-select" bind:value={themeName} onchange={(e) => setTheme(e.currentTarget.value)}>
-				{#each themes as t}
-					<option value={t.name}>{t.label}</option>
-				{/each}
-			</select>
+			<span class="logo" aria-hidden="true">
+				<ScrollText size={22} strokeWidth={1.8} color="#7c3aed" />
+			</span>
+			<div class="app-title">DocWriter</div>
+			<MenuBar
+				{menus}
+				panels={{
+					chat: chatPanelSnippet,
+					rules: rulesPanelSnippet,
+					agentSettings: agentSettingsSnippet,
+					hooks: hooksPanelSnippet
+				}}
+			/>
 		</div>
-		<div class="header-actions">
-			<button class="icon-btn" onclick={newSession} disabled={rendering} title="New session (clear agent context)">
-				<RotateCcw size={14} />
-			</button>
-			<div class="version-wrapper">
-				<button
-					class="icon-btn"
-					class:version-active={showVersions}
-					onclick={() => { showVersions = !showVersions; versionOpenedAt = Date.now(); }}
-					disabled={versions.length === 0}
-					title="Version history"
-				>
-					<History size={14} />
-				</button>
-				{#if showVersions && versions.length > 0}
-					<div class="version-dropdown">
-						<div class="version-title">Version history</div>
-						<div class="version-list">
-							{#each versions as version}
-								<button
-									class="version-item"
-									class:version-active-item={diffVersionIndex === version.index}
-									onclick={() => selectVersionForDiff(version.index)}
-								>
-									<span class="version-time">{formatTime(version.timestamp)}</span>
-									<span class="version-diff">{getVersionDiffSummary(version.prose)}</span>
-									<span class="version-preview-text">
-										{version.prose.map(s => s.text).join(' ').slice(0, 80)}...
-									</span>
-								</button>
-							{/each}
-						</div>
-					</div>
-				{/if}
-			</div>
-			<button class="icon-btn" onclick={() => undoBlocks()} disabled={!hasUndo} title="Undo (⌘Z)">
-				<Undo2 size={14} />
-			</button>
-			{#if currentAbort}
-				<button class="icon-btn cancel-btn" onclick={cancelRender} title="Stop agent (Esc)">
-					<XCircle size={14} />
-				</button>
-			{/if}
-			<button
-				class="icon-btn"
-				class:history-active={historyVisible}
-				onclick={() => showHistory.update((v) => !v)}
-				title="Agent history"
-			>
-				<MessageSquareText size={14} />
-			</button>
-			<div class="rules-wrapper">
-				<button
-					class="icon-btn"
-					class:rules-active={showRules}
-					onclick={() => (showRules = !showRules)}
-					title="Rules"
-				>
-					<Settings size={14} />
-				</button>
-				{#if showRules}
-					<RulesPanel />
-				{/if}
-			</div>
-		</div>
+		<div class="header-right"></div>
 	</header>
 
-	<div class="editor-body">
-		<div style:width="{atomsWidth}px" style:flex-shrink="0" style:height="100%">
-			<ContentPane />
-		</div>
-		<PanelResizer onResize={(d) => { atomsWidth = Math.max(200, Math.min(600, atomsWidth + d)); }} />
-		<div class="prose-wrapper">
-			{#if diffVersionIndex !== null}
-				<!-- Diff view: comparing old version to current -->
-				<div class="diff-view">
-					<div class="diff-header">
-						<span class="diff-label">Comparing with version from {formatTime(versions.find(v => v.index === diffVersionIndex)?.timestamp ?? 0)}</span>
-						<div class="diff-actions">
-							<button class="diff-restore-btn" onclick={restoreVersion}>Restore this version</button>
-							<button class="diff-close-btn" onclick={closeDiffView}>Close</button>
-						</div>
-					</div>
-					<div class="diff-content">
-						{#each paragraphDiffs as para}
-							<p class="diff-para" class:diff-changed={para.changed}>
-								{#each para.parts as part}
-									{#if part.type === 'removed'}
-										<span class="diff-removed">{part.text}</span>
-									{:else if part.type === 'added'}
-										<span class="diff-added">{part.text}</span>
-									{:else}
-										{part.text}
-									{/if}
-								{/each}
-							</p>
-						{/each}
-					</div>
+	{#snippet rulesPanelSnippet()}
+		<RulesPanel onSubmit={(trigger) => void submit(trigger)} />
+	{/snippet}
+
+	{#snippet agentSettingsSnippet()}
+		<AgentSettingsPanel onSettingsChange={persistAgentSettings} />
+	{/snippet}
+
+	{#snippet hooksPanelSnippet()}
+		<HooksPanel />
+	{/snippet}
+
+	{#snippet chatPanelSnippet()}
+		<ChatPanel onSend={(msg) => void submit(msg)} />
+	{/snippet}
+
+	<div class="body">
+		<aside class="left-pane" style:width="{leftWidth}px">
+			<div class="left-pane-inner">
+				<OutlinePane
+					onAccept={acceptAgentEdit}
+					onReject={rejectAgentEdit}
+					onAcceptRule={acceptProposedRule}
+					onRejectRule={rejectProposedRule}
+					onAcceptHook={acceptProposedHook}
+					onRejectHook={rejectProposedHook}
+					onAnswer={answerUserQuestion}
+				/>
+				<div class="file-tree-wrap">
+					<FileTree
+						activePath={activeTabFilePath}
+						onOpenFile={onFileOpened}
+						onRenamed={onFileTreeRenamed}
+						onDeleted={onFileTreeDeleted}
+					/>
 				</div>
-			{:else}
-				<TiptapEditor />
-				<div class="floating-toolbar">
-					<ActionToolbar />
-				</div>
-			{/if}
-		</div>
-		{#if historyVisible}
-			<PanelResizer onResize={(d) => { historyWidth = Math.max(250, Math.min(600, historyWidth - d)); }} />
-			<div style:width="{historyWidth}px" style:flex-shrink="0" style:height="100%">
-				<HistoryPane />
 			</div>
+		</aside>
+		<PanelResizer onResize={resizeLeft} />
+		<main class="center-pane">
+			<TabBar
+				onSwitch={switchTab}
+				onCreate={createTab}
+				onClose={closeTab}
+				onDelete={deleteTab}
+				onRename={renameTabAction}
+				pendingTabs={pendingReviewTabs}
+			/>
+			{#if docLoaded}
+				<AgentDock onSubmit={() => submit()} />
+				<TiptapEditor
+					bind:this={editorRef}
+					onSubmit={(trigger) => submit(trigger)}
+					kind={currentTabKind}
+				/>
+			{/if}
+		</main>
+		{#if historyVisible}
+			<PanelResizer onResize={resizeRight} />
+			<aside class="right-pane" style:width="{rightWidth}px">
+				<HistoryPane onNewSession={newSession} />
+			</aside>
 		{/if}
 	</div>
 </div>
 
 <style>
-	:global(:root) {
-		--bg: #ffffff;
-		--bg-surface: #f9fafb;
-		--bg-elevated: #ffffff;
-		--bg-hover: #f3f4f6;
-		--bg-active: #eef2ff;
-		--border: #b0b5be;
-		--border-light: #d1d5db;
-		--text: #111827;
-		--text-secondary: #374151;
-		--text-muted: #4b5563;
-		--text-faint: #6b7280;
-		--accent: #4f46e5;
-		--accent-light: #c7d2fe;
-		--accent-bg: #eef2ff;
-		--accent-subject: #4338ca;
-		--prose-bg: #ffffff;
-		--prose-text: #1f2937;
-		--header-bg: #ffffff;
-		--pane-bg: #ffffff;
-		--diff-added-color: #059669;
-		--diff-added-bg: #ecfdf5;
-		--diff-removed-color: #dc2626;
-		--feedback-bg: #fffbeb;
-		--feedback-border: #f59e0b;
-		--tool-bg: #f5f3ff;
-		--tool-border: #ede9fe;
-		--tool-accent: #7c3aed;
-		--assistant-bg: #f0fdf4;
-		--assistant-border: #dcfce7;
-	}
-	:global(*) {
-		box-sizing: border-box;
-		margin: 0;
-		padding: 0;
-	}
-	:global(html), :global(body) {
-		height: 100%;
-		overflow: hidden;
+	/* ── Typography ──
+	   - Inter for all UI chrome (header, panes, buttons, dropdowns)
+	   - Lora for the editor prose only (set in TiptapEditor.svelte)
+	   Font scale:
+	   - 13px  = UI controls, buttons, dropdowns, outline items
+	   - 12px  = section headers (uppercase), secondary info
+	   - 15px  = app title
+	*/
+	.app {
+		display: flex;
+		flex-direction: column;
+		height: 100vh;
+		background: var(--bg);
+		color: var(--text);
+		font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+		font-size: 13px;
 	}
 	:global(body) {
-		font-family: 'Lora', Georgia, serif;
-		background: var(--bg);
-		color: var(--text);
-		-webkit-font-smoothing: antialiased;
+		font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
 	}
-
-	.app {
-		height: 100vh;
-		display: flex;
-		flex-direction: column;
-		overflow: hidden;
-	}
-
 	.header {
-		padding: 8px 20px;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: 10px 16px;
 		border-bottom: 1px solid var(--border-light);
 		background: var(--header-bg);
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		position: sticky;
-		top: 0;
-		z-index: 50;
 	}
-	.header-left {
-		display: flex;
-		align-items: center;
-		gap: 4px;
-	}
-	.text-btn {
-		display: flex;
-		align-items: center;
-		gap: 5px;
-		padding: 5px 12px;
-		border-radius: 5px;
-		border: 1px solid var(--border);
-		background: var(--bg-elevated);
-		color: var(--text-muted);
-		font-size: 13px;
-		font-family: inherit;
-		cursor: pointer;
-		white-space: nowrap;
-	}
-	.text-btn:hover:not(:disabled) {
-		background: var(--bg-hover);
-		color: var(--text-secondary);
-		border-color: var(--border);
-	}
-	.text-btn:disabled {
-		opacity: 0.5;
-		cursor: not-allowed;
-	}
-	.header-select {
-		padding: 5px 8px;
-		border-radius: 5px;
-		border: 1px solid var(--border);
-		background: var(--bg-elevated);
-		color: var(--text-muted);
-		font-size: 13px;
-		font-family: inherit;
-		cursor: pointer;
-		outline: none;
-	}
-	.header-select:hover {
-		border-color: var(--border);
-	}
-	.header-actions {
+	.header-left, .header-right {
 		display: flex;
 		align-items: center;
 		gap: 8px;
-	}
-
-	.icon-btn {
-		width: 34px;
-		height: 32px;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		border-radius: 4px;
-		border: 1px solid var(--border);
-		background: var(--bg-elevated);
-		color: var(--text-faint);
-		cursor: pointer;
-	}
-	.icon-btn:hover:not(:disabled) {
-		background: var(--accent-bg);
-		color: var(--accent);
-		border-color: var(--accent-light);
-	}
-	.icon-btn:disabled {
-		opacity: 0.35;
-		cursor: not-allowed;
-	}
-	.icon-btn.cancel-btn {
-		border-color: #fecaca;
-		background: #fef2f2;
-		color: #dc2626;
-	}
-	.icon-btn.cancel-btn:hover {
-		background: #fee2e2;
-		border-color: #f87171;
-	}
-	.icon-btn.rules-active {
-		border-color: var(--feedback-border);
-		background: var(--feedback-bg);
-		color: var(--feedback-border);
-	}
-	.icon-btn.history-active {
-		border-color: var(--accent-light);
-		background: var(--accent-bg);
-		color: var(--accent);
-	}
-
-	:global(.spinning) {
-		animation: spin 1s linear infinite;
-	}
-	@keyframes spin {
-		from { transform: rotate(0deg); }
-		to { transform: rotate(360deg); }
-	}
-
-	.ref-wrapper {
-		position: relative;
-	}
-	.ref-popover {
-		position: absolute;
-		top: 100%;
-		left: 0;
-		margin-top: 4px;
-		width: 340px;
-		background: var(--bg-elevated);
-		border: 1px solid var(--border);
-		border-radius: 10px;
-		box-shadow: 0 12px 36px rgba(0, 0, 0, 0.12);
-		padding: 12px;
-		z-index: 100;
-		display: flex;
-		flex-direction: column;
-		gap: 8px;
-	}
-	.ref-popover-title {
-		font-size: 13px;
-		font-weight: 600;
-		color: var(--text);
-	}
-	.ref-url-input {
-		width: 100%;
-		border: 1px solid var(--border);
-		border-radius: 6px;
-		padding: 8px 10px;
-		font-size: 13px;
-		font-family: inherit;
-		outline: none;
-		color: var(--text);
-		background: var(--bg);
-	}
-	.ref-url-input:focus { border-color: var(--accent); }
-	.ref-text-input {
-		width: 100%;
-		border: 1px solid var(--border);
-		border-radius: 6px;
-		padding: 8px 10px;
-		font-size: 13px;
-		font-family: inherit;
-		outline: none;
-		color: var(--text);
-		background: var(--bg);
-		resize: vertical;
-		min-height: 60px;
-	}
-	.ref-text-input:focus { border-color: var(--accent); }
-	.ref-actions {
-		display: flex;
-		gap: 6px;
-		align-items: center;
-	}
-	.ref-mine-toggle {
-		font-size: 12px;
-		color: var(--text-muted);
-		display: flex;
-		align-items: center;
-		gap: 4px;
-		cursor: pointer;
 		flex: 1;
 	}
-	.ref-attach {
-		padding: 5px 12px;
-		border-radius: 6px;
-		border: 1px solid var(--border);
-		background: var(--bg);
-		color: var(--text-muted);
-		font-size: 12px;
-		cursor: pointer;
-		font-family: inherit;
+	.header-right {
+		justify-content: flex-end;
 	}
-	.ref-submit {
-		padding: 5px 16px;
-		border-radius: 6px;
-		border: none;
-		background: var(--accent);
-		color: white;
-		font-size: 12px;
-		cursor: pointer;
-		font-family: inherit;
-		font-weight: 500;
-	}
-	.rules-wrapper {
-		position: relative;
-	}
-	.version-wrapper {
-		position: relative;
-	}
-	.icon-btn.version-active {
-		border-color: var(--accent-light);
-		background: var(--accent-bg);
-		color: var(--accent);
-	}
-	.version-dropdown {
-		position: absolute;
-		top: 100%;
-		right: 0;
-		margin-top: 4px;
-		width: 320px;
-		max-height: 400px;
-		background: var(--bg-elevated);
-		border: 1px solid var(--border);
-		border-radius: 10px;
-		box-shadow: 0 12px 36px rgba(0, 0, 0, 0.12);
-		z-index: 100;
-		overflow: hidden;
-		display: flex;
-		flex-direction: column;
-	}
-	.version-title {
-		padding: 10px 14px 8px;
-		font-size: 12px;
-		font-weight: 600;
-		color: var(--text-muted);
-		text-transform: uppercase;
-		letter-spacing: 0.5px;
-		border-bottom: 1px solid var(--border-light);
-	}
-	.version-list {
-		overflow-y: auto;
-		max-height: 350px;
-	}
-	.version-item {
-		width: 100%;
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-		padding: 10px 14px;
-		border: none;
-		border-bottom: 1px solid var(--border-light);
-		background: transparent;
-		cursor: pointer;
-		text-align: left;
-		font-family: inherit;
-		transition: background 0.1s;
-	}
-	.version-item:hover, .version-item.version-preview {
-		background: var(--accent-bg);
-	}
-	.version-item:last-child {
-		border-bottom: none;
-	}
-	.version-time {
-		font-size: 13px;
-		font-weight: 500;
-		color: var(--text);
-	}
-	.version-diff {
-		font-size: 11px;
-		color: var(--text-faint);
-	}
-	.version-preview-text {
-		font-size: 11px;
-		color: var(--text-muted);
-		line-height: 1.4;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	.prose-wrapper {
-		flex: 1;
-		position: relative;
-		height: 100%;
-	}
-
-	/* Diff view */
-	.diff-view {
-		height: 100%;
-		display: flex;
-		flex-direction: column;
-		background: var(--prose-bg);
-	}
-	.diff-header {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		padding: 10px 20px;
-		background: var(--bg-surface);
-		border-bottom: 1px solid var(--border-light);
+	.logo {
 		flex-shrink: 0;
 	}
-	.diff-label {
-		font-size: 13px;
-		color: var(--text-muted);
-		font-weight: 500;
-	}
-	.diff-actions {
-		display: flex;
-		gap: 6px;
-	}
-	.diff-restore-btn {
-		padding: 6px 16px;
-		border-radius: 6px;
-		border: none;
-		background: var(--accent);
-		color: white;
-		font-size: 12px;
-		font-weight: 500;
-		cursor: pointer;
-		font-family: inherit;
-	}
-	.diff-restore-btn:hover {
-		opacity: 0.9;
-	}
-	.diff-close-btn {
-		padding: 6px 16px;
-		border-radius: 6px;
-		border: 1px solid var(--border);
-		background: var(--bg-elevated);
-		color: var(--text-muted);
-		font-size: 12px;
-		cursor: pointer;
-		font-family: inherit;
-	}
-	.diff-close-btn:hover {
-		background: var(--bg-hover);
-	}
-	.diff-content {
-		flex: 1;
-		overflow-y: auto;
-		padding: 32px 48px 80px;
-	}
-	.diff-content {
-		max-width: 700px;
-		margin: 0 auto;
-	}
-	.diff-para {
+	.app-title {
 		font-size: 15px;
-		line-height: 1.85;
-		color: var(--prose-text);
-		margin: 0 0 24px;
-		padding: 4px 0;
+		font-weight: 600;
+		letter-spacing: -0.2px;
+		color: var(--text);
 	}
-	.diff-para.diff-changed {
-		background: color-mix(in srgb, var(--accent) 4%, transparent);
-		border-radius: 4px;
-		padding: 4px 8px;
-		margin-left: -8px;
-		margin-right: -8px;
-	}
-	.diff-removed {
-		color: var(--diff-removed-color);
-		text-decoration: line-through;
-		background: rgba(220, 38, 38, 0.08);
-		border-radius: 2px;
-		padding: 0 2px;
-	}
-	.diff-added {
-		color: var(--diff-added-color);
-		background: var(--diff-added-bg);
-		border-radius: 2px;
-		padding: 0 2px;
-		font-weight: 500;
-	}
-	.version-item.version-active-item {
-		background: var(--accent-bg);
-		border-left: 2px solid var(--accent);
-	}
-	.prose-wrapper :global(.prose-pane) {
-		height: 100%;
-	}
-	.floating-toolbar {
-		position: absolute;
-		bottom: 20px;
-		left: 50%;
-		transform: translateX(-50%);
-		z-index: 40;
-		border-radius: 10px;
-		box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-	}
-	.floating-toolbar :global(.toolbar) {
-		border-radius: 10px;
-	}
-	.editor-body {
+	/* Submit button, mascot, and settings popover styles moved to
+	 * src/lib/components/AgentDock.svelte. */
+
+	.body {
 		display: flex;
 		flex: 1;
+		min-height: 0;
+	}
+	.left-pane {
+		border-right: 1px solid var(--border-light);
+		background: var(--pane-bg);
 		overflow: hidden;
-		height: calc(100vh - 45px);
+		flex-shrink: 0;
+	}
+	.left-pane-inner {
+		height: 100%;
+		overflow-y: auto;
+		display: flex;
+		flex-direction: column;
+	}
+	.file-tree-wrap {
+		padding: 12px 16px 16px;
+		border-top: 1px solid var(--border-light);
+		margin-top: 8px;
+	}
+	.center-pane {
+		position: relative;
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		min-width: 0;
+		background: var(--bg);
+	}
+	.right-pane {
+		border-left: 1px solid var(--border-light);
+		background: var(--pane-bg);
+		overflow: hidden;
+		flex-shrink: 0;
 	}
 </style>

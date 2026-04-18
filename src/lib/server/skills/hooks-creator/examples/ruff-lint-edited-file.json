@@ -1,0 +1,6 @@
+{
+  "event": "PostToolUse",
+  "matcher": "Edit",
+  "command": "ruff check {{file}}",
+  "reason": "Lints the specific file that was just edited."
+}

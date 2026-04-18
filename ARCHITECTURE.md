@@ -1,224 +1,307 @@
-# atomz Architecture
+# DocWriter Architecture
 
-This document describes the current runtime and persistence architecture of `atomz`, with a focus on the document sync model, Claude render flow, and crash/refresh recovery.
+This document describes the runtime and persistence model of **DocWriter**: the Yjs-backed client state, agent reconciliation via the CRDT, and how user + agent edits merge deterministically.
 
 ## Overview
 
-`atomz` is a writing editor built around a structured document model:
+`DocWriter` is a plain-markdown writing editor with an AI side-channel. The user writes markdown in a Tiptap editor; the agent proposes edits that get merged into the live document via Yjs operations the user can review and Accept or Reject. The data model is flat — no atoms, no blocks, no pins — just markdown text.
 
-- `atoms`: the source claims and hierarchy
-- `blocks`: the ordered document body (`heading` and `markdown` blocks)
-- `pins`: durable cross-links between atoms and prose blocks
-- `rules`: writing constraints
+The defining property of the architecture is:
 
-The canonical on-disk format is block-based. The app derives readonly Svelte stores (`prose`, `sections`, `paraBreaks`, `editorPins`) as runtime projections for the UI, but all mutations flow through the canonical stores.
+> **The Y.Doc is the canonical editor state.** User edits and agent edits both flow into it as CRDT operations, which merge deterministically. Disk storage is a long-term backing store and the agent's I/O surface, not the source of truth.
 
-## Main Files
+## Persistence
 
-### Canonical snapshot
+All persistent state lives in two places: the project root for user-facing files, and a hidden `.docwriter/` directory for machine-managed metadata.
 
-- `document.atomz`
-
-This is the committed document snapshot. The canonical `.atomz` schema is:
-
-- `version`
-- `atoms`
-- `rules`
-- `blocks`
-- `pins`
-
-Block kinds: `heading`, `markdown`. Markdown blocks can contain normal markdown content, including images, lists, emphasis, and other markdown constructs.
-
-### Runtime/session state
-
-- `.atomz-state.json`
-
-This stores non-document runtime metadata such as the current Claude `sessionId`.
-
-### Append-only durable ops log
-
-- `.atomz-ops.jsonl`
-
-This is the durable append-only log used to preserve unresolved work across refreshes and crashes. It stores semantic `DocumentOp` events representing replayable user intent and reconciliation requests.
-
-### Render working copy
-
-- `.atomz-render.json`
-
-This is the temporary file Claude edits during `/api/render`. The canonical snapshot is only updated after the server validates and merges the result.
-
-### Prose history
-
-- `.atomz-history.json`
-
-This stores prose-oriented history used by the versions UI.
-
-## High-Level Model
-
-```mermaid
-flowchart TD
-    userAction[UserAction] --> canonical[MutateCanonicalStores]
-    canonical --> reproject[reproject]
-    reproject --> projected[ProjectedStores]
-    projected --> ui[UI]
-    userAction --> opLog[AppendToOpsLog]
-    opLog --> replay[ReplayOnRefresh]
-    replay --> canonical
-    opLog --> processor[DocumentOpProcessor]
-    processor --> renderFile[RenderWorkingCopy]
-    renderFile --> claude[ClaudeAgent]
-    claude --> commit[AtomicCommitToSnapshot]
-    commit --> snapshot[document.atomz]
-    snapshot --> load[LoadOnBoot]
-    load --> canonical
-    sessionState[.atomz-state.json] --> processor
-    sessionState --> claude
+```
+project-root/
+  document.md                 ← user-facing ground truth
+  .docwriter/
+    agent.md                  ← agent's shadow copy during a render (transient)
+    state.json                 ← { sessionId, rules, userEditRegions,
+                                   agentSettings, recentActions, actionUsageCounts }
 ```
 
-## Client Architecture
+On the client, the canonical editor state is a `Y.Doc` persisted to IndexedDB via `y-indexeddb`. IndexedDB is rehydrated on every page load so user edits survive a refresh even if they haven't yet been pushed to the server. The review baseline and pre-agent snapshots used to live in their own markdown files on disk but are now carried inside the same Y.Doc (`getReviewMap()` in `yjs-doc.ts`), so y-indexeddb persists them for free — no server-side baseline/pre-agent files to maintain.
 
-### Canonical stores (source of truth, writable)
+| Store | Role | Read/Written by |
+| --- | --- | --- |
+| `document.md` | User-facing markdown. Re-written by the editor's autosave debounce. | Editor autosave → `PUT /api/document`; accept path never copies agent.md over it (the Y.Doc is authoritative). |
+| `.docwriter/agent.md` | Shadow copy the agent edits during a render. Required because the Claude Agent SDK's `Edit` tool performs direct filesystem I/O against a real path — there is no virtual filesystem hook. Deleted on accept/reject. | `/api/render` → Claude Agent SDK `Edit` tool; accept/reject unlink it. |
+| `.docwriter/state.json` | Everything else the server needs to know: `sessionId` (SDK session resume), `rules`, `userEditRegions`, `agentSettings` (autonomy + trackChanges), `recentActions`, `actionUsageCounts`. | `/api/session`, `/api/render`, `/api/document` (meta PUT). |
+| IndexedDB `docwriter-doc` | The actual Y.Doc binary state, persisted on every Yjs transaction by `y-indexeddb`. Also carries the review baseline and pre-agent snapshot inside a Y.Map. | Client-only. Rehydrates on every page load. |
 
-- `blocks` — `AtomzBlock[]` (heading blocks + markdown blocks with atomIds)
-- `pins` — `AtomzPin[]` (verbatim pins with atom/block anchors)
-- `fragments` — `Fragment[]` (atoms — subject/predicate, `pinnedWords` derived from pins via `reproject()`)
-- `rules` — `Rule[]`
+`ensureDocWriterDir` in `src/lib/server/document-files.ts` creates `.docwriter/` on first access. No legacy migration code — that was stripped once the rename settled.
 
-### Projected stores (readonly, derived via `reproject()`)
+## Client State Model
 
-- `prose` — `Sentence[]` derived from blocks
-- `sections` — `Section[]` derived from heading blocks
-- `paraBreaks` — `Set<number>` derived from markdown block boundaries
-- `editorPins` — `EditorPin[]` derived from blocks + pins
+### Y.Doc as canonical state
 
-No component ever directly mutates the projected stores. They are updated exclusively through:
-- `reproject()` — reads canonical stores, builds AtomzFileV2, projects to runtime state, calls `setProjectedRuntimeView()`
-- `applyCanonicalFileToStores(file)` — loads a full AtomzFileV2 into all stores
+`src/lib/yjs-doc.ts` owns a single `Y.Doc` with one `XmlFragment` named `default`. `y-indexeddb` persists every transaction to browser IndexedDB. The Tiptap editor binds into that fragment via `@tiptap/extension-collaboration`, which internally adds:
 
-### Mutation pattern
+- `ySyncPlugin` — the bidirectional Y.XmlFragment ↔ ProseMirror document sync.
+- `yUndoPlugin` — ctrl-z / ctrl-y undo/redo scoped to user edits (tracks `ySyncPluginKey` origin).
+- `undo` / `redo` commands bound to `Mod-z` / `Mod-y` / `Shift-Mod-z`.
 
-All user actions follow the same pattern:
+Because Collaboration ships these, StarterKit's `undoRedo` is disabled — double-registering corrupts the plugin state.
 
-1. Mutate canonical stores directly (`blocks.set()`, `pins.set()`, `fragments.update()`)
-2. Call `reproject()` to update projected stores
-3. Push a `DocumentOp` for durable intent tracking
+### Stores
 
-### Document ops
+The Svelte stores in `src/lib/stores.ts` are thin projections of the Y.Doc for components that don't interact with the editor directly:
 
-Current replayable op types:
+- `userMd: Writable<string>` — the current markdown projection of the Y.Doc. Updated after every user-originated editor update and consumed by the Outline pane, the render submit, and the server autosave.
+- `reviewBaseline: Writable<string | null>` — snapshot of `userMd` at render start. When non-null, the diff overlay is active and the Outline pane shows the Accept/Reject card. On boot, it's rehydrated from the server's `agentBaseline` if a pending shadow still exists.
+- `rules`, `userEditRegions`, `agentSettings` — metadata from `.docwriter/state.json`.
+- `isRendering`, `submitCountdown`, `showHistory`, `editorFontScale`, `selectedModel`, `selectedTheme`, `recentActions`, `agentHistory` — UI and session state.
 
-- `edit_atom` — atom subject/predicate changed, requires agent reconciliation
-- `replace_fragments` — atom structure changed, requires agent reconciliation
-- `pin_atom_word` — pin toggled on atom, may require agent if pin text missing from linked prose
-- `pin_prose_text` — pin created from prose selection, may require agent if text missing from linked atoms
-- `update_blocks` — blocks changed directly (editor edits, section renames, paragraph breaks), no agent needed
-- `update_pins` — pins changed directly, no agent needed
-- `replace_rules` — rules changed, no agent needed
-- `feedback_request` — user annotation/feedback, requires agent reconciliation
+There is no canonical/projected split — the Y.Doc is the one source of truth and the stores are thin projections for components that don't interact with the editor directly.
 
-### Document-op processing
+### Editor boot sequence
 
-The background processor derives two outcomes from unresolved ops:
+```
+1. +page.svelte onMount:
+   1a. applyTheme, clamp isRendering=false for HMR safety
+   1b. GET /api/document → populate userMd, rules, userEditRegions, and
+       (if present) reviewBaseline from agentBaseline
+   1c. docLoaded = true
 
-- `localOnlyOps`: can be resolved after saving the canonical snapshot
-- `agentOps`: require Claude reconciliation through `/api/render`
+2. TiptapEditor mounts (gated on docLoaded so userMd is available):
+   2a. await whenYDocReady()    ← y-indexeddb hydration complete
+   2b. if isYDocEmpty() → seedYDocFromMarkdown(userMd current)
+        via prosemirrorJSONToYXmlFragment (one-time only)
+   2c. new Editor({ extensions: collaborativeExtensions(ydoc, ...) })
+   2d. userMd.set(getEditorMarkdown()), lastWrittenMd = same
+   2e. updateDiff()     ← primes the DiffOverlay plugin
+```
 
-### Undo
+Step 2b is critical: per y-prosemirror docs, `prosemirrorJSONToYXmlFragment` must only run on an *empty* fragment, otherwise the existing history is wiped.
 
-Block-level snapshots via `blockHistory` store. `pushBlockSnapshot()` captures current blocks + pins before agent edits. `undoBlocks()` restores the snapshot and calls `reproject()`.
+### Autosave and idle submit
 
-## Server Architecture
+`TiptapEditor.svelte:onEditorUpdate` handles every PM transaction. The guard order matters:
 
-### `/api/document`
+```
+if (transaction.getMeta(ySyncPluginKey) !== undefined) return;
+    ← Skip Yjs-sync transactions entirely. These include initial Y.Doc
+      hydration (which fires before state has fully applied and would
+      otherwise write '' to document.md), remote updates, and Collaboration's
+      built-in undo/redo. Nothing should be written back to the server
+      for these — the sending side already persisted.
 
-Reads and writes `document.atomz`. This is the canonical snapshot endpoint.
+userMd.set(md)
+writeDebounceTimer = setTimeout(() => writeToDisk(md), 50)
+    ← Debounced PUT /api/document with the new userMd
 
-### `/api/history`
+if (isAgentApplyInProgress()) return;
+    ← applyAgentMarkdown dispatches a non-sync PM replace, so the block
+      above runs (good — we want agent edits persisted). But it should NOT
+      restart the idle countdown, otherwise every render would queue
+      another one 10s later in a loop.
 
-Loads Claude conversation history using the `sessionId` from `.atomz-state.json`.
+startCountdown(); idleTimer = setTimeout(submit, IDLE_MS)
+```
 
-### `/api/document-ops`
+## Agent Reconciliation
 
-Durable semantic document-op API backed by `.atomz-ops.jsonl`.
+### The Problem
 
-### `/api/render`
+The Claude Agent SDK's `Edit` and `Write` tools hit the filesystem directly — there's no way to redirect them to a virtual FS or substitute a custom implementation (confirmed via the SDK hook docs). So the agent edits a real file, `.docwriter/agent.md`, and the client reconciles after the fact.
 
-This is the Claude render path.
+Naively, reconciliation could be `editor.commands.setContent(agentMd)`. The problem: that runs a whole-document PM replace. The sync plugin translates it into "tombstone every Y item, insert a new stream of items". Concurrent user ops still exist in the Y.Doc, but they end up linked to tombstones at unpredictable positions. The CRDT technically merges, the result looks like garbage.
 
-Current behavior:
+### The Solution
 
-1. Normalize the current canonical file into `.atomz v2`
-2. Project `atoms + rules + blocks + pins` into a Claude-friendly render document with `atoms`, `rules`, `prose`
-3. Strip heading entries out of projected `prose` before Claude sees the file
-4. Write the render document to `.atomz-render.json`
-5. Run Claude against the render working copy
-6. Read the edited working copy back
-7. Reinsert heading entries into the projected prose
-8. Merge the updated render document back into canonical `blocks`
-9. Atomically commit the merged `.atomz v2` document into `document.atomz`
+`src/lib/yjs-agent.ts:applyAgentMarkdown` does a **targeted** replace:
 
-Important invariant: Claude edits `.atomz-render.json`, only the server commit step writes `document.atomz`.
+```
+1. parseMarkdownForEditor(editor, md):
+     - run the headless editor's setContent to get schema-free PM JSON
+     - rehydrate into a real PM node using the LIVE editor's schema
+       via editor.schema.nodeFromJSON(json)
+     (the schema-identity round-trip is mandatory — slices tied to a
+      different schema instance silently corrupt the live view)
 
-## Refresh / Recovery Flow
+2. if liveDoc.eq(agentDoc) return;    ← fast path
 
-On boot, the client does:
+3. start   = liveDoc.content.findDiffStart(agentDoc.content)
+   diffEnd = liveDoc.content.findDiffEnd(agentDoc.content)
+     (both are ProseMirror Fragment helpers that compute the minimal
+      prefix/suffix that matches)
 
-1. Load `document.atomz`
-2. Call `applyCanonicalFileToStores()` which hydrates all canonical and projected stores
-3. Load unresolved semantic document ops from `.atomz-ops.jsonl`
-4. Replay them into stores
-5. Resume background processing of unresolved ops
+4. slice = agentDoc.slice(start, diffEnd.b)
+   tr    = editor.state.tr.replace(start, diffEnd.a, slice)
 
-## Save / Commit Flow
+5. ydoc.transact(() => editor.view.dispatch(tr), 'agent')
+     (the agent origin lets the UndoManager track this specific write)
+```
 
-### Save-to-disk
+The sync plugin translates the minimal PM replace into minimal Yjs ops, scoped to only the bytes that actually differ. Any user ops that happened at positions outside `[start, end]` are never touched and survive byte-for-byte. User ops inside the replaced range get re-ordered by the CRDT per its normal semantics.
 
-The client periodically serializes canonical stores into `.atomz v2` format via `buildAtomzFileFromCanonicalState()` and writes through `/api/document`.
+### Agent-origin UndoManager
 
-Only canonical stores (`fragments`, `rules`, `blocks`, `pins`) trigger save — projected stores do not.
+A dedicated `Y.UndoManager` is created on the `XmlFragment` with `trackedOrigins: new Set(['agent'])` and `captureTimeout: 0`. Because agent applies are wrapped in `ydoc.transact(..., 'agent')` and user edits use the default origin (undefined), this undo manager's stack contains *only* agent transactions.
 
-### Render commit
+`undoAgentChanges()` calls `undoManager.undo()`:
 
-When a render succeeds:
+- In the same session → rewinds the most recent agent apply, preserving any user ops that were interleaved.
+- After a refresh → returns `false` (the undo manager was freshly created on page load and has no history). `rejectAgentEdit` in `+page.svelte` detects this and falls back to `applyAgentMarkdown(editor, baseline)` — replaying the baseline through the same targeted-replace path. User edits made during the render are lost in this fallback but edits made after the refresh survive (they're outside the diff range).
 
-1. Agent-needed `documentOps` that triggered the render are marked resolved
-2. The merged render result becomes the new canonical snapshot
-3. The live stores are updated from the result via `applyCanonicalFileToStores()`
+### Pending review state machine
 
-## Current Timing Model
+```
+Idle:      reviewBaseline = null. Editor is editable. No diff overlay.
 
-Timing constants are centralized in `src/lib/sync-timing.ts`.
+Rendering: isRendering = true. Editor still editable (CRDT will merge).
+           reviewBaseline captured at submit time.
+           Server: resetAgentDoc copies document.md → agent.md (client owns the baseline)
+                   startRender sets renderActive = true
+                   PreToolUse hook syncs user deltas to agent.md before
+                   each agent Edit via syncUserEditsToAgent (still useful:
+                   lets the agent see the user's latest text).
 
-Current values:
+Pending:   isRendering = false, reviewBaseline !== null.
+           applyAgentMarkdown has merged the agent's result into the Y.Doc
+           via a targeted PM replace. Diff overlay compares live doc
+           against reviewBaseline and renders green/red decorations.
+           Autosave has already pushed the merged markdown to document.md.
 
-- `editorIdleMs = 10000` — coalesces direct prose typing before emitting durable block-replacement work
-- `queueProcessMs = 1500` — batches unresolved `documentOps` before deciding whether to save locally or run Claude reconciliation
-- `saveToDiskMs = 800` — debounces canonical snapshot writes
+Accept:    writeReviewState(null, null). Server deletes agent.md
+           and clears userEditRegions. document.md already has the merged
+           content from autosave.
+
+Reject:    undoAgentChanges() (same session) OR
+           applyAgentMarkdown(baseline) (after refresh).
+           writeReviewState(null, null). Server deletes agent.md.
+```
+
+## Diff Overlay
+
+`src/lib/editor/diff-overlay.ts` is a custom Tiptap Extension with a single ProseMirror plugin that renders three decoration layers against the current editor state:
+
+1. **Agent additions (green inline class)** — text that exists in the editor but not in `reviewBaseline`. Rendered as `Decoration.inline(from, to, { class: 'diff-added' })` on existing text nodes. No widgets, no duplicates.
+2. **Agent removals (ghost widgets)** — text that existed in `reviewBaseline` but is no longer in the editor. Rendered as `Decoration.widget(pos, span, { side: -1 })` injecting a `<span class="diff-removed-widget">…</span>` at the position the text used to occupy.
+3. **User edit regions (orange inline class)** — ranges from `userEditRegions` rendered with `class: 'diff-user-edit'`.
+
+The diff is computed with `diffWords` (from the `diff` package) against flattened plain text, with a block-boundary-aware splitter so decorations never span across list items or paragraphs.
+
+## Server Endpoints
+
+| Endpoint | Method | Purpose |
+| --- | --- | --- |
+| `/api/document` | `GET` | Returns `{ userMd, agentMd, agentBaseline, meta }`. `agentBaseline` is consumed by the client on boot to rehydrate `reviewBaseline`. |
+| `/api/document` | `PUT` | `{ userMd?, meta? }`. Debounced autosave of the editor's current markdown and/or rules. |
+| `/api/document` | `POST` | `{ action: 'accept' \| 'reject' }`. Deletes `.docwriter/agent.md`; on `accept` also clears `meta.userEditRegions`. Does **not** copy `agent.md` over `document.md` — the client's Y.Doc is authoritative. |
+| `/api/render` | `POST` | Runs a single Claude Agent SDK `query()` against `.docwriter/agent.md`, streaming SSE events (`tool_call_start`, `tool_call`, `assistant_text`, `result`, `done`). The `result` event carries `agentMd` and `agentBaseline` for the client to apply. |
+| `/api/history` | `GET` | Recent agent session messages via the SDK's `getSessionMessages`. Client caps the load to the last 12 to avoid pollution after many rounds. |
+| `/api/session` | `GET` / `PUT` / `DELETE` | Runtime state: `sessionId`, `recentActions`, `actionUsageCounts`. |
+| `/api/references` | `GET` | Lists markdown style references from the docwriter-style skill. |
+| `/api/references/[filename]` | `GET` | Reads a specific style reference. |
+| `/api/import-reference` | `POST` | Saves uploaded text as a new style reference. |
+
+### Server-side render lifecycle
+
+The server still runs the shadow-copy dance during a render because the Claude Agent SDK needs a real file:
+
+1. `resetAgentDoc()` — copy `document.md` to `.docwriter/agent.md`. The review baseline lives on the client in the Y.Doc review map, so no server-side baseline file is written.
+2. `startRender(currentMarkdown)` — set in-memory `renderActive = true`, seed `lastSyncedUserMd`.
+3. Build prompt: rules, unified diff vs. `lastMarkdown` if provided, `[[ note ]]` directive handling.
+4. Install PreToolUse hooks matching `Edit|Write` → `syncUserEditsToAgent`, which patches any post-snapshot user edits to `.docwriter/agent.md` so the agent sees the latest text.
+5. `query()` with tools `Read`, `Edit`, `Write`, `Bash`, `Glob`, `Grep`, `WebSearch`, `WebFetch`, `Task` and `settingSources: ['project']` (loads the project's docwriter-style skill).
+6. On stream end: final `syncUserEditsToAgent`, read `.docwriter/agent.md`, emit `result { agentMd }`, `endRender()`, `done`, close stream.
+
+The client receives `agentMd` and feeds it into `applyAgentMarkdown`. The client never looks at `agentBaseline` during the render — it already captured its own `preRenderMd` at submit time. `agentBaseline` is only consumed on *refresh*, to rehydrate a pending review.
+
+## Concurrency
+
+```
+User                      Server                     Agent (SDK)        Filesystem
+ |                          |                              |                   |
+ | POST /api/render         |                              |                   |
+ |------------------------->|                              |                   |
+ |                          | resetAgentDoc()              |                   |
+ |                          |----------------------------->| copy md → agent.md
+ |                          | startRender()                |                   |
+ |                          | query(prompt, hooks)         |                   |
+ |                          |----------------------------->|                   |
+ |                          |                              |                   |
+ | keep typing              |                              |                   |
+ | Y.Doc transaction        |                              |                   |
+ | → ySyncPlugin → Y ops    |                              |                   |
+ | → y-indexeddb persist    |                              |                   |
+ | → onUpdate → writeToDisk |                              |                   |
+ |------------------------->| writeUserDoc('…')            |                   |
+ |                          |----------------------------->|---> document.md  |
+ |                          | (renderActive, skip sync)    |                   |
+ |                          |                              |                   |
+ |                          |                              | Edit tool call    |
+ |                          | PreToolUse hook              |                   |
+ |                          | syncUserEditsToAgent()       |                   |
+ |                          |----------------------------->|---> patch agent.md|
+ |                          |                              | writes agent.md   |
+ |                          |                              |------------------>|
+ |                          |                              |                   |
+ |                          | stream ends                  |                   |
+ |                          | final sync                   |                   |
+ |                          | SSE result { agentMd,        |                   |
+ |<-------------------------|               agentBaseline} |                   |
+ |                          | endRender()                  |                   |
+ |                          |                              |                   |
+ | applyAgentMarkdown       |                              |                   |
+ | ydoc.transact('agent')   |                              |                   |
+ |   → targeted PM replace  |                              |                   |
+ |   → sync plugin → Y ops  |                              |                   |
+ |   → CRDT merge with      |                              |                   |
+ |     concurrent user ops  |                              |                   |
+ | reviewBaseline set       |                              |                   |
+ | Diff overlay renders     |                              |                   |
+ |                          |                              |                   |
+ | Accept or Reject         |                              |                   |
+ | POST /api/document       |                              |                   |
+ |------------------------->| acceptAgentDoc /             |                   |
+ |                          |   rejectAgentDoc             |                   |
+ |                          | (delete agent.md + baseline) |                   |
+```
+
+### Why there's no mutex
+
+- User writes target `document.md`. Agent writes target `.docwriter/agent.md`. Two different files.
+- Both files are written atomically via `writeTextAtomic` (tmp-file plus rename).
+- The in-memory `renderActive` flag (in `document-lock.ts`) only gates one thing: whether `writeUserDoc` also mirrors into `agent.md` eagerly, or defers to the render endpoint's PreToolUse hook.
+- Client-side conflict resolution is the Yjs CRDT, not a hand-written patch apply. The CRDT is what makes concurrent user and agent ops merge deterministically.
 
 ## Key Source Files
 
-- `src/lib/stores.ts` — store definitions, `setProjectedRuntimeView`
-- `src/lib/runtime-canonical.ts` — `reproject()`, `applyCanonicalFileToStores()`, `getCanonicalRuntimeStateFromStores()`
-- `src/lib/types.ts` — DocumentOp types, Atom, Sentence, etc.
-- `src/lib/atomz.ts` — AtomzFileV2 format, block/pin builders, projection functions
-- `src/lib/document-op-utils.ts` — `applyDocumentOp()`
-- `src/lib/document-op-processing.ts` — `buildDocumentOpProcessingPlan()`
-- `src/lib/sync-timing.ts` — timing constants
-- `src/lib/editor/TiptapEditor.svelte` — block-native editor, `syncEditorToBlocks()`
-- `src/lib/components/ContentPane.svelte` — atom pane, pin/section/paragraph mutations via blocks/pins
-- `src/routes/+page.svelte` — main page, agent render flow, op processing
-- `src/lib/server/document-files.ts`
-- `src/lib/server/runtime-state.ts`
-- `src/routes/api/document/+server.ts`
-- `src/routes/api/render/+server.ts`
-- `src/routes/api/session/+server.ts`
-- `src/routes/api/history/+server.ts`
-- `src/routes/api/document-ops/+server.ts`
+### Server
 
-## Future Directions
+- `src/lib/server/document-files.ts` — file paths and `ensureDocWriterDir()` migration.
+- `src/lib/server/document-io.ts` — `readUserDoc` / `writeUserDoc` / `readMeta` / `writeMeta` / `resetAgentDoc` / `acceptAgentDoc` / `rejectAgentDoc` / `syncUserEditsToAgent`.
+- `src/lib/server/document-lock.ts` — `renderActive` flag and `lastSyncedUserMd` memo.
+- `src/lib/server/runtime-state.ts` — `sessionId`, `recentActions`, `actionUsageCounts` in `.docwriter/state.json`.
+- `src/lib/server/file-utils.ts` — `writeTextAtomic`, `writeJsonAtomic`.
+- `src/routes/api/render/+server.ts` — prompt builder, PreToolUse hook, SSE stream.
+- `src/routes/api/document/+server.ts` — `GET` / `PUT` / `POST` handlers.
 
-- **Binary format**: Replace JSON with MessagePack or CBOR for `.atomz` files. Same schema, ~30-50% smaller, faster parse. Matters as documents grow large.
-- **Version snapshots as files**: Store each version as a separate `versions/<timestamp>.atomz` file instead of one big `.atomz-history.json`. Enables cheap listing, diffing, and restoring without loading all versions into memory.
-- **Diff-based versions**: Store only deltas between versions. Reduces storage for large documents with many snapshots.
-- **Consolidate state files**: Merge `.atomz-state.json` + `.atomz-ops.jsonl` + `.atomz-history.json` into a single state file with `{ sessionId, wal: [...], versionPtrs: [...] }`. Fewer files to manage.
-- **Custom file format**: A line-based text format would be more git-diffable than JSON/binary. Trade-off: requires custom parser/serializer.
+### Client
+
+- `src/routes/+page.svelte` — layout, store hydration, render submission, accept/reject, refresh-restore of `reviewBaseline`.
+- `src/lib/stores.ts` — `userMd`, `reviewBaseline`, `rules`, `userEditRegions`, UI and session stores.
+- `src/lib/yjs-doc.ts` — Y.Doc singleton with `y-indexeddb` persistence.
+- `src/lib/yjs-markdown.ts` — `markdownToPMJson` + `seedYDocFromMarkdown` for one-time Y.Doc initialization from `document.md`.
+- `src/lib/yjs-agent.ts` — `applyAgentMarkdown`, `undoAgentChanges`, agent-origin `Y.UndoManager`.
+- `src/lib/editor-extensions.ts` — shared `baseExtensions()` and `collaborativeExtensions(ydoc)`.
+- `src/lib/editor/TiptapEditor.svelte` — the Tiptap + Collaboration editor, `onEditorUpdate` guards, idle countdown.
+- `src/lib/editor/diff-overlay.ts` — the three-layer decoration plugin (inline class for additions and user regions; widget for removals).
+- `src/lib/components/OutlinePane.svelte` — TOC + pending-edit card + `diffLines`-driven summary.
+- `src/lib/components/HistoryPane.svelte` — agent activity log.
+- `src/lib/components/ActionToolbar.svelte` — selection feedback popup.
+- `src/lib/components/RulesPanel.svelte` — rules editor.
+- `src/lib/diff.ts` — `wordDiff`, `unifiedLineDiff`, `markdownToPlainText`.
+
+## Follow-ups
+
+- **Concurrent-edit stress testing.** The CRDT merge path works for simple cases; heavy concurrent typing during a render hasn't been stress-tested.
+- **Pending-review persistence after refresh** works via a pre-agent snapshot captured right before `applyAgentMarkdown` dispatches and stored in the Y.Doc review map (IndexedDB-persisted). Reject-after-refresh replays that snapshot via the same targeted-replace path, so user edits made during the original render also survive the reject.
+- **Agent behavior settings** — `AgentSettings` in `src/lib/types.ts`, persisted in `state.json` via `getAgentSettings`/`setAgentSettings`. The `agency` field (`conservative`/`balanced`/`aggressive`) rewires the prompt via `agencyGuidance()` in `/api/render`; the `trackChanges` field picks whether the agent's Yjs ops are wrapped in an `'agent'` origin (review mode) or left at the default origin (silent merge). Edited via the `AgentDock` popover in the top-right.
+- **Schema migration.** If we add new node types later (tables, images), existing Y.Docs would need migration.
+- **y-indexeddb compaction** is automatic after `PREFERRED_TRIM_SIZE = 500` updates, so Y.Doc growth is bounded.

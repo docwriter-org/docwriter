@@ -1,0 +1,143 @@
+<script lang="ts">
+	import { onMount } from 'svelte';
+	import { Send } from 'lucide-svelte';
+
+	interface Props {
+		onSend: (message: string) => void;
+	}
+	let { onSend }: Props = $props();
+
+	let message = $state('');
+	let textareaEl: HTMLTextAreaElement | null = $state(null);
+
+	function send() {
+		const trimmed = message.trim();
+		if (!trimmed) return;
+		onSend(trimmed);
+		message = '';
+	}
+
+	function onKeyDown(e: KeyboardEvent) {
+		// Cmd/Ctrl+Enter sends. Plain Enter makes a new line (multi-line editing).
+		if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+			e.preventDefault();
+			send();
+		}
+	}
+
+	// Autofocus on mount. MenuBar unmounts+remounts the panel each time the
+	// user hovers a different item, so this fires fresh every open. raf
+	// guarantees the textarea is painted before we grab focus; without it,
+	// the focus can race with whatever stole focus when the hover opened.
+	onMount(() => {
+		requestAnimationFrame(() => textareaEl?.focus());
+	});
+</script>
+
+<div class="chat-panel">
+	<div class="panel-header">
+		<span class="panel-title">Send message</span>
+		<span class="panel-subtitle">free-form request to the agent</span>
+	</div>
+
+	<textarea
+		bind:this={textareaEl}
+		bind:value={message}
+		onkeydown={onKeyDown}
+		placeholder={`Ask the agent anything, e.g.\n• "Add a hook that runs pdflatex after every Edit"\n• "Tighten the first paragraph of every tab"\n• "Create a new tab called outline and fill it from document.md"`}
+		rows="5"
+	></textarea>
+
+	<div class="panel-footer">
+		<span class="hint">⌘↵ to send</span>
+		<button class="send-btn" onclick={send} disabled={!message.trim()}>
+			<Send size={12} />
+			Send
+		</button>
+	</div>
+</div>
+
+<style>
+	.chat-panel {
+		width: 380px;
+		padding: 12px 14px;
+		font-family: 'Inter', -apple-system, sans-serif;
+		font-size: 13px;
+		color: var(--text);
+		display: flex;
+		flex-direction: column;
+		gap: 10px;
+	}
+	.panel-header {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+	}
+	.panel-title {
+		font-size: 12px;
+		font-weight: 600;
+		color: var(--text-faint);
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+	}
+	.panel-subtitle {
+		font-size: 11px;
+		color: var(--text-faint);
+	}
+	textarea {
+		width: 100%;
+		resize: vertical;
+		font-family: inherit;
+		font-size: 13px;
+		line-height: 1.5;
+		color: var(--text);
+		background: var(--bg);
+		border: 1px solid var(--border-light);
+		border-radius: 6px;
+		padding: 10px 12px;
+		outline: none;
+		box-sizing: border-box;
+		transition: border-color 0.15s, box-shadow 0.15s;
+	}
+	textarea:focus {
+		border-color: var(--accent);
+		box-shadow: 0 0 0 3px var(--accent-bg);
+	}
+	textarea::placeholder {
+		color: var(--text-faint);
+		font-size: 12px;
+		line-height: 1.5;
+	}
+	.panel-footer {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+	}
+	.hint {
+		font-size: 11px;
+		color: var(--text-faint);
+	}
+	.send-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		padding: 5px 12px;
+		background: var(--accent-bg);
+		color: var(--accent);
+		border: 1px solid var(--accent-light);
+		border-radius: 5px;
+		font-family: inherit;
+		font-size: 12.5px;
+		font-weight: 500;
+		cursor: pointer;
+	}
+	.send-btn:hover:not(:disabled) {
+		background: var(--accent);
+		color: white;
+		border-color: var(--accent);
+	}
+	.send-btn:disabled {
+		opacity: 0.4;
+		cursor: default;
+	}
+</style>

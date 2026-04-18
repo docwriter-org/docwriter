@@ -18,8 +18,18 @@ Thumbs.db
 !.env.example
 !.env.test
 
-# atomz document (user data)
-document.atomz
+# DocWriter user data
+.docwriter/
+document
+document.txt
+document.md
+notes/
+
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
 
 # Playwright
 .playwright-mcp/

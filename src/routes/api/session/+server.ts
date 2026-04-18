@@ -1,15 +1,31 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { getSessionId, setSessionId } from '$lib/server/runtime-state';
-import { STATE_FILE } from '$lib/server/document-files';
-import { writeFileSync } from 'fs';
+import { getSessionId, getRecentActions, setRecentActions, getActionUsageCounts, setActionUsageCounts } from '$lib/server/runtime-state';
+import { STATE_FILE, AGENT_SCRATCH_DIR } from '$lib/server/document-files';
+import { writeFileSync, existsSync, rmSync } from 'fs';
 
 export const GET: RequestHandler = async () => {
-	return json({ sessionId: getSessionId() });
+	return json({
+		sessionId: getSessionId(),
+		recentActions: getRecentActions(),
+		actionUsageCounts: getActionUsageCounts()
+	});
+};
+
+export const PUT: RequestHandler = async ({ request }) => {
+	const body = await request.json();
+	if (body.recentActions) setRecentActions(body.recentActions);
+	if (body.actionUsageCounts) setActionUsageCounts(body.actionUsageCounts);
+	return json({ ok: true });
 };
 
 export const DELETE: RequestHandler = async () => {
-	// Clear the session ID so the next render starts a fresh session
 	writeFileSync(STATE_FILE, JSON.stringify({}, null, 2));
+	// Agent scratch workspace is session-scoped — wipe on New session so
+	// the next run starts with a clean slate (no stale drafts or notes
+	// from the previous conversation).
+	if (existsSync(AGENT_SCRATCH_DIR)) {
+		rmSync(AGENT_SCRATCH_DIR, { recursive: true, force: true });
+	}
 	return json({ ok: true });
 };

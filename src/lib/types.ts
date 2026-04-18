@@ -1,33 +1,74 @@
-export interface Atom {
-	id: string;
-	subject: string;       // core noun — who/what the sentence is about
-	predicate: string;     // the claim — what's being said
-	children: Atom[];
-	pinnedWords?: string[];
-	transition?: string;   // transition word/phrase before this atom's sentence (e.g., "Yet", "However")
-}
-
-/** @deprecated Use Atom instead */
-export type Fragment = Atom;
-
-export const TRANSITIONS = [
-	'', 'And', 'But', 'Yet', 'So', 'Or', 'Nor', 'For',
-	'However', 'Moreover', 'Furthermore', 'Meanwhile',
-	'Nevertheless', 'Instead', 'Similarly', 'Conversely',
-	'In contrast', 'As a result', 'In other words'
-] as const;
-
-// An atom = subject + predicate. Keep both minimal.
-export const ATOM_CONSTRAINTS = {
-	maxTotalWords: 12,     // subject + predicate combined
-	subjectRequired: true,
-	predicateRequired: true,
-} as const;
-
 export interface Rule {
 	id: string;
 	text: string;
-	viewModes?: string[];
+}
+
+/** Rule the agent proposed mid-render. Shows as a pending card in the
+ * OutlinePane; Accept adds it to the `rules` list, Reject dismisses it. */
+export interface ProposedRule {
+	id: string;
+	text: string;
+	reason?: string;
+	timestamp: number;
+}
+
+/** One round of agent edits pending the user's review. The outline pane
+ * shows one card per round so each can be accepted/rejected independently,
+ * while the editor's diff overlay composes them all into a single view
+ * anchored at the EARLIEST round's `beforeMd`. */
+export interface PendingReviewRound {
+	id: string;
+	/** Editor markdown captured immediately before this round applied.
+	 * Used as the baseline for the diff overlay (when this is the earliest
+	 * pending round) and as the restore target when the user rejects this
+	 * round. */
+	beforeMd: string;
+	/** Agent's output for this round — recorded for auditing / diff
+	 * summary; the Y.Doc already has it merged in. */
+	afterMd: string;
+	/** User-facing prompt or trigger that produced this round. */
+	trigger?: string;
+	timestamp: number;
+	/** Heuristic classification of this round's size, computed at write
+	 * time via a char-count threshold. `tiny` edits (e.g. a typo fix,
+	 * a single-word tweak) render subtler — softer in the editor
+	 * overlay, compact inline pill in the outline — so small corrections
+	 * don't look like a big paragraph-level rewrite. `big` edits get the
+	 * full green/red diff treatment. */
+	kind: 'tiny' | 'big';
+	/** How many AGENT_ORIGIN undo steps this round contributed to the
+	 * tab's Y.UndoManager. With incremental streaming (one apply per
+	 * Edit/Write tool call + one final apply at result time), this can be
+	 * >1 per round. Reject pops this many steps to fully rewind. Defaults
+	 * to 1 when absent (backward compat with rounds written before
+	 * streaming). */
+	stepCount?: number;
+}
+
+/** Character-delta threshold for classifying rounds as `tiny` vs `big`.
+ * Sum of added + removed characters below this is "tiny". */
+export const TINY_EDIT_THRESHOLD = 25;
+
+/** Shell hook the agent proposed mid-render. Accept appends to
+ * `.docwriter/hooks.json`; Reject dismisses it. */
+export type ProposedHookEvent =
+	| 'PreToolUse'
+	| 'PostToolUse'
+	| 'PostToolUseFailure'
+	| 'UserPromptSubmit'
+	| 'Stop'
+	| 'SubagentStop'
+	| 'SessionStart'
+	| 'SessionEnd'
+	| 'Notification';
+
+export interface ProposedHook {
+	id: string;
+	event: ProposedHookEvent;
+	matcher?: string;
+	command: string;
+	reason?: string;
+	timestamp: number;
 }
 
 export interface Action {
@@ -44,125 +85,53 @@ export interface Annotation {
 	action: Action;
 }
 
-export interface Sentence {
-	text: string;
-	frags: string[];
-	para: number;
-}
-
 export interface InlineFeedback {
 	text: string;
 	x: number;
 	y: number;
 }
 
-export interface EditorPin {
-	text: string;
-	para: number;
-}
-
-interface DocumentOpBase {
-	id: string;
-	createdAt: number;
-}
-
-export interface EditAtomOp extends DocumentOpBase {
-	type: 'edit_atom';
-	fragId: string;
-	subject: string;
-	predicate: string;
-}
-
-export interface PinAtomWordOp extends DocumentOpBase {
-	type: 'pin_atom_word';
-	fragId: string;
-	word: string;
-	pinned: boolean;
-}
-
-export interface PinProseTextOp extends DocumentOpBase {
-	type: 'pin_prose_text';
-	text: string;
-	para: number;
-	linkedFragIds: string[];
-}
-
-export interface AddAtomOp extends DocumentOpBase {
-	type: 'add_atom';
-	atom: { id: string; subject: string; predicate: string };
-	parentId?: string;       // if sub-atom, the parent atom id
-	index: number;           // insertion position
-}
-
-export interface DeleteAtomOp extends DocumentOpBase {
-	type: 'delete_atom';
-	atomId: string;
-	subject: string;         // for agent context
-	predicate: string;       // for agent context
-}
-
-export interface ReorderAtomsOp extends DocumentOpBase {
-	type: 'reorder_atoms';
-	atomId: string;
-	fromIndex: number;
-	toIndex: number;
-	parentId?: string;       // if reordering children within a parent
-}
-
-export interface ReplaceRulesOp extends DocumentOpBase {
-	type: 'replace_rules';
-	rules: Rule[];
-}
-
-export interface FeedbackRequestOp extends DocumentOpBase {
-	type: 'feedback_request';
-	description: string;
-}
-
-export interface UpdateBlocksOp extends DocumentOpBase {
-	type: 'update_blocks';
-	blocks: import('$lib/atomz').AtomzBlock[];
-	source: 'editor' | 'structure';
-}
-
-export interface UpdatePinsOp extends DocumentOpBase {
-	type: 'update_pins';
-	pins: import('$lib/atomz').AtomzPin[];
-}
-
-export type DocumentOp =
-	| EditAtomOp
-	| PinAtomWordOp
-	| PinProseTextOp
-	| AddAtomOp
-	| DeleteAtomOp
-	| ReorderAtomsOp
-	| ReplaceRulesOp
-	| FeedbackRequestOp
-	| UpdateBlocksOp
-	| UpdatePinsOp;
-
-type NewOp<T extends DocumentOpBase> = Omit<T, 'id' | 'createdAt'> & Partial<Pick<DocumentOpBase, 'id' | 'createdAt'>>;
-export type NewDocumentOp =
-	| NewOp<EditAtomOp>
-	| NewOp<PinAtomWordOp>
-	| NewOp<PinProseTextOp>
-	| NewOp<AddAtomOp>
-	| NewOp<DeleteAtomOp>
-	| NewOp<ReorderAtomsOp>
-	| NewOp<ReplaceRulesOp>
-	| NewOp<FeedbackRequestOp>
-	| NewOp<UpdateBlocksOp>
-	| NewOp<UpdatePinsOp>;
-
-export interface Section {
-	title: string;
-	beforeAtomIndex: number;
-}
-
 export type HistoryEntry =
-	| { type: 'user_action'; timestamp: number; description: string }
+	| {
+			type: 'user_action';
+			timestamp: number;
+			description: string;
+			/** Per-tab unified line diffs (tabId → diff text) summarising what
+			 * the user changed since the previous render. Populated only for
+			 * submit events where at least one tab has a non-empty diff. */
+			tabDiffs?: Record<string, string>;
+	  }
 	| { type: 'tool_call'; timestamp: number; tool_name: string; input: Record<string, unknown>; durationMs?: number; subagent?: boolean }
 	| { type: 'assistant_text'; timestamp: number; text: string }
 	| { type: 'render_start'; timestamp: number; trigger: string }
-	| { type: 'render_end'; timestamp: number; success: boolean; durationMs?: number };
+	| { type: 'render_end'; timestamp: number; success: boolean; durationMs?: number }
+	| {
+			type: 'hook_run';
+			timestamp: number;
+			hookId: string;
+			event: string; // PostToolUse | PreToolUse | Stop
+			command: string;
+			status: 'running' | 'done' | 'failed';
+			exitCode?: number;
+			stdout?: string;
+			stderr?: string;
+			durationMs?: number;
+	  };
+
+/** Agent behavior settings. Persisted to .docwriter/state.json.
+ *
+ *  - `agency`: how eager the agent is to make edits. `conservative` keeps
+ *    the current "default to NO edits" posture; `balanced` makes one focused
+ *    improvement per round when there's clearly something to do; `aggressive`
+ *    proactively rewrites for clarity, tightness, and flow.
+ *  - `trackChanges`: when true (default), agent edits land behind the
+ *    green/red diff overlay with an Accept/Reject card. When false, the
+ *    agent's changes merge silently into the doc — no review step, no
+ *    overlay. Ctrl+Z still works because agent ops are then applied with
+ *    the default origin (user undo stack).
+ */
+export interface AgentSettings {
+	agency: 'conservative' | 'balanced' | 'aggressive';
+	trackChanges: boolean;
+}
+
