@@ -81,8 +81,12 @@ export interface Action {
 
 export interface Annotation {
 	id: string;
-	text: string;
-	action: Action;
+	tabId: string;
+	excerpt: string;
+	comment: string;
+	from: number;
+	to: number;
+	timestamp: number;
 }
 
 export interface InlineFeedback {
@@ -100,11 +104,47 @@ export type HistoryEntry =
 			 * the user changed since the previous render. Populated only for
 			 * submit events where at least one tab has a non-empty diff. */
 			tabDiffs?: Record<string, string>;
+			/** Supporting quote shown under the description — e.g. the passage
+			 * a feedback action was applied to. Full text of the trigger
+			 * already goes to the agent; this is purely for the history pane
+			 * label. */
+			quote?: string;
 	  }
 	| { type: 'tool_call'; timestamp: number; tool_name: string; input: Record<string, unknown>; durationMs?: number; subagent?: boolean }
 	| { type: 'assistant_text'; timestamp: number; text: string }
+	| { type: 'assistant_thinking'; timestamp: number; text: string }
 	| { type: 'render_start'; timestamp: number; trigger: string }
 	| { type: 'render_end'; timestamp: number; success: boolean; durationMs?: number }
+	| {
+			type: 'status';
+			timestamp: number;
+			status: 'compacting' | 'requesting' | null;
+			compactResult?: 'success' | 'failed';
+			error?: string;
+	  }
+	| {
+			type: 'notification';
+			timestamp: number;
+			text: string;
+			priority?: 'low' | 'medium' | 'high' | 'immediate';
+	  }
+	| {
+			type: 'task';
+			timestamp: number;
+			taskId: string;
+			phase: 'started' | 'progress' | 'updated' | 'completed' | 'failed' | 'stopped';
+			description?: string;
+			summary?: string;
+			taskType?: string;
+			lastToolName?: string;
+	  }
+	| {
+			type: 'tool_progress';
+			timestamp: number;
+			tool_name: string;
+			elapsedSeconds: number;
+			taskId?: string;
+	  }
 	| {
 			type: 'hook_run';
 			timestamp: number;
@@ -134,4 +174,3 @@ export interface AgentSettings {
 	agency: 'conservative' | 'balanced' | 'aggressive';
 	trackChanges: boolean;
 }
-

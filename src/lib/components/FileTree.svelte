@@ -17,7 +17,9 @@
 		FileCode,
 		FileJson,
 		FileCog,
-		ChevronRight
+		ChevronRight,
+		FilePlus2,
+		FolderPlus
 	} from 'lucide-svelte';
 
 	interface Props {
@@ -40,6 +42,11 @@
 		'': { expanded: true, loading: false }
 	});
 	let rootEntries = $state<FileEntry[] | null>(null);
+	let selectedPath = $state<string | null>(null);
+	let createDraft = $state<{ parentPath: string; kind: 'file' | 'folder'; value: string } | null>(
+		null
+	);
+	let createInput: HTMLInputElement | null = $state(null);
 
 	async function fetchEntries(path: string): Promise<FileEntry[]> {
 		const res = await fetch(`/api/files?path=${encodeURIComponent(path)}`);
@@ -50,6 +57,13 @@
 
 	async function loadRoot() {
 		rootEntries = await fetchEntries('');
+	}
+
+	function entryMetaFor(path: string) {
+		return {
+			watched: path === 'notes' || path.startsWith('notes/'),
+			internal: path === '.docwriter' || path.startsWith('.docwriter/')
+		};
 	}
 
 	async function toggleFolder(entry: FileEntry) {
@@ -77,6 +91,14 @@
 
 	onMount(() => void loadRoot());
 
+	$effect(() => {
+		if (!createDraft) return;
+		setTimeout(() => {
+			createInput?.focus();
+			createInput?.select();
+		}, 0);
+	});
+
 	// ── Context menu ──────────────────────────────────────────────────
 	/** Active right-click menu target + its screen coords. */
 	let menu = $state<{ entry: FileEntry; x: number; y: number } | null>(null);
@@ -84,6 +106,7 @@
 	function openMenu(e: MouseEvent, entry: FileEntry) {
 		e.preventDefault();
 		e.stopPropagation();
+		selectedPath = entry.path;
 		menu = { entry, x: e.clientX, y: e.clientY };
 	}
 
@@ -174,12 +197,52 @@
 
 	async function doNewChild(entry: FileEntry, kind: 'file' | 'folder') {
 		closeMenu();
-		if (entry.kind !== 'folder') return;
-		const name = window.prompt(
-			kind === 'folder' ? 'New folder name:' : 'New file name (e.g. notes.md):'
-		);
-		if (!name || !name.trim()) return;
-		const newPath = `${entry.path}/${name.trim()}`;
+		beginCreate(kind, entry.path);
+	}
+
+	function parentPathForSelection() {
+		if (!selectedPath) return '';
+		const selectedState = entryStateFor(selectedPath);
+		if (selectedState?.kind === 'folder') return selectedPath;
+		return parentOf(selectedPath);
+	}
+
+	function entryStateFor(path: string): { kind: 'file' | 'folder' } | null {
+		const search = (entries: FileEntry[] | undefined | null): FileEntry | null => {
+			if (!entries) return null;
+			for (const entry of entries) {
+				if (entry.path === path) return entry;
+				const found = search(nodeState[entry.path]?.children);
+				if (found) return found;
+			}
+			return null;
+		};
+		const found = search(rootEntries);
+		return found ? { kind: found.kind } : null;
+	}
+
+	function beginCreate(kind: 'file' | 'folder', forcedParentPath: string | null = null) {
+		const parentPath = forcedParentPath ?? parentPathForSelection();
+		if (parentPath) {
+			const cur = nodeState[parentPath] ?? { expanded: false, loading: false };
+			nodeState[parentPath] = { ...cur, expanded: true };
+		}
+		createDraft = { parentPath, kind, value: '' };
+	}
+
+	function cancelCreate() {
+		createDraft = null;
+	}
+
+	async function commitCreate() {
+		if (!createDraft) return;
+		const { parentPath, kind } = createDraft;
+		const name = createDraft.value.trim();
+		if (!name) {
+			cancelCreate();
+			return;
+		}
+		const newPath = parentPath ? `${parentPath}/${name}` : name;
 		try {
 			const res = await fetch('/api/files', {
 				method: 'POST',
@@ -187,10 +250,25 @@
 				body: JSON.stringify({ path: newPath, kind })
 			});
 			if (!res.ok) throw new Error(await res.text());
-			// Force the folder to be expanded and reload its children.
-			const cur = nodeState[entry.path] ?? { expanded: false, loading: false };
-			nodeState[entry.path] = { ...cur, expanded: true };
-			await refreshFolder(entry.path);
+			createDraft = null;
+			if (parentPath) {
+				// Force the folder to be expanded and reload its children.
+				const cur = nodeState[parentPath] ?? { expanded: false, loading: false };
+				nodeState[parentPath] = { ...cur, expanded: true };
+				await refreshFolder(parentPath);
+			} else {
+				await loadRoot();
+			}
+			if (kind === 'file') {
+				const meta = entryMetaFor(newPath);
+				selectedPath = newPath;
+				onOpenFile?.({
+					name,
+					kind: 'file',
+					path: newPath,
+					...meta
+				});
+			}
 		} catch (e) {
 			window.alert(`Create failed: ${e instanceof Error ? e.message : String(e)}`);
 		}
@@ -198,13 +276,41 @@
 </script>
 
 <div class="file-tree">
-	<div class="tree-header">Files</div>
+	<div class="tree-header-row">
+		<div class="tree-header">Files</div>
+		<div class="tree-actions">
+			<button class="tree-action-btn" title="New file" onclick={() => beginCreate('file')}>
+				<FilePlus2 size={13} />
+			</button>
+			<button
+				class="tree-action-btn"
+				title="New folder"
+				onclick={() => beginCreate('folder')}
+			>
+				<FolderPlus size={13} />
+			</button>
+		</div>
+	</div>
 	{#if rootEntries === null}
 		<div class="tree-empty">Loading…</div>
 	{:else if rootEntries.length === 0}
-		<div class="tree-empty">Empty workspace.</div>
+		<div class="tree-empty-block">
+			<div class="tree-empty">Empty workspace.</div>
+			<div class="tree-empty-actions">
+				<button class="tree-empty-btn" onclick={() => beginCreate('file')}>New file</button>
+				<button class="tree-empty-btn" onclick={() => beginCreate('folder')}>New folder</button>
+			</div>
+			{#if createDraft && createDraft.parentPath === ''}
+				<ul class="tree-list">
+					{@render draftNode(0)}
+				</ul>
+			{/if}
+		</div>
 	{:else}
 		<ul class="tree-list">
+			{#if createDraft && createDraft.parentPath === ''}
+				{@render draftNode(0)}
+			{/if}
 			{#each rootEntries as entry (entry.path)}
 				{@render node(entry, 0)}
 			{/each}
@@ -242,6 +348,7 @@
 {#snippet node(entry: FileEntry, depth: number)}
 	{@const st = nodeState[entry.path]}
 	{@const isActive = activePath === entry.path}
+	{@const isSelected = selectedPath === entry.path}
 	{@const Icon = entry.kind === 'folder' ? (st?.expanded ? FolderOpen : Folder) : iconFor(entry.name, entry.internal)}
 	<li>
 		<!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -249,10 +356,12 @@
 		<div
 			class="tree-row"
 			class:active={isActive}
+			class:selected={isSelected}
 			class:watched={entry.watched}
 			class:internal={entry.internal}
 			style:padding-left="{4 + depth * 14}px"
 			onclick={() => {
+				selectedPath = entry.path;
 				if (entry.kind === 'folder') void toggleFolder(entry);
 				else onOpenFile?.(entry);
 			}}
@@ -272,16 +381,52 @@
 				<div class="tree-empty indented" style:padding-left="{18 + depth * 14}px">Loading…</div>
 			{:else if st.children && st.children.length > 0}
 				<ul class="tree-list">
+					{#if createDraft && createDraft.parentPath === entry.path}
+						{@render draftNode(depth + 1)}
+					{/if}
 					{#each st.children as child (child.path)}
 						{@render node(child, depth + 1)}
 					{/each}
 				</ul>
 			{:else}
-				<div class="tree-empty indented" style:padding-left="{18 + depth * 14}px">
-					(empty)
-				</div>
+				{#if createDraft && createDraft.parentPath === entry.path}
+					<ul class="tree-list">
+						{@render draftNode(depth + 1)}
+					</ul>
+				{:else}
+					<div class="tree-empty indented" style:padding-left="{18 + depth * 14}px">
+						(empty)
+					</div>
+				{/if}
 			{/if}
 		{/if}
+	</li>
+{/snippet}
+
+{#snippet draftNode(depth: number)}
+	{@const DraftIcon = createDraft?.kind === 'folder' ? Folder : FileText}
+	<li>
+		<div class="tree-row draft" style:padding-left="{4 + depth * 14}px">
+			<span class="chev" aria-hidden="true"></span>
+			<DraftIcon size={13} />
+			<input
+				class="tree-inline-input"
+				bind:this={createInput}
+				bind:value={createDraft!.value}
+				placeholder={createDraft?.kind === 'folder' ? 'New folder' : 'New file'}
+				onblur={commitCreate}
+				onkeydown={(e) => {
+					if (e.key === 'Enter') {
+						e.preventDefault();
+						void commitCreate();
+					}
+					if (e.key === 'Escape') {
+						e.preventDefault();
+						cancelCreate();
+					}
+				}}
+			/>
+		</div>
 	</li>
 {/snippet}
 
@@ -297,7 +442,51 @@
 		color: var(--text-faint);
 		text-transform: uppercase;
 		letter-spacing: 0.05em;
+	}
+	.tree-header-row {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
 		margin-bottom: 6px;
+	}
+	.tree-actions {
+		display: flex;
+		gap: 4px;
+	}
+	.tree-action-btn,
+	.tree-empty-btn {
+		border: 1px solid var(--border-light);
+		background: var(--bg-surface);
+		color: var(--text-secondary);
+		border-radius: 5px;
+		cursor: pointer;
+		font: inherit;
+	}
+	.tree-action-btn {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 24px;
+		height: 24px;
+		padding: 0;
+	}
+	.tree-action-btn:hover,
+	.tree-empty-btn:hover {
+		background: var(--bg-hover);
+		color: var(--text);
+	}
+	.tree-empty-block {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+	.tree-empty-actions {
+		display: flex;
+		gap: 6px;
+	}
+	.tree-empty-btn {
+		padding: 5px 8px;
 	}
 	.tree-empty {
 		color: var(--text-faint);
@@ -327,9 +516,17 @@
 	.tree-row:hover {
 		background: var(--bg-hover);
 	}
+	.tree-row.selected {
+		background: var(--bg-hover);
+		color: var(--text);
+	}
 	.tree-row.active {
 		background: var(--accent-bg);
 		color: var(--accent);
+	}
+	.tree-row.draft {
+		background: var(--bg-surface);
+		color: var(--text);
 	}
 	.chev {
 		display: inline-flex;
@@ -347,6 +544,20 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 		flex: 1;
+	}
+	.tree-inline-input {
+		flex: 1;
+		min-width: 0;
+		border: 1px solid var(--accent);
+		background: var(--bg);
+		color: var(--text);
+		border-radius: 4px;
+		padding: 2px 6px;
+		font: inherit;
+		outline: none;
+	}
+	.tree-inline-input::placeholder {
+		color: var(--text-faint);
 	}
 
 	/* Right-click menu — fixed-position, floats above everything. Mirrors

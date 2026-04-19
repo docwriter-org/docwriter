@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { Cat } from 'lucide-svelte';
+	import { Cat, Send } from 'lucide-svelte';
+	import ChatPanel from './ChatPanel.svelte';
 	import {
 		isRendering,
 		submitCountdown,
@@ -12,8 +13,9 @@
 
 	interface Props {
 		onSubmit: () => void;
+		onSendMessage: (message: string) => void;
 	}
-	let { onSubmit }: Props = $props();
+	let { onSubmit, onSendMessage }: Props = $props();
 
 	let rendering = $state(false);
 	isRendering.subscribe((v) => (rendering = v));
@@ -65,6 +67,35 @@
 			? ['var(--accent)', 'var(--accent-light)', 'var(--accent)']
 			: ['var(--accent-light)', 'var(--accent-light)', 'var(--accent-light)']
 	);
+
+	let chatOpen = $state(false);
+	let chatPopoverEl: HTMLDivElement | null = $state(null);
+
+	function toggleChat() {
+		chatOpen = !chatOpen;
+	}
+
+	function sendMessage(message: string) {
+		onSendMessage(message);
+		chatOpen = false;
+	}
+
+	$effect(() => {
+		if (!chatOpen) return;
+		function onDown(e: MouseEvent) {
+			const target = e.target as Node | null;
+			if (chatPopoverEl && target && !chatPopoverEl.contains(target)) chatOpen = false;
+		}
+		function onKey(e: KeyboardEvent) {
+			if (e.key === 'Escape') chatOpen = false;
+		}
+		document.addEventListener('mousedown', onDown);
+		document.addEventListener('keydown', onKey);
+		return () => {
+			document.removeEventListener('mousedown', onDown);
+			document.removeEventListener('keydown', onKey);
+		};
+	});
 </script>
 
 <div class="agent-dock">
@@ -116,12 +147,28 @@
 			</button>
 		{/snippet}
 	</ShineBorder>
-	{#if cost.rounds > 0}
-		<div
-			class="dock-cost"
-			title={`${cost.rounds} round${cost.rounds === 1 ? '' : 's'} · ${formatTokens(cost.inputTokens)} in / ${formatTokens(cost.outputTokens)} out · ${formatTokens(cost.cacheReadTokens)} cache read`}
+	<div class="dock-footer">
+		{#if cost.rounds > 0}
+			<div
+				class="dock-cost"
+				title={`${cost.rounds} round${cost.rounds === 1 ? '' : 's'} · ${formatTokens(cost.inputTokens)} in / ${formatTokens(cost.outputTokens)} out · ${formatTokens(cost.cacheReadTokens)} cache read`}
+			>
+				{formatCost(cost.totalCostUsd)}
+			</div>
+		{/if}
+		<button
+			class="dock-message-btn"
+			type="button"
+			aria-pressed={chatOpen}
+			title="Send message"
+			onclick={toggleChat}
 		>
-			{formatCost(cost.totalCostUsd)}
+			<Send size={12} />
+		</button>
+	</div>
+	{#if chatOpen}
+		<div class="dock-chat-popover" bind:this={chatPopoverEl}>
+			<ChatPanel onSend={sendMessage} />
 		</div>
 	{/if}
 </div>
@@ -138,6 +185,12 @@
 		gap: 6px;
 		font-family: 'Inter', -apple-system, sans-serif;
 	}
+	.dock-footer {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		position: relative;
+	}
 	/* Tiny cost badge under the dock card. Monospace digits so the width
 	 * stays stable as cost grows. Hover for full usage breakdown. */
 	.dock-cost {
@@ -151,6 +204,35 @@
 		font-variant-numeric: tabular-nums;
 		cursor: default;
 		user-select: none;
+	}
+	.dock-message-btn {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 24px;
+		height: 24px;
+		padding: 0;
+		border-radius: 999px;
+		border: 1px solid var(--border-light);
+		background: var(--bg-surface);
+		color: var(--accent);
+		cursor: pointer;
+	}
+	.dock-message-btn:hover,
+	.dock-message-btn[aria-pressed='true'] {
+		background: var(--accent-bg);
+		border-color: var(--accent-light);
+	}
+	.dock-chat-popover {
+		position: absolute;
+		top: calc(100% + 8px);
+		right: 0;
+		z-index: 20;
+		background: var(--bg-elevated);
+		border: 1px solid var(--border-light);
+		border-radius: 10px;
+		box-shadow: 0 14px 40px rgba(0, 0, 0, 0.14);
+		overflow: hidden;
 	}
 
 	/* One clickable card — mascot + label + status, all in a single button.

@@ -3,6 +3,9 @@
 	"version": "0.0.1",
 	"description": "AI-assisted markdown writing editor — run from any repo directory",
 	"type": "module",
+	"engines": {
+		"node": "^20.19 || ^22.12 || >=24"
+	},
 	"bin": {
 		"docwriter": "./bin/docwriter.js"
 	},
@@ -11,7 +14,11 @@
 		"build/"
 	],
 	"scripts": {
+		"linkme": "npm run setup:link",
+		"setup:link": "npm install && npm run build && npm link",
 		"dev": "vite dev",
+		"dev:workspace": "node bin/docwriter-dev.js",
+		"dev:evals": "node bin/docwriter-dev.js --new-session /Users/shreyashankar/Documents/projects/ai-evals-for-engineers",
 		"build": "vite build",
 		"start": "node bin/docwriter.js",
 		"preview": "vite preview",
@@ -24,7 +31,6 @@
 	},
 	"devDependencies": {
 		"@playwright/test": "^1.59.1",
-		"@sveltejs/adapter-auto": "^7.0.0",
 		"@sveltejs/adapter-node": "^5.5.4",
 		"@sveltejs/kit": "^2.50.2",
 		"@sveltejs/vite-plugin-svelte": "^6.2.4",
@@ -37,8 +43,6 @@
 	},
 	"dependencies": {
 		"@anthropic-ai/claude-agent-sdk": "^0.2.92",
-		"@chenglou/pretext": "^0.0.4",
-		"@playwright/mcp": "^0.0.70",
 		"@tiptap/core": "^3.22.3",
 		"@tiptap/extension-collaboration": "^3.22.3",
 		"@tiptap/extension-highlight": "^3.22.3",

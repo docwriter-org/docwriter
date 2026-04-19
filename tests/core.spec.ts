@@ -1,5 +1,6 @@
 import { test, expect } from './fixtures';
-import { readFileSync } from 'fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'fs';
+import { tmpdir } from 'os';
 import { join } from 'path';
 import {
 	freshPage,
@@ -19,9 +20,8 @@ test.describe('boot', () => {
 	test('loads with at least one tab and a title', async ({ page }) => {
 		await freshPage(page);
 		await expect(page).toHaveTitle('DocWriter');
-		await expect(page.locator('.tab.active')).toHaveCount(1);
-		// Agent dock mascot is visible and sleeping.
-		await expect(page.locator('.mascot-status')).toContainText(/sleeping/);
+		await expect(page.locator('.tab.active')).toHaveCount(0);
+		await expect(page.locator('.empty-editor-title')).toContainText('No file open');
 	});
 });
 
@@ -31,8 +31,10 @@ test.describe('tabs: create, switch, isolate', () => {
 		isolatedServer
 	}) => {
 		await freshPage(page);
-		const a = `t-a-${SUFFIX}`;
-		const b = `t-b-${SUFFIX}`;
+		// Tab IDs are now workspace-relative paths; the extension drives
+		// markdown-vs-plain, so we explicitly use `.md` here.
+		const a = `t-a-${SUFFIX}.md`;
+		const b = `t-b-${SUFFIX}.md`;
 
 		await createTab(page, a);
 		await setEditor(page, `# ${a}\n\nContent-A`);
@@ -61,10 +63,10 @@ test.describe('tabs: create, switch, isolate', () => {
 		expect(dbs).toContain(`docwriter-doc:${a}`);
 		expect(dbs).toContain(`docwriter-doc:${b}`);
 
-		// On-disk files match — read from this worker's isolated notes/.
-		const notes = join(isolatedServer.root, 'notes');
-		const fileA = readFileSync(join(notes, `${a}.md`), 'utf-8');
-		const fileB = readFileSync(join(notes, `${b}.md`), 'utf-8');
+		// On-disk files live at ROOT/<tabId> directly (no more flat notes/
+		// dir). tabId IS the relative path, so no extension is appended.
+		const fileA = readFileSync(join(isolatedServer.root, a), 'utf-8');
+		const fileB = readFileSync(join(isolatedServer.root, b), 'utf-8');
 		expect(fileA).toContain('Content-A');
 		expect(fileB).toContain('Content-B');
 		expect(fileA).not.toContain('Content-B');
@@ -72,7 +74,7 @@ test.describe('tabs: create, switch, isolate', () => {
 
 	test('delete tab prompts a confirm dialog and only deletes on accept', async ({ page }) => {
 		await freshPage(page);
-		const name = `t-del-${SUFFIX}`;
+		const name = `t-del-${SUFFIX}.md`;
 		await createTab(page, name);
 		const tabRow = page.locator(`.tab:has(.tab-name:has-text("${name}"))`);
 		const closeBtn = tabRow.locator('.tab-close');
@@ -112,15 +114,29 @@ test.describe('plain-text tabs', () => {
 
 		// And the file on disk is exactly the same bytes — no markdown
 		// serializer touched it.
-		const onDisk = readFileSync(join(isolatedServer.root, 'notes', name), 'utf-8');
+		const onDisk = readFileSync(join(isolatedServer.root, name), 'utf-8');
 		expect(onDisk).toBe(payload);
+	});
+
+	test('nested-path tabs round-trip through the filesystem', async ({
+		page,
+		isolatedServer
+	}) => {
+		await freshPage(page);
+		// Tab IDs can be any workspace-relative path, including subdirs.
+		const name = `drafts-${SUFFIX}/chapter.md`;
+		await createTab(page, name);
+		await setEditor(page, `# Chapter\n\nNested body.`);
+		await afterAutosave(page);
+		const onDisk = readFileSync(join(isolatedServer.root, name), 'utf-8');
+		expect(onDisk).toContain('Nested body');
 	});
 });
 
 test.describe('persistence', () => {
 	test('typing survives a page reload', async ({ page }) => {
 		await freshPage(page);
-		const name = `t-reload-${SUFFIX}`;
+		const name = `t-reload-${SUFFIX}.md`;
 		await createTab(page, name);
 		const marker = `reload-${SUFFIX}`;
 		await setEditor(page, `# ${name}\n\n${marker}`);
@@ -131,5 +147,55 @@ test.describe('persistence', () => {
 		await page.waitForFunction(() => !!(window as any).__docwriterEditor);
 		await switchTab(page, name);
 		expect(await getEditorText(page)).toContain(marker);
+	});
+
+	test('new agent session preserves tabs after reload', async ({ page }) => {
+		await freshPage(page);
+		const name = `t-session-${SUFFIX}.md`;
+		await createTab(page, name);
+		await setEditor(page, `# ${name}\n\nsession marker ${SUFFIX}`);
+		await afterAutosave(page);
+
+		await page.locator('.history-pane .clear-btn').click();
+		await page.reload();
+		await page.waitForSelector('.tab-bar');
+		await page.waitForFunction(() => !!(window as any).__docwriterEditor);
+
+		await expect(page.locator(`.tab .tab-name:has-text("${name}")`)).toBeVisible();
+		await switchTab(page, name);
+		expect(await getEditorText(page)).toContain(`session marker ${SUFFIX}`);
+	});
+});
+
+test.describe('server path safety', () => {
+	test('file APIs reject writes through symlinked directories outside the workspace', async ({
+		isolatedServer
+	}) => {
+		const outside = mkdtempSync(join(tmpdir(), `docwriter-outside-${SUFFIX}-`));
+		try {
+			symlinkSync(outside, join(isolatedServer.root, 'escape'), 'dir');
+
+			const createRes = await fetch(`${isolatedServer.baseURL}/api/files`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ path: 'escape/new.txt', content: 'blocked' })
+			});
+			expect(createRes.status).toBe(400);
+
+			const writeRes = await fetch(
+				`${isolatedServer.baseURL}/api/file-content?path=${encodeURIComponent('escape/direct.txt')}`,
+				{
+					method: 'PUT',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ content: 'blocked' })
+				}
+			);
+			expect(writeRes.status).toBe(400);
+
+			expect(existsSync(join(outside, 'new.txt'))).toBe(false);
+			expect(existsSync(join(outside, 'direct.txt'))).toBe(false);
+		} finally {
+			rmSync(outside, { recursive: true, force: true });
+		}
 	});
 });

@@ -189,3 +189,10 @@ export function rejectAgentDoc(tabId: string) {
 	const agentPath = tabAgentFile(tabId);
 	if (existsSync(agentPath)) unlinkSync(agentPath);
 }
+
+/** Session reset cleanup: discard every open tab's transient agent shadow. */
+export function clearAllAgentDocs() {
+	for (const tabId of getTabsState().order) {
+		rejectAgentDoc(tabId);
+	}
+}

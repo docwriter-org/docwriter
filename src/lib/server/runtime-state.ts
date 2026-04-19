@@ -81,6 +81,16 @@ export function setSessionId(sessionId: string) {
 	writeRuntimeState({ ...readRuntimeState(), sessionId });
 }
 
+export function clearSessionState() {
+	writeRuntimeState({
+		...readRuntimeState(),
+		sessionId: undefined,
+		recentActions: [],
+		actionUsageCounts: {},
+		userEditRegions: []
+	});
+}
+
 export function getRecentActions(): RuntimeState['recentActions'] {
 	return readRuntimeState().recentActions || [];
 }

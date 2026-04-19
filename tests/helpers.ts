@@ -27,7 +27,6 @@ export async function freshPage(page: Page) {
 	});
 	await page.reload();
 	await page.waitForSelector('.tab-bar');
-	await page.waitForFunction(() => !!(window as any).__docwriterEditor);
 }
 
 export async function createTab(page: Page, name: string) {

@@ -71,7 +71,7 @@ test.describe('submit user_action diff', () => {
 	}) => {
 		await stubRender(page);
 		await freshPage(page);
-		const tab = `t-flush-${SUFFIX}`;
+		const tab = `t-flush-${SUFFIX}.md`;
 		await createTab(page, tab);
 
 		// Seed initial content + register the agent's view of it via the
@@ -108,7 +108,7 @@ test.describe('submit user_action diff', () => {
 	test('lastAgentMd persists across reload (no spurious "first render")', async ({ page }) => {
 		await stubRender(page);
 		await freshPage(page);
-		const tab = `t-persist-${SUFFIX}`;
+		const tab = `t-persist-${SUFFIX}.md`;
 		await createTab(page, tab);
 
 		await setEditor(page, `# ${tab}\n\nbaseline content.`);

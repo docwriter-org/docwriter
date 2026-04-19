@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import { ScrollText } from 'lucide-svelte';
+	import { onMount, onDestroy } from 'svelte';
+	import { ScrollText, PanelLeftClose, PanelLeftOpen } from 'lucide-svelte';
 	import MenuBar, { type MenuSpec } from '$lib/components/MenuBar.svelte';
 	import OutlinePane from '$lib/components/OutlinePane.svelte';
 	import FileTree from '$lib/components/FileTree.svelte';
@@ -9,14 +9,36 @@
 	import HistoryPane from '$lib/components/HistoryPane.svelte';
 	import RulesPanel from '$lib/components/RulesPanel.svelte';
 	import PanelResizer from '$lib/components/PanelResizer.svelte';
+	import HorizontalPanelResizer from '$lib/components/HorizontalPanelResizer.svelte';
 	import AgentDock from '$lib/components/AgentDock.svelte';
 	import AgentSettingsPanel from '$lib/components/AgentSettingsPanel.svelte';
 	import HooksPanel from '$lib/components/HooksPanel.svelte';
-	import ChatPanel from '$lib/components/ChatPanel.svelte';
 	import { themes, applyTheme } from '$lib/themes';
 	import { unifiedLineDiff } from '$lib/diff';
-	import { diffWords } from 'diff';
-	import { TINY_EDIT_THRESHOLD } from '$lib/types';
+	import { classifyRoundKind } from '$lib/review-diff';
+
+	const CONFLICT_RETRY_MARKER = '[docwriter-conflict-retry]';
+
+	function buildConflictRetryTrigger(
+		priorTrigger: string | undefined,
+		conflictsByTab: Record<string, number>
+	): string {
+		const baseTrigger = priorTrigger || 'Review document and improve';
+		const summary = Object.entries(conflictsByTab)
+			.filter(([, count]) => count > 0)
+			.map(([tabId, count]) => `- ${tabId}: ${count} overlapping edit${count === 1 ? '' : 's'} skipped`)
+			.join('\n');
+		return [
+			CONFLICT_RETRY_MARKER,
+			baseTrigger,
+			'',
+			'Some of your proposed edits were skipped because the user edited overlapping text while you were running.',
+			'Retry against the latest document state. Preserve the user edits. Re-propose only the remaining improvements that still make sense now.',
+			'',
+			'Overlaps skipped:',
+			summary
+		].join('\n');
+	}
 
 	/** Turn a submit trigger into a compact description for the history
 	 * pane. Full text of long prompts (including feedback-on-passage quotes)
@@ -25,35 +47,42 @@
 	 * prompt the agent actually receives, not a vague "Submitted". */
 	function shortDescription(trigger: string | undefined): string {
 		if (!trigger) return 'Review document and improve';
-		// `Feedback "Too verbose" on this passage: "…"` → `Feedback: Too verbose`
-		const feedbackMatch = trigger.match(/^Feedback "([^"]+)" on this passage:/);
+		if (trigger.includes(CONFLICT_RETRY_MARKER)) {
+			return 'Retry skipped edits against your latest changes';
+		}
+		// `The user flagged this passage as|with feedback "Too verbose"…` → `Feedback: Too verbose`
+		const feedbackMatch = trigger.match(
+			/^The user flagged this passage (?:as|with feedback) "([^"]+)"/
+		);
 		if (feedbackMatch) return `Feedback: ${feedbackMatch[1]}`;
-		// Apply-rules trigger: "Review the document against the following rules…"
-		if (/^Review the document against the following rules/.test(trigger)) {
+		// Apply-rules trigger: "Review the open files against the following rules…"
+		if (/^Review the open files? against the following rules/.test(trigger)) {
 			return 'Apply rules';
 		}
 		// Reject-and-reconsider trigger starts with "The user just rejected"
 		if (/^The user just rejected/.test(trigger)) {
+			const retryFeedbackMatch = trigger.match(
+				/The user explained why they rejected it:\n\n```text\n([\s\S]*?)\n```/
+			);
+			if (retryFeedbackMatch) {
+				const feedback = retryFeedbackMatch[1].trim().replace(/\s+/g, ' ');
+				if (feedback) {
+					return `Retry: ${feedback.length > 72 ? feedback.slice(0, 69) + '…' : feedback}`;
+				}
+			}
 			return 'Reconsider after rejection';
 		}
 		if (trigger.length > 80) return trigger.slice(0, 77) + '…';
 		return trigger;
 	}
 
-	/** Classify a round's size by summing added+removed char counts. */
-	function classifyRoundKind(beforeMd: string, afterMd: string): 'tiny' | 'big' {
-		let totalDelta = 0;
-		for (const part of diffWords(beforeMd, afterMd)) {
-			if (part.added || part.removed) totalDelta += part.value.length;
-		}
-		return totalDelta < TINY_EDIT_THRESHOLD ? 'tiny' : 'big';
-	}
 	import {
 		applyAgentMarkdown,
 		undoAgentChanges,
 		captureBaselineForAgent,
 		clearAgentBaseline,
-		clearAllAgentBaselines
+		clearAllAgentBaselines,
+		disposeAgentUndo
 	} from '$lib/yjs-agent';
 	import {
 		getReviewMap,
@@ -74,6 +103,7 @@
 		proposedHooks,
 		pendingUserQuestions,
 		userEditRegions,
+		annotations,
 		isRendering,
 		agentHistory,
 		showHistory,
@@ -83,6 +113,7 @@
 		submitCountdown,
 		editorFontScale,
 		historyVerbosity,
+		showFilesPane,
 		agentSettings,
 		tabs,
 		activeTab,
@@ -108,6 +139,7 @@
 	// await. Prevents two concurrent calls from the same event loop tick (e.g.
 	// a button click firing just as the idle timer callback is about to run).
 	let submitInFlight = false;
+	let queuedSubmissions: Array<{ trigger?: string }> = [];
 
 	let currentAbort: AbortController | null = null;
 	/** Per-tab: the last agentMd the client applied to each tab. Passed to
@@ -137,6 +169,15 @@
 		return match?.kind ?? 'markdown';
 	}
 
+	function clearFeedbackAnnotationsForTab(tabId: string) {
+		annotations.update((list) => list.filter((annotation) => annotation.tabId !== tabId));
+	}
+
+	let currentActiveTabId = $state<string | null>(null);
+	activeTab.subscribe((value) => {
+		currentActiveTabId = value;
+	});
+
 	/** Fetch a tab's current markdown from the server. Used to snapshot
 	 * pre-render content for tabs other than the active one. */
 	async function fetchTabMd(tabId: string): Promise<string> {
@@ -152,8 +193,8 @@
 
 	let editorRef: EditorRef | undefined = $state();
 
-	/** Load the tab list from the server and bootstrap a default tab if none
-	 * exist. Returns the chosen active tab ID. */
+	/** Load the tab list from the server. Existing repos should start with no
+	 * open tab rather than creating a synthetic default file. */
 	async function loadTabs(): Promise<string | null> {
 		try {
 			const res = await fetch('/api/tabs');
@@ -162,20 +203,6 @@
 				(data.tabs as TabInfo[] | undefined) ??
 				(data.order || []).map((id: string) => ({ id, kind: 'markdown' as const }));
 			let active: string | null = data.active ?? null;
-			if (tabInfo.length === 0) {
-				// Fresh install: create the default tab so the user has something
-				// to open. The server's POST /api/tabs also seeds the file.
-				const createRes = await fetch('/api/tabs', {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ id: 'document.txt' })
-				});
-				const created = await createRes.json();
-				// Re-fetch to get kinds
-				const refreshed = await fetch('/api/tabs').then((r) => r.json());
-				tabInfo = refreshed.tabs || [{ id: 'document.txt', kind: 'plain' }];
-				active = created.active || 'document.txt';
-			}
 			tabs.set(tabInfo);
 			activeTab.set(active);
 			if (active) activeTabKind.set(getTabKind(active));
@@ -350,16 +377,14 @@
 	}
 
 	function getCurrentActiveTab(): string | null {
-		let v: string | null = null;
-		activeTab.subscribe((x) => (v = x))();
-		return v;
+		return currentActiveTabId;
 	}
 
 	/** Path of the currently active tab — same as its id. Used by the
 	 * FileTree to highlight the active file. */
 	let activeTabFilePath = $state<string | null>(null);
 	$effect(() => {
-		activeTabFilePath = getCurrentActiveTab();
+		activeTabFilePath = currentActiveTabId;
 	});
 
 	/** Open a file from the FileTree. Any text file becomes an agent-
@@ -443,6 +468,7 @@
 	async function persistAgentSettings(next: AgentSettings) {
 		try {
 			const tabId = getCurrentActiveTab();
+			if (!tabId) return;
 			const q = tabId ? `?tab=${encodeURIComponent(tabId)}` : '';
 			await fetch(`/api/document${q}`, {
 				method: 'PUT',
@@ -455,7 +481,11 @@
 	}
 
 	async function submit(trigger?: string) {
-		if (rendering || submitInFlight) return;
+		if (rendering || submitInFlight) {
+			queuedSubmissions = [...queuedSubmissions, { trigger }];
+			return;
+		}
+		if (!getCurrentActiveTab()) return;
 		submitInFlight = true;
 
 		// Diff composition: if there's an existing pending review, we do NOT
@@ -500,11 +530,17 @@
 				diffLinesByTab[id] = unifiedLineDiff(prev, curr, 1);
 			}
 		}
+		// If this is a feedback trigger, pull out the passage so the history
+		// entry shows both the label and what it was applied to.
+		const feedbackQuoteMatch = trigger?.match(
+			/^The user flagged this passage (?:as|with feedback) "[^"]+"\. Rewrite it to address that: "([\s\S]+)"$/
+		);
 		pushHistory({
 			type: 'user_action',
 			timestamp: Date.now(),
 			description: shortDescription(trigger),
-			tabDiffs: diffLinesByTab
+			tabDiffs: diffLinesByTab,
+			quote: feedbackQuoteMatch?.[1]
 		});
 
 		isRendering.set(true);
@@ -519,6 +555,8 @@
 		// how many undo steps to pop (one per Edit/Write tool call).
 		const incrementalAppliedTabs = new Set<string>();
 		const incrementalStepCountByTab: Record<string, number> = {};
+		const mergeBaseByTab: Record<string, string> = { ...preRenderMdByTab };
+		const conflictCountByTab: Record<string, number> = {};
 
 		try {
 			let model = 'opus';
@@ -588,6 +626,71 @@
 							}
 							return [...h, { type: 'assistant_text', timestamp: Date.now(), text: parsed.text }];
 						});
+					} else if (event === 'assistant_thinking') {
+						agentHistory.update((h) => {
+							const last = h[h.length - 1];
+							if (last && last.type === 'assistant_thinking') {
+								return [...h.slice(0, -1), { ...last, text: last.text + parsed.text }];
+							}
+							return [...h, { type: 'assistant_thinking', timestamp: Date.now(), text: parsed.text }];
+						});
+					} else if (event === 'sdk_status') {
+						if (parsed.status !== 'compacting' && !parsed.compactResult && !parsed.error) {
+							continue;
+						}
+						pushHistory({
+							type: 'status',
+							timestamp: Date.now(),
+							status: parsed.status ?? null,
+							compactResult: parsed.compactResult,
+							error: parsed.error
+						});
+					} else if (event === 'sdk_notification') {
+						pushHistory({
+							type: 'notification',
+							timestamp: Date.now(),
+							text: parsed.text,
+							priority: parsed.priority
+						});
+					} else if (event === 'task_event') {
+						pushHistory({
+							type: 'task',
+							timestamp: Date.now(),
+							taskId: parsed.taskId,
+							phase: parsed.phase,
+							description: parsed.description,
+							summary: parsed.summary,
+							taskType: parsed.taskType,
+							lastToolName: parsed.lastToolName
+						});
+					} else if (event === 'tool_progress') {
+						agentHistory.update((h) => {
+							const last = h[h.length - 1];
+							if (
+								last &&
+								last.type === 'tool_progress' &&
+								last.tool_name === parsed.tool_name &&
+								last.taskId === parsed.taskId
+							) {
+								return [
+									...h.slice(0, -1),
+									{
+										...last,
+										elapsedSeconds: parsed.elapsedSeconds
+									}
+								];
+							}
+							return [
+								...h,
+								{
+									type: 'tool_progress',
+									timestamp: Date.now(),
+									tool_name: parsed.tool_name,
+									elapsedSeconds: parsed.elapsedSeconds,
+									taskId: parsed.taskId
+								}
+							];
+						});
 					} else if (event === 'incremental_apply') {
 						// Streaming partial apply: the server's internal
 						// PostToolUse hook fired after an agent Edit/Write.
@@ -610,15 +713,24 @@
 								captureBaselineForAgent(iTabId);
 								incrementalAppliedTabs.add(iTabId);
 							}
-							applyAgentMarkdown(
+							const applyResult = applyAgentMarkdown(
 								iTabId,
 								iAgentMd,
 								true,
 								iTabId === activeTabId ? activeEditor : undefined,
-								getTabKind(iTabId)
+								getTabKind(iTabId),
+								mergeBaseByTab[iTabId]
 							);
-							incrementalStepCountByTab[iTabId] =
-								(incrementalStepCountByTab[iTabId] ?? 0) + 1;
+							mergeBaseByTab[iTabId] = iAgentMd;
+							if (applyResult.conflictCount > 0) {
+								conflictCountByTab[iTabId] =
+									(conflictCountByTab[iTabId] ?? 0) + applyResult.conflictCount;
+							}
+							if (applyResult.applied) {
+								clearFeedbackAnnotationsForTab(iTabId);
+								incrementalStepCountByTab[iTabId] =
+									(incrementalStepCountByTab[iTabId] ?? 0) + 1;
+							}
 						}
 					} else if (event === 'result') {
 						// Multi-tab result: parsed.edits is an array of
@@ -634,8 +746,23 @@
 						const activeTabId = getCurrentActiveTab();
 						const activeEditor = editorRef?.getEditor();
 
+						// Zero-edit renders used to leave the user with no visible
+						// signal — the agent might have written assistant_text
+						// saying "no edits needed," but that lives collapsed in
+						// the history pane. Push an explicit history entry so the
+						// user knows the render completed and consciously produced
+						// no edits.
+						if (edits.length === 0) {
+							pushHistory({
+								type: 'user_action',
+								timestamp: Date.now(),
+								description: 'Agent ran and made no edits'
+							});
+						}
+
 						for (const { tabId, agentMd } of edits) {
 							if (typeof agentMd !== 'string') continue;
+							let finalSeenMd = agentMd;
 							if (currentSettings.trackChanges) {
 								// Track-changes mode: append a new round to this
 								// tab's pending list. Every round gets its own
@@ -656,37 +783,59 @@
 								// for this round = stream count + 1.
 								const streamedSteps =
 									incrementalStepCountByTab[tabId] ?? 0;
+								const finalApplyResult = applyAgentMarkdown(
+									tabId,
+									agentMd,
+									true,
+									tabId === activeTabId ? activeEditor : undefined,
+									getTabKind(tabId),
+									mergeBaseByTab[tabId]
+								);
+								mergeBaseByTab[tabId] = agentMd;
+								if (finalApplyResult.conflictCount > 0) {
+									conflictCountByTab[tabId] =
+										(conflictCountByTab[tabId] ?? 0) + finalApplyResult.conflictCount;
+								}
+								if (finalApplyResult.applied) clearFeedbackAnnotationsForTab(tabId);
+								const totalSteps = streamedSteps + (finalApplyResult.applied ? 1 : 0);
+								if (totalSteps === 0) {
+									lastRenderMarkdownByTab[tabId] = finalApplyResult.mergedContent;
+									getReviewMapForTab(tabId).set('lastAgentMd', finalApplyResult.mergedContent);
+									continue;
+								}
+								finalSeenMd = finalApplyResult.mergedContent;
 								const newRound: PendingReviewRound = {
 									id:
 										'rr_' +
 										Date.now().toString(36) +
 										Math.random().toString(36).slice(2, 6),
 									beforeMd: preRender,
-									afterMd: agentMd,
+									afterMd: finalApplyResult.mergedContent,
 									trigger: trigger || undefined,
 									timestamp: Date.now(),
-									kind: classifyRoundKind(preRender, agentMd),
-									stepCount: streamedSteps + 1
+									kind: classifyRoundKind(preRender, finalApplyResult.mergedContent),
+									stepCount: totalSteps
 								};
 								writeTabRounds(tabId, [...prior, newRound]);
-								applyAgentMarkdown(
-									tabId,
-									agentMd,
-									true,
-									tabId === activeTabId ? activeEditor : undefined,
-									getTabKind(tabId)
-								);
 							} else {
 								// Silent mode: apply to the target tab's Y.Doc
 								// without any review UI. Clean up the server
 								// shadow for that tab since there's no Accept.
-								applyAgentMarkdown(
+								const silentApplyResult = applyAgentMarkdown(
 									tabId,
 									agentMd,
 									false,
 									tabId === activeTabId ? activeEditor : undefined,
-									getTabKind(tabId)
+									getTabKind(tabId),
+									mergeBaseByTab[tabId]
 								);
+								mergeBaseByTab[tabId] = agentMd;
+								if (silentApplyResult.conflictCount > 0) {
+									conflictCountByTab[tabId] =
+										(conflictCountByTab[tabId] ?? 0) + silentApplyResult.conflictCount;
+								}
+								if (silentApplyResult.applied) clearFeedbackAnnotationsForTab(tabId);
+								finalSeenMd = silentApplyResult.mergedContent;
 								const q = `?tab=${encodeURIComponent(tabId)}`;
 								void fetch(`/api/document${q}`, {
 									method: 'POST',
@@ -694,13 +843,37 @@
 									body: JSON.stringify({ action: 'accept' })
 								});
 							}
-							lastRenderMarkdownByTab[tabId] = agentMd;
+							lastRenderMarkdownByTab[tabId] = finalSeenMd;
 							// Persist the per-tab "last agent saw" snapshot in the
 							// tab's review map so a page refresh doesn't reset it
 							// to "first render". y-indexeddb takes care of survival.
-							getReviewMapForTab(tabId).set('lastAgentMd', agentMd);
+							getReviewMapForTab(tabId).set('lastAgentMd', lastRenderMarkdownByTab[tabId]);
 						}
 						lastRenderMarkdownByTab = { ...lastRenderMarkdownByTab };
+						let shouldQueueConflictRetry = false;
+						for (const [tabId, conflicts] of Object.entries(conflictCountByTab)) {
+							if (conflicts <= 0) continue;
+							shouldQueueConflictRetry = true;
+							pushHistory({
+								type: 'notification',
+								timestamp: Date.now(),
+								priority: 'high',
+								text:
+									`Skipped ${conflicts} overlapping agent edit${conflicts === 1 ? '' : 's'} in ${tabId} because you edited the same area while the agent was running.`
+							});
+						}
+						if (shouldQueueConflictRetry && !(trigger || '').includes(CONFLICT_RETRY_MARKER)) {
+							queuedSubmissions = [
+								...queuedSubmissions,
+								{ trigger: buildConflictRetryTrigger(trigger, conflictCountByTab) }
+							];
+							pushHistory({
+								type: 'notification',
+								timestamp: Date.now(),
+								priority: 'high',
+								text: 'Trying again against your latest document so the skipped edits can be reconsidered.'
+							});
+						}
 					} else if (event === 'hook_run') {
 						// Hook execution notification. `running` creates a new
 						// entry; `done`/`failed` find the matching running
@@ -828,6 +1001,11 @@
 					text: `Render failed after ${Math.round((Date.now() - renderStart) / 100) / 10}s.`
 				});
 			}
+			const next = queuedSubmissions[0];
+			if (next) {
+				queuedSubmissions = queuedSubmissions.slice(1);
+				setTimeout(() => void submit(next.trigger), 0);
+			}
 		}
 	}
 
@@ -905,10 +1083,56 @@
 	 * UX: for non-latest rejections (drops N>0 later rounds), confirms with
 	 * the user first.
 	 */
-	async function rejectAgentEdit(roundId?: string) {
+	function buildRejectedEditFollowup(
+		tabId: string,
+		rejected: PendingReviewRound,
+		droppedLater: PendingReviewRound[],
+		feedback?: string
+	): string {
+		const rejectedDiff = unifiedLineDiff(rejected.beforeMd, rejected.afterMd, 1);
+		const lines: string[] = [
+			`The user just rejected your previous edit on \`${tabId}\`:`,
+			'',
+			'```diff',
+			rejectedDiff,
+			'```',
+			'',
+			"Do not make that same change again. Take this rejection as feedback on what the user wants different in that area of the file."
+		];
+		if (feedback) {
+			lines.push(
+				'',
+				'The user explained why they rejected it:',
+				'',
+				'```text',
+				feedback,
+				'```',
+				'',
+				'Follow that feedback closely in your retry. If it sounds like a standing preference rather than a one-off request, you may also propose a rule.'
+			);
+		}
+		if (droppedLater.length > 0) {
+			lines.push(
+				'',
+				`Because accept/reject applies in order, rejecting that edit also dropped ${droppedLater.length} later edit${droppedLater.length === 1 ? '' : 's'} you had proposed. For each one, decide whether it still makes sense given the rejection — if yes, re-propose (possibly adjusted); if no, skip:`
+			);
+			droppedLater.forEach((r, i) => {
+				const d = unifiedLineDiff(r.beforeMd, r.afterMd, 1);
+				lines.push('', `Dropped edit ${i + 1}:`, '```diff', d, '```');
+			});
+		}
+		lines.push('', 'Propose a new set of edits that takes the rejection into account.');
+		return lines.join('\n');
+	}
+
+	async function rejectAgentEdit(
+		roundId?: string,
+		options?: { retryFeedback?: string }
+	) {
 		const tabId = getCurrentActiveTab();
 		if (!tabId) return;
 		const rounds = currentRounds();
+		const retryFeedback = options?.retryFeedback?.trim();
 
 		// How many rounds (from the tail) does this reject invalidate?
 		let firstIdx: number;
@@ -925,7 +1149,7 @@
 		// work. Instead, after rewinding, re-run the agent with the
 		// rejection as explicit feedback so it can re-propose edits
 		// that take the rejection into account.
-		const shouldReconsider = laterCount > 0;
+		const shouldReconsider = laterCount > 0 || !!retryFeedback;
 
 		// Pop the right number of agent-op steps. With incremental streaming
 		// each round contributes `stepCount` steps (one per Edit/Write +
@@ -993,32 +1217,20 @@
 		if (shouldReconsider) {
 			const rejected = rounds[firstIdx];
 			const droppedLater = rounds.slice(firstIdx + 1);
-			const rejectedDiff = unifiedLineDiff(rejected.beforeMd, rejected.afterMd, 1);
-			const lines: string[] = [
-				`The user just rejected your previous edit on \`${tabId}\`:`,
-				'',
-				'```diff',
-				rejectedDiff,
-				'```',
-				'',
-				"Do not make that same change again. Take this rejection as feedback on what the user wants different in that area of the file."
-			];
-			if (droppedLater.length > 0) {
-				lines.push(
-					'',
-					`Because accept/reject applies in order, rejecting that edit also dropped ${droppedLater.length} later edit${droppedLater.length === 1 ? '' : 's'} you had proposed. For each one, decide whether it still makes sense given the rejection — if yes, re-propose (possibly adjusted); if no, skip:`
-				);
-				droppedLater.forEach((r, i) => {
-					const d = unifiedLineDiff(r.beforeMd, r.afterMd, 1);
-					lines.push('', `Dropped edit ${i + 1}:`, '```diff', d, '```');
-				});
-			}
-			lines.push('', 'Propose a new set of edits that takes the rejection into account.');
-			const followup = lines.join('\n');
+			const followup = buildRejectedEditFollowup(
+				tabId,
+				rejected,
+				droppedLater,
+				retryFeedback
+			);
 			// Defer to next tick so all state updates settle before the new
 			// submit() re-enters the render loop.
 			setTimeout(() => void submit(followup), 50);
 		}
+	}
+
+	async function retryRejectedEditWithFeedback(roundId: string, feedback: string) {
+		await rejectAgentEdit(roundId, { retryFeedback: feedback });
 	}
 
 	/** Accept a rule the agent proposed: append it to the rules list and
@@ -1176,6 +1388,8 @@
 			pendingUserQuestions.set([]);
 			recentActions.set([]);
 			actionUsageCounts.set({});
+			userEditRegions.set([]);
+			annotations.set([]);
 			resetSessionCost();
 			clearAllAgentBaselines();
 			const tabId = getCurrentActiveTab();
@@ -1208,6 +1422,12 @@
 	let historyVisible = $state(true);
 	showHistory.subscribe((v) => (historyVisible = v));
 
+	let filesVisible = $state(true);
+	showFilesPane.subscribe((v) => (filesVisible = v));
+
+	let pendingRoundCount = $state(0);
+	pendingReviewRounds.subscribe((v) => (pendingRoundCount = v.length));
+
 	let currentVerbosity = $state<'verbose' | 'minimal'>('verbose');
 	historyVerbosity.subscribe((v) => (currentVerbosity = v));
 
@@ -1236,8 +1456,6 @@
 		{
 			label: 'Settings',
 			items: [
-				{ kind: 'panel', label: 'Send message', panelKey: 'chat' },
-				{ kind: 'divider' },
 				{
 					kind: 'submenu',
 					label: 'Model',
@@ -1294,6 +1512,12 @@
 					label: historyVisible ? 'Hide history pane' : 'Show history pane',
 					onClick: () => showHistory.set(!historyVisible)
 				},
+				{
+					kind: 'action',
+					label: 'Files pane',
+					checked: filesVisible,
+					onClick: () => showFilesPane.set(!filesVisible)
+				},
 				{ kind: 'action', label: 'New session', onClick: () => void newSession() }
 			]
 		}
@@ -1301,7 +1525,7 @@
 
 	// Pane widths (resizable)
 	let leftWidth = $state(260);
-	let rightWidth = $state(340);
+	let rightWidth = $state(480);
 	const MIN_PANE_WIDTH = 180;
 	const MAX_PANE_WIDTH = 560;
 	function resizeLeft(delta: number) {
@@ -1309,6 +1533,49 @@
 	}
 	function resizeRight(delta: number) {
 		rightWidth = Math.max(MIN_PANE_WIDTH, Math.min(MAX_PANE_WIDTH, rightWidth - delta));
+	}
+
+	const MIN_FILE_TREE_HEIGHT = 160;
+	const MIN_HISTORY_HEIGHT = 140;
+	const MIN_PENDING_HEIGHT = 220;
+	let fileTreeHeight = $state(280);
+	let historyPaneHeight = $state(220);
+	let leftPaneInnerEl: HTMLDivElement | null = $state(null);
+	let rightPaneInnerEl: HTMLDivElement | null = $state(null);
+	let removeSidebarResizeListener = () => {};
+	let didInitFileTreeHeight = false;
+	let didInitHistoryHeight = false;
+
+	function maxFileTreeHeight() {
+		const paneHeight = leftPaneInnerEl?.clientHeight ?? 0;
+		if (paneHeight <= 0) return 360;
+		return Math.max(MIN_FILE_TREE_HEIGHT, Math.floor(paneHeight * 0.66));
+	}
+
+	function clampFileTreeHeight(next: number) {
+		return Math.max(MIN_FILE_TREE_HEIGHT, Math.min(maxFileTreeHeight(), next));
+	}
+
+	function resizeFileTree(deltaY: number) {
+		fileTreeHeight = clampFileTreeHeight(fileTreeHeight - deltaY);
+	}
+
+	function maxHistoryPaneHeight() {
+		const paneHeight = rightPaneInnerEl?.clientHeight ?? 0;
+		if (paneHeight <= 0) return 320;
+		return Math.max(MIN_HISTORY_HEIGHT, paneHeight - MIN_PENDING_HEIGHT);
+	}
+
+	function clampHistoryPaneHeight(next: number) {
+		return Math.max(MIN_HISTORY_HEIGHT, Math.min(maxHistoryPaneHeight(), next));
+	}
+
+	function resizeHistoryPane(deltaY: number) {
+		historyPaneHeight = clampHistoryPaneHeight(historyPaneHeight + deltaY);
+	}
+
+	function toggleFilesPane() {
+		showFilesPane.set(!filesVisible);
 	}
 
 	let docLoaded = $state(false);
@@ -1361,6 +1628,31 @@
 	}
 
 	onMount(async () => {
+		function clampSidebarPanels() {
+			if (filesVisible) {
+				if (!didInitFileTreeHeight) {
+					fileTreeHeight = maxFileTreeHeight();
+					didInitFileTreeHeight = true;
+				} else {
+					fileTreeHeight = clampFileTreeHeight(fileTreeHeight);
+				}
+			}
+			if (historyVisible) {
+				const paneHeight = rightPaneInnerEl?.clientHeight ?? 0;
+				const initial = paneHeight > 0 ? Math.floor(paneHeight * 0.34) : 220;
+				if (!didInitHistoryHeight) {
+					historyPaneHeight = clampHistoryPaneHeight(initial);
+					didInitHistoryHeight = true;
+				} else {
+					historyPaneHeight = clampHistoryPaneHeight(historyPaneHeight);
+				}
+			}
+		}
+		window.addEventListener('resize', clampSidebarPanels);
+		removeSidebarResizeListener = () => {
+			window.removeEventListener('resize', clampSidebarPanels);
+		};
+
 		const initialTheme = themes.find((t) => t.name === themeName) || themes[0];
 		applyTheme(initialTheme);
 		// HMR safety: if the module was hot-reloaded during a render, the
@@ -1411,7 +1703,8 @@
 					const ed = editorRef?.getEditor();
 					const before = getEditorMarkdownNow();
 					captureBaselineForAgent(tabId);
-					applyAgentMarkdown(tabId, content, true, ed, getTabKind(tabId));
+					const applyResult = applyAgentMarkdown(tabId, content, true, ed, getTabKind(tabId));
+					if (!applyResult.applied) return;
 					const existing = getReviewMapForTab(tabId).get('pendingRounds');
 					const prior: PendingReviewRound[] = Array.isArray(existing)
 						? (existing as PendingReviewRound[])
@@ -1419,17 +1712,17 @@
 					const newRound: PendingReviewRound = {
 						id: 'rr_fake_' + Date.now().toString(36),
 						beforeMd: before,
-						afterMd: content,
+						afterMd: applyResult.mergedContent,
 						timestamp: Date.now(),
-						kind: classifyRoundKind(before, content)
+						kind: classifyRoundKind(before, applyResult.mergedContent)
 					};
 					writeTabRounds(tabId, [...prior, newRound]);
 					// Mirror the result handler: stash this as the "last agent
 					// saw" snapshot, both in memory and persisted to the
 					// per-tab review map so it survives a refresh.
-					lastRenderMarkdownByTab[tabId] = content;
+					lastRenderMarkdownByTab[tabId] = applyResult.mergedContent;
 					lastRenderMarkdownByTab = { ...lastRenderMarkdownByTab };
-					getReviewMapForTab(tabId).set('lastAgentMd', content);
+					getReviewMapForTab(tabId).set('lastAgentMd', applyResult.mergedContent);
 				},
 				accept: acceptAgentEdit,
 				reject: rejectAgentEdit,
@@ -1449,6 +1742,13 @@
 				}
 			};
 		}
+
+		clampSidebarPanels();
+	});
+
+	onDestroy(() => {
+		removeSidebarResizeListener();
+		disposeAgentUndo();
 	});
 
 	/**
@@ -1577,14 +1877,28 @@
 			<MenuBar
 				{menus}
 				panels={{
-					chat: chatPanelSnippet,
 					rules: rulesPanelSnippet,
 					agentSettings: agentSettingsSnippet,
 					hooks: hooksPanelSnippet
 				}}
 			/>
 		</div>
-		<div class="header-right"></div>
+		<div class="header-right">
+			<button
+				class="header-toggle"
+				type="button"
+				onclick={toggleFilesPane}
+				aria-pressed={filesVisible}
+				title={filesVisible ? 'Hide files pane' : 'Show files pane'}
+			>
+				{#if filesVisible}
+					<PanelLeftClose size={15} />
+				{:else}
+					<PanelLeftOpen size={15} />
+				{/if}
+				<span>Files</span>
+			</button>
+		</div>
 	</header>
 
 	{#snippet rulesPanelSnippet()}
@@ -1599,57 +1913,82 @@
 		<HooksPanel />
 	{/snippet}
 
-	{#snippet chatPanelSnippet()}
-		<ChatPanel onSend={(msg) => void submit(msg)} />
-	{/snippet}
-
 	<div class="body">
 		<aside class="left-pane" style:width="{leftWidth}px">
-			<div class="left-pane-inner">
-				<OutlinePane
-					onAccept={acceptAgentEdit}
-					onReject={rejectAgentEdit}
-					onAcceptRule={acceptProposedRule}
-					onRejectRule={rejectProposedRule}
-					onAcceptHook={acceptProposedHook}
-					onRejectHook={rejectProposedHook}
-					onAnswer={answerUserQuestion}
-				/>
-				<div class="file-tree-wrap">
-					<FileTree
-						activePath={activeTabFilePath}
-						onOpenFile={onFileOpened}
-						onRenamed={onFileTreeRenamed}
-						onDeleted={onFileTreeDeleted}
-					/>
+			<div class="left-pane-inner" bind:this={leftPaneInnerEl}>
+				<div class="outline-wrap">
+					<OutlinePane showOutline={true} showReview={false} />
 				</div>
+				{#if filesVisible}
+					<HorizontalPanelResizer onResize={resizeFileTree} />
+					<div class="file-tree-panel" style:height="{fileTreeHeight}px">
+						<div class="file-tree-wrap">
+							<FileTree
+								activePath={activeTabFilePath}
+								onOpenFile={onFileOpened}
+								onRenamed={onFileTreeRenamed}
+								onDeleted={onFileTreeDeleted}
+							/>
+						</div>
+					</div>
+				{/if}
 			</div>
 		</aside>
 		<PanelResizer onResize={resizeLeft} />
 		<main class="center-pane">
 			<TabBar
 				onSwitch={switchTab}
-				onCreate={createTab}
 				onClose={closeTab}
 				onDelete={deleteTab}
 				onRename={renameTabAction}
 				pendingTabs={pendingReviewTabs}
 			/>
-			{#if docLoaded}
-				<AgentDock onSubmit={() => submit()} />
+			{#if docLoaded && activeTabFilePath}
+				<AgentDock onSubmit={() => submit()} onSendMessage={(msg) => void submit(msg)} />
 				<TiptapEditor
 					bind:this={editorRef}
 					onSubmit={(trigger) => submit(trigger)}
 					kind={currentTabKind}
 				/>
+			{:else if docLoaded}
+				<div class="empty-editor-state">
+					<div class="empty-editor-title">No file open</div>
+					<div class="empty-editor-copy">
+						Open a file from the left sidebar, or create a new one there.
+					</div>
+				</div>
 			{/if}
 		</main>
-		{#if historyVisible}
-			<PanelResizer onResize={resizeRight} />
-			<aside class="right-pane" style:width="{rightWidth}px">
-				<HistoryPane onNewSession={newSession} />
-			</aside>
-		{/if}
+		<PanelResizer onResize={resizeRight} />
+		<aside class="right-pane" style:width="{rightWidth}px">
+			<div class="right-pane-inner" bind:this={rightPaneInnerEl}>
+				{#if historyVisible}
+					<div class="history-wrap" style:height="{historyPaneHeight}px">
+						<HistoryPane onNewSession={newSession} />
+					</div>
+					<HorizontalPanelResizer onResize={resizeHistoryPane} />
+				{/if}
+				<div class="pending-wrap" class:history-hidden={!historyVisible}>
+					<div class="pending-pane-header">
+						<span class="pending-pane-title">Pending agent edits ({pendingRoundCount})</span>
+					</div>
+					<div class="pending-pane-body">
+						<OutlinePane
+							showOutline={false}
+							showReview={true}
+							onAccept={acceptAgentEdit}
+							onReject={rejectAgentEdit}
+							onRetryWithFeedback={retryRejectedEditWithFeedback}
+							onAcceptRule={acceptProposedRule}
+							onRejectRule={rejectProposedRule}
+							onAcceptHook={acceptProposedHook}
+							onRejectHook={rejectProposedHook}
+							onAnswer={answerUserQuestion}
+						/>
+					</div>
+				</div>
+			</div>
+		</aside>
 	</div>
 </div>
 
@@ -1691,6 +2030,24 @@
 	.header-right {
 		justify-content: flex-end;
 	}
+	.header-toggle {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		padding: 6px 10px;
+		border-radius: 6px;
+		border: 1px solid var(--border-light);
+		background: var(--bg-elevated);
+		color: var(--text-secondary);
+		font: inherit;
+		cursor: pointer;
+	}
+	.header-toggle:hover,
+	.header-toggle[aria-pressed='true'] {
+		background: var(--bg-hover);
+		color: var(--text);
+		border-color: color-mix(in srgb, var(--accent) 40%, var(--border-light));
+	}
 	.logo {
 		flex-shrink: 0;
 	}
@@ -1713,17 +2070,38 @@
 		background: var(--pane-bg);
 		overflow: hidden;
 		flex-shrink: 0;
-	}
-	.left-pane-inner {
-		height: 100%;
-		overflow-y: auto;
 		display: flex;
 		flex-direction: column;
+		min-height: 0;
+	}
+	.left-pane-inner,
+	.right-pane-inner {
+		height: 100%;
+		display: flex;
+		flex-direction: column;
+		overflow: hidden;
+		min-height: 0;
+	}
+	.outline-wrap {
+		flex: 1 1 auto;
+		min-height: 0;
+		overflow: hidden;
+	}
+	.file-tree-panel {
+		flex: 0 0 auto;
+		min-height: 160px;
+		max-height: 66%;
+		overflow: hidden;
+		min-width: 0;
 	}
 	.file-tree-wrap {
+		height: 100%;
+		min-height: 0;
+		overflow: auto;
 		padding: 12px 16px 16px;
+		box-sizing: border-box;
 		border-top: 1px solid var(--border-light);
-		margin-top: 8px;
+		background: color-mix(in srgb, var(--pane-bg) 94%, var(--bg-surface));
 	}
 	.center-pane {
 		position: relative;
@@ -1733,10 +2111,59 @@
 		min-width: 0;
 		background: var(--bg);
 	}
+	.empty-editor-state {
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		padding: 32px;
+		text-align: center;
+		gap: 10px;
+		color: var(--text-secondary);
+		font-family: 'Inter', -apple-system, sans-serif;
+	}
+	.empty-editor-title {
+		font-size: 18px;
+		font-weight: 600;
+		color: var(--text);
+	}
+	.empty-editor-copy {
+		max-width: 420px;
+		font-size: 14px;
+		line-height: 1.5;
+		color: var(--text-faint);
+	}
 	.right-pane {
-		border-left: 1px solid var(--border-light);
 		background: var(--pane-bg);
 		overflow: hidden;
 		flex-shrink: 0;
+	}
+	.history-wrap {
+		flex: 0 0 auto;
+		min-height: 140px;
+		overflow: hidden;
+	}
+	.pending-wrap {
+		flex: 1 1 auto;
+		min-height: 0;
+		overflow: hidden;
+		display: flex;
+		flex-direction: column;
+	}
+	.pending-pane-header {
+		padding: 12px 16px 10px;
+	}
+	.pending-pane-title {
+		font-size: 12px;
+		font-weight: 600;
+		color: var(--text-faint);
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+	}
+	.pending-pane-body {
+		flex: 1 1 auto;
+		min-height: 0;
+		overflow: hidden;
 	}
 </style>

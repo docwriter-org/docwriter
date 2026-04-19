@@ -1,10 +1,9 @@
 <script lang="ts">
-	import { Plus, X, FileText, FileCode } from 'lucide-svelte';
+	import { X, FileText, FileCode } from 'lucide-svelte';
 	import { tabs, activeTab, type TabInfo } from '$lib/stores';
 
 	interface Props {
 		onSwitch: (id: string) => void | Promise<void>;
-		onCreate: (id: string) => Promise<void>;
 		/** Close: remove the tab from the list but LEAVE the file on disk.
 		 * This is what the × button does. */
 		onClose: (id: string) => Promise<void>;
@@ -16,30 +15,13 @@
 		 * no pending reviews on that tab; >0 renders as a numbered badge. */
 		pendingTabs?: Map<string, number>;
 	}
-	let { onSwitch, onCreate, onClose, onDelete, onRename, pendingTabs }: Props = $props();
+	let { onSwitch, onClose, onDelete, onRename, pendingTabs }: Props = $props();
 
 	let tabList: TabInfo[] = $state([]);
 	tabs.subscribe((v) => (tabList = v));
 
 	let active = $state<string | null>(null);
 	activeTab.subscribe((v) => (active = v));
-
-	// Create flow: a single prompt() dialog. The message clarifies that a
-	// missing extension defaults to markdown so the user knows what they
-	// get when they type `notes` vs `notes.txt`.
-	async function beginCreate() {
-		const raw = window.prompt(
-			'New file name (e.g. ideas.txt, todo.md). No extension defaults to markdown.'
-		);
-		if (raw === null) return; // cancelled
-		const id = raw.trim();
-		if (!id) return;
-		try {
-			await onCreate(id);
-		} catch (e) {
-			window.alert(e instanceof Error ? e.message : String(e));
-		}
-	}
 
 	// Inline rename
 	let renamingId = $state<string | null>(null);
@@ -214,10 +196,6 @@
 			</button>
 		</div>
 	{/each}
-
-	<button class="tab-add" onclick={beginCreate} aria-label="New tab">
-		<Plus size={12} />
-	</button>
 </div>
 
 {#if menu}
@@ -314,24 +292,6 @@
 	.tab-close:hover {
 		background: var(--bg-surface);
 		color: var(--text-secondary);
-	}
-	.tab-add {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 24px;
-		height: 24px;
-		margin-left: 4px;
-		border: none;
-		background: transparent;
-		color: var(--text-faint);
-		border-radius: 5px;
-		cursor: pointer;
-		flex-shrink: 0;
-	}
-	.tab-add:hover {
-		background: var(--bg-hover);
-		color: var(--accent);
 	}
 	.pending-dot {
 		display: inline-flex;

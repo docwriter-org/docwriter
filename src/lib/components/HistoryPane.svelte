@@ -39,6 +39,9 @@
 	});
 
 	function relativeTime(ts: number): string {
+		// Restored-history entries carry ts=0 because the SDK transcript
+		// doesn't include timestamps. Show nothing rather than "12/31/1969".
+		if (!ts) return '';
 		// Read nowTick so Svelte knows this function depends on it and
 		// recomputes templates that call it when the tick changes.
 		const elapsedMs = nowTick - ts;
@@ -81,6 +84,7 @@
 		if (e.type === 'tool_call') {
 			return /^(Edit|Write)$/.test(e.tool_name);
 		}
+		if (e.type === 'task') return e.phase === 'completed' || e.phase === 'failed' || e.phase === 'stopped';
 		// Skip render_end / render_start / assistant_text in minimal.
 		return false;
 	}
@@ -158,6 +162,25 @@
 	</div>
 
 	<div class="entries">
+		{#if annos.length > 0}
+			<div class="annotation-list">
+				{#each annos as anno (anno.id)}
+					<div class="annotation-card">
+						<div class="annotation-card-head">
+							<span class="annotation-label">{anno.comment}</span>
+							<button class="annotation-dismiss" onclick={() => removeAnnotation(anno.id)}>
+								<X size={12} />
+							</button>
+						</div>
+						<div class="annotation-excerpt">"{anno.excerpt}"</div>
+						<div class="annotation-meta">
+							<span>{anno.tabId}</span>
+							<span>{relativeTime(anno.timestamp)}</span>
+						</div>
+					</div>
+				{/each}
+			</div>
+		{/if}
 		{#if rendering}
 			<div class="thinking-indicator" aria-label="Agent is working">
 				<span class="dot"></span>
@@ -189,6 +212,9 @@
 							</span>
 							<span class="entry-time">{relativeTime(entry.timestamp)}</span>
 						</summary>
+						{#if entry.quote}
+							<div class="user-quote" title={entry.quote}>"{entry.quote}"</div>
+						{/if}
 						<div class="user-diffs">
 							{#each Object.entries(entry.tabDiffs) as [tabId, diff]}
 								<div class="user-diff">
@@ -199,10 +225,15 @@
 						</div>
 					</details>
 				{:else}
-					<div class="entry user-action">
-						<User size={11} color="#9ca3af" />
-						<span class="user-text">{entry.description}</span>
-						<span class="entry-time">{relativeTime(entry.timestamp)}</span>
+					<div class="entry user-action" class:has-quote={!!entry.quote}>
+						<div class="user-row">
+							<User size={11} color="#9ca3af" />
+							<span class="user-text">{entry.description}</span>
+							<span class="entry-time">{relativeTime(entry.timestamp)}</span>
+						</div>
+						{#if entry.quote}
+							<div class="user-quote" title={entry.quote}>"{entry.quote}"</div>
+						{/if}
 					</div>
 				{/if}
 			{:else if entry.type === 'tool_call'}
@@ -210,6 +241,7 @@
 					<div class="entry subagent-call">
 						<span class="subagent-icon">🤖</span>
 						<span class="subagent-label">Subagent: {(entry.input as any)?.description || entry.tool_name}</span>
+						<span class="entry-time">{relativeTime(entry.timestamp)}</span>
 						{#if entry.durationMs}<span class="duration">{formatDuration(entry.durationMs)}</span>{/if}
 					</div>
 				{:else}
@@ -218,6 +250,7 @@
 							<FileEdit size={11} color="#7c3aed" />
 							<span class="tool-name">{entry.tool_name}</span>
 							<span class="tool-hint">{summarizeToolInput(entry.input)}</span>
+							<span class="entry-time">{relativeTime(entry.timestamp)}</span>
 							{#if entry.durationMs}<span class="duration">{formatDuration(entry.durationMs)}</span>{/if}
 						</summary>
 						<pre class="tool-detail">{formatToolInput(entry.input)}</pre>
@@ -228,9 +261,72 @@
 					<summary class="assistant-summary">
 						<Bot size={11} color="#16a34a" />
 						<span class="assistant-preview">{assistantPreview(entry.text)}</span>
+						<span class="entry-time">{relativeTime(entry.timestamp)}</span>
 					</summary>
 					<div class="assistant-body">{@html renderMarkdown(entry.text)}</div>
 				</details>
+			{:else if entry.type === 'assistant_thinking'}
+				<details class="entry thinking-text">
+					<summary class="assistant-summary">
+						<Bot size={11} color="#6366f1" />
+						<span class="assistant-preview">Thinking: {assistantPreview(entry.text)}</span>
+						<span class="entry-time">{relativeTime(entry.timestamp)}</span>
+					</summary>
+					<div class="assistant-body thinking-body">{@html renderMarkdown(entry.text)}</div>
+				</details>
+			{:else if entry.type === 'status'}
+				<div class="entry status-line">
+					<Eye size={10} color="#6366f1" />
+					<span>
+						{#if entry.status === 'compacting'}
+							Compacting context
+						{:else if entry.status === 'requesting'}
+							Requesting model response
+						{:else}
+							Loop status updated
+						{/if}
+						{#if entry.compactResult} · {entry.compactResult}{/if}
+						{#if entry.error} · {entry.error}{/if}
+					</span>
+					<span class="entry-time">{relativeTime(entry.timestamp)}</span>
+				</div>
+			{:else if entry.type === 'notification'}
+				<div class="entry status-line notification-line">
+					<Eye size={10} color="#0891b2" />
+					<span>{entry.text}</span>
+					<span class="entry-time">{relativeTime(entry.timestamp)}</span>
+				</div>
+			{:else if entry.type === 'task'}
+				<div class="entry task-line" class:task-done={entry.phase === 'completed'} class:task-bad={entry.phase === 'failed'}>
+					<span class="task-bullet"></span>
+					<span class="task-copy">
+						<span class="task-title">
+							{#if entry.phase === 'started'}
+								Subagent started
+							{:else if entry.phase === 'progress'}
+								Subagent progress
+							{:else if entry.phase === 'updated'}
+								Subagent updated
+							{:else if entry.phase === 'completed'}
+								Subagent completed
+							{:else if entry.phase === 'failed'}
+								Subagent failed
+							{:else}
+								Subagent stopped
+							{/if}
+						</span>
+						{#if entry.description}<span class="task-detail">{entry.description}</span>{/if}
+						{#if entry.summary}<span class="task-detail">{entry.summary}</span>{/if}
+						{#if entry.lastToolName}<span class="task-detail">Last tool: {entry.lastToolName}</span>{/if}
+					</span>
+					<span class="entry-time">{relativeTime(entry.timestamp)}</span>
+				</div>
+			{:else if entry.type === 'tool_progress'}
+				<div class="entry status-line tool-progress-line">
+					<FileEdit size={10} color="#7c3aed" />
+					<span>{entry.tool_name} running for {Math.max(1, Math.round(entry.elapsedSeconds))}s</span>
+					<span class="entry-time">{relativeTime(entry.timestamp)}</span>
+				</div>
 			{:else if entry.type === 'hook_run'}
 				<details class="entry hook-run" class:running={entry.status === 'running'} class:failed={entry.status === 'failed'}>
 					<summary class="hook-summary" title={entry.command}>
@@ -242,6 +338,7 @@
 						{:else if entry.exitCode !== undefined && entry.exitCode !== 0}
 							<span class="hook-exit-bad">exit {entry.exitCode}</span>
 						{/if}
+						<span class="entry-time">{relativeTime(entry.timestamp)}</span>
 						{#if entry.durationMs}<span class="duration">{formatDuration(entry.durationMs)}</span>{/if}
 					</summary>
 					{#if entry.stdout || entry.stderr}
@@ -252,6 +349,7 @@
 				<div class="entry render-line">
 					<Play size={9} color="#6366f1" />
 					<span>{entry.trigger}</span>
+					<span class="entry-time">{relativeTime(entry.timestamp)}</span>
 				</div>
 			{:else if entry.type === 'render_end'}
 				<div class="entry render-end-line" class:success={entry.success} class:failure={!entry.success}>
@@ -262,6 +360,7 @@
 						<XCircle size={12} color="#ef4444" />
 						<span>Failed</span>
 					{/if}
+					<span class="entry-time">{relativeTime(entry.timestamp)}</span>
 					{#if entry.durationMs}
 						<span class="elapsed">
 							{#if entry.durationMs > 60000}
@@ -282,7 +381,6 @@
 	.history-pane {
 		width: 100%;
 		height: 100%;
-		border-left: 1px solid var(--border-light);
 		background: var(--pane-bg);
 		color: var(--text);
 		display: flex;
@@ -293,7 +391,6 @@
 	}
 	.pane-header {
 		padding: 12px 14px 10px;
-		border-bottom: 1px solid var(--border-light);
 		display: flex;
 		justify-content: space-between;
 		align-items: center;
@@ -321,6 +418,68 @@
 		overflow-y: auto;
 		padding: 6px 8px;
 	}
+	.annotation-list {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+		margin-bottom: 10px;
+	}
+	.annotation-card {
+		padding: 9px 10px;
+		border-radius: 8px;
+		border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border-light));
+		background: color-mix(in srgb, var(--accent) 4%, var(--bg-surface));
+	}
+	.annotation-card-head {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+	}
+	.annotation-label {
+		font-size: 12.5px;
+		font-weight: 600;
+		color: var(--accent);
+		flex: 1;
+		min-width: 0;
+	}
+	.annotation-dismiss {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 22px;
+		height: 22px;
+		border-radius: 999px;
+		border: none;
+		background: transparent;
+		color: var(--text-faint);
+		cursor: pointer;
+		flex-shrink: 0;
+	}
+	.annotation-dismiss:hover {
+		background: color-mix(in srgb, var(--accent) 10%, transparent);
+		color: var(--accent);
+	}
+	.annotation-excerpt {
+		margin-top: 6px;
+		font-size: 12px;
+		line-height: 1.45;
+		color: var(--text-secondary);
+		font-style: italic;
+		display: -webkit-box;
+		-webkit-line-clamp: 3;
+		line-clamp: 3;
+		-webkit-box-orient: vertical;
+		overflow: hidden;
+	}
+	.annotation-meta {
+		display: flex;
+		justify-content: space-between;
+		gap: 8px;
+		margin-top: 8px;
+		font-size: 10.5px;
+		color: var(--text-faint);
+		font-variant-numeric: tabular-nums;
+	}
 	.empty {
 		font-size: 13px;
 		color: var(--text-faint);
@@ -342,6 +501,32 @@
 		display: flex;
 		align-items: flex-start;
 		gap: 6px;
+	}
+	/* When a non-expandable user_action has a quote, switch the outer
+	 * container to block so the .user-row flex line and the quote stack
+	 * vertically. */
+	.user-action.has-quote:not(.expandable) {
+		display: block;
+	}
+	.user-row {
+		display: flex;
+		align-items: flex-start;
+		gap: 6px;
+	}
+	.user-quote {
+		margin-top: 4px;
+		color: var(--text-muted);
+		font-style: italic;
+		font-size: 12px;
+		line-height: 1.4;
+		/* Truncate long quotes to 2 lines so a feedback entry with a long
+		 * passage doesn't dominate the pane. Full text is available via the
+		 * native title tooltip set on the element. */
+		display: -webkit-box;
+		-webkit-line-clamp: 2;
+		line-clamp: 2;
+		-webkit-box-orient: vertical;
+		overflow: hidden;
 	}
 	.user-text {
 		color: var(--text-secondary);
@@ -399,6 +584,14 @@
 		margin-left: 8px;
 	}
 	.user-action:not(.expandable) .entry-time {
+		margin-left: auto;
+	}
+	.tool-summary .entry-time,
+	.assistant-summary .entry-time,
+	.hook-summary .entry-time,
+	.subagent-call .entry-time,
+	.render-line .entry-time,
+	.render-end-line .entry-time {
 		margin-left: auto;
 	}
 	.user-diffs {
@@ -492,6 +685,13 @@
 		border: 1px solid var(--assistant-border);
 		font-size: 13px;
 	}
+	.thinking-text {
+		padding: 6px 10px;
+		background: color-mix(in srgb, #6366f1 7%, var(--bg-surface));
+		border-radius: 5px;
+		border: 1px solid color-mix(in srgb, #6366f1 20%, var(--border-light));
+		font-size: 13px;
+	}
 	.assistant-summary {
 		display: flex;
 		align-items: center;
@@ -528,6 +728,11 @@
 		padding-top: 6px;
 		border-top: 1px solid var(--assistant-border);
 	}
+	.thinking-body {
+		border-top-color: color-mix(in srgb, #6366f1 18%, var(--assistant-border));
+		color: var(--text-secondary);
+		font-style: italic;
+	}
 	.assistant-body :global(strong) {
 		font-weight: 600;
 		color: var(--text);
@@ -561,6 +766,12 @@
 		margin-left: auto;
 		flex-shrink: 0;
 		font-family: 'SF Mono', 'Menlo', monospace;
+	}
+	.tool-summary .duration,
+	.hook-summary .duration,
+	.subagent-call .duration,
+	.render-end-line .elapsed {
+		margin-left: 8px;
 	}
 
 	/* Hook runs are background signals (user's own shell commands firing on
@@ -647,6 +858,58 @@
 		border-radius: 6px;
 		border-left: 3px solid #0891b2;
 	}
+	.status-line,
+	.task-line {
+		display: flex;
+		align-items: flex-start;
+		gap: 6px;
+		padding: 6px 8px;
+		font-size: 12px;
+		color: var(--text-muted);
+		background: color-mix(in srgb, var(--bg-surface) 86%, transparent);
+		border-radius: 5px;
+	}
+	.notification-line {
+		background: color-mix(in srgb, #0891b2 8%, transparent);
+	}
+	.tool-progress-line {
+		background: color-mix(in srgb, #7c3aed 7%, transparent);
+	}
+	.task-line {
+		background: color-mix(in srgb, #6366f1 7%, transparent);
+	}
+	.task-line.task-done {
+		background: color-mix(in srgb, #10b981 8%, transparent);
+	}
+	.task-line.task-bad {
+		background: color-mix(in srgb, #ef4444 8%, transparent);
+	}
+	.task-bullet {
+		width: 7px;
+		height: 7px;
+		border-radius: 999px;
+		background: #6366f1;
+		margin-top: 4px;
+		flex-shrink: 0;
+	}
+	.task-done .task-bullet { background: #10b981; }
+	.task-bad .task-bullet { background: #ef4444; }
+	.task-copy {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		min-width: 0;
+		flex: 1;
+	}
+	.task-title {
+		font-weight: 600;
+		color: var(--text-secondary);
+	}
+	.task-detail {
+		color: var(--text-muted);
+		line-height: 1.35;
+		word-break: break-word;
+	}
 	.subagent-icon { font-size: 13px; }
 	.subagent-label {
 		flex: 1;
@@ -677,7 +940,6 @@
 	.render-end-line.success { color: #10b981; }
 	.render-end-line.failure { color: #ef4444; }
 	.render-end-line .elapsed {
-		margin-left: auto;
 		color: var(--text-faint);
 		font-size: 11px;
 	}

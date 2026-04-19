@@ -1,8 +1,16 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { getSessionId, getRecentActions, setRecentActions, getActionUsageCounts, setActionUsageCounts } from '$lib/server/runtime-state';
-import { STATE_FILE, AGENT_SCRATCH_DIR } from '$lib/server/document-files';
-import { writeFileSync, existsSync, rmSync } from 'fs';
+import {
+	getSessionId,
+	getRecentActions,
+	setRecentActions,
+	getActionUsageCounts,
+	setActionUsageCounts,
+	clearSessionState
+} from '$lib/server/runtime-state';
+import { AGENT_SCRATCH_DIR } from '$lib/server/document-files';
+import { clearAllAgentDocs } from '$lib/server/document-io';
+import { existsSync, rmSync } from 'fs';
 
 export const GET: RequestHandler = async () => {
 	return json({
@@ -20,7 +28,8 @@ export const PUT: RequestHandler = async ({ request }) => {
 };
 
 export const DELETE: RequestHandler = async () => {
-	writeFileSync(STATE_FILE, JSON.stringify({}, null, 2));
+	clearSessionState();
+	clearAllAgentDocs();
 	// Agent scratch workspace is session-scoped — wipe on New session so
 	// the next run starts with a clean slate (no stale drafts or notes
 	// from the previous conversation).

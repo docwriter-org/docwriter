@@ -229,6 +229,17 @@ if (typeof window !== 'undefined') {
 	historyVerbosity.subscribe((v) => window.localStorage.setItem(HISTORY_VERBOSITY_KEY, v));
 }
 
+const SHOW_FILES_PANE_KEY = 'docwriter.showFilesPane';
+function readShowFilesPane(): boolean {
+	if (typeof window === 'undefined') return true;
+	const raw = window.localStorage.getItem(SHOW_FILES_PANE_KEY);
+	return raw === null ? true : raw !== 'false';
+}
+export const showFilesPane = writable<boolean>(readShowFilesPane());
+if (typeof window !== 'undefined') {
+	showFilesPane.subscribe((v) => window.localStorage.setItem(SHOW_FILES_PANE_KEY, String(v)));
+}
+
 /** Agent behavior settings. Mirrored into `.docwriter/state.json` by
  * +page.svelte whenever the user changes them via the AgentDock popover. */
 export const agentSettings = writable<AgentSettings>({

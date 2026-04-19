@@ -9,6 +9,7 @@ import {
 	collaborativeExtensions
 } from './editor-extensions';
 import { plainTextToPMJson } from './yjs-markdown';
+import { mergeAgentEditsIntoCurrent } from './three-way-merge';
 
 /**
  * Agent reconciliation layer. Per-tab:
@@ -57,6 +58,13 @@ const shadowEditors = new Map<string, Editor>();
 let mdParser: Editor | null = null;
 let plainParser: Editor | null = null;
 let applying = false;
+
+export interface ApplyAgentResult {
+	applied: boolean;
+	mergedContent: string;
+	conflictCount: number;
+	appliedHunks: number;
+}
 
 function getUndoManagerForTab(tabId: string): Y.UndoManager {
 	const existing = undoManagers.get(tabId);
@@ -132,19 +140,44 @@ export function applyAgentMarkdown(
 	content: string,
 	trackChanges: boolean,
 	activeEditor?: Editor,
-	kind: Kind = 'markdown'
-): void {
+	kind: Kind = 'markdown',
+	mergeBase?: string
+): ApplyAgentResult {
 	getUndoManagerForTab(tabId);
 	const editor = activeEditor ?? getShadowEditor(tabId, kind);
 	const ydoc = getYDocForTab(tabId);
+	const currentContent = getEditorContent(editor, kind);
+	const mergeResult =
+		typeof mergeBase === 'string'
+			? mergeAgentEditsIntoCurrent(mergeBase, currentContent, content)
+			: {
+					mergedText: content,
+					appliedHunks: content === currentContent ? 0 : 1,
+					conflictCount: 0
+				};
+	const contentToApply = mergeResult.mergedText;
 
-	const agentJson = contentToPMJson(content, kind);
+	const agentJson = contentToPMJson(contentToApply, kind);
 	const agentNode = editor.schema.nodeFromJSON(agentJson);
 	const liveNode = editor.state.doc;
-	if (liveNode.eq(agentNode)) return;
+	if (liveNode.eq(agentNode)) {
+		return {
+			applied: false,
+			mergedContent: currentContent,
+			conflictCount: mergeResult.conflictCount,
+			appliedHunks: 0
+		};
+	}
 
 	const start = liveNode.content.findDiffStart(agentNode.content);
-	if (start === null || start === undefined) return;
+	if (start === null || start === undefined) {
+		return {
+			applied: false,
+			mergedContent: currentContent,
+			conflictCount: mergeResult.conflictCount,
+			appliedHunks: 0
+		};
+	}
 	const diffEnd = liveNode.content.findDiffEnd(agentNode.content);
 	let liveEnd: number;
 	let agentEnd: number;
@@ -173,6 +206,12 @@ export function applyAgentMarkdown(
 	// import ensures the yjs-agent module pulls in the right PM state types
 	// for strict type-checking in consumers; the runtime use is via editor.
 	void EditorState;
+	return {
+		applied: true,
+		mergedContent: contentToApply,
+		conflictCount: mergeResult.conflictCount,
+		appliedHunks: mergeResult.appliedHunks
+	};
 }
 
 /** Undo the most recent agent-origin Yjs transaction on this tab. User
@@ -209,4 +248,11 @@ export function disposeAgentUndo(): void {
 		plainParser = null;
 	}
 	baselineStates.clear();
+}
+
+function getEditorContent(editor: Editor, kind: Kind): string {
+	if (kind === 'plain') {
+		return editor.getText({ blockSeparator: '\n' });
+	}
+	return (editor.storage as any).markdown?.getMarkdown?.() || '';
 }

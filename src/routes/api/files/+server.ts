@@ -13,15 +13,13 @@ import {
 	existsSync,
 	readdirSync,
 	statSync,
-	realpathSync,
 	mkdirSync,
 	writeFileSync,
 	renameSync,
 	rmSync
 } from 'fs';
-import { join, resolve, relative, sep, dirname } from 'path';
-
-const ROOT = process.env.DOCWRITER_ROOT || process.cwd();
+import { join, dirname } from 'path';
+import { resolveWorkspacePath } from '$lib/server/workspace-path';
 
 /** Names we always hide from the tree — noise that obscures the writing
  * workspace. `.docwriter/` is intentionally NOT here; the user wants to
@@ -41,21 +39,9 @@ interface Entry {
 	internal: boolean;
 }
 
-function safeResolve(relPath: string): string {
-	const abs = resolve(ROOT, relPath);
-	const rootReal = existsSync(ROOT) ? realpathSync(ROOT) : ROOT;
-	const absReal = existsSync(abs) ? realpathSync(abs) : abs;
-	// Must be under root (not equal nor escaping).
-	const rel = relative(rootReal, absReal);
-	if (rel.startsWith('..') || rel === '..' || rel.split(sep).includes('..')) {
-		throw error(400, `Path escapes workspace root: ${relPath}`);
-	}
-	return absReal;
-}
-
 export const GET: RequestHandler = async ({ url }) => {
 	const relPath = url.searchParams.get('path') || '';
-	const abs = safeResolve(relPath);
+	const abs = resolveWorkspacePath(relPath);
 	if (!existsSync(abs)) return json({ path: relPath, entries: [] });
 	const stat = statSync(abs);
 	if (!stat.isDirectory()) {
@@ -101,7 +87,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	const relPath = typeof body.path === 'string' ? body.path.trim() : '';
 	const kind: 'file' | 'folder' = body.kind === 'folder' ? 'folder' : 'file';
 	if (!relPath) throw error(400, 'path required');
-	const abs = safeResolve(relPath);
+	const abs = resolveWorkspacePath(relPath);
 	if (existsSync(abs)) throw error(409, `Already exists: ${relPath}`);
 	if (kind === 'folder') {
 		mkdirSync(abs, { recursive: true });
@@ -119,8 +105,8 @@ export const PATCH: RequestHandler = async ({ request }) => {
 	const from = typeof body.from === 'string' ? body.from.trim() : '';
 	const to = typeof body.to === 'string' ? body.to.trim() : '';
 	if (!from || !to) throw error(400, 'from and to required');
-	const absFrom = safeResolve(from);
-	const absTo = safeResolve(to);
+	const absFrom = resolveWorkspacePath(from);
+	const absTo = resolveWorkspacePath(to);
 	if (!existsSync(absFrom)) throw error(404, `Not found: ${from}`);
 	if (existsSync(absTo)) throw error(409, `Target exists: ${to}`);
 	mkdirSync(dirname(absTo), { recursive: true });
@@ -133,7 +119,7 @@ export const PATCH: RequestHandler = async ({ request }) => {
 export const DELETE: RequestHandler = async ({ url }) => {
 	const relPath = url.searchParams.get('path') || '';
 	if (!relPath) throw error(400, 'path required');
-	const abs = safeResolve(relPath);
+	const abs = resolveWorkspacePath(relPath);
 	if (!existsSync(abs)) return json({ ok: true, path: relPath });
 	rmSync(abs, { recursive: true, force: true });
 	return json({ ok: true, path: relPath });

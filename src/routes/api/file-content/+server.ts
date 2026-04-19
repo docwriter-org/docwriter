@@ -9,27 +9,15 @@
  */
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { existsSync, readFileSync, writeFileSync, statSync, realpathSync } from 'fs';
-import { resolve, relative, sep } from 'path';
+import { existsSync, readFileSync, writeFileSync, statSync } from 'fs';
+import { resolveWorkspacePath } from '$lib/server/workspace-path';
 
-const ROOT = process.env.DOCWRITER_ROOT || process.cwd();
 const MAX_READ_BYTES = 2 * 1024 * 1024; // 2 MB — prevents loading big binaries into the browser
-
-function safeResolve(relPath: string): string {
-	const abs = resolve(ROOT, relPath);
-	const rootReal = existsSync(ROOT) ? realpathSync(ROOT) : ROOT;
-	const absReal = existsSync(abs) ? realpathSync(abs) : abs;
-	const rel = relative(rootReal, absReal);
-	if (rel.startsWith('..') || rel === '..' || rel.split(sep).includes('..')) {
-		throw error(400, `Path escapes workspace root: ${relPath}`);
-	}
-	return absReal;
-}
 
 export const GET: RequestHandler = async ({ url }) => {
 	const relPath = url.searchParams.get('path') || '';
 	if (!relPath) throw error(400, 'path required');
-	const abs = safeResolve(relPath);
+	const abs = resolveWorkspacePath(relPath);
 	if (!existsSync(abs)) throw error(404, `Not found: ${relPath}`);
 	const stat = statSync(abs);
 	if (!stat.isFile()) throw error(400, `Not a file: ${relPath}`);
@@ -43,7 +31,7 @@ export const GET: RequestHandler = async ({ url }) => {
 export const PUT: RequestHandler = async ({ url, request }) => {
 	const relPath = url.searchParams.get('path') || '';
 	if (!relPath) throw error(400, 'path required');
-	const abs = safeResolve(relPath);
+	const abs = resolveWorkspacePath(relPath);
 	const body = await request.json();
 	if (typeof body.content !== 'string') throw error(400, 'content required');
 	writeFileSync(abs, body.content, 'utf-8');

@@ -44,7 +44,7 @@
 		bind:this={textareaEl}
 		bind:value={message}
 		onkeydown={onKeyDown}
-		placeholder={`Ask the agent anything, e.g.\n• "Add a hook that runs pdflatex after every Edit"\n• "Tighten the first paragraph of every tab"\n• "Create a new tab called outline and fill it from document.md"`}
+		placeholder={`Ask the agent anything, e.g.\n• "Add a hook that runs pdflatex after every Edit"\n• "Tighten the first paragraph of every open file"\n• "Create outline.md and fill it from document.md"`}
 		rows="5"
 	></textarea>
 

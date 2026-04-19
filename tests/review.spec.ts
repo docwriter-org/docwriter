@@ -20,7 +20,7 @@ const SUFFIX = Math.random().toString(36).slice(2, 8);
 test.describe('review mode', () => {
 	test('accept keeps agent edit, clears pending UI', async ({ page }) => {
 		await freshPage(page);
-		const name = `t-rev-acc-${SUFFIX}`;
+		const name = `t-rev-acc-${SUFFIX}.md`;
 		await createTab(page, name);
 		await setEditor(page, `# ${name}\n\nOriginal sentence.`);
 		await afterAutosave(page);
@@ -46,7 +46,7 @@ test.describe('review mode', () => {
 
 	test('reject reverts to baseline, clears pending UI', async ({ page }) => {
 		await freshPage(page);
-		const name = `t-rev-rej-${SUFFIX}`;
+		const name = `t-rev-rej-${SUFFIX}.md`;
 		await createTab(page, name);
 		await setEditor(page, `# ${name}\n\nKeep this line.`);
 		await afterAutosave(page);
@@ -66,8 +66,8 @@ test.describe('review mode', () => {
 
 	test('pending dot appears on inactive tab when agent edits it', async ({ page }) => {
 		await freshPage(page);
-		const a = `t-dot-a-${SUFFIX}`;
-		const b = `t-dot-b-${SUFFIX}`;
+		const a = `t-dot-a-${SUFFIX}.md`;
+		const b = `t-dot-b-${SUFFIX}.md`;
 		await createTab(page, a);
 		await setEditor(page, `# ${a}\n\nTab A original.`);
 		await afterAutosave(page);
@@ -88,6 +88,41 @@ test.describe('review mode', () => {
 		// And A (the active one) does not.
 		const tabA = page.locator(`.tab.active:has(.tab-name:has-text("${a}"))`);
 		await expect(tabA.locator('.pending-dot')).toHaveCount(0);
+	});
+
+	test('reject after switching tabs preserves later user edits', async ({ page }) => {
+		await freshPage(page);
+		const a = `t-rej-switch-a-${SUFFIX}.md`;
+		const b = `t-rej-switch-b-${SUFFIX}.md`;
+		await createTab(page, a);
+		await setEditor(page, `# ${a}\n\nLine 1 original.\n\nUser tail.`);
+		await afterAutosave(page);
+		await createTab(page, b);
+		await setEditor(page, `# ${b}\n\nOther tab.`);
+		await afterAutosave(page);
+
+		await switchTab(page, a);
+		await page.evaluate((after) => {
+			(window as any).__docwriterTest.fakeAgentEdit(after);
+		}, `# ${a}\n\nLine 1 agent.\n\nUser tail.`);
+
+		// Force the active editor to unmount/remount around the pending round.
+		await switchTab(page, b);
+		await switchTab(page, a);
+
+		// User edits after the agent round should survive Reject.
+		await setEditor(page, `# ${a}\n\nLine 1 agent.\n\nUser tail.\n\nMy note.`);
+		await afterAutosave(page);
+
+		await page.evaluate(() => {
+			(window as any).__docwriterTest.reject();
+		});
+
+		const text = await getEditorText(page);
+		expect(text).toContain('Line 1 original.');
+		expect(text).toContain('User tail.');
+		expect(text).toContain('My note.');
+		expect(text).not.toContain('Line 1 agent.');
 	});
 });
 
@@ -135,8 +170,8 @@ test.describe('rename tab', () => {
 		isolatedServer
 	}) => {
 		await freshPage(page);
-		const oldName = `t-rn-old-${SUFFIX}`;
-		const newName = `t-rn-new-${SUFFIX}`;
+		const oldName = `t-rn-old-${SUFFIX}.md`;
+		const newName = `t-rn-new-${SUFFIX}.md`;
 		await createTab(page, oldName);
 		await setEditor(page, `# ${oldName}\n\nRenamed body.`);
 		await afterAutosave(page);
@@ -159,11 +194,11 @@ test.describe('rename tab', () => {
 		// Content survives the rename.
 		expect(await getEditorText(page)).toContain('Renamed body');
 
-		// File on disk moved: old gone, new present with body.
+		// File on disk moved: old gone, new present with body. tabId IS the
+		// path relative to DOCWRITER_ROOT now — no `notes/` subfolder.
 		const { existsSync, readFileSync } = await import('fs');
 		const { join } = await import('path');
-		const NOTES = join(isolatedServer.root, 'notes');
-		expect(existsSync(join(NOTES, `${oldName}.md`))).toBe(false);
-		expect(readFileSync(join(NOTES, `${newName}.md`), 'utf-8')).toContain('Renamed body');
+		expect(existsSync(join(isolatedServer.root, oldName))).toBe(false);
+		expect(readFileSync(join(isolatedServer.root, newName), 'utf-8')).toContain('Renamed body');
 	});
 });

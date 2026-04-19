@@ -180,12 +180,14 @@ Otherwise, default to doing the work yourself.
 
 If — and ONLY if — you notice a consistent pattern in how the user writes or edits (e.g. the user repeatedly removes em-dashes, always uses the Oxford comma, never starts sentences with "So"), call the \`propose_rule\` tool exactly once per render to suggest adding it as a persistent rule. The user will review your proposal in the sidebar and Accept or Reject.
 
+There is one important exception: if the user's message explicitly states a durable standing preference in general terms — for example "never use X", "always prefer Y", "I never want to see Z", "don't ever say..." — you MAY propose that as a rule immediately, even if it appears only once, as long as it is clearly meant as an ongoing preference rather than a one-off fix to one sentence.
+
 Good rule proposals:
-- Evidence-based: you saw the pattern in the user's own edits (e.g. the diff shows them removing em-dashes repeatedly).
+- Evidence-based: either you saw the pattern in the user's own edits (e.g. the diff shows them removing em-dashes repeatedly), OR the user explicitly stated a durable style preference in general terms ("never use X", "always prefer Y").
 - Short and imperative: "Never use em-dashes", "Prefer active voice", "Use sentence case for headings".
 - Specific enough to be actionable. NOT vague like "Write better" or "Improve clarity".
 
-Do NOT propose a rule just because the user said it once in a message. Wait until you see a real pattern. Err on the side of not proposing — proposing too often is annoying.`;
+Do NOT propose a rule from a one-off message unless it is clearly phrased as a standing preference. If it's just a local request about one passage, do not promote it to a persistent rule. Err on the side of not proposing — proposing too often is annoying.`;
 }
 
 /**
@@ -574,6 +576,7 @@ export const POST: RequestHandler = async ({ request }) => {
 						settingSources: ['user', 'project'],
 						permissionMode: 'acceptEdits',
 						includePartialMessages: true,
+						agentProgressSummaries: true,
 						abortController,
 						hooks,
 						// Intercept AskUserQuestion: surface the questions to the
@@ -606,6 +609,60 @@ export const POST: RequestHandler = async ({ request }) => {
 							send('session', { sessionId: msg.session_id });
 						}
 
+						if (msg.type === 'system') {
+							const anyMsg = msg as any;
+							if (anyMsg.subtype === 'status') {
+								send('sdk_status', {
+									status: anyMsg.status,
+									compactResult: anyMsg.compact_result,
+									error: anyMsg.compact_error
+								});
+							} else if (anyMsg.subtype === 'notification') {
+								send('sdk_notification', {
+									text: anyMsg.text,
+									priority: anyMsg.priority
+								});
+							} else if (anyMsg.subtype === 'task_started' && !anyMsg.skip_transcript) {
+								send('task_event', {
+									taskId: anyMsg.task_id,
+									phase: 'started',
+									description: anyMsg.description,
+									taskType: anyMsg.task_type
+								});
+							} else if (anyMsg.subtype === 'task_progress') {
+								send('task_event', {
+									taskId: anyMsg.task_id,
+									phase: 'progress',
+									description: anyMsg.description,
+									summary: anyMsg.summary,
+									lastToolName: anyMsg.last_tool_name
+								});
+							} else if (anyMsg.subtype === 'task_updated') {
+								send('task_event', {
+									taskId: anyMsg.task_id,
+									phase: 'updated',
+									description: anyMsg.patch?.description,
+									summary: anyMsg.patch?.error,
+									taskType: anyMsg.patch?.status
+								});
+							} else if (anyMsg.subtype === 'task_notification' && !anyMsg.skip_transcript) {
+								send('task_event', {
+									taskId: anyMsg.task_id,
+									phase: anyMsg.status,
+									summary: anyMsg.summary
+								});
+							}
+						}
+
+						if (msg.type === 'tool_progress') {
+							const anyMsg = msg as any;
+							send('tool_progress', {
+								tool_name: anyMsg.tool_name,
+								elapsedSeconds: anyMsg.elapsed_time_seconds,
+								taskId: anyMsg.task_id
+							});
+						}
+
 						// SDK `result` message carries per-round cost + usage.
 						// See https://code.claude.com/docs/en/agent-sdk/cost-tracking
 						if (msg.type === 'result') {
@@ -635,6 +692,8 @@ export const POST: RequestHandler = async ({ request }) => {
 							} else if (event.type === 'content_block_delta') {
 								if (event.delta.type === 'text_delta') {
 									send('assistant_text', { text: event.delta.text });
+								} else if (event.delta.type === 'thinking_delta') {
+									send('assistant_thinking', { text: event.delta.thinking });
 								} else if (event.delta.type === 'input_json_delta') {
 									toolInputAccum += event.delta.partial_json;
 								}

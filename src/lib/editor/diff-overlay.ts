@@ -1,8 +1,10 @@
 import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
-import { diffWords } from 'diff';
+import { diffLines, diffWords } from 'diff';
 import type { UserEditRegion } from '$lib/stores';
+import type { Annotation } from '$lib/types';
+import { normalizeReviewText } from '$lib/review-diff';
 
 /**
  * Renders decorations over the editor while a review is pending:
@@ -24,10 +26,9 @@ import type { UserEditRegion } from '$lib/stores';
 export interface DiffState {
 	baseline: string | null;
 	userEditRegions: UserEditRegion[];
-	/** PM positions for an active text selection we should visually
-	 * highlight with a magic-style swipe (used while the feedback popup is
-	 * open). Null when no selection is active. */
-	feedbackSelection?: { from: number; to: number } | null;
+	annotations?: Annotation[];
+	activeFeedbackRange?: { from: number; to: number } | null;
+	isPlainText?: boolean;
 	/** True when every pending round is classified as `tiny`. Drives a
 	 * softer ghost-text style for inline additions so a single typo fix
 	 * doesn't look like a paragraph rewrite. */
@@ -38,7 +39,9 @@ const diffKey = new PluginKey<DecorationSet>('diffOverlay');
 let currentState: DiffState = {
 	baseline: null,
 	userEditRegions: [],
-	feedbackSelection: null,
+	annotations: [],
+	activeFeedbackRange: null,
+	isPlainText: false,
 	allRoundsTiny: false
 };
 
@@ -55,31 +58,35 @@ export const DiffOverlay = Extension.create({
 				key: diffKey,
 				props: {
 					decorations(state) {
-						const { baseline, userEditRegions, feedbackSelection, allRoundsTiny } = currentState;
+						const { baseline, userEditRegions, annotations = [], activeFeedbackRange, isPlainText, allRoundsTiny } = currentState;
 						const addedClass = allRoundsTiny ? 'diff-added diff-added-tiny' : 'diff-added';
 						const removedClass = allRoundsTiny
 							? 'diff-removed-widget diff-removed-tiny'
 							: 'diff-removed-widget';
-
-						// Fast path: nothing to decorate. User regions no longer
-						// paint anything (they just exclude ranges from the
-						// agent-added pass below), so we only need a baseline
-						// OR a feedback selection to have work to do.
-						if (baseline === null && !feedbackSelection) {
-							return DecorationSet.empty;
-						}
+						const annotationClass = 'feedback-annotation';
+						const activeFeedbackClass = 'feedback-selection';
 
 						const decorations: Decoration[] = [];
+						applyAnnotationDecorations(state, decorations, annotations, annotationClass);
+						applyActiveFeedbackDecoration(state, decorations, activeFeedbackRange, activeFeedbackClass);
 
-						// Note: we used to paint feedback-selected text with a PM
-						// inline decoration here, but rough-notation inserts its
-						// SVG as a sibling of the annotated element, and PM's
-						// DOM observer wipes it on the next state change.
-						// Feedback selection is now drawn via an overlay OUTSIDE
-						// the editor DOM — see refreshFeedbackOverlay in
-						// TiptapEditor.svelte. `feedbackSelection` is kept in
-						// DiffState for future use but no decoration here.
-						void feedbackSelection;
+						// Fast path: nothing to decorate. User regions only act as
+						// exclusions from the agent-added pass below; without a
+						// baseline there is nothing to compare against.
+						if (baseline === null) {
+							return DecorationSet.create(state.doc, decorations);
+						}
+
+						if (isPlainText) {
+							return buildPlainTextDecorations(
+								state,
+								decorations,
+								baseline,
+								userEditRegions,
+								addedClass,
+								removedClass
+							);
+						}
 
 						// Build a flat map from plain-text-character-index → PM position
 						// so we can translate plain-text offsets into PM ranges.
@@ -171,6 +178,47 @@ export const DiffOverlay = Extension.create({
 	}
 });
 
+function applyAnnotationDecorations(
+	state: any,
+	decorations: Decoration[],
+	annotations: Annotation[],
+	cls: string
+) {
+	if (!annotations.length) return;
+	const maxPos = state.doc.content.size;
+	for (const annotation of annotations) {
+		const from = Math.max(1, Math.min(annotation.from, maxPos));
+		const to = Math.max(from, Math.min(annotation.to, maxPos));
+		if (to > from) {
+			decorations.push(
+				Decoration.inline(from, to, {
+					class: cls,
+					'data-feedback-comment': annotation.comment
+				})
+			);
+		}
+	}
+}
+
+function applyActiveFeedbackDecoration(
+	state: any,
+	decorations: Decoration[],
+	range: { from: number; to: number } | null | undefined,
+	cls: string
+) {
+	if (!range) return;
+	const maxPos = state.doc.content.size;
+	const from = Math.max(1, Math.min(range.from, maxPos));
+	const to = Math.max(from, Math.min(range.to, maxPos));
+	if (to > from) {
+		decorations.push(
+			Decoration.inline(from, to, {
+				class: cls
+			})
+		);
+	}
+}
+
 /** Apply an inline class decoration over the editor range corresponding to
  * plain-text indices [start, end). Splits on block boundaries (detected by
  * non-contiguous PM positions) so decorations never span list items. */
@@ -206,9 +254,99 @@ function resolveWidgetPos(charPositions: number[], idx: number): number {
 	return (charPositions[charPositions.length - 1] ?? 0) + 1;
 }
 
+function buildPlainTextDecorations(
+	state: any,
+	decorations: Decoration[],
+	baseline: string,
+	userEditRegions: UserEditRegion[],
+	addedClass: string,
+	removedClass: string
+): DecorationSet {
+	const lines = getPlainLineInfo(state);
+	const currentText = lines.map((line) => line.text).join('\n');
+	const parts = diffLines(normalizeReviewText(baseline), normalizeReviewText(currentText));
+	let lineIdx = 0;
+
+	for (const part of parts) {
+		const chunkLines = splitDiffLines(part.value);
+		if (part.added) {
+			for (let i = 0; i < chunkLines.length; i++) {
+				const line = lines[lineIdx + i];
+				if (!line) continue;
+				if (line.to > line.from && !plainLineOverlapsUserEdits(lines, lineIdx + i, userEditRegions)) {
+					decorations.push(Decoration.inline(line.from, line.to, { class: addedClass }));
+				}
+			}
+			lineIdx += chunkLines.length;
+		} else if (part.removed) {
+			const anchor = lines[lineIdx]?.from ?? resolvePlainWidgetPos(lines);
+			if (anchor >= 0) {
+				const value = chunkLines.join('\n');
+				if (value.length > 0) {
+					decorations.push(
+						Decoration.widget(
+							anchor,
+							() => {
+								const span = document.createElement('span');
+								span.className = removedClass;
+								span.textContent = value;
+								span.setAttribute('contenteditable', 'false');
+								return span;
+							},
+							{ side: -1 }
+						)
+					);
+				}
+			}
+		} else {
+			lineIdx += chunkLines.length;
+		}
+	}
+
+	return DecorationSet.create(state.doc, decorations);
+}
+
+function plainLineOverlapsUserEdits(
+	lines: Array<{ from: number; to: number; text: string }>,
+	lineIndex: number,
+	userEditRegions: UserEditRegion[]
+): boolean {
+	if (userEditRegions.length === 0) return false;
+	let start = 0;
+	for (let i = 0; i < lineIndex; i++) {
+		start += lines[i]?.text.length ?? 0;
+	}
+	const end = start + (lines[lineIndex]?.text.length ?? 0);
+	return userEditRegions.some((region) => start < region.to && end > region.from);
+}
+
+function getPlainLineInfo(state: any): Array<{ from: number; to: number; text: string }> {
+	const lines: Array<{ from: number; to: number; text: string }> = [];
+	state.doc.forEach((node: any, offset: number) => {
+		lines.push({
+			from: offset + 1,
+			to: offset + node.nodeSize - 1,
+			text: node.textContent ?? ''
+		});
+	});
+	return lines;
+}
+
+function splitDiffLines(value: string): string[] {
+	if (!value) return [];
+	return normalizeReviewText(value).split('\n');
+}
+
+function resolvePlainWidgetPos(lines: Array<{ from: number; to: number; text: string }>): number {
+	if (lines.length === 0) return 1;
+	const last = lines[lines.length - 1];
+	return Math.max(last.to, last.from);
+}
+
 /** Strip markdown syntax to plain text, matching node.textContent semantics. */
 function markdownToPlain(md: string): string {
-	return md
+	return normalizeReviewText(
+		md
 		.replace(/^#{1,6}\s+/gm, '')
 		.replace(/^[-*+]\s+/gm, '')
 		.replace(/^\d+\.\s+/gm, '')
@@ -218,5 +356,6 @@ function markdownToPlain(md: string): string {
 		.replace(/(?<!_)_(?!_)(.+?)(?<!_)_(?!_)/g, '$1')
 		.replace(/`(.+?)`/g, '$1')
 		.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
-		.replace(/\n+/g, '');
+		.replace(/\n+/g, '')
+	);
 }
