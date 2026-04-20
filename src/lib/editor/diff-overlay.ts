@@ -1,9 +1,9 @@
 import { Editor, Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
-import { diffLines, diffWords } from 'diff';
+import { diffWords } from 'diff';
 import type { Annotation } from '$lib/types';
-import { normalizeReviewText } from '$lib/review-diff';
+import { buildReviewDiffPreview, normalizeReviewText } from '$lib/review-diff';
 
 /**
  * Renders decorations over the editor while a review is pending:
@@ -32,7 +32,7 @@ export interface DiffState {
 }
 
 const diffKey = new PluginKey<DiffState>('diffOverlay');
-const INITIAL_STATE: DiffState = {
+	const INITIAL_STATE: DiffState = {
 	baseline: null,
 	annotations: [],
 	activeFeedbackRange: null,
@@ -86,13 +86,12 @@ export const DiffOverlay = Extension.create({
 						}
 
 						if (isPlainText) {
-							return buildPlainTextDecorations(
-								state,
-								decorations,
-								baseline,
-								addedClass,
-								removedClass
-							);
+							// Plain-text review cards are currently the source of truth
+							// for add/remove hunks. The in-editor plain-text overlay was
+							// still producing misleading line highlights during the
+							// ongoing refactor, so keep the editor honest by rendering
+							// only annotations/selection there for now.
+							return DecorationSet.create(state.doc, decorations);
 						}
 
 						// Build a flat map from plain-text-character-index → PM position
@@ -241,80 +240,6 @@ function applyInlineClassRange(
 function resolveWidgetPos(charPositions: number[], idx: number): number {
 	if (idx < charPositions.length) return charPositions[idx];
 	return (charPositions[charPositions.length - 1] ?? 0) + 1;
-}
-
-function buildPlainTextDecorations(
-	state: any,
-	decorations: Decoration[],
-	baseline: string,
-	addedClass: string,
-	removedClass: string
-): DecorationSet {
-	const lines = getPlainLineInfo(state);
-	const currentText = lines.map((line) => line.text).join('\n');
-	const parts = diffLines(normalizeReviewText(baseline), normalizeReviewText(currentText));
-	let lineIdx = 0;
-
-	for (const part of parts) {
-		const chunkLines = splitDiffLines(part.value);
-		if (part.added) {
-			for (let i = 0; i < chunkLines.length; i++) {
-				const line = lines[lineIdx + i];
-				if (!line) continue;
-				if (line.to > line.from) {
-					decorations.push(Decoration.inline(line.from, line.to, { class: addedClass }));
-				}
-			}
-			lineIdx += chunkLines.length;
-		} else if (part.removed) {
-			const anchor = lines[lineIdx]?.from ?? resolvePlainWidgetPos(lines);
-			if (anchor >= 0) {
-				const value = chunkLines.join('\n');
-				if (value.length > 0) {
-					decorations.push(
-						Decoration.widget(
-							anchor,
-							() => {
-								const span = document.createElement('span');
-								span.className = removedClass;
-								span.textContent = value;
-								span.setAttribute('contenteditable', 'false');
-								return span;
-							},
-							{ side: -1 }
-						)
-					);
-				}
-			}
-		} else {
-			lineIdx += chunkLines.length;
-		}
-	}
-
-	return DecorationSet.create(state.doc, decorations);
-}
-
-function getPlainLineInfo(state: any): Array<{ from: number; to: number; text: string }> {
-	const lines: Array<{ from: number; to: number; text: string }> = [];
-	state.doc.forEach((node: any, offset: number) => {
-		lines.push({
-			from: offset + 1,
-			to: offset + node.nodeSize - 1,
-			text: node.textContent ?? ''
-		});
-	});
-	return lines;
-}
-
-function splitDiffLines(value: string): string[] {
-	if (!value) return [];
-	return normalizeReviewText(value).split('\n');
-}
-
-function resolvePlainWidgetPos(lines: Array<{ from: number; to: number; text: string }>): number {
-	if (lines.length === 0) return 1;
-	const last = lines[lines.length - 1];
-	return Math.max(last.to, last.from);
 }
 
 /** Strip markdown syntax to plain text, matching node.textContent semantics. */

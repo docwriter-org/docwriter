@@ -1,32 +1,29 @@
 import * as Y from 'yjs';
-import { IndexeddbPersistence } from 'y-indexeddb';
 import { HocuspocusProvider } from '@hocuspocus/provider';
 
 /**
- * Per-tab Y.Doc registry. Each tab has its own Y.Doc, bound to its own
- * IndexedDB store (`docwriter-doc:<tabId>`) and, in Phase 2+, a Hocuspocus
- * WebSocket provider that syncs the same doc with the server-side Y.Doc.
- * Switching tabs switches which Y.Doc is "current"; the editor rebuilds
- * itself against the new doc.
+ * Per-tab Y.Doc registry. Each tab has its own Y.Doc bound to a
+ * `HocuspocusProvider` that syncs it with the server-authoritative Y.Doc
+ * over WebSocket. Switching tabs switches which Y.Doc is "current"; the
+ * editor rebuilds itself against the new doc.
  *
  * Each Y.Doc holds:
  *   - an XmlFragment named `default` (the editor content, via y-prosemirror)
- *   - a Y.Map named `review` with `baseline` and `preAgent` snapshot strings
- *     (null when no review is pending)
+ *   - a Y.Map named `review` with `pendingRounds` (plus legacy `baseline` /
+ *     `preAgent` strings for backward compatibility)
  *
- * y-indexeddb persists every transaction locally so tab content and review
- * state survive page refresh without a round-trip; the WebSocket provider
- * additionally mirrors each transaction to the server's SQLite-backed
- * Y.Doc log. Phase 3 removes IndexedDB; for now they run in parallel.
+ * Phase 3: IndexedDB persistence is gone. The server is the single source
+ * of truth — it replays each tab's Yjs update log from SQLite on first
+ * connect and streams updates back to the browser via the provider.
+ * `whenYDocReady` now awaits the provider's `synced` event; the Tiptap
+ * editor mounts after that so it binds against a fully-hydrated Y.Doc.
  */
 
-const DB_PREFIX = 'docwriter-doc:';
 const FRAGMENT_NAME = 'default';
 const REVIEW_MAP_NAME = 'review';
 
 interface TabDoc {
 	ydoc: Y.Doc;
-	persistence: IndexeddbPersistence | null;
 	wsProvider: HocuspocusProvider | null;
 	readyPromise: Promise<void>;
 }
@@ -42,33 +39,43 @@ function wsUrl(): string {
 const registry = new Map<string, TabDoc>();
 let currentTabId: string | null = null;
 
-/** Get (or create) the Y.Doc for a tab. Instantiating a Y.Doc also sets up
- * its IndexedDB persistence, so the first call for a tab hydrates from
- * whatever was stored previously. Subsequent calls return the same instance. */
+/** Build a `synced` Promise wrapper for a HocuspocusProvider. Resolves on
+ * the first `synced` event, whether initial sync fires immediately or after
+ * a delayed connect. */
+function waitForSynced(provider: HocuspocusProvider): Promise<void> {
+	return new Promise((resolve) => {
+		if (provider.synced) {
+			resolve();
+			return;
+		}
+		const onSynced = () => {
+			provider.off('synced', onSynced);
+			resolve();
+		};
+		provider.on('synced', onSynced);
+	});
+}
+
+/** Get (or create) the Y.Doc for a tab. Instantiating a Y.Doc also attaches
+ * the WebSocket provider, so the first call for a tab kicks off the server
+ * handshake. Subsequent calls return the same instance. */
 export function getYDocForTab(tabId: string): Y.Doc {
 	const existing = registry.get(tabId);
 	if (existing) return existing.ydoc;
 	const ydoc = new Y.Doc();
-	let persistence: IndexeddbPersistence | null = null;
 	let wsProvider: HocuspocusProvider | null = null;
 	let readyPromise: Promise<void>;
 	if (typeof window !== 'undefined') {
-		persistence = new IndexeddbPersistence(DB_PREFIX + tabId, ydoc);
-		// Phase 2: attach Hocuspocus alongside IndexedDB. Both providers
-		// share the same Y.Doc — CRDT semantics handle any cross-provider
-		// ordering. Phase 3 removes IndexedDB.
 		wsProvider = new HocuspocusProvider({
 			url: wsUrl(),
 			name: tabId,
 			document: ydoc
 		});
-		readyPromise = new Promise<void>((resolve) => {
-			persistence!.once('synced', () => resolve());
-		});
+		readyPromise = waitForSynced(wsProvider);
 	} else {
 		readyPromise = Promise.resolve();
 	}
-	registry.set(tabId, { ydoc, persistence, wsProvider, readyPromise });
+	registry.set(tabId, { ydoc, wsProvider, readyPromise });
 	return ydoc;
 }
 
@@ -121,44 +128,43 @@ export function getReviewMapForTab(tabId: string): Y.Map<unknown> {
 	return getYDocForTab(tabId).getMap(REVIEW_MAP_NAME);
 }
 
-/** Resolves once IndexedDB has hydrated the current tab's Y.Doc. */
+/** Resolves once the WebSocket provider has completed its initial sync with
+ * the server (i.e. the current tab's Y.Doc is fully hydrated). */
 export function whenYDocReady(): Promise<void> {
 	return requireCurrent().readyPromise;
 }
 
-/** True if the current tab's XmlFragment has no content — used to decide
- * whether to seed from the server's markdown on first load. */
+/** True if the current tab's XmlFragment has no content. */
 export function isYDocEmpty(): boolean {
 	return getXmlFragment().length === 0;
 }
 
-/** Destroy the Y.Doc for a given tab and clear its IndexedDB store. Called
- * when the user deletes a tab so stale editor state doesn't linger. Also
- * disconnects the server WebSocket provider so the browser stops receiving
- * updates for the gone tab. */
+/** Destroy the Y.Doc for a given tab. Called when the user deletes a tab so
+ * stale editor state doesn't linger. Disconnects the WebSocket provider so
+ * the browser stops receiving updates for the gone tab. */
 export async function destroyTab(tabId: string): Promise<void> {
 	const doc = registry.get(tabId);
 	if (!doc) return;
 	if (doc.wsProvider) {
 		doc.wsProvider.destroy();
 	}
-	if (doc.persistence) {
-		await doc.persistence.clearData();
-		doc.persistence.destroy();
-	}
 	doc.ydoc.destroy();
 	registry.delete(tabId);
 	if (currentTabId === tabId) currentTabId = null;
 }
 
-/** Migrate a tab's Y.Doc to a new IndexedDB key when the file is renamed.
- * Copies the doc state under the new key, then deletes the old store. */
+/** Migrate a tab's Y.Doc to a new id when the file is renamed. Tears down
+ * the old provider, carries the Y.Doc state into a new doc, and connects a
+ * fresh provider under the new name. The server's `yjs_updates` table is
+ * still keyed by the old id — that's a caveat caller `renameTabAction` in
+ * +page.svelte already handles by issuing a PATCH /api/tabs that renames
+ * the file on disk; the next open of the new id will seed from that file. */
 export async function renameTab(oldId: string, newId: string): Promise<void> {
 	if (oldId === newId) return;
 	const existing = registry.get(oldId);
 	if (!existing) {
-		// The old tab's doc was never loaded — nothing to migrate. Just
-		// let the new tab hydrate fresh from the server on next access.
+		// Old tab's doc was never loaded — nothing to migrate. Let the new
+		// tab hydrate fresh from the server on next access.
 		return;
 	}
 	// Snapshot the old doc state, seed a new tab doc, swap the registry.
@@ -166,39 +172,33 @@ export async function renameTab(oldId: string, newId: string): Promise<void> {
 	const newYdoc = new Y.Doc();
 	Y.applyUpdate(newYdoc, state);
 
-	// Tear down the old persistence / WS connection.
+	// Tear down the old WS connection.
 	if (existing.wsProvider) {
 		existing.wsProvider.destroy();
-	}
-	if (existing.persistence) {
-		await existing.persistence.clearData();
-		existing.persistence.destroy();
 	}
 	existing.ydoc.destroy();
 	registry.delete(oldId);
 
-	// Spin up persistence for the new ID, seed it with the migrated state.
-	let persistence: IndexeddbPersistence | null = null;
+	// Spin up a provider for the new id. The server will seed from the
+	// renamed-to file if its `yjs_updates` table has no rows for `newId`.
 	let wsProvider: HocuspocusProvider | null = null;
 	let readyPromise: Promise<void>;
 	if (typeof window !== 'undefined') {
-		persistence = new IndexeddbPersistence(DB_PREFIX + newId, newYdoc);
 		wsProvider = new HocuspocusProvider({
 			url: wsUrl(),
 			name: newId,
 			document: newYdoc
 		});
-		readyPromise = new Promise<void>((resolve) => {
-			persistence!.once('synced', () => resolve());
-		});
+		readyPromise = waitForSynced(wsProvider);
 	} else {
 		readyPromise = Promise.resolve();
 	}
-	registry.set(newId, { ydoc: newYdoc, persistence, wsProvider, readyPromise });
+	registry.set(newId, { ydoc: newYdoc, wsProvider, readyPromise });
 	if (currentTabId === oldId) currentTabId = newId;
 }
 
-/** Dev-only: nuke every tab's IndexedDB store and in-memory Y.Doc. */
+/** Dev-only: destroy every tab's in-memory Y.Doc. Server-side state in
+ * SQLite is unaffected; next open of a tab re-hydrates from there. */
 export async function resetAllYDocs(): Promise<void> {
 	for (const [id] of Array.from(registry)) {
 		await destroyTab(id);

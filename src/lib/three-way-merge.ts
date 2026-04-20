@@ -45,8 +45,8 @@ export function mergeAgentEditsIntoCurrent(
 			continue;
 		}
 
-		const start = mapBaseIndexToCurrent(hunk.baseStart, userHunks) + appliedOffset;
-		const end = mapBaseIndexToCurrent(hunk.baseEnd, userHunks) + appliedOffset;
+		const start = mapBaseIndexToCurrent(hunk.baseStart, userHunks, 'start') + appliedOffset;
+		const end = mapBaseIndexToCurrent(hunk.baseEnd, userHunks, 'end') + appliedOffset;
 		mergedTokens.splice(start, end - start, ...hunk.newTokens);
 		appliedOffset += hunk.newTokens.length - (end - start);
 		appliedHunks++;
@@ -93,10 +93,28 @@ function buildHunks(baseTokens: string[], targetTokens: string[]): Hunk[] {
 	return hunks;
 }
 
-function mapBaseIndexToCurrent(baseIndex: number, userHunks: Hunk[]): number {
+/** Map a base-index position into the post-user-hunk `currentTokens` space.
+ *
+ * The `position` flag matters at boundaries where a user INSERT hunk (zero-
+ * width) sits exactly at the index being mapped:
+ *   - 'start': include the user insert's offset — the agent's range should
+ *     begin AFTER the user's insertion, since the user's new tokens logically
+ *     precede the first base token the range covers.
+ *   - 'end': exclude the user insert's offset — the agent's range should END
+ *     BEFORE the user's insertion, since the user's tokens come after the last
+ *     base token the range covered. Including the offset here would sweep the
+ *     user's insert into the agent's splice and delete it.
+ */
+function mapBaseIndexToCurrent(
+	baseIndex: number,
+	userHunks: Hunk[],
+	position: 'start' | 'end'
+): number {
 	let currentIndex = baseIndex;
 	for (const hunk of userHunks) {
-		if (hunk.baseEnd <= baseIndex) {
+		const include =
+			position === 'start' ? hunk.baseEnd <= baseIndex : hunk.baseEnd < baseIndex;
+		if (include) {
 			currentIndex += hunk.newTokens.length - (hunk.baseEnd - hunk.baseStart);
 		}
 	}
@@ -107,8 +125,12 @@ function hunksOverlap(a: Hunk, b: Hunk): boolean {
 	const aInsert = a.baseStart === a.baseEnd;
 	const bInsert = b.baseStart === b.baseEnd;
 	if (aInsert && bInsert) return a.baseStart === b.baseStart;
-	if (aInsert) return a.baseStart >= b.baseStart && a.baseStart <= b.baseEnd;
-	if (bInsert) return b.baseStart >= a.baseStart && b.baseStart <= a.baseEnd;
+	// An insertion exactly at a range's start or end boundary is ADJACENT,
+	// not overlapping — user's new tokens sit either just before the range
+	// (at start) or just after it (at end), and can coexist with the agent's
+	// edit. Only strictly-interior positions conflict.
+	if (aInsert) return a.baseStart > b.baseStart && a.baseStart < b.baseEnd;
+	if (bInsert) return b.baseStart > a.baseStart && b.baseStart < a.baseEnd;
 	return a.baseStart < b.baseEnd && b.baseStart < a.baseEnd;
 }
 

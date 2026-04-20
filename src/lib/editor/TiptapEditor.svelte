@@ -35,11 +35,9 @@
 
 	let element: HTMLDivElement;
 	let editor: Editor | undefined = $state();
-	let writeDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 	let idleTimer: ReturnType<typeof setTimeout> | null = null;
 	let countdownInterval: ReturnType<typeof setInterval> | null = null;
 	let idleDeadline = 0;
-	let lastWrittenMd = '';
 
 	let fontScale = $state(1.0);
 	editorFontScale.subscribe((v) => (fontScale = v));
@@ -188,41 +186,30 @@
 		return (editor.storage as any).markdown?.getMarkdown?.() || '';
 	}
 
-	let inFlightWrite: Promise<void> = Promise.resolve();
-
-	function writeToDisk(md: string): Promise<void> {
-		if (md === lastWrittenMd) return inFlightWrite;
-		lastWrittenMd = md;
-		// Include the tab id explicitly so the autosave can never route to
-		// the wrong file if the server's "active tab" pointer is momentarily
-		// out of sync with what the editor is showing.
-		const tabId = getCurrentTab();
-		const q = tabId ? `?tab=${encodeURIComponent(tabId)}` : '';
-		inFlightWrite = fetch(`/api/document${q}`, {
-			method: 'PUT',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ userMd: md })
-		}).then(() => undefined);
-		return inFlightWrite;
-	}
-
 	function syncPlainLineCount() {
 		if (!editor || kind !== 'plain') return;
-		plainLineCount = Math.max(1, editor.state.doc.childCount);
+		let count = 0;
+		editor.state.doc.forEach((node, offset) => {
+			if (node.content.size === 0) {
+				count += 1;
+				return;
+			}
+			let blockLines = 1;
+			node.forEach((child) => {
+				if (child.type?.name === 'hardBreak') blockLines += 1;
+			});
+			count += blockLines;
+		});
+		plainLineCount = Math.max(1, count);
 	}
 
-	/** Synchronously fire any pending debounced write and return the in-flight
-	 * Promise. Awaiting this guarantees notes/<tab>.md reflects every keystroke
-	 * before the caller proceeds — used by submit() so the agent never sees a
-	 * stale file. */
+	/** Previously flushed a pending HTTP autosave; now a no-op. The server
+	 * is authoritative and every keystroke has already been delivered over
+	 * the WebSocket by the time this is called. Callers (most notably
+	 * `submit()` in +page.svelte) still await it so the contract is
+	 * preserved across the Phase 3 cutover. */
 	export function flushAutosave(): Promise<void> {
-		if (writeDebounceTimer) {
-			clearTimeout(writeDebounceTimer);
-			writeDebounceTimer = null;
-			const md = getEditorMarkdown();
-			return writeToDisk(md);
-		}
-		return inFlightWrite;
+		return Promise.resolve();
 	}
 
 	// Diff overlay state — baseline changes when a review starts/ends.
@@ -285,11 +272,6 @@
 		submitCountdown.set(0);
 	}
 
-	function scheduleAutosave(md: string) {
-		if (writeDebounceTimer) clearTimeout(writeDebounceTimer);
-		writeDebounceTimer = setTimeout(() => writeToDisk(md), 50);
-	}
-
 	function restartIdleCountdown() {
 		if (idleTimer) clearTimeout(idleTimer);
 		startCountdown();
@@ -309,16 +291,20 @@
 	}
 
 	/**
-	 * Update policy
-	 * ┌─────────────┬──────────┬────────────┐
-	 * │    Kind     │ Autosave │ Idle timer │
-	 * ├─────────────┼──────────┼────────────┤
-	 * │ yjs-remote  │ skip     │ skip       │
-	 * ├─────────────┼──────────┼────────────┤
-	 * │ agent-apply │ run      │ skip       │
-	 * ├─────────────┼──────────┼────────────┤
-	 * │ user-edit   │ run      │ restart    │
-	 * └─────────────┴──────────┴────────────┘
+	 * Update policy (Phase 3+: server is authoritative, autosave is gone)
+	 * ┌─────────────┬────────────┐
+	 * │    Kind     │ Idle timer │
+	 * ├─────────────┼────────────┤
+	 * │ yjs-remote  │ skip       │
+	 * ├─────────────┼────────────┤
+	 * │ agent-apply │ skip       │
+	 * ├─────────────┼────────────┤
+	 * │ user-edit   │ restart    │
+	 * └─────────────┴────────────┘
+	 *
+	 * `userMd.set(md)` still runs for local stores (outline, diff overlay)
+	 * but the markdown reaches disk via the WebSocket-driven server flush,
+	 * not an HTTP PUT from this component.
 	 */
 	function onEditorUpdate({ transaction }: { transaction: Transaction }) {
 		if (!editor) return;
@@ -327,22 +313,22 @@
 		if (kind === 'yjs-remote') return;
 		const md = getEditorMarkdown();
 		userMd.set(md);
-		scheduleAutosave(md);
 		if (kind === 'user-edit') restartIdleCountdown();
 	}
 
 	onMount(async () => {
-		// Wait for IndexedDB to hydrate the Y.Doc from any previously persisted
-		// state. If it's the very first mount (or IndexedDB was cleared), the
-		// Y.Doc will be empty and we seed it from the server's document.md.
+		// Wait for the Hocuspocus provider's initial sync to finish. The
+		// server is authoritative: it replays the tab's Yjs update log from
+		// SQLite (seeding from the workspace file on first open if the log
+		// is empty) and streams the result here before `synced` fires.
 		const ydoc = getYDoc();
 		await whenYDocReady();
 
 		if (isYDocEmpty()) {
-			// `userMd` should already have been populated by +page.svelte's
-			// loadTab() before we mounted. Seed the Y.Doc from it, using the
-			// right parser for the tab kind so plain-text files don't get
-			// turned into markdown headings etc.
+			// Last-resort fallback: the server didn't seed the Y.Doc for
+			// any reason (file missing, persistence error). +page.svelte's
+			// loadTab() primed `userMd` from a GET /api/document response,
+			// so use that to avoid showing a blank editor.
 			let initialMd = '';
 			userMd.subscribe((v) => (initialMd = v))();
 			if (initialMd) seedYDocFromContent(initialMd, kind);
@@ -393,11 +379,10 @@
 		editorRoot.addEventListener('pointerdown', handlePointerDown);
 		window.addEventListener('pointerup', handlePointerUp);
 
-		// Prime the store and the write-through tracker with the Y.Doc's
-		// current content, so we don't re-save unchanged text on first tick.
+		// Prime the store with the Y.Doc's current content so outline and
+		// other local readers see the live text on mount.
 		const initialMd = getEditorMarkdown();
 		userMd.set(initialMd);
-		lastWrittenMd = initialMd;
 		syncPlainLineCount();
 		updateDiff();
 		editor.on('update', ({ transaction }) => onEditorUpdate({ transaction }));
@@ -416,14 +401,6 @@
 	});
 
 	onDestroy(() => {
-		// Fire any pending debounced write before tearing down — switching
-		// tabs fast (within the 50ms debounce) used to drop the last few
-		// keystrokes since onDestroy ran before the timer fired.
-		if (writeDebounceTimer) {
-			clearTimeout(writeDebounceTimer);
-			writeDebounceTimer = null;
-			void writeToDisk(getEditorMarkdown());
-		}
 		if (editor) editor.destroy();
 		detachFeedbackPointerHandlers?.();
 		detachFeedbackPointerHandlers = null;
@@ -705,6 +682,10 @@
 		color: var(--diff-added-color);
 		background: var(--diff-added-bg);
 	}
+	.tiptap-editor :global(.tiptap-plain p.diff-added-line) {
+		color: var(--diff-added-color);
+		background: var(--diff-added-bg);
+	}
 	.tiptap-editor :global(.diff-removed) {
 		color: var(--diff-removed-color);
 		text-decoration: line-through;
@@ -728,6 +709,11 @@
 	 * rather than "the agent rewrote a paragraph". Background gone; text
 	 * takes just a subtle color + thin underline/strike. */
 	.tiptap-editor :global(.diff-added.diff-added-tiny) {
+		color: var(--diff-added-color);
+		background: transparent;
+		border-bottom: 1px dotted color-mix(in srgb, var(--diff-added-color) 60%, transparent);
+	}
+	.tiptap-editor :global(.tiptap-plain p.diff-added-line.diff-added-line-tiny) {
 		color: var(--diff-added-color);
 		background: transparent;
 		border-bottom: 1px dotted color-mix(in srgb, var(--diff-added-color) 60%, transparent);

@@ -2,14 +2,33 @@
  * SQLite ↔ Y.Doc bridge: persist Yjs updates into the `yjs_updates` table
  * and replay them back into a fresh Y.Doc on load.
  *
- * Phase 2 scaffolding. The `yjs_updates` column is literally named `update`
- * (a SQLite reserved word), so every SELECT/INSERT must quote it as
- * `"update"`. Schema lives in `db-schema.ts`.
+ * Phase 3 turns this module into the server's source of truth for document
+ * state:
+ *   - `loadYDoc` now hydrates from `yjs_updates`, and if that table is
+ *     empty for a tab, seeds from the real workspace file on disk (so a
+ *     freshly-opened tab for an existing file shows its content instead of
+ *     appearing empty).
+ *   - `scheduleMarkdownFlush` debounces a write of the tab's user-facing
+ *     file. Called from Hocuspocus's `onChange` whenever a client (or, in
+ *     Phase 4, a custom MCP tool) mutates the Y.Doc.
+ *
+ * The `yjs_updates` column is literally named `update` (a SQLite reserved
+ * word), so every SELECT/INSERT must quote it as `"update"`.
  */
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { dirname } from 'path';
 import * as Y from 'yjs';
 import { getDb } from './db';
+import { tabFile, tabKind } from './document-files';
+import { serializeYDocToMarkdown, seedYDocFromContent } from './ydoc-markdown';
 
 /** Load a Y.Doc by replaying all its updates from `yjs_updates` in seq order.
+ *
+ * If no rows exist for the tab (first open of the tab in this database) AND
+ * a real workspace file exists at the tab's path, seed the Y.Doc from the
+ * file's content and persist that seed as a single `origin = 'system'` row
+ * so subsequent loads skip the disk read. This preserves the "open an
+ * existing .md file and its content shows up" UX after IndexedDB is gone.
  *
  * Preserves `origin` via `ydoc.transact(() => applyUpdate(...), origin)` so
  * that a freshly-constructed UndoManager (which watches by origin) observes
@@ -17,17 +36,44 @@ import { getDb } from './db';
  * for undo-after-restart semantics. */
 export function loadYDoc(tabId: string): Y.Doc {
 	const ydoc = new Y.Doc();
-	const rows = getDb()
+	const db = getDb();
+	const rows = db
 		.prepare(
 			`SELECT "update", origin FROM yjs_updates WHERE tab_id = ? ORDER BY seq`
 		)
 		.all(tabId) as Array<{ update: Buffer; origin: string }>;
-	for (const row of rows) {
-		ydoc.transact(
-			() => Y.applyUpdate(ydoc, new Uint8Array(row.update)),
-			row.origin
-		);
+
+	if (rows.length > 0) {
+		for (const row of rows) {
+			ydoc.transact(
+				() => Y.applyUpdate(ydoc, new Uint8Array(row.update)),
+				row.origin
+			);
+		}
+		return ydoc;
 	}
+
+	// No persisted updates — try seeding from the workspace file so an
+	// existing `document.md` on disk hydrates the server-authoritative
+	// Y.Doc on first connect. Silent no-op if the file doesn't exist.
+	try {
+		const workspacePath = tabFile(tabId);
+		if (existsSync(workspacePath)) {
+			const content = readFileSync(workspacePath, 'utf-8');
+			if (content) {
+				seedYDocFromContent(ydoc, content, tabKind(tabId));
+				// Persist the seed as a single update row so the next
+				// `loadYDoc` replays it instead of re-reading the file.
+				const update = Y.encodeStateAsUpdate(ydoc);
+				db.prepare(
+					`INSERT INTO yjs_updates (tab_id, "update", origin, created) VALUES (?, ?, ?, ?)`
+				).run(tabId, Buffer.from(update), 'system', Date.now());
+			}
+		}
+	} catch (err) {
+		console.error(`[docwriter] seed from disk failed for tab "${tabId}":`, err);
+	}
+
 	return ydoc;
 }
 
@@ -58,4 +104,56 @@ export function compactTab(tabId: string) {
 			`INSERT INTO yjs_updates (tab_id, "update", origin, created) VALUES (?, ?, ?, ?)`
 		).run(tabId, Buffer.from(merged), 'system', Date.now());
 	})();
+}
+
+/**
+ * Debounced markdown flush — keeps the on-disk `document.md` in sync with
+ * the server's authoritative Y.Doc. Called from Hocuspocus's `onChange`
+ * hook, which fires on every mutation (client keystroke, custom MCP tool,
+ * etc.). One timer per tab; the last call within the debounce window wins.
+ *
+ * The `ydoc` argument must be the live Y.Doc from the `onChange` payload —
+ * Hocuspocus maintains its own authoritative Document per connection and
+ * the cold-start registry Y.Doc goes stale once clients connect. Passing
+ * the wrong one would flush stale content over the user's latest edits.
+ */
+const FLUSH_DEBOUNCE_MS = 1_000;
+const flushTimers = new Map<string, NodeJS.Timeout>();
+
+export function scheduleMarkdownFlush(tabId: string, ydoc: Y.Doc) {
+	const existing = flushTimers.get(tabId);
+	if (existing) clearTimeout(existing);
+	flushTimers.set(
+		tabId,
+		setTimeout(() => {
+			flushTimers.delete(tabId);
+			try {
+				const kind = tabKind(tabId);
+				const content = serializeYDocToMarkdown(ydoc, kind);
+				const path = tabFile(tabId);
+				mkdirSync(dirname(path), { recursive: true });
+				writeFileSync(path, content);
+			} catch (err) {
+				console.error(`[docwriter] markdown flush failed for tab "${tabId}":`, err);
+			}
+		}, FLUSH_DEBOUNCE_MS)
+	);
+}
+
+/** Force a flush for one tab — clears any pending debounce and writes
+ * synchronously. Used at shutdown and from the `PUT /api/document` no-op so
+ * legacy callers still see their last keystroke land on disk. */
+export function flushMarkdownNow(tabId: string, ydoc: Y.Doc) {
+	const existing = flushTimers.get(tabId);
+	if (existing) clearTimeout(existing);
+	flushTimers.delete(tabId);
+	try {
+		const kind = tabKind(tabId);
+		const content = serializeYDocToMarkdown(ydoc, kind);
+		const path = tabFile(tabId);
+		mkdirSync(dirname(path), { recursive: true });
+		writeFileSync(path, content);
+	} catch (err) {
+		console.error(`[docwriter] markdown flush (sync) failed for tab "${tabId}":`, err);
+	}
 }
