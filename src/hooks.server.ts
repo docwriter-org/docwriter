@@ -9,6 +9,7 @@ import type { Handle } from '@sveltejs/kit';
 import { readRuntimeState, setSessionId } from '$lib/server/runtime-state';
 import { installBundledSkills } from '$lib/server/skills-install';
 import { seedFromJsonFilesIfNeeded } from '$lib/server/db-seed';
+import { createWsServer } from '$lib/server/ws-server';
 
 // Install DocWriter's bundled project skill(s) into the workspace's
 // `.claude/skills/` dir so the SDK picks them up via the 'project'
@@ -23,6 +24,22 @@ try {
 	seedFromJsonFilesIfNeeded();
 } catch (err) {
 	console.error('[docwriter] SQLite seed failed (non-fatal):', err);
+}
+
+// Phase 2: start the Hocuspocus WebSocket Y.Doc sync server on a separate
+// port alongside Vite's HTTP server. Module-scope singleton guard keeps
+// Vite HMR (which re-executes this file on save) from double-binding.
+const WS_PORT = parseInt(process.env.DOCWRITER_WS_PORT ?? '', 10) || 3001;
+let wsServer: ReturnType<typeof createWsServer> | null = (globalThis as unknown as { __docwriterWsServer?: ReturnType<typeof createWsServer> }).__docwriterWsServer ?? null;
+if (!wsServer) {
+	try {
+		wsServer = createWsServer(WS_PORT);
+		wsServer.listen();
+		(globalThis as unknown as { __docwriterWsServer?: ReturnType<typeof createWsServer> }).__docwriterWsServer = wsServer;
+		console.log(`[docwriter] Y.Doc sync listening on ws://localhost:${WS_PORT}`);
+	} catch (err) {
+		console.error('[docwriter] failed to start Y.Doc WebSocket server:', err);
+	}
 }
 
 // Run at module load (= server startup), not per-request.

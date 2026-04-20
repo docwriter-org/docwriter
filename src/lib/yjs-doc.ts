@@ -1,18 +1,23 @@
 import * as Y from 'yjs';
 import { IndexeddbPersistence } from 'y-indexeddb';
+import { HocuspocusProvider } from '@hocuspocus/provider';
 
 /**
  * Per-tab Y.Doc registry. Each tab has its own Y.Doc, bound to its own
- * IndexedDB store (`docwriter-doc:<tabId>`). Switching tabs switches which
- * Y.Doc is "current"; the editor rebuilds itself against the new doc.
+ * IndexedDB store (`docwriter-doc:<tabId>`) and, in Phase 2+, a Hocuspocus
+ * WebSocket provider that syncs the same doc with the server-side Y.Doc.
+ * Switching tabs switches which Y.Doc is "current"; the editor rebuilds
+ * itself against the new doc.
  *
  * Each Y.Doc holds:
  *   - an XmlFragment named `default` (the editor content, via y-prosemirror)
  *   - a Y.Map named `review` with `baseline` and `preAgent` snapshot strings
  *     (null when no review is pending)
  *
- * y-indexeddb persists every transaction, so tab content and review state
- * both survive page refresh without any server round-trip.
+ * y-indexeddb persists every transaction locally so tab content and review
+ * state survive page refresh without a round-trip; the WebSocket provider
+ * additionally mirrors each transaction to the server's SQLite-backed
+ * Y.Doc log. Phase 3 removes IndexedDB; for now they run in parallel.
  */
 
 const DB_PREFIX = 'docwriter-doc:';
@@ -22,7 +27,16 @@ const REVIEW_MAP_NAME = 'review';
 interface TabDoc {
 	ydoc: Y.Doc;
 	persistence: IndexeddbPersistence | null;
+	wsProvider: HocuspocusProvider | null;
 	readyPromise: Promise<void>;
+}
+
+/** Build the WebSocket URL the HocuspocusProvider connects to. The port is
+ * injected at build time via Vite's `PUBLIC_DOCWRITER_WS_PORT` env (falling
+ * back to 3001 — the server default). Only callable in the browser. */
+function wsUrl(): string {
+	const port = import.meta.env.PUBLIC_DOCWRITER_WS_PORT || '3001';
+	return `ws://${location.hostname}:${port}`;
 }
 
 const registry = new Map<string, TabDoc>();
@@ -36,16 +50,25 @@ export function getYDocForTab(tabId: string): Y.Doc {
 	if (existing) return existing.ydoc;
 	const ydoc = new Y.Doc();
 	let persistence: IndexeddbPersistence | null = null;
+	let wsProvider: HocuspocusProvider | null = null;
 	let readyPromise: Promise<void>;
 	if (typeof window !== 'undefined') {
 		persistence = new IndexeddbPersistence(DB_PREFIX + tabId, ydoc);
+		// Phase 2: attach Hocuspocus alongside IndexedDB. Both providers
+		// share the same Y.Doc — CRDT semantics handle any cross-provider
+		// ordering. Phase 3 removes IndexedDB.
+		wsProvider = new HocuspocusProvider({
+			url: wsUrl(),
+			name: tabId,
+			document: ydoc
+		});
 		readyPromise = new Promise<void>((resolve) => {
 			persistence!.once('synced', () => resolve());
 		});
 	} else {
 		readyPromise = Promise.resolve();
 	}
-	registry.set(tabId, { ydoc, persistence, readyPromise });
+	registry.set(tabId, { ydoc, persistence, wsProvider, readyPromise });
 	return ydoc;
 }
 
@@ -110,10 +133,15 @@ export function isYDocEmpty(): boolean {
 }
 
 /** Destroy the Y.Doc for a given tab and clear its IndexedDB store. Called
- * when the user deletes a tab so stale editor state doesn't linger. */
+ * when the user deletes a tab so stale editor state doesn't linger. Also
+ * disconnects the server WebSocket provider so the browser stops receiving
+ * updates for the gone tab. */
 export async function destroyTab(tabId: string): Promise<void> {
 	const doc = registry.get(tabId);
 	if (!doc) return;
+	if (doc.wsProvider) {
+		doc.wsProvider.destroy();
+	}
 	if (doc.persistence) {
 		await doc.persistence.clearData();
 		doc.persistence.destroy();
@@ -138,7 +166,10 @@ export async function renameTab(oldId: string, newId: string): Promise<void> {
 	const newYdoc = new Y.Doc();
 	Y.applyUpdate(newYdoc, state);
 
-	// Tear down the old IndexedDB store.
+	// Tear down the old persistence / WS connection.
+	if (existing.wsProvider) {
+		existing.wsProvider.destroy();
+	}
 	if (existing.persistence) {
 		await existing.persistence.clearData();
 		existing.persistence.destroy();
@@ -148,16 +179,22 @@ export async function renameTab(oldId: string, newId: string): Promise<void> {
 
 	// Spin up persistence for the new ID, seed it with the migrated state.
 	let persistence: IndexeddbPersistence | null = null;
+	let wsProvider: HocuspocusProvider | null = null;
 	let readyPromise: Promise<void>;
 	if (typeof window !== 'undefined') {
 		persistence = new IndexeddbPersistence(DB_PREFIX + newId, newYdoc);
+		wsProvider = new HocuspocusProvider({
+			url: wsUrl(),
+			name: newId,
+			document: newYdoc
+		});
 		readyPromise = new Promise<void>((resolve) => {
 			persistence!.once('synced', () => resolve());
 		});
 	} else {
 		readyPromise = Promise.resolve();
 	}
-	registry.set(newId, { ydoc: newYdoc, persistence, readyPromise });
+	registry.set(newId, { ydoc: newYdoc, persistence, wsProvider, readyPromise });
 	if (currentTabId === oldId) currentTabId = newId;
 }
 
