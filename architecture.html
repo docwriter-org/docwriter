@@ -339,13 +339,13 @@
         <li><a href="#mental-model">Mental model</a></li>
         <li><a href="#user-journey">What the user does</a></li>
         <li><a href="#topology">Runtime topology</a></li>
-        <li><a href="#flow-typing">Flow: typing &amp; autosave</a></li>
+        <li><a href="#flow-typing">Flow: user keystroke</a></li>
         <li><a href="#flow-render">Flow: agent render</a></li>
         <li><a href="#flow-review">Flow: review &amp; accept/reject</a></li>
-        <li><a href="#flow-conflict">Flow: conflict &amp; retry</a></li>
-        <li><a href="#why-shadows">Why the filesystem shadows</a></li>
+        <li><a href="#flow-conflict">Flow: stale <code>old_string</code></a></li>
+        <li><a href="#undo-persistence">Undo across server restart</a></li>
         <li><a href="#persistence">Persistence layers</a></li>
-        <li><a href="#merge-internals">Merge &amp; review internals</a></li>
+        <li><a href="#merge-internals">Y.Doc registry &amp; review internals</a></li>
         <li><a href="#components">Components &amp; stores</a></li>
         <li><a href="#api">Server API reference</a></li>
         <li><a href="#safety">Workspace safety</a></li>
@@ -357,20 +357,22 @@
       <!-- ============ HERO ============ -->
       <section class="hero" style="margin-top: 0;">
         <div class="eyebrow">DocWriter &middot; Engineering Overview</div>
-        <h1>A local-first writing editor with an agent that works on a shadow copy.</h1>
+        <h1>A local-first writing editor whose editor state lives on the server.</h1>
         <p class="lede">
-          DocWriter edits real files in a real folder on disk. Each open tab is backed by its own CRDT document
-          in the browser. When the user pauses, a Claude agent wakes up, edits a <em>shadow copy</em> of the
-          files on disk, and the app merges the agent&rsquo;s output back into the live document without
-          clobbering anything the user typed in the meantime.
+          DocWriter edits real files in a real folder on disk. Each open tab is backed by a CRDT
+          document (<code>Y.Doc</code>) whose authoritative copy lives on a Hocuspocus WebSocket
+          server running in the same Node process as SvelteKit. The browser is a synced client.
+          The agent edits tabs through custom MCP tools that transact directly against the live
+          server document &mdash; no shadows, no post-hoc merge.
         </p>
         <div class="pill-row">
           <span class="pill">SvelteKit + Tiptap</span>
-          <span class="pill">Yjs per tab</span>
-          <span class="pill">IndexedDB</span>
+          <span class="pill">Server Y.Doc</span>
+          <span class="pill">Hocuspocus WebSocket</span>
+          <span class="pill">SQLite <code>yjs_updates</code></span>
           <span class="pill">Claude Agent SDK</span>
-          <span class="pill">SSE streaming</span>
-          <span class="pill">3-way merge</span>
+          <span class="pill">Custom MCP tools</span>
+          <span class="pill">Origin-tagged undo</span>
         </div>
       </section>
 
@@ -379,13 +381,14 @@
         <span class="section-tag">Section 1</span>
         <h2>At a glance</h2>
         <p>
-          Four processes, one folder. The browser holds the <em>live</em> document state. The server mediates
-          file I/O and runs the agent. The agent reads the workspace and writes only to shadow files. The disk
-          is the source of portability, not the source of truth.
+          One Node process, one folder. The server holds the authoritative Y.Doc per tab and
+          persists every CRDT update into SQLite, origin-tagged. The browser connects a
+          <code>HocuspocusProvider</code> per open tab and is always in sync. The agent mutates
+          the same live document the browser is looking at, through custom MCP tools.
         </p>
 
         <div class="diagram">
-          <svg viewBox="0 0 960 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="System topology">
+          <svg viewBox="0 0 960 380" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="System topology">
             <defs>
               <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
                 <path d="M0,0 L10,5 L0,10 z" fill="#245a7a" />
@@ -395,75 +398,88 @@
               </marker>
             </defs>
 
-            <!-- CLI -->
-            <g>
-              <rect x="20" y="30" width="180" height="70" rx="10" fill="#fdfbf7" stroke="#d8c9b0" />
-              <text x="110" y="58" text-anchor="middle" font-family="Inter, sans-serif" font-size="14" font-weight="600" fill="#2d2a26">CLI launcher</text>
-              <text x="110" y="78" text-anchor="middle" font-family="Inter, sans-serif" font-size="11.5" fill="#7a6f62">bin/docwriter.js</text>
-              <text x="110" y="92" text-anchor="middle" font-family="Inter, sans-serif" font-size="11.5" fill="#7a6f62">--watch, --new-session</text>
-            </g>
-
             <!-- Browser -->
             <g>
-              <rect x="250" y="20" width="260" height="150" rx="12" fill="#fdfbf7" stroke="#245a7a" stroke-width="1.4" />
-              <text x="380" y="46" text-anchor="middle" font-family="Inter, sans-serif" font-size="14" font-weight="700" fill="#245a7a">Browser</text>
-              <text x="380" y="72" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">Tiptap editor</text>
-              <text x="380" y="92" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">Y.Doc per tab + IndexedDB</text>
-              <text x="380" y="112" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">review UI, outline, history</text>
-              <text x="380" y="146" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" font-style="italic" fill="#7a6f62">owns live document state</text>
+              <rect x="20" y="30" width="260" height="170" rx="12" fill="#fdfbf7" stroke="#245a7a" stroke-width="1.4" />
+              <text x="150" y="56" text-anchor="middle" font-family="Inter, sans-serif" font-size="14" font-weight="700" fill="#245a7a">Browser</text>
+              <text x="150" y="82" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">Tiptap editor</text>
+              <text x="150" y="102" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">per-tab Y.Doc</text>
+              <text x="150" y="122" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">HocuspocusProvider</text>
+              <text x="150" y="142" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">review UI, history pane</text>
+              <text x="150" y="175" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" font-style="italic" fill="#7a6f62">synced client &mdash; no local persistence</text>
             </g>
 
-            <!-- Server -->
+            <!-- Node process: SvelteKit + Hocuspocus -->
             <g>
-              <rect x="560" y="20" width="260" height="150" rx="12" fill="#fdfbf7" stroke="#245a7a" stroke-width="1.4" />
-              <text x="690" y="46" text-anchor="middle" font-family="Inter, sans-serif" font-size="14" font-weight="700" fill="#245a7a">SvelteKit server</text>
-              <text x="690" y="72" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">/api/document, /api/tabs</text>
-              <text x="690" y="92" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">/api/render (SSE)</text>
-              <text x="690" y="112" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">/api/files, /api/history ...</text>
-              <text x="690" y="146" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" font-style="italic" fill="#7a6f62">mediates file I/O &amp; agent run</text>
+              <rect x="330" y="30" width="310" height="170" rx="12" fill="#fdfbf7" stroke="#245a7a" stroke-width="1.4" />
+              <text x="485" y="56" text-anchor="middle" font-family="Inter, sans-serif" font-size="14" font-weight="700" fill="#245a7a">Node process</text>
+              <text x="485" y="82" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">SvelteKit /api/*</text>
+              <text x="485" y="102" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">Hocuspocus WebSocket (3001)</text>
+              <text x="485" y="122" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">ydoc-registry: Y.Doc + UndoManager</text>
+              <text x="485" y="142" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">custom MCP tools (edit_doc, ...)</text>
+              <text x="485" y="175" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" font-style="italic" fill="#7a6f62">authoritative copy of each tab's Y.Doc</text>
             </g>
 
-            <!-- Agent -->
+            <!-- Agent SDK -->
             <g>
-              <rect x="560" y="220" width="260" height="110" rx="12" fill="#fdfbf7" stroke="#9a5b2f" stroke-width="1.4" />
-              <text x="690" y="248" text-anchor="middle" font-family="Inter, sans-serif" font-size="14" font-weight="700" fill="#9a5b2f">Claude Agent SDK</text>
-              <text x="690" y="272" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">reads workspace files</text>
-              <text x="690" y="290" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">edits .docwriter/agent/&lt;tab&gt;</text>
-              <text x="690" y="315" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" font-style="italic" fill="#7a6f62">owns shadow copy during render</text>
+              <rect x="690" y="30" width="250" height="170" rx="12" fill="#fdfbf7" stroke="#9a5b2f" stroke-width="1.4" />
+              <text x="815" y="56" text-anchor="middle" font-family="Inter, sans-serif" font-size="14" font-weight="700" fill="#9a5b2f">Claude Agent SDK</text>
+              <text x="815" y="82" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">query() per render</text>
+              <text x="815" y="102" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">edit_doc / read_doc / write_doc</text>
+              <text x="815" y="122" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">Read / Glob / Grep anywhere</text>
+              <text x="815" y="142" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">scratch at .docwriter/agent/scratch/</text>
+              <text x="815" y="175" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" font-style="italic" fill="#7a6f62">transacts live server Y.Doc</text>
             </g>
 
-            <!-- Filesystem -->
+            <!-- SQLite -->
             <g>
-              <rect x="250" y="220" width="260" height="110" rx="12" fill="#fdfbf7" stroke="#d8c9b0" />
-              <text x="380" y="248" text-anchor="middle" font-family="Inter, sans-serif" font-size="14" font-weight="600" fill="#2d2a26">Workspace on disk</text>
-              <text x="380" y="272" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">your files (draft.md, ...)</text>
-              <text x="380" y="290" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">.docwriter/state.json</text>
-              <text x="380" y="308" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">.docwriter/agent/&lt;tab&gt; (shadows)</text>
+              <rect x="250" y="250" width="230" height="100" rx="12" fill="#fdfbf7" stroke="#d8c9b0" />
+              <text x="365" y="278" text-anchor="middle" font-family="Inter, sans-serif" font-size="14" font-weight="600" fill="#2d2a26">.docwriter/docwriter.db</text>
+              <text x="365" y="302" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">yjs_updates (append log, origin-tagged)</text>
+              <text x="365" y="320" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">tabs, rules, hooks, kv</text>
+              <text x="365" y="338" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" font-style="italic" fill="#7a6f62">persistence layer</text>
+            </g>
+
+            <!-- Workspace files -->
+            <g>
+              <rect x="510" y="250" width="230" height="100" rx="12" fill="#fdfbf7" stroke="#d8c9b0" />
+              <text x="625" y="278" text-anchor="middle" font-family="Inter, sans-serif" font-size="14" font-weight="600" fill="#2d2a26">Workspace on disk</text>
+              <text x="625" y="302" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">document.md, drafts/intro.md, ...</text>
+              <text x="625" y="320" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">.docwriter/state.json (JSON mirror)</text>
+              <text x="625" y="338" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" font-style="italic" fill="#7a6f62">debounced backup from Y.Doc</text>
             </g>
 
             <!-- Arrows -->
-            <line x1="200" y1="64" x2="250" y2="64" stroke="#7a6f62" stroke-width="1.4" marker-end="url(#arrow)" />
-            <line x1="510" y1="64" x2="560" y2="64" stroke="#245a7a" stroke-width="1.4" marker-end="url(#arrow)" />
-            <line x1="560" y1="104" x2="510" y2="104" stroke="#245a7a" stroke-width="1.4" marker-end="url(#arrow)" />
-            <text x="535" y="56" font-family="Inter, sans-serif" font-size="10.5" fill="#245a7a">HTTP + SSE</text>
+            <!-- Browser <-> Node (WebSocket) -->
+            <line x1="280" y1="100" x2="330" y2="100" stroke="#245a7a" stroke-width="1.4" marker-end="url(#arrow)" />
+            <line x1="330" y1="130" x2="280" y2="130" stroke="#245a7a" stroke-width="1.4" marker-end="url(#arrow)" />
+            <text x="305" y="92" text-anchor="middle" font-family="Inter, sans-serif" font-size="10.5" fill="#245a7a">WebSocket</text>
+            <text x="305" y="150" text-anchor="middle" font-family="Inter, sans-serif" font-size="10.5" fill="#245a7a">+ SSE</text>
 
-            <line x1="690" y1="170" x2="690" y2="220" stroke="#9a5b2f" stroke-width="1.4" marker-end="url(#arrowWarm)" />
-            <text x="698" y="200" font-family="Inter, sans-serif" font-size="10.5" fill="#9a5b2f">query()</text>
+            <!-- Node -> Agent (query) and back -->
+            <line x1="640" y1="100" x2="690" y2="100" stroke="#9a5b2f" stroke-width="1.4" marker-end="url(#arrowWarm)" />
+            <line x1="690" y1="130" x2="640" y2="130" stroke="#9a5b2f" stroke-width="1.4" marker-end="url(#arrowWarm)" />
+            <text x="665" y="92" text-anchor="middle" font-family="Inter, sans-serif" font-size="10.5" fill="#9a5b2f">query()</text>
+            <text x="665" y="150" text-anchor="middle" font-family="Inter, sans-serif" font-size="10.5" fill="#9a5b2f">MCP calls</text>
 
-            <line x1="560" y1="275" x2="510" y2="275" stroke="#9a5b2f" stroke-width="1.4" marker-end="url(#arrowWarm)" />
-            <text x="518" y="266" font-family="Inter, sans-serif" font-size="10.5" fill="#9a5b2f">read / edit shadow</text>
+            <!-- Node -> SQLite -->
+            <line x1="400" y1="200" x2="365" y2="250" stroke="#7a6f62" stroke-width="1.4" marker-end="url(#arrow)" />
+            <text x="350" y="232" font-family="Inter, sans-serif" font-size="10.5" fill="#7a6f62">appendUpdate</text>
 
-            <line x1="380" y1="170" x2="380" y2="220" stroke="#7a6f62" stroke-width="1.4" stroke-dasharray="3 3" />
-            <text x="388" y="200" font-family="Inter, sans-serif" font-size="10.5" fill="#7a6f62">autosave &amp; read</text>
+            <!-- Node -> Disk -->
+            <line x1="565" y1="200" x2="595" y2="250" stroke="#7a6f62" stroke-width="1.4" marker-end="url(#arrow)" />
+            <text x="604" y="232" font-family="Inter, sans-serif" font-size="10.5" fill="#7a6f62">1s flush</text>
           </svg>
         </div>
 
         <div class="panel accent" style="margin-top: 18px;">
           <span class="panel-label">Core invariant</span>
           <p style="margin: 0;">
-            Live state lives in the browser&rsquo;s Y.Doc. Disk files are a portable mirror. Shadow files are
-            transient workspace for the agent. The merge algorithm reconciles shadow &rarr; live without losing
-            user keystrokes.
+            The server Y.Doc is the source of truth. Every change &mdash; user keystroke or agent
+            edit &mdash; is a Yjs transaction with an explicit origin that appends to the
+            <code>yjs_updates</code> log and broadcasts to every connected client. <code>document.md</code>
+            is a debounced backup; it is never read back into the running system unless the tab is
+            brand new and the update log is empty.
           </p>
         </div>
       </section>
@@ -471,74 +487,85 @@
       <!-- ============ 2. MENTAL MODEL ============ -->
       <section id="mental-model">
         <span class="section-tag">Section 2</span>
-        <h2>Mental model: three worlds</h2>
+        <h2>Mental model: one Y.Doc, three places you can see it</h2>
 
         <div class="panel warm">
           <span class="panel-label">Vocabulary (used everywhere below)</span>
           <ul style="margin: 6px 0 0 18px;">
             <li>
               <strong>Render.</strong> One full agent cycle: the user pauses (or clicks Wake), the server
-              calls the Claude Agent SDK once, the agent reads files and edits shadow copies, the result
-              streams back, the browser merges it into the editor. Begins when the user triggers it; ends
-              when the SDK emits a final <code>result</code>. Named after <code>/api/render</code>. You can
-              think of it as "agent turn" or "agent run."
+              calls the Claude Agent SDK once, the agent uses <code>edit_doc</code>/<code>write_doc</code>
+              to mutate open tabs, the stream of events flows back to the browser. Begins when the user
+              triggers it; ends when the SDK emits a final <code>result</code>.
             </li>
             <li>
-              <strong>Shadow.</strong> A throwaway copy of a workspace file under
-              <code>.docwriter/agent/&lt;path&gt;</code>. Created at the start of a render, edited by the
-              agent, read and deleted at the end. The agent never touches the real file.
+              <strong>Y.Doc.</strong> The per-tab CRDT. An <code>XmlFragment</code> named <code>default</code>
+              holds the editor content; a <code>Y.Map</code> named <code>review</code> holds pending review
+              rounds. Lives authoritatively on the server; browsers have live mirrors via
+              <code>HocuspocusProvider</code>.
             </li>
             <li>
-              <strong>Review round.</strong> One apply of agent edits into the live document, shown in the
-              UI as a card with Accept / Reject. A single render can produce multiple review rounds
-              (streaming incremental applies + a final apply).
+              <strong>Origin.</strong> Every Yjs transaction carries a string tag. <code>'agent'</code> for
+              the custom MCP tools, defaults to <code>'user'</code> for browser-driven updates,
+              <code>'system'</code> for cold-start seeding. The UndoManager tracks only <code>'agent'</code>
+              &mdash; that's the whole mechanism behind Reject.
             </li>
             <li>
-              <strong>Live / Disk / Shadow.</strong> The three copies of each document (defined in the
-              table below). When code says "Live" it means the Y.Doc in the browser, not the file on disk.
+              <strong>Review round.</strong> One <code>edit_doc</code>/<code>write_doc</code> call produces
+              one round: a <code>PendingReviewRound</code> entry appended to <code>Y.Map('review').pendingRounds</code>
+              in the same transaction as the content change. Surfaced in the UI as a card with Accept / Reject.
+            </li>
+            <li>
+              <strong>DirectConnection.</strong> A Hocuspocus handle that lets server-side code transact
+              against the live Document as if it were a client. The custom MCP tools use it; this is the
+              only correct way for server code to mutate a tab once any browser has connected.
             </li>
           </ul>
         </div>
 
         <p>
-          The single hardest thing to hold in your head about DocWriter is that there are <em>three copies</em>
-          of every document during an agent render, and they can diverge. If you understand how they&rsquo;re
-          kept in sync, the rest of the system falls out naturally.
+          The one hard idea to hold: <em>there is exactly one Y.Doc per tab</em>, and it lives on the
+          server. What you see in the browser is a synced copy. What you see on disk is a debounced
+          serialization. Neither is the source of truth.
         </p>
 
         <table>
           <thead>
-            <tr><th style="width: 16%">World</th><th style="width: 22%">Where it lives</th><th>What it is</th><th style="width: 24%">Who writes to it</th></tr>
+            <tr><th style="width: 18%">Copy</th><th style="width: 24%">Where it lives</th><th>What it is</th><th style="width: 24%">Who writes to it</th></tr>
           </thead>
           <tbody>
             <tr>
-              <td><strong>Live</strong></td>
-              <td><code>Y.Doc</code> in memory<br><span style="color: var(--muted); font-size: 12.5px">mirrored to IndexedDB</span></td>
-              <td>The CRDT the editor actually renders. One per open tab. Truth for everything the user sees and edits <em>right now</em>.</td>
-              <td>User keystrokes &middot; agent apply step</td>
+              <td><strong>Server Y.Doc</strong></td>
+              <td>Node heap (Hocuspocus internal <code>Document</code>)</td>
+              <td>The authoritative CRDT. All Reads and Writes go through here. Replayed from
+                <code>yjs_updates</code> on cold start.</td>
+              <td>User ops via WebSocket &middot; agent ops via DirectConnection</td>
             </tr>
             <tr>
-              <td><strong>Disk</strong></td>
-              <td>Real file under <code>DOCWRITER_ROOT</code></td>
-              <td>Portable, git-friendly copy of the document. Autosaved from Live on a debounce. This is what you see if you <code>cat</code> the file.</td>
-              <td>Autosave &middot; external editors (via <code>--watch</code>)</td>
+              <td><strong>Browser Y.Doc</strong></td>
+              <td><code>Y.Doc</code> in the tab's JS heap</td>
+              <td>A synced mirror of the server Y.Doc. The editor renders from this. Empty on refresh
+                until the WebSocket synchandshake completes (sub-20ms on localhost).</td>
+              <td>HocuspocusProvider (remote ops) &middot; Tiptap (local ops that immediately round-trip
+                through the server)</td>
             </tr>
             <tr>
-              <td><strong>Shadow</strong></td>
-              <td><code>.docwriter/agent/&lt;tab-path&gt;</code></td>
-              <td>Transient copy made at the start of each render. The agent&rsquo;s <code>Edit</code>/<code>Write</code> tools operate on this file, not the real one.</td>
-              <td>Reset from Disk at render start &middot; edited by agent &middot; re-synced from user edits mid-render</td>
+              <td><strong>Workspace file</strong></td>
+              <td>Real file under <code>DOCWRITER_ROOT</code> (<code>document.md</code>, etc.)</td>
+              <td>Portable, git-friendly serialization. Written 1s after the last Yjs update. Read only
+                when seeding a brand-new tab whose update log is empty.</td>
+              <td>Server's debounced flush &middot; external editors (visible via <code>--watch</code>)</td>
             </tr>
           </tbody>
         </table>
 
         <div class="panel accent">
-          <span class="panel-label">Why three?</span>
+          <span class="panel-label">What changed from the old model</span>
           <p style="margin: 0;">
-            The Claude Agent SDK&rsquo;s file-editing tools need a real filesystem path. They can&rsquo;t operate on
-            a Y.Doc. If we pointed them at the real file, concurrent user typing would race with agent writes and one
-            side would lose. The shadow decouples them: the agent gets a stable file to edit, and the app
-            decides how and when to fold the result back into Live.
+            The previous architecture had three <em>independent</em> worlds &mdash; a browser Y.Doc, a
+            disk file, and a filesystem shadow for the agent &mdash; held together by a 3-way merge at
+            each agent apply. All three worlds are gone. There is now one Y.Doc, with a serialization
+            (disk) and a mirror (browser). The CRDT handles convergence; no post-hoc merge is needed.
           </p>
         </div>
       </section>
@@ -548,7 +575,7 @@
         <span class="section-tag">Section 3</span>
         <h2>What the user does</h2>
         <p>
-          Before you read any code, picture an actual writing session. Every architectural decision earns its
+          Before the code, picture an actual writing session. Every architectural decision earns its
           keep against this workflow.
         </p>
 
@@ -557,53 +584,56 @@
             <div>
               <strong>Launch against a folder.</strong>
               The user runs <code>docwriter</code> pointed at a workspace directory. The CLI sets
-              <code>DOCWRITER_ROOT</code>, starts the SvelteKit server, and opens the browser.
+              <code>DOCWRITER_ROOT</code>, starts SvelteKit + Hocuspocus in one Node process, and opens
+              the browser.
             </div>
           </li>
           <li>
             <div>
               <strong>Open a file.</strong>
-              The file tree lists the workspace. Clicking a file opens it as a tab. The browser creates (or
-              rehydrates from IndexedDB) a <code>Y.Doc</code> for that tab and mounts Tiptap on it.
+              The file tree lists the workspace. Clicking a file opens it as a tab. The browser
+              instantiates a fresh Y.Doc + HocuspocusProvider for that tab id; the server either
+              replays the tab's <code>yjs_updates</code> log or, if it's empty, seeds from the
+              on-disk file. The editor mounts once the provider reports <code>synced</code>.
             </div>
           </li>
           <li>
             <div>
               <strong>Write.</strong>
-              Every keystroke updates the Y.Doc. Two independent timers also run in the background, both
-              <em>reset</em> on every keystroke so they only fire when you actually pause:
+              Every keystroke updates the browser Y.Doc, which immediately streams the Yjs update to
+              the server. One idle timer runs in the background, reset on every keystroke:
               <ul style="margin: 8px 0 0 18px;">
-                <li><strong>Autosave (~50ms):</strong> after a 50ms pause, the current markdown is written
-                to the file on disk via <code>PUT /api/document</code>. Keeps the file up to date so the
-                server always has fresh content.</li>
-                <li><strong>Idle-submit (3s):</strong> after a full 3 seconds of quiet, <code>submit()</code>
-                runs and kicks off a render &mdash; the agent wakes up. Press
-                <span class="kbd">Cmd/Ctrl + Enter</span> to skip the 3-second wait and trigger it now.</li>
+                <li><strong>Idle-submit (3s):</strong> after a full 3 seconds of quiet,
+                <code>submit()</code> runs and kicks off a render &mdash; the agent wakes up. Press
+                <span class="kbd">Cmd/Ctrl + Enter</span> to skip the wait.</li>
               </ul>
-              "Debounced" here means the timer restarts every time you type, so it only fires after you
-              stop &mdash; like a motion light that turns on only once you&rsquo;ve been still for a bit.
+              A second timer lives on the server: 1 second after the last Yjs update, the server
+              serializes the current Y.Doc to markdown and writes <code>document.md</code>. Client
+              no longer initiates disk writes.
             </div>
           </li>
           <li>
             <div>
               <strong>Agent wakes.</strong>
-              The right-hand history pane streams the agent&rsquo;s thinking, tool calls, and progress live
-              over SSE. The user can keep typing while this happens.
+              The right-hand history pane streams the agent's thinking, tool calls, and progress live
+              over SSE. The user can keep typing while this happens &mdash; the agent's edits and the
+              user's keystrokes converge in the server Y.Doc via the CRDT.
             </div>
           </li>
           <li>
             <div>
               <strong>Review proposal.</strong>
-              When the agent finishes, the proposed edits land in the editor as a diff overlay (if track-changes
-              is on) or merge silently. Pending rounds appear as cards in the left pane with Accept and Reject.
+              When the agent calls <code>edit_doc</code>, the content change and the review-round
+              entry reach the browser in one atomic update. A card appears in the OutlinePane with
+              Accept / Reject. The diff overlay renders against the stored <code>beforeMd</code>.
             </div>
           </li>
           <li>
             <div>
               <strong>Accept, reject, or keep writing.</strong>
-              Accept keeps the merge. Reject rewinds just the agent&rsquo;s edits and leaves user edits
-              untouched. Ignoring the review and typing over it is also fine &mdash; the overlap-safe merge
-              protects user keystrokes even in that case.
+              Accept removes the round from <code>Y.Map('review')</code>. Reject additionally calls
+              <code>undoManager.undo()</code> to rewind the agent's transactions &mdash; user edits
+              that landed in between are untouched (they're not in the tracked-origin set).
             </div>
           </li>
         </ol>
@@ -614,8 +644,9 @@
         <span class="section-tag">Section 4</span>
         <h2>Runtime topology</h2>
         <p>
-          Everything runs on the user&rsquo;s machine: a Node process serving the SvelteKit app, the browser
-          connected to it, and the Claude Agent SDK invoked as a subprocess when the user triggers a render.
+          Everything runs on the user's machine. One Node process hosts both the SvelteKit HTTP
+          server and the Hocuspocus WebSocket server. The Claude Agent SDK is invoked as a
+          subprocess of that process when a render starts.
         </p>
 
         <h3>Process layout</h3>
@@ -625,14 +656,19 @@
 └── spawns SvelteKit server (built app OR Vite dev server)
       │
       ├── Browser tab
-      │     ├── Tiptap editor (per-tab Y.Doc + IndexedDB)
-      │     ├── file tree, outline, history pane, agent dock
+      │     ├── Tiptap editor bound to per-tab Y.Doc
+      │     ├── HocuspocusProvider (ws://localhost:3001/&lt;tabId&gt;)
       │     └── SSE client consuming /api/render
       │
-      └── HTTP + SSE endpoints under /api/*
-            └── /api/render → spawns Claude Agent SDK query()
-                  ├── reads workspace files
-                  └── edits .docwriter/agent/&lt;tab-path&gt; shadows only</pre>
+      ├── HTTP + SSE endpoints under /api/*
+      │     └── /api/render → spawns Claude Agent SDK query()
+      │           with edit_doc / read_doc / write_doc MCP tools
+      │           that transact against the live Hocuspocus Document
+      │
+      └── Hocuspocus WebSocket server (port 3001)
+            ├── onLoadDocument → lazy-hydrates from yjs_updates
+            ├── onChange → appendUpdate + scheduleMarkdownFlush
+            └── in-memory ydoc-registry (Y.Doc + UndoManager per tab)</pre>
 
         <h3>Launch modes</h3>
         <div class="two-up">
@@ -648,7 +684,9 @@
             <span class="panel-label">Development</span>
             <p style="margin: 0;">
               <code>bin/docwriter-dev.js</code> runs the Vite dev server so UI changes hot-reload while
-              DocWriter is pointed at a real writing workspace.
+              DocWriter is pointed at a real writing workspace. Vite HMR re-imports
+              <code>hooks.server.ts</code> on save; a <code>globalThis.__docwriterWsServer</code> guard
+              keeps Hocuspocus from double-binding the port.
             </p>
           </div>
         </div>
@@ -660,122 +698,112 @@
         <h2>Flow: the user types a character</h2>
 
         <div class="panel warm">
-          <span class="panel-label">Primer: Tiptap, ProseMirror, transactions</span>
+          <span class="panel-label">Primer: Tiptap, ProseMirror, Yjs origins</span>
           <ul style="margin: 6px 0 0 18px;">
             <li>
-              <strong>ProseMirror</strong> is the low-level editor engine. <strong>Tiptap</strong> is a
-              friendlier wrapper around it. DocWriter uses Tiptap; under the hood it&rsquo;s all ProseMirror.
+              <strong>ProseMirror</strong> is the low-level editor engine; <strong>Tiptap</strong> wraps
+              it. DocWriter uses Tiptap + <code>@tiptap/extension-collaboration</code>, which binds a
+              ProseMirror editor to a <code>Y.XmlFragment</code>. Editor edits translate to Yjs ops.
             </li>
             <li>
-              <strong>The document never changes directly.</strong> To change it, something creates a
-              <em>transaction</em> &mdash; an object describing the change (e.g. "insert 'h' at position 5")
-              &mdash; and hands it to the editor. The editor applies it, updates the document, then calls
-              your <code>onUpdate</code> callback. One transaction = one change = one <code>onUpdate</code>
-              call.
+              <strong>Yjs transactions carry an origin string.</strong> When the browser's
+              ySyncPlugin translates a ProseMirror transaction into Yjs ops, it uses its own
+              plugin key as the origin. Server-side <code>DirectConnection.transact(..., 'agent')</code>
+              uses the string <code>AGENT_ORIGIN</code>. The UndoManager watches origin tags.
             </li>
             <li>
-              <strong>Transactions can carry metadata.</strong> The code that creates a transaction can
-              attach extra info with <code>tr.setMeta(key, value)</code>. Think of it as a sticky note:
-              "this transaction came from X." The receiver reads it with <code>tr.getMeta(key)</code>.
-            </li>
-            <li>
-              <strong>Who creates transactions here?</strong> Three different sources, and the handler has
-              to behave differently for each:
+              <strong>Three kinds of ProseMirror transactions reach the update handler:</strong>
               <ol style="margin: 6px 0 0 18px;">
-                <li><em>User keystrokes</em> &mdash; no metadata. Save to disk, restart timers, record the edit range.</li>
-                <li><em>Agent applies</em> &mdash; tagged with Yjs origin <code>'agent'</code> (set by <code>yjs-agent.ts</code> when it applies the merged markdown). Save to disk, but <strong>don&rsquo;t</strong> restart the idle timer (an agent edit shouldn&rsquo;t reset "the user is done writing").</li>
-                <li><em>Yjs restore</em> &mdash; tagged with <code>ySyncPluginKey</code> (set by <code>y-prosemirror</code> when it pushes content from IndexedDB or a remote update into the editor). Skip everything &mdash; this isn&rsquo;t a real change, just the editor catching up to its stored state.</li>
+                <li><em>User keystrokes</em> &mdash; local edits. Rebroadcast over WebSocket by Tiptap's Collaboration plugin.</li>
+                <li><em>Remote updates</em> &mdash; Yjs updates arriving via <code>HocuspocusProvider</code> (another client's keystroke, or the agent's edit). The ySyncPlugin marks these with <code>ySyncPluginKey</code> meta.</li>
+                <li><em>Agent-origin apply</em> &mdash; a remote update whose Yjs origin equals <code>AGENT_ORIGIN</code>. The editor tags the derived ProseMirror transaction with <code>AGENT_APPLY_KEY</code> meta so the update handler can recognize it.</li>
               </ol>
             </li>
           </ul>
         </div>
 
         <p>
-          With that vocabulary, the whole update handler in <code>TiptapEditor.svelte</code> is just a series
-          of "is this transaction X? then do Y" checks, in order.
+          The update handler in <code>TiptapEditor.svelte</code> is a short series of "is this X?
+          then Y" checks. No autosave path; no disk write; no serialize-for-outline-only step.
         </p>
 
         <ol class="flow">
           <li>
             <div>
-              <strong>Tiptap calls <code>onUpdate(transaction)</code>.</strong>
-              Something just changed the document. The transaction object has a <code>.getMeta()</code>
-              method we can query to figure out who made it. At this point we don&rsquo;t know yet &mdash;
-              it could be any of the three sources above.
+              <strong>Tiptap fires <code>onUpdate(transaction)</code>.</strong>
+              Something just changed the document. We inspect the transaction's metas.
             </div>
           </li>
           <li>
             <div>
-              <strong>Check for the Yjs restore marker; if present, return early.</strong>
+              <strong>If the transaction is a Yjs hydration, return early.</strong>
               <p class="meta">
                 Concretely: <code>if (transaction.getMeta(ySyncPluginKey) !== undefined) return;</code>.
-                That marker is attached by <code>y-prosemirror</code> any time it pushes content into the
-                editor as part of restoring the Y.Doc &mdash; for example, when IndexedDB finishes loading
-                your saved document on page reload and the content gets pumped back into the editor piece by
-                piece. Each of those pieces fires <code>onUpdate</code>. If we didn&rsquo;t bail out here,
-                the handler would serialize whatever partial content is in the editor right now (possibly
-                an empty string, if we caught it mid-restore) and autosave that to disk &mdash; wiping your
-                real file. So: if the marker is there, do nothing. Let the restore finish in peace.
+                That marker fires while the ySyncPlugin catches up to a fresh Y.Doc state &mdash; for
+                example, right after the <code>synced</code> event on page load. Touching <code>userMd</code>
+                or triggering any side effects during hydration can desynchronize the editor.
               </p>
             </div>
           </li>
           <li>
             <div>
-              <strong>Serialize the current editor content to markdown (or plain text).</strong>
-              Markdown tabs run a markdown serializer; plain tabs (<code>.txt</code>, <code>.json</code>,
-              source code) use a schema that just emits raw text. Result is a string, e.g.
-              <code>"# Hello\n\nworld"</code>.
-            </div>
-          </li>
-          <li>
-            <div>
-              <strong>Update the <code>userMd</code> store and debounce a disk write.</strong>
-              <p class="meta" style="margin-bottom: 4px;">
-                <code>userMd</code> is a Svelte store (<code>writable&lt;string&gt;('')</code>) holding the
-                latest serialized markdown. Multiple readers subscribe to it &mdash; the outline pane
-                rebuilds on heading changes, the autosave loop reads what to write, the initial-tab-open
-                flow seeds the Y.Doc from it, and baseline/diff paths sample it.
-              </p>
-              <p class="meta" style="margin-top: 6px;">
-                <strong>Why materialize this as a store instead of serializing on demand?</strong>
-                Two reasons:
-              </p>
-              <ul style="margin-top: 4px;">
-                <li><strong>Reactivity.</strong> Subscribers re-run automatically when the markdown
-                  changes. A <code>getCurrentMarkdown(tabId)</code> function wouldn&rsquo;t give you that
-                  &mdash; each reader would need its own Y.Doc observer or poll.</li>
-                <li><strong>Shared computation.</strong> ProseMirror &rarr; markdown serialization
-                  isn&rsquo;t free. The editor has to compute it here anyway (to feed autosave), so
-                  publishing the result once amortizes it across every reader instead of each of them
-                  re-serializing.</li>
-              </ul>
-              <p class="meta" style="margin-top: 8px;">
-                After updating the store, schedule a <code>PUT /api/document</code> request ~50ms from
-                now. If another keystroke arrives in that window, the scheduled request is cancelled and
-                re-scheduled &mdash; so we only actually write to disk once the user pauses. After the
-                write, the file on disk matches Live.
-              </p>
-            </div>
-          </li>
-          <li>
-            <div>
-              <strong>Check for the agent-apply origin; if present, stop here.</strong>
+              <strong>Serialize the editor content and publish to the <code>userMd</code> store.</strong>
+              Markdown tabs run a markdown serializer; plain tabs emit raw text. Subscribers to
+              <code>userMd</code> (outline pane, diff overlay, some UI projections) re-render.
               <p class="meta">
-                We check the Yjs transaction origin (separate from ProseMirror&rsquo;s metadata &mdash;
-                Yjs has its own concept). If it&rsquo;s <code>'agent'</code>, this change came from
-                <code>yjs-agent.ts</code> applying a merged agent proposal. We still wanted the disk write
-                (step 4) so the file reflects the new content, but we <em>don&rsquo;t</em> want to treat it
-                as user activity: no idle-timer restart. Return.
+                The store does not drive disk writes &mdash; the server owns the markdown flush.
+                <code>userMd</code> is a pure convenience projection so reactive UI code doesn't each
+                re-serialize the Y.Doc.
+              </p>
+            </div>
+          </li>
+          <li>
+            <div>
+              <strong>If the transaction carries <code>AGENT_APPLY_KEY</code>, stop here.</strong>
+              <p class="meta">
+                The update came from the WebSocket with Yjs origin <code>'agent'</code>. It's a valid
+                document change, but not "the user is writing," so we don't restart the 3-second idle
+                timer. (If we did, every agent edit would reset the auto-submit clock and the agent
+                would never fire again.)
               </p>
             </div>
           </li>
           <li>
             <div>
               <strong>Restart the 3-second idle-submit countdown.</strong>
-              Clear any existing idle timer, start a new one. If 3 seconds pass with no further
-              <code>onUpdate</code> calls, the callback fires <code>submit()</code> &mdash; which is the
-              entry point for a render. Pressing <span class="kbd">Cmd/Ctrl + Enter</span> skips the wait
-              and calls <code>submit()</code> immediately.
+              Clear any existing idle timer, start a new one. On timeout, <code>submit()</code> kicks
+              off a render. <span class="kbd">Cmd/Ctrl + Enter</span> fires it immediately.
+            </div>
+          </li>
+        </ol>
+
+        <h3>On the server side (same keystroke, parallel track)</h3>
+        <p style="margin-top: 6px;">
+          While the local editor reacts, the browser's Collaboration plugin has already encoded the
+          change as a Yjs update and sent it over the WebSocket. Server-side:
+        </p>
+        <ol class="flow">
+          <li>
+            <div>
+              <strong>Hocuspocus receives the update.</strong> It applies to the tab's internal
+              <code>Document</code>, advancing the authoritative state. Fires <code>onChange</code>.
+            </div>
+          </li>
+          <li>
+            <div>
+              <strong><code>onChange</code> appends to <code>yjs_updates</code>.</strong>
+              <code>transactionOrigin</code> here is a <code>Connection</code> object (not a string),
+              so we default the recorded origin to <code>'user'</code>. The row is durable immediately;
+              if the server crashes now, the keystroke survives.
+            </div>
+          </li>
+          <li>
+            <div>
+              <strong>Schedule a debounced markdown flush.</strong>
+              <code>scheduleMarkdownFlush(tabId, document)</code> sets a 1-second timer (per tab) to
+              serialize the Y.Doc and <code>writeFileSync</code> the workspace file. If another update
+              lands within the window, the timer resets. Reading from disk is not the hot path &mdash;
+              the server always answers reads from the Y.Doc, not the file.
             </div>
           </li>
         </ol>
@@ -786,16 +814,15 @@
         <span class="section-tag">Section 6 &middot; Data flow</span>
         <h2>Flow: triggering an agent render</h2>
         <p>
-          A render is one agent turn. Something in the browser triggers it, the server makes one streaming
-          call to the Claude Agent SDK, the agent edits shadow files, and a stream of events flows back to
-          the browser while it&rsquo;s all happening.
+          A render is one agent turn. Something in the browser calls <code>submit()</code>, which
+          POSTs to <code>/api/render</code>. The server runs one streaming <code>query()</code> call;
+          the agent uses custom MCP tools to read and write the live Y.Docs; events flow back over
+          SSE.
         </p>
 
         <h3>What can trigger a render</h3>
-        <p style="margin-top: 6px;">Any of these ends up calling the same <code>submit()</code> function
-          in the browser, which POSTs to <code>/api/render</code>. The <strong>trigger</strong> only
-          determines the explicit user prompt (<code>userMessage</code>) &mdash; everything else the agent
-          sees is the same regardless.</p>
+        <p style="margin-top: 6px;">Any of these ends up calling <code>submit()</code>. The
+          <strong>trigger</strong> only determines the user-message string.</p>
         <table>
           <thead><tr><th style="width: 26%">Trigger</th><th style="width: 28%">What the user did</th><th><code>userMessage</code> sent</th></tr></thead>
           <tbody>
@@ -807,22 +834,19 @@
           </tbody>
         </table>
 
-        <h3>What the POST body actually contains</h3>
-        <p style="margin-top: 6px;">The body is small because the server assembles most of the context
-          itself by reading <code>state.json</code>, the shadow directory, and the current files.</p>
+        <h3>What the POST body contains</h3>
 <pre>POST /api/render
 {
-  userMessage:       string     // empty for idle / wake-up, or the user's prompt
-  model:             'opus' | 'sonnet' | 'haiku'
-  tab:               string     // which tab is active
-  warmup?:           boolean    // optional prefetch flag
+  userMessage: string      // empty for idle / wake-up, or the user's prompt
+  model:       'opus' | 'sonnet' | 'haiku'
+  tab:         string      // which tab is active
+  warmup?:     boolean     // optional prefetch flag
 }</pre>
         <p style="margin-top: 10px; color: var(--muted); font-size: 14px;">
-          Rules, references, agency setting, and the current tab content are <em>not</em> in the POST
-          body &mdash; the server reads all of that from disk, including previous "last agent view"
-          shadow state for diffing. That&rsquo;s why adding a rule or editing
-          a style reference takes effect on the very next render without the client doing anything
-          special.
+          Rules, references, agency, and tab content are <em>not</em> in the POST body. The server
+          reads rules / agentSettings from <code>state.json</code>, tab content from the live
+          Hocuspocus <code>Document</code>, and per-tab "last seen" markdown from the <code>kv</code>
+          table. Add a rule mid-session and the next render sees it automatically.
         </p>
 
         <h3>Step-by-step</h3>
@@ -831,191 +855,116 @@
           <li>
             <div>
               <strong>Browser calls <code>POST /api/render</code>.</strong>
-              The response isn&rsquo;t a single JSON blob &mdash; it&rsquo;s an SSE stream the browser
-              subscribes to. The stream will stay open for seconds to minutes while the agent works.
+              The response is an SSE stream.
             </div>
           </li>
           <li>
             <div>
-              <strong>Server reads prior shadows, then snapshots all open tabs into fresh shadows.</strong>
+              <strong>Server reads live content + "last seen" from each open tab.</strong>
               <p class="meta">
-                Before the reset, the existing shadow file is treated as the previous "last agent view"
-                for that tab and used to build the diff block. Then <code>resetAllAgentDocs()</code>
-                copies every open tab from its real workspace path into
-                <code>.docwriter/agent/&lt;tab-path&gt;</code>. After this, shadow content exactly matches
-                Live content and becomes the <strong>baseline</strong> for the 3-way merge at the end of
-                the render &mdash; it&rsquo;s how the app tells "what the agent changed" apart from "what the
-                user typed during the render."
+                For every open tab, <code>readLiveTabMarkdown(tabId)</code> serializes the live
+                Hocuspocus <code>Document</code> (falling back to the registry Y.Doc if no client
+                has connected yet). <code>kv['last_seen:&lt;tabId&gt;']</code> holds the content the
+                agent saw at the end of the previous render; a unified-line diff against current
+                content is what surfaces "I fixed a typo" or "I reverted that rewrite" to the agent.
               </p>
             </div>
           </li>
           <li>
             <div>
-              <strong>Server builds one big prompt.</strong>
-              <p class="meta" style="margin-bottom: 4px;">Assembled in <code>buildMultiTabPrompt()</code>.
-                Regardless of trigger, every render prompt contains the same sections &mdash; only
-                <code>userMessage</code> varies with how the render was triggered.</p>
-              <p style="margin: 10px 0 4px; font-weight: 600;">What goes in:</p>
+              <strong>Server builds one multi-tab prompt.</strong>
+              <p class="meta" style="margin-bottom: 4px;">Assembled in <code>buildMultiTabPrompt()</code>. Inlining policy:</p>
               <ul style="margin-top: 4px;">
-                <li><strong>The <code>userMessage</code></strong> (from the POST body), or a default
-                  substitute if empty: <em>"the user clicked Wake-up without a specific request."</em></li>
-                <li><strong>Current content of every open tab</strong>, inlined as fenced code blocks,
-                  with the active tab flagged so the agent knows where attention should default. Read
-                  fresh from the shadow directory (which is a copy of disk at render start).</li>
-                <li><strong>A per-tab diff since the agent last edited that file.</strong> The server
-                  compares the current file on disk against the persisted shadow from the previous
-                  render and inlines a unified diff under the file. This is how "I fixed a typo the
-                  agent missed" or "I reverted that last rewrite" surfaces to the next render as a
-                  visible change the agent can react to.</li>
-                <li><strong>All persistent writing rules</strong>, freshly read from
-                  <code>state.json → rules</code> at render start. Add a rule between renders and the
-                  next render picks it up automatically.</li>
-                <li><strong>Style references</strong>, assembled by
-                  <code>buildStyleReferencesPromptBlock()</code> &mdash; also read fresh each render.</li>
-                <li><strong>Agency guidance</strong> &mdash; a paragraph that varies with
-                  <code>agentSettings.agency</code> (<code>conservative</code> / <code>balanced</code> /
-                  <code>aggressive</code>) and rewires "when is it OK to make an edit?"</li>
-                <li><strong>Tool sandbox rules</strong> &mdash; only write inside
-                  <code>.docwriter/agent/</code> shadows and scratch; propose rules and hooks via MCP
-                  tools instead of editing config directly.</li>
-                <li><strong>MCP tool definitions</strong> for <code>propose_rule</code> and
-                  <code>propose_hook</code>, so the agent can suggest new rules/hooks for the user to
-                  review in the sidebar.</li>
+                <li><strong>Active tab:</strong> full content inlined + diff against <code>last_seen</code>.</li>
+                <li><strong>Non-active tab with changes:</strong> path + diff only; agent calls <code>read_doc</code> for full content.</li>
+                <li><strong>Non-active tab, unchanged since last render:</strong> path only.</li>
+                <li><strong>First-render tab (no <code>last_seen</code>):</strong> full content inlined.</li>
               </ul>
-              <p style="margin: 14px 0 4px; font-weight: 600;">Why re-send all of this every render?</p>
-              <p class="meta" style="margin-top: 4px;">
-                DocWriter <em>does</em> resume the SDK session across renders
-                (<code>resume: currentSessionId</code> is passed to <code>query()</code>), so
-                conversation history carries forward. Reasonable question why we also re-include rules,
-                references, and sandbox text in every single turn. Four reasons:
+              <p class="meta" style="margin-top: 10px;">
+                Plus: persistent writing rules, style-references index, agency guidance (<code>conservative</code>
+                / <code>balanced</code> / <code>aggressive</code>), tool-usage rules, and MCP tool definitions
+                for <code>propose_rule</code> / <code>propose_hook</code>.
               </p>
+            </div>
+          </li>
+          <li>
+            <div>
+              <strong>Server calls <code>query()</code> with two MCP servers registered.</strong>
+              <p class="meta">
+                <code>docwriter</code> &mdash; <code>propose_rule</code>, <code>propose_hook</code>.<br>
+                <code>docwriter-doc</code> &mdash; <code>edit_doc</code>, <code>read_doc</code>, <code>write_doc</code>.
+              </p>
+              <p class="meta">
+                Built-in <code>Read</code> / <code>Glob</code> / <code>Grep</code> are available for
+                exploring the workspace. Built-in <code>Edit</code> / <code>Write</code> are still
+                registered but the prompt forbids their use on open-tab paths &mdash; scratch paths
+                under <code>.docwriter/agent/scratch/</code> may use either channel.
+              </p>
+            </div>
+          </li>
+          <li>
+            <div>
+              <strong>Agent calls <code>edit_doc({ path, old_string, new_string })</code>.</strong>
+              <p class="meta">In <code>mcp-doc-tools.ts</code>:</p>
               <ol style="margin-top: 6px;">
-                <li><strong>Those things change between renders.</strong> The user can add a rule, toggle
-                  agency, or edit a reference at any moment. Re-reading from disk each render is the
-                  simplest way to always reflect current state; tracking deltas would add complexity
-                  with no real upside.</li>
-                <li><strong>Session resumption preserves conversation history, not working state.</strong>
-                  It remembers "5 turns ago you rewrote paragraph 3," not "the current ruleset is X."
-                  Files, rules, and agency may all be different now &mdash; each turn&rsquo;s prompt is
-                  the place for "here&rsquo;s the world right now."</li>
-                <li><strong>Long sessions drift.</strong> By turn 50 the model may have internally
-                  summarized earlier context. Rules sent only at turn 1 could fade out of active
-                  attention. Re-including them keeps them in the foreground.</li>
-                <li><strong>Prompt caching makes it cheap.</strong> Stable prefixes are cached by the
-                  API, so wire cost is real but inference cost is mostly amortized. Re-sending
-                  isn&rsquo;t the bandwidth problem it looks like at first glance.</li>
+                <li>Route by path. Scratch &rarr; <code>fs.writeFileSync</code>. Otherwise resolve
+                  <code>tabId</code> via <code>path-router.ts</code>; reject with <code>isError: true</code>
+                  if not an open tab or a scratch path.</li>
+                <li><code>getHocuspocus().openDirectConnection(tabId)</code>.</li>
+                <li>Inside the <code>direct.transact(document =&gt; ...)</code>, serialize the current
+                  Y.Doc to markdown and find the <em>single</em> occurrence of <code>old_string</code>.
+                  Zero matches or multiple matches &rarr; return <code>isError: true</code> with a helpful
+                  message steering the agent to <code>read_doc</code>.</li>
+                <li>In one <code>document.transact(() =&gt; { ... }, AGENT_ORIGIN)</code>:
+                  <ul>
+                    <li>Rebuild the <code>default</code> XmlFragment via a headless Tiptap
+                      Collaboration editor bound to the document &mdash; ySyncPlugin emits the minimal
+                      Yjs ops inside our transact so they all carry <code>AGENT_ORIGIN</code>.</li>
+                    <li>Append a <code>PendingReviewRound</code> to
+                      <code>Y.Map('review').pendingRounds</code>.</li>
+                  </ul>
+                </li>
               </ol>
-            </div>
-          </li>
-          <li>
-            <div>
-              <strong>Server calls the SDK&rsquo;s <code>query()</code> with that prompt.</strong>
-              The agent is given access to <code>Read</code>, <code>Edit</code>, and <code>Write</code>
-              tools, but the file paths it&rsquo;s allowed to touch are restricted to the shadow directory.
-              It can read anywhere in the workspace, but it can only write inside
-              <code>.docwriter/agent/</code>.
-            </div>
-          </li>
-          <li>
-            <div>
-              <strong>Before every agent write, a pre-tool hook re-syncs user edits into the shadow.</strong>
-              <p class="meta">
-                The agent takes seconds to minutes. The user may keep typing the whole time. Autosave is
-                writing those keystrokes to the real file on disk every ~50ms. But the agent is looking at
-                the shadow, which was snapshotted at render start &mdash; it&rsquo;s getting stale. So
-                just before each <code>Edit</code>/<code>Write</code> the agent tries to run,
-                <code>syncUserEditsToAgent()</code> reads the current real file and overwrites the shadow
-                with it. The agent&rsquo;s edit is then computed against the freshest user content. This
-                is what keeps "keep typing while the agent runs" from producing stale proposals.
-              </p>
-            </div>
-          </li>
-          <li>
-            <div>
-              <strong>The server streams events down the SSE connection as the agent works.</strong>
-              <p class="meta">Each event is a small JSON object with a <code>type</code> field. Event kinds include:</p>
-              <ul style="margin-top: 6px;">
-                <li><code>tool_call_start</code>, <code>tool_call</code> &mdash; the agent invoked a tool (shown in the history pane).</li>
-                <li><code>assistant_text</code>, <code>assistant_thinking</code> &mdash; model output and thinking summaries.</li>
-                <li><code>incremental_apply</code> &mdash; the shadow just changed; push this intermediate version to the editor <em>through the 3-way merge</em> so the user sees each edit land in real time. See step 7 for the merge mechanics.</li>
-                <li><code>rule_proposal</code>, <code>hook_proposal</code>, <code>ask_user</code> &mdash; sidebar UI events.</li>
-                <li><code>notification</code>, <code>cost</code> &mdash; status updates.</li>
-                <li><code>result</code> &mdash; the render is done; this carries the final shadow content per tab.</li>
-              </ul>
-            </div>
-          </li>
-          <li>
-            <div>
-              <strong>Every <code>incremental_apply</code> runs the 3-way merge, against a rolling baseline.</strong>
-              <p class="meta" style="margin-bottom: 4px;">
-                This is the part that keeps the editor in sync with user typing during streaming &mdash; no
-                drift accumulates waiting for <code>result</code>.
-              </p>
-              <p class="meta" style="margin-top: 8px; margin-bottom: 4px;">
-                <strong>Two baselines are tracked per render, for two different purposes:</strong>
-              </p>
-              <ul style="margin-top: 4px;">
-                <li><strong><code>mergeBaseByTab[tabId]</code> &mdash; the merge baseline (markdown string).</strong>
-                  Initialized at render start from <code>preRenderMdByTab</code>, so the first incremental
-                  apply sees the <em>pre-render</em> user content as base. This is intentional: if the user
-                  typed during the agent&rsquo;s thinking, those keystrokes show up as user hunks in the
-                  <code>base &rarr; current</code> diff. Those hunks are what let the merge detect overlap
-                  and protect user edits. If we captured base at first-apply time instead, the user&rsquo;s
-                  mid-render typing would be baked into base and invisible to overlap detection.</li>
-                <li><strong><code>baselineStates</code> &mdash; the reject baseline (Y.Doc snapshot).</strong>
-                  Captured at render start via <code>captureBaselineForAgent(tabId)</code>, then
-                  <em>re-captured</em> on the first <code>incremental_apply</code> for each tab (line 687
-                  in <code>+page.svelte</code>). Why re-capture? Reject needs to rewind only the agent&rsquo;s
-                  edits, not the user&rsquo;s mid-render typing. So the reject baseline should be "Y.Doc
-                  state right before the first agent edit lands" &mdash; which by then includes whatever the
-                  user typed. User typing survives reject; agent edits don&rsquo;t.</li>
-              </ul>
-              <p class="meta" style="margin-top: 10px; margin-bottom: 4px;">
-                <strong>How the merge baseline rolls forward across applies:</strong>
-              </p>
-              <ul style="margin-top: 4px;">
-                <li><strong>First incremental apply for a tab:</strong>
-                  <code>applyAgentMarkdown(tabId, agentMd, trackChanges=true, ..., mergeBaseByTab[tabId])</code>
-                  runs a 3-way merge of (pre-render base, current Live, agentMd) and commits to the Y.Doc
-                  with origin <code>'agent'</code>. After the apply,
-                  <code>mergeBaseByTab[tabId] = iAgentMd</code>.</li>
-                <li><strong>Each subsequent incremental apply:</strong> baseline = <em>previous</em>
-                  incremental&rsquo;s <code>agentMd</code>. The diff is now "what the agent changed since
-                  its last step," merged against whatever the user has typed since. Overlap-safe at every
-                  step.</li>
-                <li><strong>Each apply adds its own Yjs undo step</strong> (agent origin), tallied into
-                  <code>incrementalStepCountByTab[tabId]</code>. These steps will all belong to the review
-                  round created at <code>result</code>.</li>
-                <li><strong>Conflicts accumulate</strong> into <code>conflictCountByTab[tabId]</code>
-                  across all incremental applies for this render &mdash; used at <code>result</code> to
-                  decide whether to queue a retry.</li>
-              </ul>
-            </div>
-          </li>
-          <li>
-            <div>
-              <strong>On <code>result</code>, finalize: one last merge + create the review round.</strong>
-              <p class="meta">
-                Why a final apply is still needed after all those incremental ones: the agent&rsquo;s
-                <em>final</em> shadow state can differ from the last <code>incremental_apply</code> (e.g.
-                a <code>Write</code> after the last <code>Edit</code>). The final call to
-                <code>applyAgentMarkdown(agentMd, ..., baseline=mergeBaseByTab[tabId])</code> canonicalizes:
-                if the last incremental already matched the final shadow it&rsquo;s a no-op; otherwise it
-                commits the remaining delta (plus one more undo step).
-              </p>
               <p class="meta" style="margin-top: 8px;">
-                <strong>Then the review round is born.</strong> In track-changes mode, a
-                <code>PendingReviewRound</code> is added to the tab&rsquo;s Yjs review map with
-                <code>afterMd</code> = final agentMd, <code>beforeMd</code> = captured pre-render state,
-                and <code>stepCount = streamedSteps + 1</code>. Reject uses that count to rewind exactly
-                the right number of steps from the agent-only <code>UndoManager</code>.
+                Because both side-effects are inside one transact, the resulting Yjs update is
+                atomic. Every connected browser receives the content change and the review card
+                together &mdash; it's not possible to see one without the other.
               </p>
-              <p class="meta" style="margin-top: 8px;">
-                In silent mode the apply runs with origin <code>ySyncPluginKey</code> instead of
-                <code>'agent'</code> (no review round, no agent UndoManager capture). Shadow files are
-                cleaned up on accept (or, post-refactor, kept around as "last agent view"; see §6&rsquo;s
-                POST body note).
-              </p>
+            </div>
+          </li>
+          <li>
+            <div>
+              <strong>Hocuspocus's <code>onChange</code> fires.</strong>
+              The transaction origin is the string <code>'agent'</code>, so the row in
+              <code>yjs_updates</code> is tagged accordingly. The update streams to every connected
+              browser Y.Doc. The server-side UndoManager captures a stack frame because
+              <code>'agent'</code> is in its tracked-origin set.
+            </div>
+          </li>
+          <li>
+            <div>
+              <strong>Browser sees the update.</strong>
+              <code>HocuspocusProvider</code> applies it. The ySyncPlugin translates the Y.Doc change
+              into a ProseMirror transaction; the editor re-renders. The review map mutation triggers
+              Svelte reactivity; the review card appears in the OutlinePane.
+            </div>
+          </li>
+          <li>
+            <div>
+              <strong>SSE stream carries status events throughout.</strong>
+              <p class="meta">Event kinds: <code>tool_call_start</code>, <code>tool_call</code>,
+                <code>assistant_text</code>, <code>assistant_thinking</code>, <code>rule_proposal</code>,
+                <code>hook_proposal</code>, <code>ask_user</code>, <code>notification</code>,
+                <code>cost</code>, subagent lifecycle, and finally <code>result</code>. The
+                <code>result</code> event no longer carries markdown &mdash; the content changes already
+                reached the browser through the WebSocket.</p>
+            </div>
+          </li>
+          <li>
+            <div>
+              <strong>After <code>result</code>, update <code>kv['last_seen:&lt;tabId&gt;']</code>.</strong>
+              For every tab the agent saw, store the current serialized markdown. The next render's
+              prompt will compute its diff against this baseline.
             </div>
           </li>
         </ol>
@@ -1026,87 +975,105 @@
         <span class="section-tag">Section 7 &middot; Data flow</span>
         <h2>Flow: review &amp; accept/reject</h2>
         <p>
-          Track-changes mode turns each successful apply into a <code>PendingReviewRound</code> stored in the
-          tab&rsquo;s Yjs review map. Silent mode skips the round entirely and just merges.
+          Every <code>edit_doc</code>/<code>write_doc</code> call creates one
+          <code>PendingReviewRound</code> in <code>Y.Map('review').pendingRounds</code>, in the
+          same transaction as the content change. Accept and Reject are pure Y.Map /
+          UndoManager operations; there's no longer a <code>POST /api/document</code> round-trip.
         </p>
 
         <h3>What a review round contains</h3>
         <pre>PendingReviewRound {
-  beforeMd        // baseline markdown before the round
-  afterMd         // merged markdown after the round
-  trigger         // 'idle' | 'manual' | 'feedback' | ...
+  id            // stable uuid for client-side ordering
+  beforeMd      // serialized markdown at the start of this tool call
+  afterMd       // serialized markdown at the end of this tool call
+  trigger       // 'agent_edit_doc' | 'agent_write_doc' | ...
   timestamp
-  sizeClass       // 'tiny' | 'big'  — drives UI treatment
-  stepCount       // how many Yjs undo steps belong to this round
+  kind          // 'tiny' | 'big'  — UI treatment
+  stepCount     // always 1 in the new model (one tool call = one Yjs txn)
 }</pre>
 
         <p class="meta">
-          <code>stepCount</code> is the non-obvious one. A single render can produce multiple
-          <code>incremental_apply</code> events plus a final <code>result</code> apply &mdash; each is its own
-          Yjs transaction on the undo stack. Reject needs that count to rewind exactly the right number of
-          steps.
+          <code>stepCount</code> is historical from the streaming-apply era. With direct MCP
+          tools, each call is one atomic transaction, so it's always 1. The Reject path still
+          multiplies undo calls by <code>stepCount</code> for forward compatibility.
         </p>
 
         <div class="two-up">
           <div class="panel">
             <span class="panel-label">Accept</span>
             <ul style="margin: 6px 0 0 18px;">
-              <li>Drop the round from the review map.</li>
-              <li>Leave the merged content in the live Y.Doc.</li>
-              <li><code>POST /api/document</code> with <code>action: accept</code> deletes the shadow file.</li>
+              <li>Drop the round (and any later rounds up to the one being accepted) from
+                <code>Y.Map('review').pendingRounds</code>.</li>
+              <li>Leave the content unchanged in the live Y.Doc.</li>
+              <li>The mutation propagates through Hocuspocus to every connected client. No server
+                endpoint.</li>
             </ul>
           </div>
           <div class="panel">
             <span class="panel-label">Reject</span>
             <ul style="margin: 6px 0 0 18px;">
-              <li>A dedicated <code>Y.UndoManager</code> tracks only transactions with origin <code>agent</code>.</li>
-              <li>Rewind exactly <code>stepCount</code> steps &mdash; this undoes agent edits without touching user edits that landed during the render.</li>
-              <li>If the undo stack is gone (post-refresh), fall back to re-applying the stored <code>beforeMd</code> baseline.</li>
+              <li>Per-tab <code>Y.UndoManager</code> (client-side mirror of the server's) tracks only
+                <code>AGENT_ORIGIN</code> transactions.</li>
+              <li>Call <code>undoManager.undo()</code> <code>stepCount</code> times &mdash; rewinds
+                exactly this round's agent ops. User edits made in between are unaffected (they're
+                not in the tracked-origin set).</li>
+              <li>Remove the rejected round (and any later rounds built on it) from the review
+                map.</li>
+              <li>Trigger a follow-up render with the rejection diff as context so the agent doesn't
+                repeat the rejected edit.</li>
             </ul>
           </div>
+        </div>
+
+        <div class="panel accent" style="margin-top: 16px;">
+          <span class="panel-label">Why this is simpler than before</span>
+          <p style="margin: 0;">
+            Accept and Reject used to hit <code>POST /api/document</code> to clean up shadow files.
+            They no longer need to &mdash; there's no shadow to clean up. The review round is just
+            a Yjs map entry in the same Y.Doc as the editor content; mutating or removing it is a
+            normal CRDT operation that syncs to every client automatically.
+          </p>
         </div>
       </section>
 
       <!-- ============ 8. CONFLICT ============ -->
       <section id="flow-conflict">
         <span class="section-tag">Section 8 &middot; Data flow</span>
-        <h2>Flow: conflict &amp; automatic retry</h2>
+        <h2>Flow: "<code>old_string</code> not found"</h2>
         <p>
-          The interesting case is when the agent&rsquo;s proposal and the user&rsquo;s keystrokes touch the
-          same paragraph. The 3-way merge decides what to do.
+          With a single authoritative Y.Doc, there's no post-hoc merge to fail. The only remaining
+          conflict is at <code>edit_doc</code> time: the agent formed its plan against a snapshot
+          of the document and, by the time its MCP call executes, the user has edited that region.
+          The literal <code>old_string</code> no longer exists.
         </p>
-
-        <pre>base    = shadow contents at render start (or previous agent step)
-current = live user document now (includes edits typed during render)
-agent   = final shadow contents from the agent
-</pre>
 
         <ol class="flow">
           <li>
             <div>
-              <strong>Diff twice.</strong>
-              <code>mergeAgentEditsIntoCurrent()</code> computes hunks from <code>base &rarr; current</code>
-              (the user&rsquo;s edits) and from <code>base &rarr; agent</code> (the agent&rsquo;s edits).
+              <strong>Agent planned against content X.</strong>
+              It may have seen X via the prompt's inlined content, an earlier <code>read_doc</code>
+              call, or its own prior <code>edit_doc</code> result.
             </div>
           </li>
           <li>
             <div>
-              <strong>For each agent hunk, check overlap.</strong>
-              If it overlaps <em>any</em> user hunk in base coordinates, skip it and bump <code>conflictCount</code>.
-              Otherwise apply it to the current token stream, adjusting indices for earlier applied offsets.
+              <strong>User typed, changing the region of interest.</strong>
+              The keystrokes are already in the server Y.Doc.
             </div>
           </li>
           <li>
             <div>
-              <strong>Return <code>{ mergedText, appliedHunks, conflictCount }</code>.</strong>
-              The apply path uses <code>mergedText</code> as the new content.
+              <strong>Agent calls <code>edit_doc({ old_string, ... })</code>.</strong>
+              The server opens a DirectConnection, serializes the live Y.Doc, and counts occurrences
+              of <code>old_string</code>.
             </div>
           </li>
           <li>
             <div>
-              <strong>If <code>conflictCount &gt; 0</code>, queue one automatic retry.</strong>
-              A history notification is emitted. The retry runs against the updated document and is marked
-              internally so it can&rsquo;t loop forever.
+              <strong>Zero matches (or &gt;1) &rarr; <code>isError: true</code>.</strong>
+              The error message tells the agent to call <code>read_doc(path)</code> and retry
+              against the fresh content. No automatic app-level retry &mdash; the agent's own tool
+              loop handles it, typically in the next turn.
             </div>
           </li>
         </ol>
@@ -1114,49 +1081,65 @@ agent   = final shadow contents from the agent
         <div class="panel warm">
           <span class="panel-label">Design call</span>
           <p style="margin: 0;">
-            The merge favors the user. We never silently overwrite user keystrokes to make the agent&rsquo;s
-            diff cleaner. If a round applies only half of the proposed edits, that&rsquo;s the correct
-            outcome &mdash; surface the conflict and let a fresh retry handle it with current context.
+            The old 3-way merge tried to salvage partial edits when the agent and user overlapped.
+            In the new architecture, the atomic <code>old_string</code>-match check serves the same
+            goal more simply: if the region has changed, the edit is rejected outright and the
+            agent re-plans against current state. User keystrokes are never overwritten because the
+            match never succeeds.
           </p>
         </div>
       </section>
 
-      <!-- ============ 9. WHY SHADOWS ============ -->
-      <section id="why-shadows">
+      <!-- ============ 9. UNDO PERSISTENCE ============ -->
+      <section id="undo-persistence">
         <span class="section-tag">Section 9 &middot; Design</span>
-        <h2>Why the filesystem shadows exist</h2>
+        <h2>Undo across a server restart</h2>
         <p>
-          The Claude Agent SDK exposes <code>Edit</code> and <code>Write</code> tools that take real
-          filesystem paths and perform real I/O. There is no way to hand it a <code>Y.Doc</code> handle.
-          That constraint drives the shadow design.
+          The per-tab server-side <code>Y.UndoManager</code> is the machinery behind Reject. It must
+          correctly reconstruct its undo stack after the Node process dies and restarts, because
+          pending rounds persist across restarts and the user expects Reject to work on them.
         </p>
 
-        <div class="two-up">
-          <div class="panel">
-            <span class="panel-label">Option A &mdash; point agent at real file</span>
-            <p style="margin: 0;">
-              The agent writes directly to <code>draft.md</code>. The browser&rsquo;s Y.Doc and the disk
-              file now disagree any time the user is typing. Autosave races with agent writes. Either side
-              clobbers the other. Review is impossible because there&rsquo;s no stable &ldquo;before&rdquo;
-              to diff against.
-            </p>
-          </div>
-          <div class="panel accent">
-            <span class="panel-label">Option B &mdash; shadow copy (what we do)</span>
-            <p style="margin: 0;">
-              Copy the file to <code>.docwriter/agent/&lt;path&gt;</code> at render start. Agent edits the
-              shadow; real file is untouched by the agent. At render end, the app reads the shadow, merges
-              it against current Live state, and applies the result as Yjs ops. The shadow is the baseline
-              for the 3-way merge and for rejection.
-            </p>
-          </div>
+        <h3>The critical ordering</h3>
+        <p>
+          In <code>src/lib/server/ydoc-registry.ts</code>:
+        </p>
+        <pre>function getTabYDoc(tabId) {
+  const ydoc = new Y.Doc();
+
+  // Step 1 — attach UndoManager FIRST.
+  const undoManager = new Y.UndoManager(
+    ydoc.getXmlFragment('default'),
+    { trackedOrigins: new Set([AGENT_ORIGIN]) }
+  );
+
+  // Step 2 — THEN replay the persisted updates. Each row's origin is
+  // restored via ydoc.transact(..., row.origin), so agent-origin
+  // transactions from prior sessions fire through the already-attached
+  // UndoManager observer and repopulate its undo stack.
+  replayUpdatesInto(ydoc, tabId);
+
+  return { ydoc, undoManager, reviewMap: ydoc.getMap('review') };
+}</pre>
+
+        <p style="margin-top: 12px;">
+          Swap steps 1 and 2 and the UndoManager never observes the replayed transactions. The
+          undo stack is empty at cold start, and Reject on any pending round silently does
+          nothing. This is the whole content of "Phase 7" of the refactor; the fix is one
+          reordering.
+        </p>
+
+        <div class="panel accent">
+          <span class="panel-label">Why it works</span>
+          <p style="margin: 0;">
+            Every writer &mdash; browser WebSocket, <code>DirectConnection</code>, cold-start seed
+            &mdash; records its update with an origin string in <code>yjs_updates</code>. On
+            replay, <code>ydoc.transact(() =&gt; applyUpdate(...), row.origin)</code> reinstates
+            both the CRDT state and the origin tag. The UndoManager's origin-based filter sees the
+            same sequence of transactions it would have seen if the server had been running all
+            along.
+          </p>
         </div>
-
-        <p style="margin-top: 16px;">
-          Shadows also let the pre-tool hook sync user edits into the shadow between agent steps &mdash;
-          so the agent&rsquo;s next <code>Edit</code> sees what the user just typed, without having to
-          pause the agent or lock the document.
-        </p>
       </section>
 
       <!-- ============ 10. PERSISTENCE ============ -->
@@ -1164,34 +1147,54 @@ agent   = final shadow contents from the agent
         <span class="section-tag">Section 10</span>
         <h2>Persistence layers</h2>
         <p>
-          DocWriter persists state in three places with clearly separated responsibilities. Nothing is
-          duplicated; each layer answers a different question.
+          SQLite is the authoritative persistence layer. <code>document.md</code> is a debounced
+          backup. JSON files are mirrors for user inspection.
         </p>
 
         <table>
           <thead>
-            <tr><th style="width: 24%">Layer</th><th style="width: 28%">Location</th><th>Holds</th></tr>
+            <tr><th style="width: 22%">Layer</th><th style="width: 30%">Location</th><th>Holds</th></tr>
           </thead>
           <tbody>
             <tr>
               <td><strong>Workspace</strong></td>
-              <td>User&rsquo;s project folder</td>
-              <td>Actual writing files. Git-friendly. Portable. Autosaved from Live.</td>
+              <td>User's project folder</td>
+              <td>Actual writing files. Git-friendly. Debounced-written (1s) from the server Y.Doc.
+                Read only when seeding a brand-new tab whose update log is empty.</td>
             </tr>
             <tr>
-              <td><strong>Runtime state</strong></td>
+              <td><strong>SQLite (authoritative)</strong></td>
+              <td><code>.docwriter/docwriter.db</code></td>
+              <td><code>yjs_updates</code> (append-only per-tab Yjs ops, origin-tagged),
+                <code>tabs</code>, <code>rules</code>, <code>hooks</code>, <code>recent_actions</code>,
+                <code>action_usage_counts</code>, <code>kv</code> (<code>sessionId</code>,
+                <code>last_seen:&lt;tabId&gt;</code>, etc.).</td>
+            </tr>
+            <tr>
+              <td><strong>JSON mirror</strong></td>
               <td><code>.docwriter/state.json</code></td>
-              <td>Session id, tab order &amp; active tab, writing rules, user edit regions, agent settings, recent feedback actions, usage counts.</td>
+              <td>Session id, tab order &amp; active tab, writing rules, agent settings, recent
+                feedback actions, usage counts. Dual-written alongside the DB for portability.</td>
             </tr>
             <tr>
-              <td><strong>Agent shadows</strong></td>
-              <td><code>.docwriter/agent/&lt;tab-path&gt;</code><br><code>.docwriter/agent/scratch/</code></td>
-              <td>Per-tab shadow files. They persist across accepts/rejects and serve as the next render&rsquo;s "last agent view"; scratch space is for agent drafts and is wiped on New Session.</td>
+              <td><strong>Agent scratch</strong></td>
+              <td><code>.docwriter/agent/scratch/</code></td>
+              <td>Session-scoped drafts and notes the agent can freely write. Not surfaced as tabs;
+                wiped on New Session. Directory lazy-created on first scratch write.</td>
             </tr>
             <tr>
-              <td><strong>Client state</strong></td>
-              <td>IndexedDB (<code>docwriter-doc</code>)</td>
-              <td>One <code>Y.Doc</code> per tab. Each contains an <code>XmlFragment</code> for editor content and a <code>Y.Map("review")</code> with pending rounds and review metadata.</td>
+              <td><strong>Server Y.Doc registry</strong></td>
+              <td>Node heap (<code>ydoc-registry.ts</code>)</td>
+              <td>One entry per loaded tab: <code>{ ydoc, undoManager, reviewMap }</code>. Hydrated
+                from <code>yjs_updates</code> on first access. Becomes stale once Hocuspocus
+                copies state into its own <code>Document</code> &mdash; use DirectConnection from
+                that point on.</td>
+            </tr>
+            <tr>
+              <td><strong>Hocuspocus internal Document</strong></td>
+              <td>Node heap (<code>@hocuspocus/server</code>)</td>
+              <td>The live authoritative Y.Doc once any client has connected. What DirectConnection
+                transacts against. What every browser client is synced with.</td>
             </tr>
           </tbody>
         </table>
@@ -1199,22 +1202,22 @@ agent   = final shadow contents from the agent
         <h3>Example layout on disk</h3>
         <pre>workspace/
   ch12.asciidoc
-  draft/intro.md
+  drafts/intro.md
   scripts/cleanup.py
   .docwriter/
-    state.json              ← runtime state
+    docwriter.db             ← SQLite (authoritative)
+    state.json               ← JSON mirror
     agent/
-      ch12.asciidoc         ← shadow of ch12.asciidoc
-      draft/intro.md        ← shadow of draft/intro.md
-      scratch/              ← agent-only drafts</pre>
+      scratch/               ← agent drafts (lazy-created)
+    references/              ← saved style-reference samples</pre>
 
         <div class="panel">
-          <span class="panel-label">Rehydration order</span>
+          <span class="panel-label">Cold start path</span>
           <p style="margin: 0;">
-            On reload, the browser reads each tab&rsquo;s Y.Doc from IndexedDB <em>before</em> asking the
-            server for document content. This is why refreshes feel instant and why in-progress review
-            rounds survive page reloads. The <code>y-prosemirror</code> sync transactions that fire during
-            this hydration are exactly the ones <a href="#flow-typing">flow-typing</a> skips.
+            On <code>getTabYDoc(tabId)</code>: construct Y.Doc, attach UndoManager, then replay
+            every <code>yjs_updates</code> row through <code>ydoc.transact(..., row.origin)</code>.
+            If there are no rows, seed from the workspace file (origin <code>'system'</code>) and
+            persist that seed as a single row so future loads skip the disk read.
           </p>
         </div>
       </section>
@@ -1222,71 +1225,112 @@ agent   = final shadow contents from the agent
       <!-- ============ 11. MERGE INTERNALS ============ -->
       <section id="merge-internals">
         <span class="section-tag">Section 11</span>
-        <h2>Merge &amp; review internals</h2>
+        <h2>Y.Doc registry &amp; review internals</h2>
 
-        <h3>The apply path (<code>src/lib/yjs-agent.ts</code>)</h3>
+        <h3>The server registry (<code>src/lib/server/ydoc-registry.ts</code>)</h3>
+        <pre>interface TabYDocEntry {
+  ydoc: Y.Doc;
+  undoManager: Y.UndoManager;  // trackedOrigins: { 'agent' }
+  reviewMap: Y.Map&lt;unknown&gt;;    // ydoc.getMap('review')
+}</pre>
+        <p class="meta">
+          One entry per tab. Constructed lazily on first <code>getTabYDoc(tabId)</code> call.
+          <code>destroyTabYDoc(tabId)</code> tears it down (tab deleted / explicit unload); the
+          persisted <code>yjs_updates</code> rows are not touched.
+        </p>
+
+        <h3>The Hocuspocus plumbing (<code>src/lib/server/ws-server.ts</code>)</h3>
         <ol class="flow">
           <li>
             <div>
-              <strong>Run the 3-way merge</strong> between render-start baseline, current Live content,
-              and the agent&rsquo;s final shadow markdown. Output is <code>mergedText</code>.
+              <strong><code>onLoadDocument({ documentName: tabId })</code></strong>
+              returns <code>getTabYDoc(tabId).ydoc</code>. Hocuspocus copies its state into its own
+              <code>Document</code> and holds that going forward.
             </div>
           </li>
           <li>
             <div>
-              <strong>Parse <code>mergedText</code> into ProseMirror JSON</strong> using the active tab&rsquo;s
-              schema (markdown or plain).
-            </div>
-          </li>
-          <li>
-            <div>
-              <strong>Compute the minimal changed range</strong> between current editor doc and the parsed
-              target. Dispatch a single <code>replace(from, to, newSlice)</code> transaction rather than
-              replacing the whole document &mdash; this keeps cursor position, selection, and collaborative
-              ops tight.
-            </div>
-          </li>
-          <li>
-            <div>
-              <strong>Wrap it in a Yjs transaction with an explicit origin</strong>:
+              <strong><code>onChange({ update, transactionOrigin, document })</code></strong>
               <ul style="margin-top: 6px;">
-                <li><code>'agent'</code> &mdash; review mode. The agent-only <code>UndoManager</code> captures this, enabling precise reject.</li>
-                <li><code>ySyncPluginKey</code> &mdash; silent mode. Merges with the user&rsquo;s normal undo stack and the editor update handler ignores it (see <a href="#flow-typing">flow-typing</a>).</li>
+                <li>Resolve <code>origin</code>: if <code>transactionOrigin</code> is a string
+                  (<code>'agent'</code> from a DirectConnection, or <code>'system'</code>), use it.
+                  Otherwise (browser Connection instance, context-supplied origin) default to
+                  <code>'user'</code>.</li>
+                <li><code>appendUpdate(tabId, update, origin)</code> &mdash; one row into
+                  <code>yjs_updates</code>.</li>
+                <li><code>scheduleMarkdownFlush(tabId, document)</code> &mdash; pass the live
+                  <code>document</code> from the payload (NOT the registry Y.Doc), because the registry
+                  one is stale.</li>
               </ul>
             </div>
           </li>
         </ol>
 
-        <h3>3-way merge algorithm (<code>src/lib/three-way-merge.ts</code>)</h3>
-        <p>Tokens are roughly words/whitespace/punctuation &mdash; not characters. <code>diff</code> builds hunks.</p>
-        <pre>mergeAgentEditsIntoCurrent(base, current, agent):
-  userHunks  = diff(base → current)
-  agentHunks = diff(base → agent)
+        <h3>The custom MCP tools (<code>src/lib/server/mcp-doc-tools.ts</code>)</h3>
+        <ol class="flow">
+          <li>
+            <div>
+              <strong>Path routing.</strong>
+              Scratch paths &rarr; fall through to <code>fs</code> (no Y.Doc involvement).
+              Workspace tab paths &rarr; <code>resolveTabFromPath</code> + <code>isOpenTab</code>.
+              Unknown &rarr; <code>isError: true</code>.
+            </div>
+          </li>
+          <li>
+            <div>
+              <strong><code>getHocuspocus().openDirectConnection(tabId)</code>.</strong>
+              Returns a handle whose <code>transact(cb)</code> method invokes the callback against
+              the live <code>Document</code>. <code>cb</code> receives the Y.Doc.
+            </div>
+          </li>
+          <li>
+            <div>
+              <strong>Inside <code>direct.transact(document =&gt; ...)</code>:</strong>
+              <ul style="margin-top: 6px;">
+                <li>Serialize the current markdown (<code>serializeYDocToMarkdown(document, kind)</code>).</li>
+                <li><code>edit_doc</code>-specific: count <code>old_string</code> matches; 0 or &gt;1
+                  &rarr; early-return without mutating.</li>
+                <li>Open an inner <code>document.transact(() =&gt; { ... }, AGENT_ORIGIN)</code>:
+                  <ul>
+                    <li>Bind a headless Tiptap <code>Editor</code> with Collaboration pointing at
+                      this <code>document</code> + field <code>'default'</code>.</li>
+                    <li>Call <code>headless.commands.setContent(newMd, { emitUpdate: false })</code>.
+                      ySyncPlugin translates the ProseMirror diff to minimal Yjs ops on the
+                      fragment; all inside our transact, so they all carry
+                      <code>AGENT_ORIGIN</code>.</li>
+                    <li>Destroy the headless editor.</li>
+                    <li>Append to <code>reviewMap.get('pendingRounds')</code>.</li>
+                  </ul>
+                </li>
+              </ul>
+            </div>
+          </li>
+        </ol>
 
-  for each agentHunk:
-    if any userHunk overlaps agentHunk in base coordinates:
-      conflictCount++
-      skip
-    else:
-      apply agentHunk to current token stream
-      track offset for subsequent hunks
-      appliedHunks++
-
-  return { mergedText, appliedHunks, conflictCount }</pre>
-
-        <h3>Review rounds</h3>
+        <h3>Client-side review (<code>src/routes/+page.svelte</code>)</h3>
         <p>
-          Stored in the tab&rsquo;s Yjs <code>review</code> map, so they&rsquo;re local-first and survive
-          reload. The diff overlay composes all pending rounds against the <em>earliest</em> baseline &mdash;
-          i.e. multiple back-to-back renders show as one cumulative diff, not a stack.
+          <code>pendingReviewRounds</code> is a Svelte store mirroring the active tab's
+          <code>Y.Map('review').pendingRounds</code>. An observer on the Y.Map updates the store
+          whenever the map changes &mdash; whether from a local mutation, a remote client, or an
+          agent edit.
+        </p>
+        <p class="meta">
+          Accept: <code>reviewMap.set('pendingRounds', rounds.slice(idx + 1))</code>. Reject:
+          <code>for (let i = 0; i &lt; round.stepCount; i++) undoManager.undo()</code>, then the
+          same map write. No <code>fetch()</code> anywhere.
         </p>
 
         <h3>Undo isolation</h3>
         <p>
-          A second <code>Y.UndoManager</code> is constructed with <code>trackedOrigins: new Set(['agent'])</code>.
-          It captures agent apply transactions but ignores user keystrokes. Reject calls
-          <code>undo()</code> on it <code>stepCount</code> times, which rewinds exactly the agent&rsquo;s edits
-          and leaves anything the user typed during the render intact.
+          Per-tab <code>Y.UndoManager</code> with <code>trackedOrigins: new Set([AGENT_ORIGIN])</code>
+          and <code>captureTimeout: 0</code>. Each agent-origin transaction is its own undo step.
+          User keystrokes (default origin) never enter the stack, so they survive Reject.
+        </p>
+        <p class="meta">
+          The client has its own per-tab UndoManager (<code>src/lib/yjs-agent.ts</code>) that
+          mirrors the server's, so Reject operates locally and immediately. Its stack is
+          reconstructed from replayed Y.Doc history the next time the tab's Y.Doc is synced from
+          the server.
         </p>
       </section>
 
@@ -1300,7 +1344,7 @@ agent   = final shadow contents from the agent
           <thead><tr><th style="width: 36%">File</th><th>Role</th></tr></thead>
           <tbody>
             <tr><td><code>src/routes/+page.svelte</code></td><td>App shell. Theme, tab lifecycle, file tree, render/review loop, history hydration.</td></tr>
-            <tr><td><code>src/lib/editor/TiptapEditor.svelte</code></td><td>Editor surface. Autosave, idle-submit timer, feedback popup, diff overlay, Yjs sync handling.</td></tr>
+            <tr><td><code>src/lib/editor/TiptapEditor.svelte</code></td><td>Editor surface. Idle-submit timer, feedback popup, diff overlay, Yjs sync handling via HocuspocusProvider.</td></tr>
             <tr><td><code>src/lib/components/FileTree.svelte</code></td><td>Workspace explorer; inline create / rename / delete.</td></tr>
             <tr><td><code>src/lib/components/OutlinePane.svelte</code></td><td>Outline from headings, plus pending review cards, proposed rules/hooks, user questions.</td></tr>
             <tr><td><code>src/lib/components/HistoryPane.svelte</code></td><td>Unified agent event log: tool calls, thinking, hooks, notifications, annotations.</td></tr>
@@ -1309,15 +1353,13 @@ agent   = final shadow contents from the agent
         </table>
 
         <h3>Stores (<code>src/lib/stores.ts</code>)</h3>
-        <p>Projections and UI wrappers around content state. Editor content itself lives in Yjs, not in stores.</p>
+        <p>Projections and UI wrappers around content state. Editor content lives in Yjs, not stores.</p>
         <div class="two-up">
           <div class="panel">
             <span class="panel-label">Document</span>
             <ul style="margin: 6px 0 0 18px;">
-              <li><code>userMd</code> — last serialized markdown</li>
-              <li><code>reviewBaseline</code> — render-start snapshot</li>
-              <li><code>pendingReviewRounds</code></li>
-              <li><code>preAgentSnapshot</code></li>
+              <li><code>userMd</code> — last serialized markdown from the active tab</li>
+              <li><code>pendingReviewRounds</code> — mirror of the active tab's <code>Y.Map('review')</code></li>
             </ul>
           </div>
           <div class="panel">
@@ -1344,7 +1386,7 @@ agent   = final shadow contents from the agent
             <ul style="margin: 6px 0 0 18px;">
               <li><code>tabs</code>, <code>activeTab</code></li>
               <li><code>activeTabKind</code> (<code>markdown</code> or <code>plain</code>)</li>
-              <li>Per-tab Y.Doc registry in <code>src/lib/yjs-doc.ts</code></li>
+              <li>Per-tab Y.Doc + HocuspocusProvider registry in <code>src/lib/yjs-doc.ts</code></li>
             </ul>
           </div>
         </div>
@@ -1356,23 +1398,30 @@ agent   = final shadow contents from the agent
         <h2>Server API reference</h2>
         <table>
           <thead>
-            <tr><th style="width: 22%">Endpoint</th><th style="width: 12%">Method</th><th>Purpose</th></tr>
+            <tr><th style="width: 22%">Endpoint</th><th style="width: 20%">Method</th><th>Purpose</th></tr>
           </thead>
           <tbody>
-            <tr><td><code>/api/document</code></td><td>GET</td><td>Read current file content + metadata for a tab.</td></tr>
-            <tr><td></td><td>PUT</td><td>Autosave editor content + metadata. Called ~50ms after last keystroke.</td></tr>
-            <tr><td></td><td>POST</td><td>Accept/reject bookkeeping for review cleanup. Shadows are preserved so they can act as the next render&rsquo;s "last agent view".</td></tr>
-            <tr><td><code>/api/tabs</code></td><td>GET / POST / PATCH / DELETE</td><td>Open/create/focus/rename/close tabs. Tab order persists to <code>state.json</code>.</td></tr>
+            <tr><td><code>ws://host:3001/&lt;tabId&gt;</code></td><td>WebSocket</td><td>Hocuspocus Y.Doc sync. The real transport for editor state; HTTP endpoints below are for everything else.</td></tr>
+            <tr><td><code>/api/document</code></td><td>GET</td><td>Read on-disk markdown + metadata for a tab. Force-flushes the Y.Doc to disk before reading so the response reflects any unflushed keystrokes.</td></tr>
+            <tr><td></td><td>PUT</td><td>Meta-only write (rules / agent settings). <code>userMd</code> is ignored — WebSocket sync owns editor content.</td></tr>
+            <tr><td><code>/api/tabs</code></td><td>GET / POST / PATCH / DELETE</td><td>Open/create/focus/rename/close tabs. Tab order persists to <code>state.json</code> and the <code>tabs</code> table.</td></tr>
             <tr><td><code>/api/files</code></td><td>GET / POST / PATCH / DELETE</td><td>Workspace tree: listing, create, rename/move, delete. Guarded by the workspace-path resolver.</td></tr>
-            <tr><td><code>/api/file-content</code></td><td>GET / PUT</td><td>Raw read/write for non-editor files (previewing binary-ish or unsupported formats).</td></tr>
-            <tr><td><code>/api/render</code></td><td>POST (SSE)</td><td>Claude Agent SDK orchestration. Response is an event stream; see the <a href="#flow-render">render flow</a>.</td></tr>
-            <tr><td><code>/api/history</code></td><td>GET</td><td>Rehydrate the agent event timeline from the Claude SDK&rsquo;s own transcript.</td></tr>
-            <tr><td><code>/api/session</code></td><td>GET / POST / DELETE</td><td>Session id, recent feedback actions, usage counts; DELETE clears session-scoped state (New Session).</td></tr>
+            <tr><td><code>/api/file-content</code></td><td>GET / PUT</td><td>Raw read/write for non-editor files.</td></tr>
+            <tr><td><code>/api/render</code></td><td>POST (SSE)</td><td>Claude Agent SDK orchestration. See the <a href="#flow-render">render flow</a>.</td></tr>
+            <tr><td><code>/api/history</code></td><td>GET</td><td>Rehydrate the agent event timeline from the Claude SDK's transcript.</td></tr>
+            <tr><td><code>/api/session</code></td><td>GET / POST / DELETE</td><td>Session id, recent feedback actions, usage counts. <code>DELETE</code> clears session-scoped state (New Session).</td></tr>
             <tr><td><code>/api/hooks</code></td><td>GET / PUT</td><td>Read or replace the persisted hook configuration.</td></tr>
-            <tr><td><code>/api/live</code></td><td>GET (SSE)</td><td>File-watch notifications so external edits (<code>--watch</code> mode) reach the browser.</td></tr>
-            <tr><td><code>/api/ask-user-reply</code></td><td>POST</td><td>Feed a user answer back into an agent&rsquo;s blocked <code>AskUserQuestion</code> call.</td></tr>
+            <tr><td><code>/api/references</code></td><td>GET / POST / PATCH / DELETE</td><td>Writing-style references index and samples.</td></tr>
+            <tr><td><code>/api/live</code></td><td>GET (SSE)</td><td>File-watch notifications (<code>--watch</code>).</td></tr>
+            <tr><td><code>/api/ask-user-reply</code></td><td>POST</td><td>Feed a user answer back into an agent's blocked <code>AskUserQuestion</code> call.</td></tr>
           </tbody>
         </table>
+        <p class="meta" style="margin-top: 12px;">
+          <code>POST /api/document</code> with <code>action: 'accept' | 'reject'</code> is gone.
+          Accept and Reject are now pure client-side operations on <code>Y.Map('review')</code>
+          (and the per-tab UndoManager for Reject), propagated to other clients via normal Y.Doc
+          sync.
+        </p>
       </section>
 
       <!-- ============ 14. SAFETY ============ -->
@@ -1385,8 +1434,9 @@ agent   = final shadow contents from the agent
         </p>
         <ul>
           <li><strong>Path traversal</strong> (<code>../../etc/passwd</code>) is rejected.</li>
-          <li><strong>Symlink escapes</strong> are blocked &mdash; even for paths that don&rsquo;t exist yet, the resolver walks up to the nearest existing ancestor, resolves its real path, and checks containment from there.</li>
+          <li><strong>Symlink escapes</strong> are blocked &mdash; even for paths that don't exist yet, the resolver walks up to the nearest existing ancestor, resolves its real path, and checks containment from there.</li>
           <li><strong>Hook configuration</strong> is never agent-writable. The agent can only <em>propose</em> hooks via the <code>propose_hook</code> MCP tool; acceptance flows through the user and <code>PUT /api/hooks</code>.</li>
+          <li><strong><code>write_doc</code> never creates new tabs.</strong> The target must already be open (so the user has explicitly opted in to letting the agent write there).</li>
         </ul>
       </section>
 
@@ -1395,15 +1445,21 @@ agent   = final shadow contents from the agent
         <span class="section-tag">Section 15</span>
         <h2>Key files (shortest accurate map)</h2>
         <p>If you have 30 minutes to ramp up, read these in order.</p>
-        <pre>bin/docwriter.js                    packaged CLI launcher
+<pre>bin/docwriter.js                    packaged CLI launcher
 bin/docwriter-dev.js                dev launcher
+src/hooks.server.ts                 startup hook — boots Hocuspocus
 src/routes/+page.svelte             app shell + render/review loop
-src/lib/editor/TiptapEditor.svelte  editor, autosave, feedback UI, idle timer
-src/lib/yjs-doc.ts                  per-tab Y.Doc registry + IndexedDB
-src/lib/yjs-agent.ts                agent apply path + undo isolation
-src/lib/three-way-merge.ts          overlap-safe merge algorithm
+src/lib/editor/TiptapEditor.svelte  editor, feedback UI, idle timer
+src/lib/yjs-doc.ts                  per-tab Y.Doc + HocuspocusProvider
+src/lib/yjs-agent.ts                client-side agent UndoManager + apply-key
+src/lib/server/ydoc-registry.ts     server per-tab Y.Doc + UndoManager
+src/lib/server/ydoc-persistence.ts  SQLite ↔ Y.Doc bridge + markdown flush
+src/lib/server/ws-server.ts         Hocuspocus setup + onChange plumbing
+src/lib/server/mcp-doc-tools.ts     edit_doc / read_doc / write_doc
+src/lib/server/path-router.ts       scratch vs. open-tab routing
+src/lib/server/ydoc-markdown.ts     Y.Doc ↔ markdown serializer
 src/routes/api/render/+server.ts    Claude Agent SDK orchestration + SSE
-src/lib/server/document-io.ts       workspace &lt;&ndash;&gt; shadow sync
+src/lib/server/document-io.ts       rules/agentSettings meta I/O
 src/lib/server/runtime-state.ts     .docwriter/state.json model
 src/lib/server/workspace-path.ts    sandboxing &amp; symlink-safe resolver
 src/lib/stores.ts                   UI/projection stores</pre>
@@ -1411,16 +1467,17 @@ src/lib/stores.ts                   UI/projection stores</pre>
         <div class="panel accent">
           <span class="panel-label">Bottom line</span>
           <p style="margin: 0;">
-            DocWriter is a local, multi-file writing environment with per-tab CRDT editor state, a filesystem
-            shadow workspace for the agent, a streaming render loop, a review queue, and conflict-aware merge
-            logic that favors the user&rsquo;s live edits. The shadow / merge / review triangle is what lets
-            the agent use real file-edit tools without the app ever feeling like it&rsquo;s fighting you.
+            DocWriter is a local, multi-file writing environment with per-tab CRDT editor state
+            held authoritatively on the server and synced over WebSocket, an append-only SQLite
+            log of every Yjs update, and a Claude Agent SDK loop that edits the live Y.Doc through
+            custom MCP tools. Content convergence is the CRDT's job; review, undo, and reject all
+            fall out of origin-tagged transactions on a single Y.Doc.
           </p>
         </div>
       </section>
 
       <div class="footer">
-        Generated from the current codebase on April 19, 2026.
+        Post-refactor architecture; regenerated April 19, 2026.
       </div>
 
     </main>

@@ -17,9 +17,9 @@ import { getYDocForTab } from './yjs-doc';
  *     (autosave / idle timer) can distinguish agent-origin transactions
  *     from plain user typing.
  *
- * The old `applyAgentMarkdown` / `captureBaselineForAgent` / 3-way merge
- * path is gone — the server tools apply directly to the live Y.Doc, so
- * the browser no longer has to re-derive a minimal PM range diff.
+ * The older client-side apply / baseline-capture / 3-way merge path is
+ * gone — the server tools apply directly to the live Y.Doc, so the
+ * browser no longer has to re-derive a minimal PM range diff.
  */
 
 export const AGENT_ORIGIN = 'agent';

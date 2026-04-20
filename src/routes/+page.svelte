@@ -384,9 +384,11 @@
 
 	/**
 	 * Write the pending-rounds array for a specific tab into its Y.Doc
-	 * review map (persisted by y-indexeddb). If the tab is the currently
-	 * active one, mirror into the live stores so the diff overlay and the
-	 * OutlinePane cards update immediately.
+	 * review map. The map is part of the tab's Y.Doc, so the mutation
+	 * propagates through Hocuspocus sync to every connected client and
+	 * lands in SQLite via the usual `yjs_updates` append. If the tab is
+	 * the currently active one, mirror into the live stores so the diff
+	 * overlay and the OutlinePane cards update immediately.
 	 *
 	 * Also clears the legacy `baseline`/`preAgent` keys when the new rounds
 	 * array is empty, so a fully-accepted tab doesn't flicker back on reload.

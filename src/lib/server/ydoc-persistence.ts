@@ -1,16 +1,17 @@
 /**
  * SQLite ↔ Y.Doc bridge: persist Yjs updates into the `yjs_updates` table
- * and replay them back into a fresh Y.Doc on load.
+ * and replay them back into a caller-supplied Y.Doc on load.
  *
- * Phase 3 turns this module into the server's source of truth for document
- * state:
- *   - `loadYDoc` now hydrates from `yjs_updates`, and if that table is
- *     empty for a tab, seeds from the real workspace file on disk (so a
- *     freshly-opened tab for an existing file shows its content instead of
- *     appearing empty).
+ *   - `replayUpdatesInto(ydoc, tabId)` hydrates an existing Y.Doc from
+ *     `yjs_updates`, and if that table is empty for a tab, seeds from the
+ *     real workspace file on disk (so a freshly-opened tab for an existing
+ *     file shows its content instead of appearing empty). The caller
+ *     (`ydoc-registry.ts`) constructs the UndoManager before invoking this,
+ *     so agent-origin transactions replayed from disk repopulate the undo
+ *     stack — load-bearing for Reject across server restarts.
  *   - `scheduleMarkdownFlush` debounces a write of the tab's user-facing
- *     file. Called from Hocuspocus's `onChange` whenever a client (or, in
- *     Phase 4, a custom MCP tool) mutates the Y.Doc.
+ *     file. Called from Hocuspocus's `onChange` whenever a client or custom
+ *     MCP tool mutates the Y.Doc.
  *
  * The `yjs_updates` column is literally named `update` (a SQLite reserved
  * word), so every SELECT/INSERT must quote it as `"update"`.
@@ -22,20 +23,22 @@ import { getDb } from './db';
 import { tabFile, tabKind } from './document-files';
 import { serializeYDocToMarkdown, seedYDocFromContent } from './ydoc-markdown';
 
-/** Load a Y.Doc by replaying all its updates from `yjs_updates` in seq order.
+/** Replay persisted updates into an existing Y.Doc.
+ *
+ * Phase 7: split from the original `loadYDoc()` so the caller can construct
+ * a UndoManager *before* this runs — each `ydoc.transact(..., origin)` then
+ * goes through the UndoManager's observer with its original origin,
+ * correctly reconstructing the undo stack across server restarts. If we
+ * built the UndoManager after replay (as Phase 2 did), the stack would be
+ * empty on cold start and Reject would be a no-op for any pending round
+ * whose transactions only existed in `yjs_updates`.
  *
  * If no rows exist for the tab (first open of the tab in this database) AND
  * a real workspace file exists at the tab's path, seed the Y.Doc from the
  * file's content and persist that seed as a single `origin = 'system'` row
  * so subsequent loads skip the disk read. This preserves the "open an
- * existing .md file and its content shows up" UX after IndexedDB is gone.
- *
- * Preserves `origin` via `ydoc.transact(() => applyUpdate(...), origin)` so
- * that a freshly-constructed UndoManager (which watches by origin) observes
- * each replayed transaction with its original tag. Phase 7 relies on this
- * for undo-after-restart semantics. */
-export function loadYDoc(tabId: string): Y.Doc {
-	const ydoc = new Y.Doc();
+ * existing .md file and its content shows up" UX after IndexedDB is gone. */
+export function replayUpdatesInto(ydoc: Y.Doc, tabId: string): void {
 	const db = getDb();
 	const rows = db
 		.prepare(
@@ -50,7 +53,7 @@ export function loadYDoc(tabId: string): Y.Doc {
 				row.origin
 			);
 		}
-		return ydoc;
+		return;
 	}
 
 	// No persisted updates — try seeding from the workspace file so an
@@ -61,9 +64,14 @@ export function loadYDoc(tabId: string): Y.Doc {
 		if (existsSync(workspacePath)) {
 			const content = readFileSync(workspacePath, 'utf-8');
 			if (content) {
-				seedYDocFromContent(ydoc, content, tabKind(tabId));
+				// Seed inside a 'system'-origin transact so the UndoManager
+				// (which only tracks AGENT_ORIGIN) ignores it, and the origin
+				// matches the row we persist for next time.
+				ydoc.transact(() => {
+					seedYDocFromContent(ydoc, content, tabKind(tabId));
+				}, 'system');
 				// Persist the seed as a single update row so the next
-				// `loadYDoc` replays it instead of re-reading the file.
+				// load replays it instead of re-reading the file.
 				const update = Y.encodeStateAsUpdate(ydoc);
 				db.prepare(
 					`INSERT INTO yjs_updates (tab_id, "update", origin, created) VALUES (?, ?, ?, ?)`
@@ -73,8 +81,6 @@ export function loadYDoc(tabId: string): Y.Doc {
 	} catch (err) {
 		console.error(`[docwriter] seed from disk failed for tab "${tabId}":`, err);
 	}
-
-	return ydoc;
 }
 
 /** Append a single Yjs update. Called from Hocuspocus's `onChange` hook. */

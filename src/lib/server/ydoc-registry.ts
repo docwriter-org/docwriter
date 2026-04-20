@@ -1,17 +1,20 @@
 /**
  * In-memory per-tab Y.Doc + UndoManager registry on the server.
  *
- * Phase 2: entries are materialized on demand from the `yjs_updates` table
- * (via `loadYDoc`) and cached in a Map. The UndoManager is constructed
- * *after* replay in Phase 2 — Phase 7 may move it before replay so that the
- * UndoManager observes every replayed transaction with its original origin.
+ * Phase 7: the UndoManager is constructed BEFORE the persisted updates are
+ * replayed into the Y.Doc. That ordering is load-bearing for Reject after a
+ * server restart — each `ydoc.transact(..., origin)` in `replayUpdatesInto`
+ * fires through the UndoManager's observer, so AGENT_ORIGIN transactions
+ * repopulate the undo stack on cold start. If the UndoManager were built
+ * afterward (the Phase 2 shape), the stack would always be empty at boot
+ * and a Reject of a pending round would silently do nothing.
  *
  * `AGENT_ORIGIN` matches the string constant in the browser's
  * `src/lib/yjs-agent.ts`. Both sides must agree, or the UndoManager won't
  * correctly isolate agent transactions.
  */
 import * as Y from 'yjs';
-import { loadYDoc } from './ydoc-persistence';
+import { replayUpdatesInto } from './ydoc-persistence';
 
 export const AGENT_ORIGIN = 'agent'; // match the browser's yjs-agent.ts
 
@@ -26,17 +29,23 @@ interface TabYDocEntry {
 
 const registry = new Map<string, TabYDocEntry>();
 
-/** Get (or lazily load) the Y.Doc entry for a tab. First call replays any
- * persisted updates from SQLite. Subsequent calls return the cached entry. */
+/** Get (or lazily load) the Y.Doc entry for a tab. First call constructs a
+ * fresh Y.Doc, attaches an AGENT_ORIGIN-tracking UndoManager, and THEN
+ * replays any persisted updates so the UndoManager observes each replayed
+ * transaction with its original origin. Subsequent calls return the cached
+ * entry. */
 export function getTabYDoc(tabId: string): TabYDocEntry {
 	let entry = registry.get(tabId);
 	if (!entry) {
-		const ydoc = loadYDoc(tabId);
+		const ydoc = new Y.Doc();
 		const xmlFragment = ydoc.getXmlFragment(FRAGMENT_NAME);
 		const reviewMap = ydoc.getMap(REVIEW_MAP_NAME);
 		const undoManager = new Y.UndoManager(xmlFragment, {
 			trackedOrigins: new Set([AGENT_ORIGIN])
 		});
+		// Replay AFTER the UndoManager is attached so agent-origin
+		// transactions from prior sessions repopulate the undo stack.
+		replayUpdatesInto(ydoc, tabId);
 		entry = { ydoc, undoManager, reviewMap };
 		registry.set(tabId, entry);
 	}
