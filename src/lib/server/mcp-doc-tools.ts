@@ -134,6 +134,13 @@ async function runTabWrite(
 				// headless Collaboration editor. ySyncPlugin emits minimal
 				// Yjs ops on the live document inside this transact so
 				// everything carries AGENT_ORIGIN.
+				//
+				// Plain-text kind: Tiptap's setContent(string) treats the arg
+				// as HTML, which collapses "\n" into a single paragraph. For
+				// plain files we must hand it ProseMirror JSON — one paragraph
+				// per line, matching how seedYDocFromContent builds the doc.
+				// Markdown kind: tiptap-markdown hooks setContent to parse the
+				// string as markdown, so the string form is correct there.
 				const base = kind === 'plain' ? plainBaseExtensions() : markdownBaseExtensions();
 				const headless = new Editor({
 					extensions: [
@@ -142,7 +149,25 @@ async function runTabWrite(
 					]
 				});
 				try {
-					headless.commands.setContent(afterMd, { emitUpdate: false });
+					if (kind === 'plain') {
+						const lines = afterMd.split('\n');
+						headless.commands.setContent(
+							{
+								type: 'doc',
+								content: lines.map((line) =>
+									line.length === 0
+										? { type: 'paragraph' }
+										: {
+												type: 'paragraph',
+												content: [{ type: 'text', text: line }]
+											}
+								)
+							},
+							{ emitUpdate: false }
+						);
+					} else {
+						headless.commands.setContent(afterMd, { emitUpdate: false });
+					}
 				} finally {
 					headless.destroy();
 				}
