@@ -424,9 +424,9 @@
 		}
 	});
 
-	// Export the live editor instance so +page.svelte can apply agent
-	// markdown via applyAgentMarkdown(). We expose it via the reviewBaseline
-	// callback path rather than a global to keep ownership clear.
+	// Export the live editor instance so +page.svelte can reach for it
+	// (e.g. the dev-only fakeAgentEdit test seam that transacts agent-
+	// origin ops directly on the Y.Doc).
 	export function getEditor(): Editor | undefined {
 		return editor;
 	}

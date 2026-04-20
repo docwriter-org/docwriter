@@ -1,32 +1,34 @@
-import { join, dirname } from 'path';
+import { join } from 'path';
 import { existsSync, mkdirSync } from 'fs';
 
-// DocWriter persistence layout (v2, post-notes/ refactor):
+// DocWriter persistence layout (post Phase 5+6):
 //
 //   <file-the-user-wanted>.md         ← ANY file in the workspace can be
 //   drafts/chapter-1.md                 an open tab. Tab ID = the file's
 //   src/app/script.py                   path relative to DOCWRITER_ROOT.
 //   ...
 //   .docwriter/
-//     agent/<relative-path>           ← per-tab shadow, mirrors the
-//                                       user-facing file's location under
-//                                       DOCWRITER_ROOT
-//     state.json                      ← sessionId, rules,
-//                                       agentSettings, tabs.{order,active}
+//     docwriter.db                    ← SQLite: Y.Doc updates, tabs, rules,
+//                                       hooks, recent_actions, kv (sessionId
+//                                       + last_seen:<tabId>).
+//     state.json                      ← JSON mirror of rules / agent
+//                                       settings / tabs (for portability).
+//     agent/scratch/                  ← agent scratch workspace — created
+//                                       lazily on first scratch write.
 //
-// The old flat `notes/` directory is gone. Any file you open from the
-// FileTree becomes an agent-editable tab, and its shadow gets created
-// on demand inside .docwriter/agent/ with the same relative path.
+// The old per-tab shadow directory (.docwriter/agent/<tabId>) is gone:
+// agent edits now mutate the live Hocuspocus Y.Doc via the custom MCP
+// tools in `mcp-doc-tools.ts`, which syncs directly to the browser.
 
 const ROOT = process.env.DOCWRITER_ROOT || process.cwd();
 
 export const DOCWRITER_DIR = join(ROOT, '.docwriter');
-export const AGENT_DIR = join(DOCWRITER_DIR, 'agent');
 /** Scratch workspace the agent can freely Write/Edit without user review.
  * Meant for its own drafts, outlines, intermediate notes-to-self. Not
  * surfaced as tabs; survives across rounds in the same session; cleared
- * when the user starts a new session. */
-export const AGENT_SCRATCH_DIR = join(AGENT_DIR, 'scratch');
+ * when the user starts a new session. Created lazily — no `.docwriter/agent/`
+ * directory is created unless the agent actually writes a scratch file. */
+export const AGENT_SCRATCH_DIR = join(DOCWRITER_DIR, 'agent', 'scratch');
 export const STATE_FILE = join(DOCWRITER_DIR, 'state.json');
 
 /** File extensions we treat as text-editable tabs. `.md`/`.markdown`/`.mdx`
@@ -117,39 +119,17 @@ export function tabFile(tabId: string): string {
 	return join(ROOT, tabId);
 }
 
-/** Absolute path to a tab's transient agent shadow. The shadow mirrors the
- * user-facing file's relative position under AGENT_DIR so the agent's
- * `file_path` argument round-trips through parseTabIdFromAgentPath. */
-export function tabAgentFile(tabId: string): string {
-	return join(AGENT_DIR, tabId);
-}
-
-/** Ensure the directory containing a shadow file exists. */
-export function ensureAgentDirFor(tabId: string) {
-	mkdirSync(dirname(tabAgentFile(tabId)), { recursive: true });
-}
-
-/** Reverse of tabAgentFile: given a filesystem path inside AGENT_DIR,
- * return the tab id (everything after AGENT_DIR/), or null if the path
- * is outside AGENT_DIR or invalid. Used by the PreToolUse write-guard. */
-export function parseTabIdFromAgentPath(path: string): string | null {
-	if (!path.startsWith(AGENT_DIR + '/')) return null;
-	const id = path.slice(AGENT_DIR.length + 1);
-	return isValidTabId(id) ? id : null;
-}
-
-/** Ensure `.docwriter/` and `.docwriter/agent/` exist. Idempotent. */
+/** Ensure `.docwriter/` exists. Idempotent. Does NOT create
+ * `.docwriter/agent/`; that directory is created lazily only if the agent
+ * actually writes a scratch file. */
 export function ensureDocWriterDir() {
 	if (!existsSync(DOCWRITER_DIR)) {
 		mkdirSync(DOCWRITER_DIR, { recursive: true });
 	}
-	if (!existsSync(AGENT_DIR)) {
-		mkdirSync(AGENT_DIR, { recursive: true });
-	}
 }
 
-/** Ensure the agent's scratch dir exists. Called at render start so the
- * agent can immediately Write into it. Idempotent. */
+/** Ensure the agent's scratch dir exists. Called lazily the first time the
+ * agent writes a scratch file. Idempotent. */
 export function ensureAgentScratchDir() {
 	ensureDocWriterDir();
 	if (!existsSync(AGENT_SCRATCH_DIR)) {

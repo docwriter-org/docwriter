@@ -1,12 +1,6 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import {
-	readUserDoc,
-	readMeta,
-	writeMeta,
-	acceptAgentDoc,
-	rejectAgentDoc
-} from '$lib/server/document-io';
+import { readUserDoc, readMeta, writeMeta } from '$lib/server/document-io';
 import { isValidTabId } from '$lib/server/document-files';
 import { getTabsState } from '$lib/server/runtime-state';
 import { flushTabMarkdownNow } from '$lib/server/ws-server';
@@ -14,21 +8,16 @@ import { flushTabMarkdownNow } from '$lib/server/ws-server';
 /**
  * Per-tab document endpoint.
  *
- * Phase 3: the client no longer persists `userMd` through `PUT`; the
- * server is authoritative for Y.Doc state and writes `document.md` itself
- * on a debounce off the WebSocket stream. `PUT` is kept as a backward-
- * compatible no-op (returns 200 with `{ ok: true, deprecated: true }`) so
- * any stragglers calling it don't see an error. Callers sending a `meta`
- * payload still get their rules / agentSettings persisted — that's still
- * a legitimate write path.
+ * Post Phase 5+6: this endpoint is only used for:
+ *   - `GET` — read the current on-disk markdown + JSON meta (rules /
+ *     agentSettings). Used by the client's initial `loadTab`.
+ *   - `PUT` — persist `meta` (rules / agentSettings). `userMd` is ignored
+ *     since Y.Doc sync owns editor content; the PUT is kept for meta-only
+ *     writes from the AgentSettings / Rules panels.
  *
- * `GET` remains the canonical way to read a tab's on-disk markdown (used
- * by `+page.svelte`'s `loadTab` to snapshot pre-render state before the
- * Y.Doc is hydrated).
- *
- * `POST { action: 'accept' | 'reject' }` is still valid — shadow cleanup
- * for the agent render flow lives here until Phase 6 deletes the whole
- * shadow machinery.
+ * `POST { action: 'accept' | 'reject' }` was removed — accept/reject is
+ * now a pure Y.Map('review') operation driven by the browser (see
+ * `acceptAgentEdit` / `rejectAgentEdit` in `src/routes/+page.svelte`).
  */
 
 function resolveTabId(url: URL): string {
@@ -45,8 +34,8 @@ function resolveTabId(url: URL): string {
 export const GET: RequestHandler = async ({ url }) => {
 	const tabId = resolveTabId(url);
 	// Force-flush any pending debounced Y.Doc → disk write before reading.
-	// Without this, a read within the 1s flush window (including the
-	// agent render path's pre-render snapshot) sees stale file content.
+	// Without this, a read within the 1s flush window sees stale file
+	// content.
 	try {
 		flushTabMarkdownNow(tabId);
 	} catch (e) {
@@ -60,11 +49,10 @@ export const GET: RequestHandler = async ({ url }) => {
 };
 
 /**
- * Deprecated in Phase 3. Ignored `userMd` — the Y.Doc path delivers every
- * keystroke over WebSocket and the server writes `document.md` itself. A
- * `meta` payload (rules / agent settings) is still honored, since those
- * flow through separate save paths. Remove this endpoint in a later
- * cleanup phase once we're sure no clients call it with `userMd`.
+ * Ignored `userMd` — the Y.Doc path delivers every keystroke over
+ * WebSocket and the server writes the workspace file itself. A `meta`
+ * payload (rules / agent settings) is still honored since those flow
+ * through separate save paths.
  */
 export const PUT: RequestHandler = async ({ request }) => {
 	try {
@@ -72,26 +60,7 @@ export const PUT: RequestHandler = async ({ request }) => {
 		if (body && body.meta) {
 			await writeMeta(body.meta);
 		}
-		return json({ ok: true, deprecated: true });
-	} catch (e) {
-		return json({ error: String(e) }, { status: 500 });
-	}
-};
-
-export const POST: RequestHandler = async ({ request, url }) => {
-	// Accept / reject actions for the agent's pending shadow on a given tab.
-	try {
-		const tabId = resolveTabId(url);
-		const body = await request.json();
-		if (body.action === 'accept') {
-			await acceptAgentDoc(tabId);
-			return json({ ok: true });
-		}
-		if (body.action === 'reject') {
-			await rejectAgentDoc(tabId);
-			return json({ ok: true });
-		}
-		return json({ error: 'Unknown action' }, { status: 400 });
+		return json({ ok: true });
 	} catch (e) {
 		return json({ error: String(e) }, { status: 500 });
 	}

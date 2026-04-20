@@ -40,3 +40,7 @@ vite.config.ts.timestamp-*
 
 # Junk dirs from accidental --root=" " testing
 /\ /
+
+# Agent worktrees and locks
+.claude/worktrees/
+.claude/scheduled_tasks.lock

@@ -404,9 +404,11 @@ export function isTabPath(p: string): boolean {
 
 ---
 
-## Phase 5 — Prompt-diff cutover
+## Phase 5 + 6 (combined) — Prompt-diff cutover AND shadow / merge deletion
 
-**Goal:** Shrink prompts. Active tab gets full content + diff since `last_seen`. Other open tabs get path + diff (if any). No full content for non-active tabs. Agent uses `read_doc` on demand.
+**Goal:** Shrink prompts AND delete the now-vestigial shadow machinery together. Phase 4 already made shadows and `incremental_apply` dead code (the agent uses `edit_doc` which bypasses them); these two were originally split but they're naturally one atomic cleanup — leaving them separate would just mean Phase 5 adds code that Phase 6 immediately has to keep working through the shadow purge.
+
+### Prompt changes (formerly Phase 5)
 
 ### Modified files
 
@@ -436,22 +438,14 @@ Tabs whose content isn't inlined above: you can read their current state with
 - Agent successfully calls `read_doc` when it needs content of a non-inlined tab.
 - `npm run check` passes.
 
-### Risks
+### Shadow / merge deletion (formerly Phase 6)
 
-- **Agent doesn't reach for `read_doc`** — plans against stale memory of earlier turn content, makes wrong edits. Tighten prompt guidance; monitor via the history pane.
-
----
-
-## Phase 6 — Delete shadows, 3-way merge, and the old merge machinery
-
-**Goal:** Remove obsolete code paths. Pure cleanup.
-
-### Deleted files
+#### Deleted files
 
 - `src/lib/three-way-merge.ts`
 - `src/lib/server/document-lock.ts`
 
-### Deleted functions (`src/lib/server/document-io.ts`)
+#### Deleted functions (`src/lib/server/document-io.ts`)
 
 - `resetAgentDoc`, `resetAllAgentDocs`
 - `syncUserEditsToAgent`
@@ -462,7 +456,7 @@ Tabs whose content isn't inlined above: you can read their current state with
 
 Keep only what the new design needs (or delete the whole file if it's empty after removals).
 
-### Deleted endpoints / state
+#### Deleted endpoints / state
 
 - `POST /api/document` with `action: accept | reject` — shadow cleanup no longer needed; accept/reject is a pure Y.Doc operation (remove round from `Y.Map('review')` and optionally rewind undo stack).
 - Client-side `mergeBaseByTab`, `preRenderMdByTab`, rolling-baseline machinery in `src/routes/+page.svelte`.
@@ -470,20 +464,24 @@ Keep only what the new design needs (or delete the whole file if it's empty afte
 - Pre-tool sync hook in `src/routes/api/render/+server.ts`.
 - Post-tool `incremental_apply` emit hook in the same file.
 
-### Filesystem
+#### Filesystem
 
 - `.docwriter/agent/` directory should no longer be created. Delete any code that makes the directory.
 
-### Acceptance criteria
+### Combined acceptance criteria
 
-- Grep: `three-way-merge`, `resetAgentDoc`, `syncUserEditsToAgent`, `incremental_apply`, `mergeBaseByTab`, `preRenderMdByTab` — all return zero hits.
+- Prompt: active tab inlined with diff; non-active tabs show path + diff-only (or omitted entirely if unchanged).
+- `kv['last_seen:<tabId>']` is written after every render the tab was part of.
+- Grep: `three-way-merge`, `resetAgentDoc`, `syncUserEditsToAgent`, `incremental_apply`, `mergeBaseByTab`, `preRenderMdByTab` — all zero hits.
 - `.docwriter/agent/` is never created during a normal render.
+- Agent flow end-to-end: trigger a render, accept, reject, retry — all work. Agent uses `read_doc` for non-inlined tabs.
 - `npm run check` passes.
-- Agent flow end-to-end: trigger a render, accept, reject, retry — all work.
 
 ### Risks
 
 - **Hidden dependencies**: some obscure UI feature may rely on `incremental_apply` for live-streaming visuals. Search for references before deleting. Keep the `tool_call_start` / `assistant_text` / `result` events.
+- **Agent doesn't reach for `read_doc`** — plans against stale memory from earlier turns, makes wrong edits. Tighten prompt guidance; monitor via the history pane.
+- **Accept/Reject client logic** currently depends on `incremental_apply` + `applyAgentMarkdown`. After Phase 4, agent applies come through WebSocket sync instead. Client-side Accept/Reject needs to switch to operating on the `Y.Map('review')` state directly (remove round from map; optionally `undoManager.undo()` for reject). Verify this works end-to-end.
 
 ---
 

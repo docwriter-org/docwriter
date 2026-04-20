@@ -124,6 +124,33 @@ export function dbReplaceActionUsageCounts(counts: Record<string, number>) {
 	}
 }
 
+/** Read a raw string value from the `kv` table. Returns `null` if the key
+ * is absent. Callers parse / interpret the value as they see fit (e.g. the
+ * render endpoint stores each tab's post-render markdown under
+ * `last_seen:<tabId>` so the next render can diff against it). */
+export function kvGet(key: string): string | null {
+	try {
+		const row = getDb()
+			.prepare('SELECT value FROM kv WHERE key = ?')
+			.get(key) as { value: string } | undefined;
+		return row?.value ?? null;
+	} catch (err) {
+		logDbError('kvGet:' + key, err);
+		return null;
+	}
+}
+
+/** Upsert a raw string into the `kv` table. Overwrites any prior value. */
+export function kvSet(key: string, value: string) {
+	try {
+		getDb()
+			.prepare('INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)')
+			.run(key, value);
+	} catch (err) {
+		logDbError('kvSet:' + key, err);
+	}
+}
+
 export function dbReplaceHooks(hooks: Hook[]) {
 	try {
 		const db = getDb();

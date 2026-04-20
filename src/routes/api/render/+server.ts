@@ -4,26 +4,24 @@ import { query, createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk'
 import type { HookCallback } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import { spawn } from 'child_process';
+import * as Y from 'yjs';
 import {
-	parseTabIdFromAgentPath,
-	AGENT_DIR,
 	AGENT_SCRATCH_DIR,
-	ensureAgentScratchDir,
-	isAgentScratchPath,
 	isValidTabId,
 	tabKind
 } from '$lib/server/document-files';
-import { readHooks, resolveCommand, HOOK_EVENTS, type Hook, type HookEvent } from '$lib/server/hooks-config';
-import { getSessionId, setSessionId, getTabsState } from '$lib/server/runtime-state';
 import {
-	readMeta,
-	readUserDoc,
-	resetAllAgentDocs,
-	readAllAgentDocs,
-	readAgentDoc,
-	syncUserEditsToAgent
-} from '$lib/server/document-io';
-import { startRender, endRender } from '$lib/server/document-lock';
+	readHooks,
+	resolveCommand,
+	HOOK_EVENTS,
+	type Hook,
+	type HookEvent
+} from '$lib/server/hooks-config';
+import { getSessionId, setSessionId, getTabsState } from '$lib/server/runtime-state';
+import { readMeta } from '$lib/server/document-io';
+import { kvGet, kvSet } from '$lib/server/db-writes';
+import { getTabYDoc } from '$lib/server/ydoc-registry';
+import { serializeYDocToMarkdown } from '$lib/server/ydoc-markdown';
 import { registerPendingAskUser } from '$lib/server/ask-user-state';
 import { unifiedLineDiff } from '$lib/diff';
 import { buildStyleReferencesPromptBlock } from '$lib/server/references';
@@ -33,6 +31,28 @@ import {
 	READ_DOC_TOOL_NAME,
 	WRITE_DOC_TOOL_NAME
 } from '$lib/server/mcp-doc-tools';
+
+/** Read the live authoritative markdown for a tab. Prefers the Hocuspocus
+ * in-memory Document (which is what clients are synced to); falls back to
+ * the registry Y.Doc (cold-start / no-client-connected state, which in turn
+ * seeds from the workspace file via `seedYDocFromContent`). */
+function readLiveTabMarkdown(tabId: string): string {
+	const holder = globalThis as unknown as {
+		__docwriterWsServer?: {
+			hocuspocus?: { documents?: { get(name: string): unknown } };
+		};
+	};
+	const hp = holder.__docwriterWsServer?.hocuspocus;
+	const liveDoc = hp?.documents?.get(tabId) as Y.Doc | undefined;
+	const ydoc = liveDoc ?? getTabYDoc(tabId).ydoc;
+	return serializeYDocToMarkdown(ydoc, tabKind(tabId));
+}
+
+const LAST_SEEN_PREFIX = 'last_seen:';
+
+function lastSeenKey(tabId: string): string {
+	return LAST_SEEN_PREFIX + tabId;
+}
 
 function agencyGuidance(
 	agency: 'conservative' | 'balanced' | 'aggressive',
@@ -77,15 +97,24 @@ Only make an edit if ONE of these is clearly true:
 If none of those apply: exit without editing anything. Do NOT polish, do NOT reword, do NOT "improve" prose that is already fine. Do NOT make tiny stylistic tweaks on unchanged text. When in doubt, do nothing.`;
 }
 
-/** Build a single prompt covering every open file. The active file is
- * flagged so the agent treats the user's message as primarily about that
- * file, but it can and should edit other files when the request spans
- * them (e.g. "pull the intro from `notes` into `document`"). Each file
- * section inlines current content plus, if present, a non-empty diff
- * since the agent last left that file. */
+interface TabPromptInfo {
+	tabId: string;
+	currentMd: string;
+	lastSeenMd: string | null;
+}
+
+/** Build a single prompt covering every open file. Content-inlining policy:
+ *   - Active tab: full content + diff against `last_seen` (if any).
+ *   - Non-active tab with changes: path + diff only (no full content).
+ *   - Non-active tab with no changes: path only.
+ *   - First-render tab (no `last_seen`): full content inlined.
+ *
+ * For tabs the agent needs the full content of but didn't inline, it can
+ * call `read_doc(path)` — free in-process fetch against the live Y.Doc.
+ */
 function buildMultiTabPrompt(
 	activeTabId: string,
-	tabs: Array<{ tabId: string; currentMd: string; lastMd: string | null }>,
+	tabs: TabPromptInfo[],
 	userMessage: string
 ): string {
 	const meta = readMeta();
@@ -94,33 +123,40 @@ function buildMultiTabPrompt(
 	const styleReferencesBlock = buildStyleReferencesPromptBlock();
 
 	const tabSections = tabs
-		.map(({ tabId, currentMd, lastMd }) => {
+		.map(({ tabId, currentMd, lastSeenMd }) => {
 			const kind = tabKind(tabId);
 			const isActive = tabId === activeTabId;
-			const hasDiff = lastMd !== null && lastMd !== currentMd;
-			const diffBlock = hasDiff
-				? `\n\n**User changes since your last edit:**\n\`\`\`diff\n${unifiedLineDiff(lastMd as string, currentMd)}\n\`\`\``
-				: '';
+			const hasLastSeen = lastSeenMd !== null;
+			const hasDiff = hasLastSeen && lastSeenMd !== currentMd;
 			const kindNote =
 				kind === 'plain'
 					? ' (**plain text** — preserve it as-is; do NOT add markdown formatting)'
 					: ' (markdown)';
 			const fence = kind === 'markdown' ? 'markdown' : 'text';
-			// `path` here is the value the agent will pass to
-			// `edit_doc` / `write_doc` / `read_doc` — the workspace-relative
-			// tab id, which the path-router resolves to the live Y.Doc.
-			return `### ${isActive ? '⭐ ' : ''}\`${tabId}\`${kindNote}${isActive ? ' (active — the user is currently looking at this one)' : ''}
+			const star = isActive ? '⭐ ' : '';
+			const activeNote = isActive ? ' (active — the user is currently looking at this one)' : '';
+			const header = `### ${star}\`${tabId}\`${kindNote}${activeNote}\n\nPath (use as \`path\` argument to edit_doc / write_doc / read_doc): \`${tabId}\``;
 
-Path (use as \`path\` argument to edit_doc / write_doc / read_doc): \`${tabId}\`
+			// Active tab or first-render tab: inline full content.
+			if (isActive || !hasLastSeen) {
+				const diffBlock = hasDiff
+					? `\n\n**User changes since your last edit:**\n\`\`\`diff\n${unifiedLineDiff(lastSeenMd as string, currentMd)}\n\`\`\``
+					: '';
+				return `${header}\n\n\`\`\`${fence}\n${currentMd}\n\`\`\`${diffBlock}`;
+			}
 
-\`\`\`${fence}
-${currentMd}
-\`\`\`${diffBlock}`;
+			// Non-active tab WITH changes: path + diff only.
+			if (hasDiff) {
+				return `${header}\n\n**User changes since your last edit:**\n\`\`\`diff\n${unifiedLineDiff(lastSeenMd as string, currentMd)}\n\`\`\`\n\nFull content not inlined — call \`read_doc("${tabId}")\` if you need it.`;
+			}
+
+			// Non-active tab with no changes: path only.
+			return `${header}\n\nUnchanged since your last edit. Full content not inlined — call \`read_doc("${tabId}")\` if you need it.`;
 		})
 		.join('\n\n');
 
 	const anyDiff = tabs.some(
-		({ currentMd, lastMd }) => lastMd !== null && lastMd !== currentMd
+		({ currentMd, lastSeenMd }) => lastSeenMd !== null && lastSeenMd !== currentMd
 	);
 	const agencyBlock = agencyGuidance(agency, anyDiff);
 
@@ -134,6 +170,8 @@ ${currentMd}
 ## Files (${tabs.length})
 
 ${tabSections}
+
+Tabs without full content inlined above: call \`read_doc(path)\` to fetch the current content if you need it. \`read_doc\` is free — the server holds the Y.Doc in-process, no network round-trip.
 
 ${styleReferencesBlock ? `${styleReferencesBlock}\n\n` : ''}## What the user wants
 
@@ -155,7 +193,6 @@ ${agencyBlock}
 - \`read_doc(path)\` returns the live content of an open tab.
 - Each \`edit_doc\` / \`write_doc\` call lands atomically into the user's live document and shows up as a reviewable round in the outline. Its tool_result reflects reality (success = the user now sees your change).
 - For files outside the open-tab list, read with the built-in \`Read\` / \`Glob\` / \`Grep\`, and for your scratch workspace under \`${AGENT_SCRATCH_DIR}/\` you may use either \`edit_doc\` / \`write_doc\` / \`read_doc\` (they fall through to plain filesystem I/O on scratch paths) or the built-in \`Edit\` / \`Write\` tools.
-- The content is inlined above. Jump straight to \`edit_doc\` using that content. Only call \`read_doc\` if an \`edit_doc\` fails on \`old_string\` mismatch (meaning the user typed into the range you were targeting).
 - Preserve the user's voice — don't rewrite sentences that aren't broken.
 - Do NOT create new tab files. Only edit the files listed above.
 - If the user's message is about the active file, prefer editing that one. Edit other files when the request genuinely spans them.
@@ -352,78 +389,14 @@ const USER_HOOK_TIMEOUT_SEC = 60;
 
 type HookEntry = { matcher: string; hooks: HookCallback[]; timeout?: number };
 
-type IncrementalApplyEmitter = (entry: { tabId: string; agentMd: string }) => void;
-
+/** Build the hook map for this render. Only user-defined shell hooks are
+ * wired in — the legacy PreToolUse / PostToolUse internal hooks that
+ * synced shadow files and streamed partial applies are gone (Phase 5+6).
+ * Agent writes to open tabs go through `edit_doc` / `write_doc`, which
+ * mutate the live Y.Doc atomically and stream to the browser directly. */
 function buildHooks(
-	allowedTabIds: Set<string>,
-	emitHookRun: HookRunEmitter,
-	emitIncrementalApply: IncrementalApplyEmitter
+	emitHookRun: HookRunEmitter
 ): Partial<Record<HookEvent | 'PreToolUse', HookEntry[]>> {
-	// Before each agent Edit/Write:
-	//   1. If the target is an open tab's shadow (.docwriter/agent/<tabId>),
-	//      sync the user's latest keystrokes into the shadow so the agent's
-	//      edit lands on fresh text. Allow.
-	//   2. If the target is under .docwriter/agent/scratch/, allow — this is
-	//      the agent's private working dir for drafts / notes-to-self. Not
-	//      surfaced to the user, persists across rounds in the same session.
-	//   3. Otherwise hard-deny. Read/Glob/Grep stay unrestricted; this is
-	//      purely a write guard.
-	const preEdit: HookCallback = async (input) => {
-		const inp = input as any;
-		if (inp.hook_event_name !== 'PreToolUse') return {};
-		const toolInput = inp.tool_input;
-		const filePath: string | undefined = toolInput?.file_path;
-		if (!filePath) return {};
-
-		// (2) Scratch writes: always allowed.
-		if (isAgentScratchPath(filePath)) return {};
-
-		// (1) Open-tab shadow: sync user deltas, allow.
-		const tabId = parseTabIdFromAgentPath(filePath);
-		if (tabId && allowedTabIds.has(tabId)) {
-			await syncUserEditsToAgent(tabId);
-			return {};
-		}
-
-		// (3) Everywhere else: hard-deny.
-		return {
-			systemMessage:
-				`Write blocked: you can Edit/Write open-tab shadows under ` +
-				`\`${AGENT_DIR}/\` and anywhere under \`${AGENT_SCRATCH_DIR}/\` ` +
-				`(your scratch space). For hooks/rules, call propose_hook / ` +
-				`propose_rule instead of editing files directly.`,
-			hookSpecificOutput: {
-				hookEventName: 'PreToolUse',
-				permissionDecision: 'deny',
-				permissionDecisionReason:
-					`Write blocked: ${filePath} is outside the agent's sandbox. ` +
-					`Allowed: shadow paths for currently-open tabs, or anywhere ` +
-					`under ${AGENT_SCRATCH_DIR}/.`
-			}
-		};
-	};
-
-	// After each agent Edit/Write, read the shadow for that tab and push
-	// the current content to the client as an incremental_apply event.
-	// This lets the editor stream agent edits in real time — you see each
-	// Edit tool call land as it happens, instead of waiting for the whole
-	// round to finish.
-	//
-	// Not a user-exposed hook — registered on the SDK directly, not stored
-	// in .docwriter/hooks.json, and not surfaced in the history pane.
-	const postEditStream: HookCallback = async (input) => {
-		const toolInput = (input as any).tool_input;
-		const filePath: string | undefined = toolInput?.file_path;
-		if (!filePath) return {};
-		const tabId = parseTabIdFromAgentPath(filePath);
-		if (!tabId || !allowedTabIds.has(tabId)) return {};
-		const agentMd = readAgentDoc(tabId);
-		if (typeof agentMd === 'string') {
-			emitIncrementalApply({ tabId, agentMd });
-		}
-		return {};
-	};
-
 	const userHooks = readHooks().hooks.filter((h) => h.enabled !== false);
 
 	function buildUserHookCallback(hook: Hook): HookCallback {
@@ -447,20 +420,11 @@ function buildHooks(
 		};
 	}
 
-	// Start every supported event as an empty bucket + our two internal
-	// hooks (preEdit for user-delta sync, postEditStream for live apply).
-	const buckets: Record<string, HookEntry[]> = {
-		PreToolUse: [{ matcher: 'Edit|Write', hooks: [preEdit] }],
-		PostToolUse: [{ matcher: 'Edit|Write', hooks: [postEditStream] }]
-	};
-	for (const ev of HOOK_EVENTS) {
-		if (!buckets[ev]) buckets[ev] = [];
-	}
+	const buckets: Record<string, HookEntry[]> = {};
+	for (const ev of HOOK_EVENTS) buckets[ev] = [];
 
 	for (const h of userHooks) {
 		const cb = buildUserHookCallback(h);
-		// Tool-based events: pass the matcher through (SDK regexes on tool name).
-		// For non-tool events, omit the matcher so the hook always fires.
 		const toolEvent =
 			h.event === 'PreToolUse' ||
 			h.event === 'PostToolUse' ||
@@ -469,7 +433,6 @@ function buildHooks(
 		buckets[h.event].push({ matcher, hooks: [cb], timeout: USER_HOOK_TIMEOUT_SEC });
 	}
 
-	// Drop empty buckets so we don't pass noise to the SDK.
 	const out: Partial<Record<string, HookEntry[]>> = {};
 	for (const [k, v] of Object.entries(buckets)) {
 		if (v.length > 0) out[k] = v;
@@ -496,45 +459,27 @@ export const POST: RequestHandler = async ({ request }) => {
 		if (!allTabIds.includes(active)) {
 			throw error(400, `Active tab "${active}" not found on disk`);
 		}
-		const tabsForPrompt = allTabIds.map((id) => ({
+
+		// Snapshot each tab's live authoritative content + its last-seen
+		// baseline from kv. The agent gets a prompt built off this snapshot
+		// and post-render we write each tab's (new) current content back
+		// into kv so the next render diffs cleanly.
+		const tabsForPrompt: TabPromptInfo[] = allTabIds.map((id) => ({
 			tabId: id,
-			currentMd: readUserDoc(id),
-			lastMd: readAgentDoc(id)
+			currentMd: readLiveTabMarkdown(id),
+			lastSeenMd: kvGet(lastSeenKey(id))
 		}));
-		// Reset EVERY tab's shadow to match its user doc — the deterministic
-		// starting point for this render round. The agent can edit any of them.
-		resetAllAgentDocs();
-		// Make sure the scratch sandbox exists so the agent can immediately
-		// Write into it without a first-time mkdir failure.
-		ensureAgentScratchDir();
-
-		// Snapshot the user docs right now (same content as the freshly-reset
-		// shadows) so we can compute "did the agent actually change this tab?"
-		// at result time by diffing the shadow against this snapshot.
-		const userDocsAtStart = readAllAgentDocs().reduce<Record<string, string>>(
-			(acc, { tabId, userMd }) => {
-				acc[tabId] = userMd;
-				return acc;
-			},
-			{}
-		);
-
-		// Mark render active (document-lock). startRender only takes one seed
-		// string because lastSyncedUserMd is shared across tabs for the duration
-		// of a single render — which is fine because the PreToolUse hook looks
-		// up the current user md per-tab each time it runs.
-		startRender(userDocsAtStart[active] || '');
 
 		const currentSessionId = getSessionId();
-		const message = userMessage || "The user clicked Wake-up without a specific request. Decide what (if anything) to do per the agency guidance above.";
+		const message =
+			userMessage ||
+			"The user clicked Wake-up without a specific request. Decide what (if anything) to do per the agency guidance above.";
 		const prompt = warmup
-			? `You are a writing assistant. The user has a set of files under ${AGENT_DIR}/. Acknowledge you're ready in 1-2 sentences. Don't edit anything.`
+			? `You are a writing assistant. The user has a set of files open as tabs. Acknowledge you're ready in 1-2 sentences. Don't edit anything.`
 			: buildMultiTabPrompt(active, tabsForPrompt, message);
 
 		const abortController = new AbortController();
 		request.signal.addEventListener('abort', () => abortController.abort());
-
-		const allowedTabIds = new Set(allTabIds);
 
 		const stream = new ReadableStream({
 			async start(controller) {
@@ -543,15 +488,13 @@ export const POST: RequestHandler = async ({ request }) => {
 
 				function send(event: string, data: unknown) {
 					controller.enqueue(
-						encoder.encode(`event: ${event}\ndata: ${JSON.stringify({ ...(data as object), _elapsed: Date.now() - renderStart })}\n\n`)
+						encoder.encode(
+							`event: ${event}\ndata: ${JSON.stringify({ ...(data as object), _elapsed: Date.now() - renderStart })}\n\n`
+						)
 					);
 				}
 
-				const hooks = buildHooks(
-					allowedTabIds,
-					(entry) => send('hook_run', entry),
-					(entry) => send('incremental_apply', entry)
-				);
+				const hooks = buildHooks((entry) => send('hook_run', entry));
 
 				let currentToolName = '';
 				let currentToolId = '';
@@ -623,6 +566,10 @@ export const POST: RequestHandler = async ({ request }) => {
 						...(currentSessionId ? { resume: currentSessionId } : {})
 					};
 
+					// Scratch workspace is created lazily (by `mcp-doc-tools`
+					// on the first scratch write). No render-start mkdir here
+					// — otherwise a `.docwriter/agent/` dir gets created on
+					// every render even when the agent never writes scratch.
 					for await (const msg of query({ prompt, options: queryOptions })) {
 						if (msg.type === 'system' && msg.session_id) {
 							setSessionId(msg.session_id);
@@ -749,22 +696,21 @@ export const POST: RequestHandler = async ({ request }) => {
 					send('error', { error: String(err) });
 				}
 
-				// Final sync pass per tab, then emit one `edits` array listing
-				// every tab whose shadow differs from its user doc at start.
+				// Update `last_seen:<tabId>` for every tab the agent could
+				// have touched, using the NOW-authoritative content. The next
+				// render will diff against these baselines — so a tab the
+				// user edited mid-render gets its fresh content baked in,
+				// and a tab the agent edited gets its post-edit content.
 				try {
 					for (const id of allTabIds) {
-						await syncUserEditsToAgent(id);
+						const now = readLiveTabMarkdown(id);
+						kvSet(lastSeenKey(id), now);
 					}
-					const finals = readAllAgentDocs();
-					const edits = finals
-						.filter(({ tabId, agentMd }) => (userDocsAtStart[tabId] ?? '') !== agentMd)
-						.map(({ tabId, agentMd }) => ({ tabId, agentMd }));
-					send('result', { activeTabId: active, edits });
 				} catch (err) {
-					send('error', { error: 'Failed to read agent docs: ' + String(err) });
+					send('error', { error: 'Failed to update last_seen kv: ' + String(err) });
 				}
-				endRender();
 
+				send('result', { activeTabId: active });
 				send('done', {});
 				controller.close();
 			}

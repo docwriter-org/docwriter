@@ -35,12 +35,10 @@ export const reviewBaseline = writable<string | null>(null);
  * (also dropping all later rounds). */
 export const pendingReviewRounds = writable<PendingReviewRound[]>([]);
 
-/** Snapshot of the editor's markdown captured right before applyAgentMarkdown
- * dispatches its PM replace. Includes any user edits made DURING the render
- * (which the bare baseline does not). Used as the restore target for
- * reject-after-refresh, because the in-memory Y.UndoManager has no history
- * after a page reload. Null when no review is pending. Persisted to the
- * server via PUT /api/document { preAgentMd } and read back on boot. */
+/** Legacy: snapshot of the editor's markdown before the first pending
+ * round's agent ops landed. Today it's simply `rounds[0].beforeMd`. Kept
+ * as a separate store for backward-compat with code paths (and the diff
+ * overlay) that still read it directly. Null when no review is pending. */
 export const preAgentSnapshot = writable<string | null>(null);
 
 /** Writing rules (mirror of document.meta.json rules). */

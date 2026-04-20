@@ -9,7 +9,6 @@ import {
 	clearSessionState
 } from '$lib/server/runtime-state';
 import { AGENT_SCRATCH_DIR } from '$lib/server/document-files';
-import { clearAllAgentDocs } from '$lib/server/document-io';
 import { existsSync, rmSync } from 'fs';
 
 export const GET: RequestHandler = async () => {
@@ -29,7 +28,6 @@ export const PUT: RequestHandler = async ({ request }) => {
 
 export const DELETE: RequestHandler = async () => {
 	clearSessionState();
-	clearAllAgentDocs();
 	// Agent scratch workspace is session-scoped — wipe on New session so
 	// the next run starts with a clean slate (no stale drafts or notes
 	// from the previous conversation).

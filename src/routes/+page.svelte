@@ -18,28 +18,12 @@
 	import { unifiedLineDiff } from '$lib/diff';
 	import { classifyRoundKind } from '$lib/review-diff';
 
+	/** Legacy marker left on triggers by the pre-refactor conflict-retry flow.
+	 * The conflict-retry path is gone (Phase 5+6 — edits land atomically into
+	 * the live Y.Doc so there are no 3-way merge conflicts to retry), but the
+	 * marker remains in `shortDescription` so a replayed SDK transcript from
+	 * an older session still renders a sensible label. */
 	const CONFLICT_RETRY_MARKER = '[docwriter-conflict-retry]';
-
-	function buildConflictRetryTrigger(
-		priorTrigger: string | undefined,
-		conflictsByTab: Record<string, number>
-	): string {
-		const baseTrigger = priorTrigger || 'Review document and improve';
-		const summary = Object.entries(conflictsByTab)
-			.filter(([, count]) => count > 0)
-			.map(([tabId, count]) => `- ${tabId}: ${count} overlapping edit${count === 1 ? '' : 's'} skipped`)
-			.join('\n');
-		return [
-			CONFLICT_RETRY_MARKER,
-			baseTrigger,
-			'',
-			'Some of your proposed edits were skipped because the user edited overlapping text while you were running.',
-			'Retry against the latest document state. Preserve the user edits. Re-propose only the remaining improvements that still make sense now.',
-			'',
-			'Overlaps skipped:',
-			summary
-		].join('\n');
-	}
 
 	/** Turn a submit trigger into a compact description for the history
 	 * pane. Full text of long prompts (including feedback-on-passage quotes)
@@ -78,16 +62,15 @@
 	}
 
 	import {
-		applyAgentMarkdown,
 		undoAgentChanges,
-		captureBaselineForAgent,
-		clearAgentBaseline,
-		clearAllAgentBaselines,
-		disposeAgentUndo
+		disposeAgentUndo,
+		getUndoManagerForTab,
+		AGENT_ORIGIN
 	} from '$lib/yjs-agent';
 	import {
 		getReviewMap,
 		getReviewMapForTab,
+		getYDocForTab,
 		whenYDocReady,
 		setCurrentTab,
 		destroyTab,
@@ -147,10 +130,6 @@
 	/** Map tabId → pending round count. Drives the numbered badge on
 	 * each tab. 0 / absent means no pending review on that tab. */
 	let pendingReviewTabs: Map<string, number> = $state(new Map());
-	/** Per-tab pre-render markdown snapshot (for the diff overlay baseline). */
-	let preRenderMdByTab: Record<string, string> = {};
-	/** Per-tab pre-agent-apply snapshot (for reject-after-refresh restore). */
-	let preAgentMdByTab: Record<string, string> = {};
 
 	function getCurrentTabList(): string[] {
 		let v: TabInfo[] = [];
@@ -173,19 +152,6 @@
 	activeTab.subscribe((value) => {
 		currentActiveTabId = value;
 	});
-
-	/** Fetch a tab's current markdown from the server. Used to snapshot
-	 * pre-render content for tabs other than the active one. */
-	async function fetchTabMd(tabId: string): Promise<string> {
-		try {
-			const res = await fetch(`/api/document?tab=${encodeURIComponent(tabId)}`);
-			const data = await res.json();
-			return data.userMd || '';
-		} catch (e) {
-			console.error(`Failed to fetch md for tab "${tabId}":`, e);
-			return '';
-		}
-	}
 
 	let editorRef: EditorRef | undefined = $state();
 
@@ -492,18 +458,6 @@
 			console.error('flushAutosave failed:', e);
 		}
 
-		// Capture the pre-render markdown AND the Y.Doc state per tab so
-		// applyAgentMarkdown can merge via CRDT against the right baseline
-		// and the diff overlay can compare against the pre-render text.
-		const tabList = getCurrentTabList();
-		preRenderMdByTab = {};
-		preAgentMdByTab = {};
-		for (const id of tabList) {
-			const md = await fetchTabMd(id);
-			preRenderMdByTab[id] = md;
-			captureBaselineForAgent(id);
-		}
-
 		// If this is a feedback trigger, pull out the passage so the history
 		// entry shows both the label and what it was applied to.
 		const feedbackQuoteMatch = trigger?.match(
@@ -521,15 +475,19 @@
 
 		currentAbort = new AbortController();
 		let success = true;
-
-		// Streaming state: each incremental_apply increments a per-tab
-		// counter and adds to `incrementalAppliedTabs`. At result time these
-		// feed into the new PendingReviewRound's stepCount so reject knows
-		// how many undo steps to pop (one per Edit/Write tool call).
-		const incrementalAppliedTabs = new Set<string>();
-		const incrementalStepCountByTab: Record<string, number> = {};
-		const mergeBaseByTab: Record<string, string> = { ...preRenderMdByTab };
-		const conflictCountByTab: Record<string, number> = {};
+		// Snapshot of `pendingRounds` per tab BEFORE this render started.
+		// The agent's custom `edit_doc` / `write_doc` tools append rounds
+		// directly into each tab's `Y.Map('review')` on the server; those
+		// rounds stream to the browser over Hocuspocus sync, so by the
+		// time `result` fires the Y.Doc already has the new rounds. Diffing
+		// against this snapshot lets us count rounds added this render
+		// (for the zero-edit message and feedback-annotation cleanup).
+		const priorRoundIdsByTab = new Map<string, Set<string>>();
+		for (const id of getCurrentTabList()) {
+			const existing = getReviewMapForTab(id).get('pendingRounds');
+			const rounds = Array.isArray(existing) ? (existing as PendingReviewRound[]) : [];
+			priorRoundIdsByTab.set(id, new Set(rounds.map((r) => r.id)));
+		}
 
 		try {
 			let model = 'opus';
@@ -663,176 +621,38 @@
 								}
 							];
 						});
-					} else if (event === 'incremental_apply') {
-						// Streaming partial apply: the server's internal
-						// PostToolUse hook fired after an agent Edit/Write.
-						// Apply the shadow's current content to the target
-						// tab's Y.Doc so the user sees each edit land in
-						// real time instead of in one lump at `result`.
+					} else if (event === 'result') {
+						// Agent-applied edits arrive over Hocuspocus WebSocket
+						// sync: `mcp__docwriter-doc__edit_doc` and `write_doc`
+						// on the server transact directly against the live
+						// Y.Doc (content + a new entry in `pendingRounds` in
+						// one atomic op), and the client's Y.Doc picks both up
+						// via the provider. By the time `result` fires, the
+						// per-tab review rounds and the editor content are
+						// already in their final state — the browser doesn't
+						// need to apply anything.
 						//
-						// We apply with trackChanges=true (AGENT_ORIGIN) so
-						// each incremental apply creates its own step on the
-						// tab's UndoManager — rejecting the round later will
-						// undo that many steps via `round.stepCount`.
-						const iTabId: string = parsed.tabId;
-						const iAgentMd: string = parsed.agentMd;
-						if (typeof iTabId === 'string' && typeof iAgentMd === 'string') {
-							const activeTabId = getCurrentActiveTab();
-							const activeEditor = editorRef?.getEditor();
-							// Capture baseline on the first stream of a round so
-							// the CRDT merge anchors at the right pre-round state.
-							if (!incrementalAppliedTabs.has(iTabId)) {
-								captureBaselineForAgent(iTabId);
-								incrementalAppliedTabs.add(iTabId);
-							}
-							const applyResult = applyAgentMarkdown(
-								iTabId,
-								iAgentMd,
-								true,
-								iTabId === activeTabId ? activeEditor : undefined,
-								getTabKind(iTabId),
-								mergeBaseByTab[iTabId]
-							);
-							mergeBaseByTab[iTabId] = iAgentMd;
-							if (applyResult.conflictCount > 0) {
-								conflictCountByTab[iTabId] =
-									(conflictCountByTab[iTabId] ?? 0) + applyResult.conflictCount;
-							}
-							if (applyResult.applied) {
-								clearFeedbackAnnotationsForTab(iTabId);
-								incrementalStepCountByTab[iTabId] =
-									(incrementalStepCountByTab[iTabId] ?? 0) + 1;
+						// Derive whether the agent actually touched any tab by
+						// comparing the current `pendingRounds` to the pre-
+						// render snapshot captured before `/api/render`.
+						let anyRoundAdded = false;
+						for (const id of getCurrentTabList()) {
+							const priorIds = priorRoundIdsByTab.get(id) ?? new Set<string>();
+							const current = getReviewMapForTab(id).get('pendingRounds');
+							const rounds = Array.isArray(current)
+								? (current as PendingReviewRound[])
+								: [];
+							const added = rounds.filter((r) => !priorIds.has(r.id));
+							if (added.length > 0) {
+								anyRoundAdded = true;
+								clearFeedbackAnnotationsForTab(id);
 							}
 						}
-					} else if (event === 'result') {
-						// Multi-tab result: parsed.edits is an array of
-						// { tabId, agentMd } for every tab the agent touched.
-						let currentSettings: AgentSettings = {
-							agency: 'conservative',
-							trackChanges: true
-						};
-						agentSettings.subscribe((v) => (currentSettings = v))();
-
-						const edits: Array<{ tabId: string; agentMd: string }> =
-							Array.isArray(parsed.edits) ? parsed.edits : [];
-						const activeTabId = getCurrentActiveTab();
-						const activeEditor = editorRef?.getEditor();
-
-						// Zero-edit renders used to leave the user with no visible
-						// signal — the agent might have written assistant_text
-						// saying "no edits needed," but that lives collapsed in
-						// the history pane. Push an explicit history entry so the
-						// user knows the render completed and consciously produced
-						// no edits.
-						if (edits.length === 0) {
+						if (!anyRoundAdded) {
 							pushHistory({
 								type: 'user_action',
 								timestamp: Date.now(),
 								description: 'Agent ran and made no edits'
-							});
-						}
-
-						for (const { tabId, agentMd } of edits) {
-							if (typeof agentMd !== 'string') continue;
-							if (currentSettings.trackChanges) {
-								// Track-changes mode: append a new round to this
-								// tab's pending list. Every round gets its own
-								// OutlinePane card; the editor's composite diff
-								// overlay anchors at rounds[0].beforeMd so all
-								// accumulated agent changes show at once.
-								const preRender = preRenderMdByTab[tabId] ?? '';
-								const reviewMap = getReviewMapForTab(tabId);
-								const existing = reviewMap.get('pendingRounds');
-								const prior: PendingReviewRound[] = Array.isArray(existing)
-									? (existing as PendingReviewRound[])
-									: [];
-								// If streaming already landed intermediate edits
-								// for this tab, the Y.Doc has them. Final apply
-								// still runs so the `afterMd` is canonical, and
-								// it adds one more undo step (or a no-op if
-								// content already matches). Total step count
-								// for this round = stream count + 1.
-								const streamedSteps =
-									incrementalStepCountByTab[tabId] ?? 0;
-								const finalApplyResult = applyAgentMarkdown(
-									tabId,
-									agentMd,
-									true,
-									tabId === activeTabId ? activeEditor : undefined,
-									getTabKind(tabId),
-									mergeBaseByTab[tabId]
-								);
-								mergeBaseByTab[tabId] = agentMd;
-								if (finalApplyResult.conflictCount > 0) {
-									conflictCountByTab[tabId] =
-										(conflictCountByTab[tabId] ?? 0) + finalApplyResult.conflictCount;
-								}
-								if (finalApplyResult.applied) clearFeedbackAnnotationsForTab(tabId);
-								const totalSteps = streamedSteps + (finalApplyResult.applied ? 1 : 0);
-								if (totalSteps === 0) {
-									continue;
-								}
-								const newRound: PendingReviewRound = {
-									id:
-										'rr_' +
-										Date.now().toString(36) +
-										Math.random().toString(36).slice(2, 6),
-									beforeMd: preRender,
-									afterMd: finalApplyResult.mergedContent,
-									trigger: trigger || undefined,
-									timestamp: Date.now(),
-									kind: classifyRoundKind(preRender, finalApplyResult.mergedContent),
-									stepCount: totalSteps
-								};
-								writeTabRounds(tabId, [...prior, newRound]);
-							} else {
-								// Silent mode: apply to the target tab's Y.Doc
-								// without any review UI. Clean up the server
-								// shadow for that tab since there's no Accept.
-								const silentApplyResult = applyAgentMarkdown(
-									tabId,
-									agentMd,
-									false,
-									tabId === activeTabId ? activeEditor : undefined,
-									getTabKind(tabId),
-									mergeBaseByTab[tabId]
-								);
-								mergeBaseByTab[tabId] = agentMd;
-								if (silentApplyResult.conflictCount > 0) {
-									conflictCountByTab[tabId] =
-										(conflictCountByTab[tabId] ?? 0) + silentApplyResult.conflictCount;
-								}
-								if (silentApplyResult.applied) clearFeedbackAnnotationsForTab(tabId);
-								const q = `?tab=${encodeURIComponent(tabId)}`;
-								void fetch(`/api/document${q}`, {
-									method: 'POST',
-									headers: { 'Content-Type': 'application/json' },
-									body: JSON.stringify({ action: 'accept' })
-								});
-							}
-						}
-						let shouldQueueConflictRetry = false;
-						for (const [tabId, conflicts] of Object.entries(conflictCountByTab)) {
-							if (conflicts <= 0) continue;
-							shouldQueueConflictRetry = true;
-							pushHistory({
-								type: 'notification',
-								timestamp: Date.now(),
-								priority: 'high',
-								text:
-									`Skipped ${conflicts} overlapping agent edit${conflicts === 1 ? '' : 's'} in ${tabId} because you edited the same area while the agent was running.`
-							});
-						}
-						if (shouldQueueConflictRetry && !(trigger || '').includes(CONFLICT_RETRY_MARKER)) {
-							queuedSubmissions = [
-								...queuedSubmissions,
-								{ trigger: buildConflictRetryTrigger(trigger, conflictCountByTab) }
-							];
-							pushHistory({
-								type: 'notification',
-								timestamp: Date.now(),
-								priority: 'high',
-								text: 'Trying again against your latest document so the skipped edits can be reconsidered.'
 							});
 						}
 					} else if (event === 'hook_run') {
@@ -1005,20 +825,11 @@
 			next = rounds.slice(idx + 1);
 		}
 		const acceptedCount = rounds.length - next.length;
+		// Accept is a pure Y.Map('review') mutation: remove the round
+		// entries, leave the content in place. The mutation propagates to
+		// every connected client (just this browser in single-user mode)
+		// via Hocuspocus sync. No server endpoint to call.
 		writeTabRounds(tabId, next);
-		if (next.length === 0) {
-			clearAgentBaseline(tabId);
-		}
-		try {
-			const q = `?tab=${encodeURIComponent(tabId)}`;
-			await fetch(`/api/document${q}`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ action: 'accept' })
-			});
-		} catch (e) {
-			console.error('Accept (server cleanup) failed:', e);
-		}
 		pushHistory({
 			type: 'user_action',
 			timestamp: Date.now(),
@@ -1036,12 +847,7 @@
 	 *
 	 * Uses the per-tab Yjs UndoManager, which only tracks `AGENT_ORIGIN`
 	 * transactions — so user keystrokes made between / after agent rounds
-	 * are PRESERVED (they're never in the undo stack). Hard-reset via
-	 * `applyAgentMarkdown(beforeMd)` is the fallback for cases where the
-	 * UndoManager has no in-memory history (reject-after-refresh).
-	 *
-	 * UX: for non-latest rejections (drops N>0 later rounds), confirms with
-	 * the user first.
+	 * are PRESERVED (they're never in the undo stack).
 	 */
 	function buildRejectedEditFollowup(
 		tabId: string,
@@ -1111,53 +917,25 @@
 		// that take the rejection into account.
 		const shouldReconsider = laterCount > 0 || !!retryFeedback;
 
-		// Pop the right number of agent-op steps. With incremental streaming
-		// each round contributes `stepCount` steps (one per Edit/Write +
-		// one final apply). Sum across the rejected rounds and pop that
-		// many — captureTimeout:0 makes every tracked transaction its own
-		// step, so the math is direct.
+		// Pop the right number of agent-op steps. Each `edit_doc` /
+		// `write_doc` call lands as one AGENT_ORIGIN transaction containing
+		// both the content change and the `pendingRounds` push — that
+		// transaction is a single undo step regardless of whether the
+		// server-side tool made two sub-transacts, because the client's
+		// UndoManager observes the combined update as one agent-origin op.
+		// For rounds created by the new server-side flow `stepCount` is 1.
+		// Legacy rounds (pre-refactor, composite diff) may still have
+		// higher stepCount — respect it.
 		let stepsToPop = 0;
 		for (let i = firstIdx; i < rounds.length; i++) {
 			stepsToPop += rounds[i].stepCount ?? 1;
 		}
-		let rewoundCount = 0;
 		for (let i = 0; i < stepsToPop; i++) {
-			if (undoAgentChanges(tabId)) rewoundCount++;
-			else break;
-		}
-
-		// Fallback: UndoManager had fewer steps than we needed (typically
-		// after a page refresh, where the in-memory stack is empty). Hard-
-		// reset to the earliest-rejected round's beforeMd. User edits made
-		// before that round still apply (they're in the Y.Doc history but
-		// not reversible from this path).
-		if (rewoundCount < stepsToPop && rounds.length > 0) {
-			const ed = editorRef?.getEditor();
-			applyAgentMarkdown(
-				tabId,
-				rounds[firstIdx].beforeMd,
-				true,
-				ed,
-				getTabKind(tabId)
-			);
+			if (!undoAgentChanges(tabId)) break;
 		}
 
 		const keep = rounds.slice(0, firstIdx);
 		writeTabRounds(tabId, keep);
-		if (keep.length === 0) {
-			clearAgentBaseline(tabId);
-		}
-
-		try {
-			const q = `?tab=${encodeURIComponent(tabId)}`;
-			await fetch(`/api/document${q}`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ action: 'reject' })
-			});
-		} catch (e) {
-			console.error('Reject (server cleanup) failed:', e);
-		}
 		pushHistory({
 			type: 'user_action',
 			timestamp: Date.now(),
@@ -1329,9 +1107,18 @@
 		try {
 			await fetch('/api/session', { method: 'DELETE' });
 			agentHistory.set([]);
-			// Also reject any pending agent edits — fresh start across all tabs.
+			// Reject any pending agent edits — fresh start across all tabs.
+			// Each round's AGENT_ORIGIN transactions are in the UndoManager;
+			// rewinding them restores the pre-agent state before clearing
+			// the `pendingRounds` Y.Map entries.
 			for (const id of getCurrentTabList()) {
-				undoAgentChanges(id);
+				const rounds = getReviewMapForTab(id).get('pendingRounds');
+				const list = Array.isArray(rounds) ? (rounds as PendingReviewRound[]) : [];
+				let steps = 0;
+				for (const r of list) steps += r.stepCount ?? 1;
+				for (let i = 0; i < steps; i++) {
+					if (!undoAgentChanges(id)) break;
+				}
 				writeTabRounds(id, []);
 			}
 			pendingReviewTabs = new Map();
@@ -1342,14 +1129,6 @@
 			actionUsageCounts.set({});
 			annotations.set([]);
 			resetSessionCost();
-			clearAllAgentBaselines();
-			const tabId = getCurrentActiveTab();
-			const q = tabId ? `?tab=${encodeURIComponent(tabId)}` : '';
-			await fetch(`/api/document${q}`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ action: 'reject' })
-			});
 			pushHistory({ type: 'user_action', timestamp: Date.now(), description: 'Started new session' });
 		} catch (e) {
 			console.error('New session failed:', e);
@@ -1653,10 +1432,18 @@
 					const tabId = getCurrentActiveTab();
 					if (!tabId) return;
 					const ed = editorRef?.getEditor();
+					if (!ed) return;
 					const before = getEditorMarkdownNow();
-					captureBaselineForAgent(tabId);
-					const applyResult = applyAgentMarkdown(tabId, content, true, ed, getTabKind(tabId));
-					if (!applyResult.applied) return;
+					// Ensure the UndoManager is listening before we transact
+					// so the agent-origin transaction is captured (matches the
+					// real flow, where edit_doc lands one tracked transaction).
+					getUndoManagerForTab(tabId);
+					const ydoc = getYDocForTab(tabId);
+					ydoc.transact(() => {
+						ed.commands.setContent(content, { emitUpdate: false });
+					}, AGENT_ORIGIN);
+					const after = getEditorMarkdownNow();
+					if (after === before) return;
 					const existing = getReviewMapForTab(tabId).get('pendingRounds');
 					const prior: PendingReviewRound[] = Array.isArray(existing)
 						? (existing as PendingReviewRound[])
@@ -1664,9 +1451,10 @@
 					const newRound: PendingReviewRound = {
 						id: 'rr_fake_' + Date.now().toString(36),
 						beforeMd: before,
-						afterMd: applyResult.mergedContent,
+						afterMd: after,
 						timestamp: Date.now(),
-						kind: classifyRoundKind(before, applyResult.mergedContent)
+						kind: classifyRoundKind(before, after),
+						stepCount: 1
 					};
 					writeTabRounds(tabId, [...prior, newRound]);
 				},

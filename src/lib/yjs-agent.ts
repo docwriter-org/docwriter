@@ -1,75 +1,37 @@
 import * as Y from 'yjs';
-import { Editor } from '@tiptap/core';
-import { ySyncPluginKey } from 'y-prosemirror';
 import { PluginKey } from '@tiptap/pm/state';
 import { getYDocForTab } from './yjs-doc';
-import {
-	markdownBaseExtensions,
-	plainBaseExtensions,
-	collaborativeExtensions
-} from './editor-extensions';
-import { plainTextToPMJson } from './yjs-markdown';
-import { mergeAgentEditsIntoCurrent } from './three-way-merge';
 
 /**
- * Agent reconciliation layer. Per-tab:
- *   - a baseline Yjs snapshot captured at render start (used only for
- *     display purposes by the diff overlay, not for applying edits)
- *   - a Y.UndoManager that tracks only `AGENT_ORIGIN` transactions
- *   - an ephemeral "live editor" reference for the active tab
+ * Agent reconciliation layer (post Phase 5+6).
  *
- * Applying agent output is a single code path for every tab, active or not:
+ * Agent edits land in the browser via Hocuspocus WebSocket sync — the
+ * custom MCP tools in `src/lib/server/mcp-doc-tools.ts` mutate the live
+ * server Y.Doc with `AGENT_ORIGIN`, and the change streams to every
+ * connected client's Y.Doc. This file keeps only what's needed on the
+ * browser side:
  *
- *   1. Parse the agent's new content into a ProseMirror node using the
- *      schema of a per-kind shared editor.
- *   2. Build (or reuse) a "sync editor" — a headless Tiptap editor bound
- *      to the target tab's Y.Doc via the Collaboration extension. For the
- *      active tab we reuse the live editor the user is interacting with;
- *      for background tabs we create one on demand.
- *   3. Compute the minimal PM range that changed (`findDiffStart` /
- *      `findDiffEnd`) and dispatch a single `replace` transaction inside
- *      a `ydoc.transact` with the desired origin.
+ *   - A per-tab `Y.UndoManager` that tracks `AGENT_ORIGIN` transactions so
+ *     Reject rewinds just the agent's ops (user keystrokes are preserved).
+ *   - An `AGENT_APPLY_KEY` ProseMirror plugin key so editor-side policy
+ *     (autosave / idle timer) can distinguish agent-origin transactions
+ *     from plain user typing.
  *
- * The targeted range is the key: only the bytes that actually changed get
- * new Yjs ops, so user edits outside that range are byte-for-byte preserved.
- * Edits inside the range race through the CRDT's item-level merge (inherent,
- * not something this layer can fix).
- *
- * `trackChanges` routes the Yjs origin, while `AGENT_APPLY_KEY` marks the
- * ProseMirror transaction itself so the editor can treat both review-mode
- * and silent-mode agent writes as "agent apply" for autosave purposes.
- *
- *   - `true`  → `AGENT_ORIGIN`, captured by this tab's UndoManager so the
- *               user's Reject rewinds just the agent's ops.
- *   - `false` → `ySyncPluginKey`, the origin y-prosemirror's yUndoPlugin
- *               watches by default; the ops go on the user's normal undo
- *               stack for silent-merge mode.
+ * The old `applyAgentMarkdown` / `captureBaselineForAgent` / 3-way merge
+ * path is gone — the server tools apply directly to the live Y.Doc, so
+ * the browser no longer has to re-derive a minimal PM range diff.
  */
 
-const AGENT_ORIGIN = 'agent';
+export const AGENT_ORIGIN = 'agent';
 const FRAGMENT_NAME = 'default';
 export const AGENT_APPLY_KEY = new PluginKey('agentApply');
 
-type Kind = 'markdown' | 'plain';
-
-const baselineStates = new Map<string, Uint8Array>();
 const undoManagers = new Map<string, Y.UndoManager>();
-/** Per-tab shadow editor — a disposable Tiptap instance bound to the tab's
- * Y.Doc. Used when we need to apply agent output to a tab whose live editor
- * isn't currently focused. Cached to avoid rebuilding per apply. */
-const shadowEditors = new Map<string, Editor>();
-/** Per-kind parser editors, shared across tabs. */
-let mdParser: Editor | null = null;
-let plainParser: Editor | null = null;
 
-export interface ApplyAgentResult {
-	applied: boolean;
-	mergedContent: string;
-	conflictCount: number;
-	appliedHunks: number;
-}
-
-function getUndoManagerForTab(tabId: string): Y.UndoManager {
+/** Get (or create) the per-tab UndoManager. Tracks only `AGENT_ORIGIN`
+ * transactions with `captureTimeout: 0`, so every agent-origin transaction
+ * is its own step — `undo()` rewinds one Edit/Write worth of change. */
+export function getUndoManagerForTab(tabId: string): Y.UndoManager {
 	const existing = undoManagers.get(tabId);
 	if (existing) return existing;
 	const ydoc = getYDocForTab(tabId);
@@ -82,134 +44,9 @@ function getUndoManagerForTab(tabId: string): Y.UndoManager {
 	return mgr;
 }
 
-function getParser(kind: Kind): Editor {
-	if (kind === 'plain') {
-		if (!plainParser) plainParser = new Editor({ extensions: plainBaseExtensions(), content: '' });
-		return plainParser;
-	}
-	if (!mdParser) mdParser = new Editor({ extensions: markdownBaseExtensions(), content: '' });
-	return mdParser;
-}
-
-/** Parse a string into PM JSON using the right schema for the kind.
- * Markdown tabs round-trip through tiptap-markdown; plain tabs use a
- * simple `\n`-split mapping each line to a paragraph. */
-function contentToPMJson(content: string, kind: Kind): unknown {
-	if (kind === 'plain') return plainTextToPMJson(content);
-	const ed = getParser('markdown');
-	ed.commands.setContent(content, { emitUpdate: false });
-	return ed.getJSON();
-}
-
-/** Get or create a Tiptap editor bound to the target tab's Y.Doc. For the
- * active tab the caller passes in the live editor; for background tabs we
- * spin up a headless one and cache it. */
-function getShadowEditor(tabId: string, kind: Kind): Editor {
-	const existing = shadowEditors.get(tabId);
-	if (existing) return existing;
-	const ydoc = getYDocForTab(tabId);
-	const ed = new Editor({
-		extensions: collaborativeExtensions(ydoc, { kind })
-	});
-	shadowEditors.set(tabId, ed);
-	return ed;
-}
-
-/** Snapshot the given tab's Y.Doc state for later reject / diff purposes. */
-export function captureBaselineForAgent(tabId: string): void {
-	baselineStates.set(tabId, Y.encodeStateAsUpdate(getYDocForTab(tabId)));
-}
-
-export function clearAgentBaseline(tabId: string): void {
-	baselineStates.delete(tabId);
-}
-
-export function clearAllAgentBaselines(): void {
-	baselineStates.clear();
-}
-
-/**
- * Apply agent-produced content to the given tab's Y.Doc via a targeted
- * PM range replace. Works for active and background tabs alike — the
- * active tab's live editor is reused when provided; background tabs use
- * their own cached shadow editor.
- */
-export function applyAgentMarkdown(
-	tabId: string,
-	content: string,
-	trackChanges: boolean,
-	activeEditor?: Editor,
-	kind: Kind = 'markdown',
-	mergeBase?: string
-): ApplyAgentResult {
-	getUndoManagerForTab(tabId);
-	const editor = activeEditor ?? getShadowEditor(tabId, kind);
-	const ydoc = getYDocForTab(tabId);
-	const currentContent = getEditorContent(editor, kind);
-	const mergeResult =
-		typeof mergeBase === 'string'
-			? mergeAgentEditsIntoCurrent(mergeBase, currentContent, content)
-			: {
-					mergedText: content,
-					appliedHunks: content === currentContent ? 0 : 1,
-					conflictCount: 0
-				};
-	const contentToApply = mergeResult.mergedText;
-
-	const agentJson = contentToPMJson(contentToApply, kind);
-	const agentNode = editor.schema.nodeFromJSON(agentJson);
-	const liveNode = editor.state.doc;
-	if (liveNode.eq(agentNode)) {
-		return {
-			applied: false,
-			mergedContent: currentContent,
-			conflictCount: mergeResult.conflictCount,
-			appliedHunks: 0
-		};
-	}
-
-	const start = liveNode.content.findDiffStart(agentNode.content);
-	if (start === null || start === undefined) {
-		return {
-			applied: false,
-			mergedContent: currentContent,
-			conflictCount: mergeResult.conflictCount,
-			appliedHunks: 0
-		};
-	}
-	const diffEnd = liveNode.content.findDiffEnd(agentNode.content);
-	let liveEnd: number;
-	let agentEnd: number;
-	if (diffEnd) {
-		liveEnd = diffEnd.a;
-		agentEnd = diffEnd.b;
-	} else {
-		liveEnd = liveNode.content.size;
-		agentEnd = agentNode.content.size;
-	}
-	if (liveEnd < start) liveEnd = start;
-	if (agentEnd < start) agentEnd = start;
-
-	const slice = agentNode.slice(start, agentEnd);
-	const tr = editor.state.tr.replace(start, liveEnd, slice);
-	tr.setMeta(AGENT_APPLY_KEY, true);
-	ydoc.transact(() => {
-		editor.view.dispatch(tr);
-	}, trackChanges ? AGENT_ORIGIN : ySyncPluginKey);
-	return {
-		applied: true,
-		mergedContent: contentToApply,
-		conflictCount: mergeResult.conflictCount,
-		appliedHunks: mergeResult.appliedHunks
-	};
-}
-
 /** Undo the most recent agent-origin Yjs transaction on this tab. User
- * edits (default origin) are not touched.
- *
- * y-prosemirror marks undo transactions with `ySyncPluginKey` metadata and
- * `isUndoRedoOperation`, which the editor update classifier treats as an
- * agent-apply path so autosave runs but the idle timer does not restart. */
+ * edits (default origin) are not touched — they're not in the tracked
+ * origin set, so the UndoManager never captured them. */
 export function undoAgentChanges(tabId: string): boolean {
 	const mgr = getUndoManagerForTab(tabId);
 	return !!mgr.undo();
@@ -219,22 +56,4 @@ export function undoAgentChanges(tabId: string): boolean {
 export function disposeAgentUndo(): void {
 	for (const mgr of undoManagers.values()) mgr.destroy();
 	undoManagers.clear();
-	for (const ed of shadowEditors.values()) ed.destroy();
-	shadowEditors.clear();
-	if (mdParser) {
-		mdParser.destroy();
-		mdParser = null;
-	}
-	if (plainParser) {
-		plainParser.destroy();
-		plainParser = null;
-	}
-	baselineStates.clear();
-}
-
-function getEditorContent(editor: Editor, kind: Kind): string {
-	if (kind === 'plain') {
-		return editor.getText({ blockSeparator: '\n' });
-	}
-	return (editor.storage as any).markdown?.getMarkdown?.() || '';
 }
