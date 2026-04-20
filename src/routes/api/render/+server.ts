@@ -18,6 +18,7 @@ import { readHooks, resolveCommand, HOOK_EVENTS, type Hook, type HookEvent } fro
 import { getSessionId, setSessionId, getTabsState } from '$lib/server/runtime-state';
 import {
 	readMeta,
+	readUserDoc,
 	resetAllAgentDocs,
 	readAllAgentDocs,
 	readAgentDoc,
@@ -26,6 +27,7 @@ import {
 import { startRender, endRender } from '$lib/server/document-lock';
 import { registerPendingAskUser } from '$lib/server/ask-user-state';
 import { unifiedLineDiff } from '$lib/diff';
+import { buildStyleReferencesPromptBlock } from '$lib/server/references';
 
 function agencyGuidance(
 	agency: 'conservative' | 'balanced' | 'aggressive',
@@ -75,7 +77,7 @@ If none of those apply: exit without editing anything. Do NOT polish, do NOT rew
  * file, but it can and should edit other files when the request spans
  * them (e.g. "pull the intro from `notes` into `document`"). Each file
  * section inlines current content plus, if present, a non-empty diff
- * since the last render. */
+ * since the agent last left that file. */
 function buildMultiTabPrompt(
 	activeTabId: string,
 	tabs: Array<{ tabId: string; currentMd: string; lastMd: string | null }>,
@@ -84,6 +86,7 @@ function buildMultiTabPrompt(
 	const meta = readMeta();
 	const rules = meta.rules.map((r) => `- ${r.text}`).join('\n') || 'None';
 	const agency = meta.agentSettings.agency;
+	const styleReferencesBlock = buildStyleReferencesPromptBlock();
 
 	const tabSections = tabs
 		.map(({ tabId, currentMd, lastMd }) => {
@@ -92,7 +95,7 @@ function buildMultiTabPrompt(
 			const isActive = tabId === activeTabId;
 			const hasDiff = lastMd !== null && lastMd !== currentMd;
 			const diffBlock = hasDiff
-				? `\n\n**User changes since last round:**\n\`\`\`diff\n${unifiedLineDiff(lastMd as string, currentMd)}\n\`\`\``
+				? `\n\n**User changes since your last edit:**\n\`\`\`diff\n${unifiedLineDiff(lastMd as string, currentMd)}\n\`\`\``
 				: '';
 			const kindNote =
 				kind === 'plain'
@@ -125,7 +128,7 @@ ${currentMd}
 
 ${tabSections}
 
-## What the user wants
+${styleReferencesBlock ? `${styleReferencesBlock}\n\n` : ''}## What the user wants
 
 ${userMessage}
 
@@ -465,13 +468,10 @@ function buildHooks(
 export const POST: RequestHandler = async ({ request }) => {
 	try {
 		const body = await request.json();
-		const { userMessage, model, warmup, lastMarkdownByTab, tab } = body as {
+		const { userMessage, model, warmup, tab } = body as {
 			userMessage?: string;
 			model?: string;
 			warmup?: boolean;
-			/** Map from tab id → last agentMd the client applied, per tab. Used
-			 * to compute a per-tab "what changed since last round" diff. */
-			lastMarkdownByTab?: Record<string, string>;
 			tab?: string;
 		};
 
@@ -480,12 +480,18 @@ export const POST: RequestHandler = async ({ request }) => {
 			throw error(400, 'No active tab');
 		}
 
-		// Reset EVERY tab's shadow to match its user doc — the deterministic
-		// starting point for this render round. The agent can edit any of them.
-		const allTabIds = resetAllAgentDocs();
+		const allTabIds = getTabsState().order;
 		if (!allTabIds.includes(active)) {
 			throw error(400, `Active tab "${active}" not found on disk`);
 		}
+		const tabsForPrompt = allTabIds.map((id) => ({
+			tabId: id,
+			currentMd: readUserDoc(id),
+			lastMd: readAgentDoc(id)
+		}));
+		// Reset EVERY tab's shadow to match its user doc — the deterministic
+		// starting point for this render round. The agent can edit any of them.
+		resetAllAgentDocs();
 		// Make sure the scratch sandbox exists so the agent can immediately
 		// Write into it without a first-time mkdir failure.
 		ensureAgentScratchDir();
@@ -509,11 +515,6 @@ export const POST: RequestHandler = async ({ request }) => {
 
 		const currentSessionId = getSessionId();
 		const message = userMessage || "The user clicked Wake-up without a specific request. Decide what (if anything) to do per the agency guidance above.";
-		const tabsForPrompt = allTabIds.map((id) => ({
-			tabId: id,
-			currentMd: userDocsAtStart[id] || '',
-			lastMd: lastMarkdownByTab?.[id] ?? null
-		}));
 		const prompt = warmup
 			? `You are a writing assistant. The user has a set of files under ${AGENT_DIR}/. Acknowledge you're ready in 1-2 sentences. Don't edit anything.`
 			: buildMultiTabPrompt(active, tabsForPrompt, message);

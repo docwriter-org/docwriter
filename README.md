@@ -124,10 +124,11 @@ What to verify:
 1. Open `essay.md`, type some text, reload the page, and confirm the text persists.
 2. Open `outline.md`, switch between tabs, and confirm content stays isolated.
 3. Open `notes/todo.txt` and confirm plain text stays literal, not markdown-rendered.
-4. Ask the agent to revise one paragraph, then Accept and Reject to confirm review mode works.
-5. After an agent edit, switch tabs, come back, and Reject. Your later typing should still remain.
-6. Use `New agent session`, reload, and confirm your files and tabs still exist.
-7. Run with `--watch`, edit a file from another terminal, and confirm the browser reload path works.
+4. Add a style reference from `Settings -> Writing references` by using the current file, pasting a sample, or saving a URL.
+5. Ask the agent to revise one paragraph, then Accept and Reject to confirm review mode works.
+6. After an agent edit, switch tabs, come back, and Reject. Your later typing should still remain.
+7. Use `New agent session`, reload, and confirm your files and tabs still exist.
+8. Run with `--watch`, edit a file from another terminal, and confirm the browser reload path works.
 
 ## CLI Usage
 
@@ -202,4 +203,4 @@ The package publishes only:
 
 That means you must build before creating a tarball or publishing.
 
-See [RELEASE.md](/Users/shreyashankar/Documents/projects/atoms-editor/RELEASE.md) for a release checklist.
+See [RELEASE.md](/Users/shreyashankar/Documents/projects/docwriter/RELEASE.md) for a release checklist.

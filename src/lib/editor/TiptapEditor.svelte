@@ -1,16 +1,16 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
 	import { Editor } from '@tiptap/core';
+	import type { Transaction } from '@tiptap/pm/state';
 	import { ySyncPluginKey } from 'y-prosemirror';
 	import { DiffOverlay, setDiffState } from './diff-overlay';
 	import { collaborativeExtensions } from '$lib/editor-extensions';
 	import { getYDoc, whenYDocReady, isYDocEmpty, getCurrentTab } from '$lib/yjs-doc';
 	import { seedYDocFromContent } from '$lib/yjs-markdown';
-	import { isAgentApplyInProgress } from '$lib/yjs-agent';
+	import { AGENT_APPLY_KEY } from '$lib/yjs-agent';
 	import {
 		userMd,
 		reviewBaseline,
-		userEditRegions,
 		annotations,
 		isRendering,
 		submitCountdown,
@@ -20,7 +20,6 @@
 		trackActionUsage,
 		pendingReviewRounds
 	} from '$lib/stores';
-	import type { UserEditRegion } from '$lib/stores';
 	import type { Action, Annotation } from '$lib/types';
 
 	const IDLE_MS = 3_000;
@@ -233,12 +232,6 @@
 		updateDiff();
 	});
 
-	let currentRegions: UserEditRegion[] = [];
-	userEditRegions.subscribe((v) => {
-		currentRegions = v;
-		updateDiff();
-	});
-
 	let currentAnnotations: Annotation[] = [];
 	annotations.subscribe((v) => {
 		currentAnnotations = v;
@@ -261,16 +254,13 @@
 
 	function updateDiff() {
 		if (!editor) return;
-		setDiffState({
+		setDiffState(editor, {
 			baseline: currentBaseline,
-			userEditRegions: currentRegions,
 			annotations: currentAnnotations.filter((annotation) => annotation.tabId === getCurrentTab()),
 			activeFeedbackRange: feedbackSelectionRange,
 			isPlainText: kind === 'plain',
 			allRoundsTiny
 		});
-		// Kick the plugin so it re-renders decorations with the new state.
-		editor.view.dispatch(editor.state.tr.setMeta('diffOverlay', true));
 	}
 
 	function startCountdown() {
@@ -295,54 +285,12 @@
 		submitCountdown.set(0);
 	}
 
-	function onEditorUpdate({ transaction }: { transaction: any }) {
-		if (!editor) return;
-		syncPlainLineCount();
-
-		// Skip ALL side effects for Yjs-sync-originated transactions. These
-		// fire during initial Y.Doc hydration (sometimes before state has
-		// fully applied, returning an empty markdown) and during remote
-		// updates. If we touch userMd or writeToDisk here, we can wipe
-		// document.md mid-hydration. The post-mount code handles the initial
-		// userMd seed; subsequent sync transactions from the network don't
-		// need a write-through since the sending client is already persisting.
-		const fromYjsSync = transaction.getMeta(ySyncPluginKey) !== undefined;
-		if (fromYjsSync) return;
-
-		const md = getEditorMarkdown();
-
-		// Push current markdown to the store (for Outline, render submission)
-		// and debounce a write-through to document.md.
-		userMd.set(md);
+	function scheduleAutosave(md: string) {
 		if (writeDebounceTimer) clearTimeout(writeDebounceTimer);
 		writeDebounceTimer = setTimeout(() => writeToDisk(md), 50);
+	}
 
-		// applyAgentMarkdown dispatches via editor.view.dispatch — that's NOT
-		// a sync transaction, so it passes the filter above and reaches the
-		// autosave path (good — we want to persist agent edits). But it
-		// should NOT restart the idle countdown, otherwise every agent
-		// render would queue another one ten seconds later in a loop.
-		if (isAgentApplyInProgress()) {
-			// Agent op (apply or undo) just changed the doc. The plaintext
-			// char indices we stored in `userEditRegions` are now stale —
-			// their positions have shifted. Clear them so the diff overlay
-			// doesn't exclude the wrong spots on the next render. Small
-			// cost: user typing that happened BEFORE this agent op is no
-			// longer known, but it also no longer needs exclusion because
-			// it's either still in the doc (and part of whatever diff we
-			// compute) or replaced by the agent.
-			userEditRegions.set([]);
-			return;
-		}
-
-		// Track user-typed ranges in plaintext coordinates so the diff
-		// overlay can subtract them from its "agent added" (green)
-		// decorations. Without this, the user's own keystrokes during a
-		// pending review get painted green alongside the agent's text.
-		if (transaction.docChanged) {
-			recordUserEdit(transaction);
-		}
-
+	function restartIdleCountdown() {
 		if (idleTimer) clearTimeout(idleTimer);
 		startCountdown();
 		idleTimer = setTimeout(() => {
@@ -351,59 +299,36 @@
 		}, IDLE_MS);
 	}
 
-	/** Walk a user transaction's ReplaceStep mappings, convert each inserted
-	 * range to plaintext indices, and push an entry onto userEditRegions.
-	 * We only track INSERTS — deletes don't show up as `diff-added` anyway.
-	 *
-	 * Plaintext indices are what `diff-overlay.ts` uses (it walks
-	 * `state.doc.descendants` and counts characters in text nodes). We do
-	 * the same count here on the doc AFTER the transaction. */
-	function recordUserEdit(transaction: any) {
+	type UpdateKind = 'yjs-remote' | 'agent-apply' | 'user-edit';
+
+	function classifyUpdate(transaction: Transaction): UpdateKind {
+		const syncMeta = transaction.getMeta(ySyncPluginKey);
+		if (transaction.getMeta(AGENT_APPLY_KEY) || syncMeta?.isUndoRedoOperation) return 'agent-apply';
+		if (syncMeta !== undefined) return 'yjs-remote';
+		return 'user-edit';
+	}
+
+	/**
+	 * Update policy
+	 * ┌─────────────┬──────────┬────────────┐
+	 * │    Kind     │ Autosave │ Idle timer │
+	 * ├─────────────┼──────────┼────────────┤
+	 * │ yjs-remote  │ skip     │ skip       │
+	 * ├─────────────┼──────────┼────────────┤
+	 * │ agent-apply │ run      │ skip       │
+	 * ├─────────────┼──────────┼────────────┤
+	 * │ user-edit   │ run      │ restart    │
+	 * └─────────────┴──────────┴────────────┘
+	 */
+	function onEditorUpdate({ transaction }: { transaction: Transaction }) {
 		if (!editor) return;
-		const doc = editor.state.doc;
-		// Build plaintext index from PM position — same walk the overlay does.
-		function plainIndexAt(pmPos: number): number {
-			let idx = 0;
-			let found = -1;
-			doc.descendants((node: any, pos: number) => {
-				if (found >= 0) return false;
-				if (node.isText) {
-					const text = node.text || '';
-					for (let i = 0; i < text.length; i++) {
-						if (pos + i >= pmPos) {
-							found = idx;
-							return false;
-						}
-						idx++;
-					}
-				}
-				return true;
-			});
-			return found >= 0 ? found : idx;
-		}
-		const newRegions: UserEditRegion[] = [];
-		const now = Date.now();
-		for (const step of transaction.steps as any[]) {
-			// ReplaceStep-ish: has from/to (old range) and slice (new content).
-			const from: number = step.from ?? -1;
-			const sliceSize: number = step.slice?.content?.size ?? 0;
-			if (from < 0 || sliceSize === 0) continue;
-			// After the transaction, inserted content occupies [from, from+sliceSize)
-			// in the new doc positions.
-			const startIdx = plainIndexAt(from);
-			const endIdx = plainIndexAt(from + sliceSize);
-			if (endIdx > startIdx) {
-				newRegions.push({ from: startIdx, to: endIdx, timestamp: now });
-			}
-		}
-		if (newRegions.length === 0) return;
-		// Keep only regions from the last 90s to bound memory and stale
-		// matches — 90s is well past any realistic "typed during review"
-		// window and covers the 3s idle + agent round time.
-		const cutoff = now - 90_000;
-		userEditRegions.update((prev) =>
-			[...prev.filter((r) => r.timestamp >= cutoff), ...newRegions]
-		);
+		syncPlainLineCount();
+		const kind = classifyUpdate(transaction);
+		if (kind === 'yjs-remote') return;
+		const md = getEditorMarkdown();
+		userMd.set(md);
+		scheduleAutosave(md);
+		if (kind === 'user-edit') restartIdleCountdown();
 	}
 
 	onMount(async () => {
@@ -446,7 +371,6 @@
 					return false;
 				}
 			},
-			onUpdate: ({ transaction }) => onEditorUpdate({ transaction }),
 			onSelectionUpdate: () => handleSelectionChange(),
 			onBlur: () => {
 				setTimeout(() => {
@@ -476,6 +400,7 @@
 		lastWrittenMd = initialMd;
 		syncPlainLineCount();
 		updateDiff();
+		editor.on('update', ({ transaction }) => onEditorUpdate({ transaction }));
 
 		// Dev-only: expose the editor on window for stress tests and
 		// interactive debugging via devtools. Guarded so production bundles

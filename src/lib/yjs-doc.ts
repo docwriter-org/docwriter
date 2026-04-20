@@ -84,9 +84,9 @@ export function getXmlFragment(): Y.XmlFragment {
 	return requireCurrent().ydoc.getXmlFragment(FRAGMENT_NAME);
 }
 
-/** The current tab's review map. Values are serializable JSON — keys like
- * `baseline`/`preAgent`/`lastAgentMd` hold strings, and `pendingRounds`
- * holds an array of PendingReviewRound objects. */
+/** The current tab's review map. Values are serializable JSON — legacy keys
+ * like `baseline`/`preAgent` hold strings, and `pendingRounds` holds an
+ * array of PendingReviewRound objects. */
 export function getReviewMap(): Y.Map<unknown> {
 	return requireCurrent().ydoc.getMap(REVIEW_MAP_NAME);
 }

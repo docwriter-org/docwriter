@@ -1,7 +1,7 @@
 import * as Y from 'yjs';
 import { Editor } from '@tiptap/core';
 import { ySyncPluginKey } from 'y-prosemirror';
-import { EditorState } from '@tiptap/pm/state';
+import { PluginKey } from '@tiptap/pm/state';
 import { getYDocForTab } from './yjs-doc';
 import {
 	markdownBaseExtensions,
@@ -35,7 +35,10 @@ import { mergeAgentEditsIntoCurrent } from './three-way-merge';
  * Edits inside the range race through the CRDT's item-level merge (inherent,
  * not something this layer can fix).
  *
- * `trackChanges` routes the Yjs origin:
+ * `trackChanges` routes the Yjs origin, while `AGENT_APPLY_KEY` marks the
+ * ProseMirror transaction itself so the editor can treat both review-mode
+ * and silent-mode agent writes as "agent apply" for autosave purposes.
+ *
  *   - `true`  → `AGENT_ORIGIN`, captured by this tab's UndoManager so the
  *               user's Reject rewinds just the agent's ops.
  *   - `false` → `ySyncPluginKey`, the origin y-prosemirror's yUndoPlugin
@@ -45,6 +48,7 @@ import { mergeAgentEditsIntoCurrent } from './three-way-merge';
 
 const AGENT_ORIGIN = 'agent';
 const FRAGMENT_NAME = 'default';
+export const AGENT_APPLY_KEY = new PluginKey('agentApply');
 
 type Kind = 'markdown' | 'plain';
 
@@ -57,7 +61,6 @@ const shadowEditors = new Map<string, Editor>();
 /** Per-kind parser editors, shared across tabs. */
 let mdParser: Editor | null = null;
 let plainParser: Editor | null = null;
-let applying = false;
 
 export interface ApplyAgentResult {
 	applied: boolean;
@@ -110,10 +113,6 @@ function getShadowEditor(tabId: string, kind: Kind): Editor {
 	});
 	shadowEditors.set(tabId, ed);
 	return ed;
-}
-
-export function isAgentApplyInProgress(): boolean {
-	return applying;
 }
 
 /** Snapshot the given tab's Y.Doc state for later reject / diff purposes. */
@@ -193,19 +192,10 @@ export function applyAgentMarkdown(
 
 	const slice = agentNode.slice(start, agentEnd);
 	const tr = editor.state.tr.replace(start, liveEnd, slice);
-
-	applying = true;
-	try {
-		ydoc.transact(() => {
-			editor.view.dispatch(tr);
-		}, trackChanges ? AGENT_ORIGIN : ySyncPluginKey);
-	} finally {
-		applying = false;
-	}
-	// Keep the ts typechecker from flagging EditorState as unused. This
-	// import ensures the yjs-agent module pulls in the right PM state types
-	// for strict type-checking in consumers; the runtime use is via editor.
-	void EditorState;
+	tr.setMeta(AGENT_APPLY_KEY, true);
+	ydoc.transact(() => {
+		editor.view.dispatch(tr);
+	}, trackChanges ? AGENT_ORIGIN : ySyncPluginKey);
 	return {
 		applied: true,
 		mergedContent: contentToApply,
@@ -217,20 +207,12 @@ export function applyAgentMarkdown(
 /** Undo the most recent agent-origin Yjs transaction on this tab. User
  * edits (default origin) are not touched.
  *
- * Sets `applying = true` for the duration of the undo so PM-layer code
- * (onEditorUpdate's user-edit region tracker) treats the resulting
- * transaction as an agent apply, not a user keystroke. Without this,
- * rejecting a round would paint the entire undone range as "user-edited"
- * orange. */
+ * y-prosemirror marks undo transactions with `ySyncPluginKey` metadata and
+ * `isUndoRedoOperation`, which the editor update classifier treats as an
+ * agent-apply path so autosave runs but the idle timer does not restart. */
 export function undoAgentChanges(tabId: string): boolean {
 	const mgr = getUndoManagerForTab(tabId);
-	const prev = applying;
-	applying = true;
-	try {
-		return !!mgr.undo();
-	} finally {
-		applying = prev;
-	}
+	return !!mgr.undo();
 }
 
 /** Tear down all agent state. Called on editor teardown / HMR. */

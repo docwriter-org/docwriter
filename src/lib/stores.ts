@@ -71,10 +71,6 @@ export interface PendingUserQuestion {
 }
 export const pendingUserQuestions = writable<PendingUserQuestion[]>([]);
 
-/** Regions of userMd that have been recently typed by the user (for orange highlighting). */
-export interface UserEditRegion { from: number; to: number; timestamp: number; }
-export const userEditRegions = writable<UserEditRegion[]>([]);
-
 // ── UI state ──────────────────────────────────────────────────────────
 
 export const isRendering = writable(false);

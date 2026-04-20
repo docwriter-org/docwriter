@@ -8,6 +8,7 @@
 	import TiptapEditor from '$lib/editor/TiptapEditor.svelte';
 	import HistoryPane from '$lib/components/HistoryPane.svelte';
 	import RulesPanel from '$lib/components/RulesPanel.svelte';
+	import ReferencesPanel from '$lib/components/ReferencesPanel.svelte';
 	import PanelResizer from '$lib/components/PanelResizer.svelte';
 	import HorizontalPanelResizer from '$lib/components/HorizontalPanelResizer.svelte';
 	import AgentDock from '$lib/components/AgentDock.svelte';
@@ -102,7 +103,6 @@
 		proposedRules,
 		proposedHooks,
 		pendingUserQuestions,
-		userEditRegions,
 		annotations,
 		isRendering,
 		agentHistory,
@@ -142,10 +142,6 @@
 	let queuedSubmissions: Array<{ trigger?: string }> = [];
 
 	let currentAbort: AbortController | null = null;
-	/** Per-tab: the last agentMd the client applied to each tab. Passed to
-	 * the server so it can build a per-tab "what the user changed since the
-	 * last round" diff. */
-	let lastRenderMarkdownByTab: Record<string, string> = $state({});
 	/** Which tabs currently have a pending review (drives the tab dot badges
 	 * and gates the Accept/Reject UI in the OutlinePane). */
 	/** Map tabId → pending round count. Drives the numbered badge on
@@ -235,7 +231,6 @@
 			// userMd seeds the Y.Doc via TiptapEditor's mount/remount flow.
 			userMd.set(data.userMd || '');
 			rules.set(data.meta?.rules || []);
-			userEditRegions.set(data.meta?.userEditRegions || []);
 			if (data.meta?.agentSettings) {
 				agentSettings.set(data.meta.agentSettings);
 			}
@@ -243,7 +238,6 @@
 			await whenYDocReady();
 			const reviewMap = getReviewMap();
 			const persistedRounds = reviewMap.get('pendingRounds');
-			const persistedLastAgentMd = reviewMap.get('lastAgentMd');
 			// `pendingRounds` is the authoritative source in the new per-round
 			// model. `baseline` / `preAgent` are legacy single-round fields
 			// we still read for backward compat (old review maps written
@@ -275,13 +269,6 @@
 			pendingReviewRounds.set(rounds);
 			reviewBaseline.set(rounds.length > 0 ? rounds[0].beforeMd : null);
 			preAgentSnapshot.set(rounds.length > 0 ? rounds[0].beforeMd : null);
-			// Restore the "what the agent last saw" snapshot for this tab so
-			// the next submit's user_action diff has a real baseline to compare
-			// against, not "first render" after every reload.
-			if (typeof persistedLastAgentMd === 'string') {
-				lastRenderMarkdownByTab[tabId] = persistedLastAgentMd;
-				lastRenderMarkdownByTab = { ...lastRenderMarkdownByTab };
-			}
 		} catch (e) {
 			console.error(`Failed to load tab "${tabId}":`, e);
 		}
@@ -498,7 +485,7 @@
 		// Flush the active editor's pending autosave so the file on disk
 		// reflects every keystroke before we read it back. Without this,
 		// submitting within ~50ms of typing reads stale content and the
-		// "what changed since last render" diff comes back empty.
+		// server-side shadow diff can come back empty.
 		try {
 			await editorRef?.flushAutosave();
 		} catch (e) {
@@ -517,19 +504,6 @@
 			captureBaselineForAgent(id);
 		}
 
-		// Lead the history with a user_action entry summarising what the
-		// agent received this round: the trigger message plus unified diffs
-		// for any tabs whose content has actually changed since the last
-		// round. Unchanged tabs and first-render tabs are intentionally
-		// omitted — we don't need "0/4 changed" noise, just the real diffs.
-		const diffLinesByTab: Record<string, string> = {};
-		for (const id of tabList) {
-			const prev = lastRenderMarkdownByTab[id];
-			const curr = preRenderMdByTab[id] ?? '';
-			if (typeof prev === 'string' && prev !== curr) {
-				diffLinesByTab[id] = unifiedLineDiff(prev, curr, 1);
-			}
-		}
 		// If this is a feedback trigger, pull out the passage so the history
 		// entry shows both the label and what it was applied to.
 		const feedbackQuoteMatch = trigger?.match(
@@ -539,7 +513,6 @@
 			type: 'user_action',
 			timestamp: Date.now(),
 			description: shortDescription(trigger),
-			tabDiffs: diffLinesByTab,
 			quote: feedbackQuoteMatch?.[1]
 		});
 
@@ -569,7 +542,6 @@
 				body: JSON.stringify({
 					userMessage: trigger,
 					model,
-					lastMarkdownByTab: lastRenderMarkdownByTab,
 					tab: tabId
 				}),
 				signal: currentAbort.signal
@@ -762,7 +734,6 @@
 
 						for (const { tabId, agentMd } of edits) {
 							if (typeof agentMd !== 'string') continue;
-							let finalSeenMd = agentMd;
 							if (currentSettings.trackChanges) {
 								// Track-changes mode: append a new round to this
 								// tab's pending list. Every round gets its own
@@ -799,11 +770,8 @@
 								if (finalApplyResult.applied) clearFeedbackAnnotationsForTab(tabId);
 								const totalSteps = streamedSteps + (finalApplyResult.applied ? 1 : 0);
 								if (totalSteps === 0) {
-									lastRenderMarkdownByTab[tabId] = finalApplyResult.mergedContent;
-									getReviewMapForTab(tabId).set('lastAgentMd', finalApplyResult.mergedContent);
 									continue;
 								}
-								finalSeenMd = finalApplyResult.mergedContent;
 								const newRound: PendingReviewRound = {
 									id:
 										'rr_' +
@@ -835,7 +803,6 @@
 										(conflictCountByTab[tabId] ?? 0) + silentApplyResult.conflictCount;
 								}
 								if (silentApplyResult.applied) clearFeedbackAnnotationsForTab(tabId);
-								finalSeenMd = silentApplyResult.mergedContent;
 								const q = `?tab=${encodeURIComponent(tabId)}`;
 								void fetch(`/api/document${q}`, {
 									method: 'POST',
@@ -843,13 +810,7 @@
 									body: JSON.stringify({ action: 'accept' })
 								});
 							}
-							lastRenderMarkdownByTab[tabId] = finalSeenMd;
-							// Persist the per-tab "last agent saw" snapshot in the
-							// tab's review map so a page refresh doesn't reset it
-							// to "first render". y-indexeddb takes care of survival.
-							getReviewMapForTab(tabId).set('lastAgentMd', lastRenderMarkdownByTab[tabId]);
 						}
-						lastRenderMarkdownByTab = { ...lastRenderMarkdownByTab };
 						let shouldQueueConflictRetry = false;
 						for (const [tabId, conflicts] of Object.entries(conflictCountByTab)) {
 							if (conflicts <= 0) continue;
@@ -1047,7 +1008,6 @@
 		writeTabRounds(tabId, next);
 		if (next.length === 0) {
 			clearAgentBaseline(tabId);
-			userEditRegions.set([]);
 		}
 		try {
 			const q = `?tab=${encodeURIComponent(tabId)}`;
@@ -1186,9 +1146,6 @@
 		writeTabRounds(tabId, keep);
 		if (keep.length === 0) {
 			clearAgentBaseline(tabId);
-			// Clear stale user-edit regions; they're indexed on pre-reject
-			// positions and would paint wrong spots orange now.
-			userEditRegions.set([]);
 		}
 
 		try {
@@ -1376,19 +1333,13 @@
 			for (const id of getCurrentTabList()) {
 				undoAgentChanges(id);
 				writeTabRounds(id, []);
-				// Reset the per-tab "what the agent last saw" snapshot too, so
-				// the next submit really shows "first render" — matching the
-				// fact that the SDK session is gone.
-				getReviewMapForTab(id).set('lastAgentMd', null);
 			}
 			pendingReviewTabs = new Map();
-			lastRenderMarkdownByTab = {};
 			proposedRules.set([]);
 			proposedHooks.set([]);
 			pendingUserQuestions.set([]);
 			recentActions.set([]);
 			actionUsageCounts.set({});
-			userEditRegions.set([]);
 			annotations.set([]);
 			resetSessionCost();
 			clearAllAgentBaselines();
@@ -1486,6 +1437,7 @@
 						onClick: () => editorFontScale.set(p.scale)
 					}))
 				},
+				{ kind: 'panel', label: 'Writing references', panelKey: 'references' },
 				{ kind: 'panel', label: 'Writing rules', panelKey: 'rules' },
 				{ kind: 'panel', label: 'Hooks', panelKey: 'hooks' },
 				{ kind: 'divider' },
@@ -1717,29 +1669,9 @@
 						kind: classifyRoundKind(before, applyResult.mergedContent)
 					};
 					writeTabRounds(tabId, [...prior, newRound]);
-					// Mirror the result handler: stash this as the "last agent
-					// saw" snapshot, both in memory and persisted to the
-					// per-tab review map so it survives a refresh.
-					lastRenderMarkdownByTab[tabId] = applyResult.mergedContent;
-					lastRenderMarkdownByTab = { ...lastRenderMarkdownByTab };
-					getReviewMapForTab(tabId).set('lastAgentMd', applyResult.mergedContent);
 				},
 				accept: acceptAgentEdit,
-				reject: rejectAgentEdit,
-				/** Read in-memory state for assertions. */
-				inspectLastRenderMap: () => ({ ...lastRenderMarkdownByTab }),
-				/** Mark the current tab's content as "what the agent last saw"
-				 * without going through fakeAgentEdit (which no-ops when the
-				 * passed content equals the live content). Mirrors only the
-				 * lastAgentMd half of the result handler — useful for tests
-				 * that just need a baseline for the next submit's diff. */
-				seedLastAgentMd(content: string) {
-					const tabId = getCurrentActiveTab();
-					if (!tabId) return;
-					lastRenderMarkdownByTab[tabId] = content;
-					lastRenderMarkdownByTab = { ...lastRenderMarkdownByTab };
-					getReviewMapForTab(tabId).set('lastAgentMd', content);
-				}
+				reject: rejectAgentEdit
 			};
 		}
 
@@ -1877,6 +1809,7 @@
 			<MenuBar
 				{menus}
 				panels={{
+					references: referencesPanelSnippet,
 					rules: rulesPanelSnippet,
 					agentSettings: agentSettingsSnippet,
 					hooks: hooksPanelSnippet
@@ -1903,6 +1836,10 @@
 
 	{#snippet rulesPanelSnippet()}
 		<RulesPanel onSubmit={(trigger) => void submit(trigger)} />
+	{/snippet}
+
+	{#snippet referencesPanelSnippet()}
+		<ReferencesPanel activeTabId={currentActiveTabId} />
 	{/snippet}
 
 	{#snippet agentSettingsSnippet()}

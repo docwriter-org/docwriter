@@ -1,8 +1,7 @@
-import { Extension } from '@tiptap/core';
+import { Editor, Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { diffLines, diffWords } from 'diff';
-import type { UserEditRegion } from '$lib/stores';
 import type { Annotation } from '$lib/types';
 import { normalizeReviewText } from '$lib/review-diff';
 
@@ -14,8 +13,6 @@ import { normalizeReviewText } from '$lib/review-diff';
  *   - Agent removals (present in baseline, absent from editor) → ghost
  *     widget with strikethrough inserted at the position the text used to
  *     occupy.
- *   - User edit regions → orange highlight on the user's recent ranges.
- *
  * In the Yjs-backed model the editor *always* shows the live Y.Doc state
  * (there is no separate "agent" display mode), and the baseline is a string
  * captured by +page.svelte at render_start. The diff overlay compares the
@@ -25,7 +22,6 @@ import { normalizeReviewText } from '$lib/review-diff';
 
 export interface DiffState {
 	baseline: string | null;
-	userEditRegions: UserEditRegion[];
 	annotations?: Annotation[];
 	activeFeedbackRange?: { from: number; to: number } | null;
 	isPlainText?: boolean;
@@ -35,18 +31,17 @@ export interface DiffState {
 	allRoundsTiny?: boolean;
 }
 
-const diffKey = new PluginKey<DecorationSet>('diffOverlay');
-let currentState: DiffState = {
+const diffKey = new PluginKey<DiffState>('diffOverlay');
+const INITIAL_STATE: DiffState = {
 	baseline: null,
-	userEditRegions: [],
 	annotations: [],
 	activeFeedbackRange: null,
 	isPlainText: false,
 	allRoundsTiny: false
 };
 
-export function setDiffState(state: DiffState) {
-	currentState = state;
+export function setDiffState(editor: Editor, state: DiffState) {
+	editor.view.dispatch(editor.state.tr.setMeta(diffKey, state));
 }
 
 export const DiffOverlay = Extension.create({
@@ -56,9 +51,22 @@ export const DiffOverlay = Extension.create({
 		return [
 			new Plugin({
 				key: diffKey,
+				state: {
+					init: () => ({ ...INITIAL_STATE }),
+					apply: (tr, prev) => {
+						const next = tr.getMeta(diffKey);
+						return next !== undefined ? next : prev;
+					}
+				},
 				props: {
 					decorations(state) {
-						const { baseline, userEditRegions, annotations = [], activeFeedbackRange, isPlainText, allRoundsTiny } = currentState;
+						const {
+							baseline,
+							annotations = [],
+							activeFeedbackRange,
+							isPlainText,
+							allRoundsTiny
+						} = diffKey.getState(state) ?? INITIAL_STATE;
 						const addedClass = allRoundsTiny ? 'diff-added diff-added-tiny' : 'diff-added';
 						const removedClass = allRoundsTiny
 							? 'diff-removed-widget diff-removed-tiny'
@@ -82,7 +90,6 @@ export const DiffOverlay = Extension.create({
 								state,
 								decorations,
 								baseline,
-								userEditRegions,
 								addedClass,
 								removedClass
 							);
@@ -103,12 +110,6 @@ export const DiffOverlay = Extension.create({
 							return true;
 						});
 
-						// `userEditRegions` is kept purely for the subtraction pass
-						// below (so user keystrokes don't get painted agent-green).
-						// The visual orange decoration this plugin used to draw
-						// was removed — it was a leftover from an earlier "show
-						// user edits inline" feature that didn't pull its weight.
-
 						// ── Agent diff: editor (current) vs baseline ─────────────
 						if (baseline !== null) {
 							const baselinePlain = markdownToPlain(baseline);
@@ -117,28 +118,16 @@ export const DiffOverlay = Extension.create({
 								const parts = diffWords(baselinePlain, plainText);
 								let editorIdx = 0;
 
-								/** Exclude ranges that the user typed (tracked via
-								 * `userEditRegions`) — those already get the orange
-								 * treatment and should NOT be painted green. Without
-								 * this, user keystrokes during a pending review look
-								 * like agent additions. */
-								const isUserRange = (a: number, b: number) =>
-									userEditRegions.some((r) => a < r.to && b > r.from);
-
 								for (const part of parts) {
 									if (part.added) {
-										// Text is in the editor but not in baseline → agent
-										// addition. Skip user-typed ranges so the user's own
-										// keystrokes don't show up as agent green.
-										if (!isUserRange(editorIdx, editorIdx + part.value.length)) {
-											applyInlineClassRange(
-												decorations,
-												charPositions,
-												editorIdx,
-												editorIdx + part.value.length,
-												addedClass
-											);
-										}
+										// Text is in the editor but not in baseline → addition.
+										applyInlineClassRange(
+											decorations,
+											charPositions,
+											editorIdx,
+											editorIdx + part.value.length,
+											addedClass
+										);
 										editorIdx += part.value.length;
 									} else if (part.removed) {
 										// Text is in baseline but not in editor → agent
@@ -258,7 +247,6 @@ function buildPlainTextDecorations(
 	state: any,
 	decorations: Decoration[],
 	baseline: string,
-	userEditRegions: UserEditRegion[],
 	addedClass: string,
 	removedClass: string
 ): DecorationSet {
@@ -273,7 +261,7 @@ function buildPlainTextDecorations(
 			for (let i = 0; i < chunkLines.length; i++) {
 				const line = lines[lineIdx + i];
 				if (!line) continue;
-				if (line.to > line.from && !plainLineOverlapsUserEdits(lines, lineIdx + i, userEditRegions)) {
+				if (line.to > line.from) {
 					decorations.push(Decoration.inline(line.from, line.to, { class: addedClass }));
 				}
 			}
@@ -304,20 +292,6 @@ function buildPlainTextDecorations(
 	}
 
 	return DecorationSet.create(state.doc, decorations);
-}
-
-function plainLineOverlapsUserEdits(
-	lines: Array<{ from: number; to: number; text: string }>,
-	lineIndex: number,
-	userEditRegions: UserEditRegion[]
-): boolean {
-	if (userEditRegions.length === 0) return false;
-	let start = 0;
-	for (let i = 0; i < lineIndex; i++) {
-		start += lines[i]?.text.length ?? 0;
-	}
-	const end = start + (lines[lineIndex]?.text.length ?? 0);
-	return userEditRegions.some((region) => start < region.to && end > region.from);
 }
 
 function getPlainLineInfo(state: any): Array<{ from: number; to: number; text: string }> {

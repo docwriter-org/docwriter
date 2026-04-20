@@ -10,6 +10,7 @@ import {
 	ensureDocWriterDir,
 	ensureAgentDirFor
 } from '$lib/server/document-files';
+import { clearShadowForTab } from '$lib/server/document-io';
 import { getTabsState, setTabsState } from '$lib/server/runtime-state';
 import { writeTextAtomic } from '$lib/server/file-utils';
 
@@ -64,16 +65,15 @@ export const POST: RequestHandler = async ({ request }) => {
  * the destructive "delete file" action the user gets from the tab's
  * right-click menu or the FileTree context menu.
  *
- * The agent shadow is always removed either way (it's transient state
- * scoped to an open tab). */
+ * The per-tab shadow is always removed either way so stale "last agent view"
+ * state does not linger for closed tabs. */
 export const DELETE: RequestHandler = async ({ url }) => {
 	const id = url.searchParams.get('id') || '';
 	if (!isValidTabId(id)) throw error(400, 'Invalid tab id');
 	const deleteFile = url.searchParams.get('deleteFile') === 'true';
 
 	ensureDocWriterDir();
-	const agentPath = tabAgentFile(id);
-	if (existsSync(agentPath)) unlinkSync(agentPath);
+	clearShadowForTab(id);
 
 	if (deleteFile) {
 		const path = tabFile(id);
@@ -110,7 +110,8 @@ export const PATCH: RequestHandler = async ({ request }) => {
 		if (existsSync(to)) throw error(409, `"${newId}" already exists.`);
 		mkdirSync(dirname(to), { recursive: true });
 		renameSync(from, to);
-		// Move the agent shadow too if it exists (active render / pending review).
+		// Move the agent shadow too if it exists so "last agent view" keeps
+		// tracking this file across renames.
 		const agentFrom = tabAgentFile(id);
 		const agentTo = tabAgentFile(newId);
 		if (existsSync(agentFrom)) {

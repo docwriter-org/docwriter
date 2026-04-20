@@ -1,16 +1,17 @@
 /**
- * Install the docwriter bundled skills into the workspace's `.claude/skills/`
- * directory. The Claude Agent SDK auto-discovers skills there when
- * settingSources includes 'project', so we drop the files and the agent
- * learns about them on the next render.
+ * Install DocWriter's built-in project skills into the workspace's
+ * `.claude/skills/` directory. The Claude Agent SDK auto-discovers skills
+ * there when settingSources includes 'project', so we drop the files and the
+ * agent learns about them on the next render.
  *
  * Skill files are imported as raw strings via Vite's `?raw` (and `?raw`
  * through `import.meta.glob` for the examples folder) so they live as real
  * markdown/JSON in the repo — editable, grep-able, reviewable — AND get
  * bundled into the server build.
  *
- * We always overwrite: the skill is OURS, shipped with the package. Users
- * customize by editing hooks in the UI, not by hand-editing the skill file.
+ * We always overwrite built-in skill files: they are ours, shipped with the
+ * package. User-owned writing samples live separately under
+ * `.docwriter/references/`, not in `.claude/skills/`.
  */
 import { mkdirSync, writeFileSync } from 'fs';
 import { join, dirname, basename } from 'path';

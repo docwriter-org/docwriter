@@ -11,7 +11,7 @@ import { existsSync, mkdirSync } from 'fs';
 //     agent/<relative-path>           ← per-tab shadow, mirrors the
 //                                       user-facing file's location under
 //                                       DOCWRITER_ROOT
-//     state.json                      ← sessionId, rules, userEditRegions,
+//     state.json                      ← sessionId, rules,
 //                                       agentSettings, tabs.{order,active}
 //
 // The old flat `notes/` directory is gone. Any file you open from the

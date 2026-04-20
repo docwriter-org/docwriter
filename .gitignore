@@ -37,3 +37,6 @@ notes/
 # Vite
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# Junk dirs from accidental --root=" " testing
+/\ /

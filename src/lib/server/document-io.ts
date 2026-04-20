@@ -16,19 +16,15 @@ import {
 } from './document-files';
 import { getTabsState } from './runtime-state';
 import {
-	isRenderActive,
 	getLastSyncedUserMd,
 	setLastSyncedUserMd
 } from './document-lock';
 import {
 	getRules,
 	setRules,
-	getUserEditRegions,
-	setUserEditRegions,
 	getAgentSettings,
 	setAgentSettings,
 	type Rule,
-	type UserEditRegion,
 	type AgentSettings
 } from './runtime-state';
 
@@ -45,14 +41,13 @@ import {
  * The list of currently-open tabs lives in `.docwriter/state.json` under
  * `tabs.order`. Files on disk that aren't in that list aren't watched.
  *
- * Rules / userEditRegions / agentSettings / sessionId also live in
- * state.json. Review baselines + pre-agent snapshots are per-tab Y.Doc
- * state on the client (y-indexeddb).
+ * Rules / agentSettings / sessionId also live in state.json. Review
+ * baselines + pre-agent snapshots are per-tab Y.Doc state on the client
+ * (y-indexeddb).
  */
 
 export interface DocMeta {
 	rules: Rule[];
-	userEditRegions: UserEditRegion[];
 	agentSettings: AgentSettings;
 }
 
@@ -72,46 +67,22 @@ export function readAgentDoc(tabId: string): string | null {
 export function readMeta(): DocMeta {
 	return {
 		rules: getRules(),
-		userEditRegions: getUserEditRegions(),
 		agentSettings: getAgentSettings()
 	};
 }
 
 export function writeMeta(meta: Partial<DocMeta>) {
 	if (meta.rules !== undefined) setRules(meta.rules);
-	if (meta.userEditRegions !== undefined) setUserEditRegions(meta.userEditRegions);
 	if (meta.agentSettings !== undefined) setAgentSettings(meta.agentSettings);
 }
 
 export function writeUserDoc(tabId: string, markdown: string, meta?: Partial<DocMeta>) {
 	ensureDocWriterDir();
 	const userPath = tabFile(tabId);
-	const agentPath = tabAgentFile(tabId);
 	// Ensure the user-facing parent exists (e.g. "drafts/" for
 	// "drafts/chapter-1.md").
 	mkdirSync(dirname(userPath), { recursive: true });
-	const previousUserMd = existsSync(userPath) ? readFileSync(userPath, 'utf-8') : '';
 	writeTextAtomic(userPath, markdown);
-
-	// Sync to the per-tab agent shadow ONLY when:
-	//   1. No render is currently active (the render endpoint handles sync
-	//      lazily via the PreToolUse hook → syncUserEditsToAgent).
-	//   2. AND there is no pending agent edit (agent shadow matches the
-	//      previous user content). If it differs, there's an unresolved
-	//      proposal we must NOT overwrite.
-	if (!isRenderActive()) {
-		ensureAgentDirFor(tabId);
-		const agentExists = existsSync(agentPath);
-		if (!agentExists) {
-			writeTextAtomic(agentPath, markdown);
-		} else {
-			const currentAgentMd = readFileSync(agentPath, 'utf-8');
-			if (currentAgentMd === previousUserMd) {
-				writeTextAtomic(agentPath, markdown);
-			}
-			// Else: pending agent edit. Leave the shadow alone.
-		}
-	}
 	if (meta) writeMeta(meta);
 }
 
@@ -176,23 +147,27 @@ export function readAllAgentDocs(): Array<{ tabId: string; userMd: string; agent
 	});
 }
 
-/** Accept: clean up this tab's shadow. Client's Y.Doc already carries the
- * merged content. */
-export function acceptAgentDoc(tabId: string) {
-	setUserEditRegions([]);
+/** Remove a single tab's shadow. Used when the tab is closed, deleted, or
+ * renamed away — not during normal review flow. */
+export function clearShadowForTab(tabId: string) {
 	const agentPath = tabAgentFile(tabId);
 	if (existsSync(agentPath)) unlinkSync(agentPath);
 }
 
-/** Reject: discard this tab's shadow. */
+/** Accept: keep the shadow as the next render's "last agent view". */
+export function acceptAgentDoc(tabId: string) {
+	// Shadow intentionally preserved as "what the agent last left behind".
+}
+
+/** Reject: keep the rejected proposal shadow so the next diff can show that
+ * the user reverted it. */
 export function rejectAgentDoc(tabId: string) {
-	const agentPath = tabAgentFile(tabId);
-	if (existsSync(agentPath)) unlinkSync(agentPath);
+	// Shadow intentionally preserved as "what the agent last proposed".
 }
 
 /** Session reset cleanup: discard every open tab's transient agent shadow. */
 export function clearAllAgentDocs() {
 	for (const tabId of getTabsState().order) {
-		rejectAgentDoc(tabId);
+		clearShadowForTab(tabId);
 	}
 }

@@ -38,7 +38,7 @@ project-root/
   document.md          ← user-facing markdown (git-friendly)
   .docwriter/
     agent.md           ← agent's shadow copy during a render (transient)
-    state.json         ← sessionId, rules, userEditRegions, agentSettings,
+    state.json         ← sessionId, rules, agentSettings,
                          recentActions, actionUsageCounts
 ```
 

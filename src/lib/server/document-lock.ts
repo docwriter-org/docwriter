@@ -1,3 +1,15 @@
+// ┌─ SINGLE-USER ASSUMPTION ─────────────────────────────────────────────┐
+// │ These globals are process-wide. DocWriter is a local, single-user   │
+// │ app — one browser connects to one Node process, only one render is  │
+// │ active at a time. Under those assumptions, process-wide state is    │
+// │ equivalent to session state.                                        │
+// │                                                                     │
+// │ If this ever runs multi-tenant, these break: one user's render      │
+// │ would toggle renderActive / lastSyncedUserMd for everyone. The fix  │
+// │ would be to key both by session (e.g. a Map<sessionId, LockState>)  │
+// │ and thread sessionId through writeUserDoc callers.                  │
+// └──────────────────────────────────────────────────────────────────────┘
+
 // Render lifecycle state. The user and agent write to DIFFERENT files, so we
 // don't need a mutex — the OS handles atomic file writes. We only need to
 // track the render lifecycle so writeUserDoc knows when NOT to sync to agent.md.
