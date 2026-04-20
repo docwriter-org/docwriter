@@ -39,8 +39,20 @@ export function createWsServer(port: number): Server {
 		async onLoadDocument({ documentName: tabId }) {
 			return getTabYDoc(tabId).ydoc;
 		},
-		async onChange({ documentName: tabId, update, context, document }) {
-			const origin = (context as { origin?: string } | undefined)?.origin ?? 'user';
+		async onChange({ documentName: tabId, update, context, document, transactionOrigin }) {
+			// transactionOrigin carries the Yjs origin attached to the
+			// transaction that produced this update. For WebSocket-driven
+			// updates it's the `Connection` instance; for direct-connection
+			// writes (Phase 4 custom MCP tools) it's the string we passed to
+			// `document.transact(..., origin)` — AGENT_ORIGIN.
+			let origin: string;
+			if (typeof transactionOrigin === 'string') {
+				origin = transactionOrigin;
+			} else if ((context as { origin?: string } | undefined)?.origin) {
+				origin = (context as { origin: string }).origin;
+			} else {
+				origin = 'user';
+			}
 			appendUpdate(tabId, update, origin);
 			// Use the live Document from the payload — the registry Y.Doc
 			// goes stale post-connect (Hocuspocus copies state into its own

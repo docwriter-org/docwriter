@@ -5,7 +5,6 @@ import type { HookCallback } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import { spawn } from 'child_process';
 import {
-	tabAgentFile,
 	parseTabIdFromAgentPath,
 	AGENT_DIR,
 	AGENT_SCRATCH_DIR,
@@ -28,6 +27,12 @@ import { startRender, endRender } from '$lib/server/document-lock';
 import { registerPendingAskUser } from '$lib/server/ask-user-state';
 import { unifiedLineDiff } from '$lib/diff';
 import { buildStyleReferencesPromptBlock } from '$lib/server/references';
+import {
+	docToolsMcp,
+	EDIT_DOC_TOOL_NAME,
+	READ_DOC_TOOL_NAME,
+	WRITE_DOC_TOOL_NAME
+} from '$lib/server/mcp-doc-tools';
 
 function agencyGuidance(
 	agency: 'conservative' | 'balanced' | 'aggressive',
@@ -90,7 +95,6 @@ function buildMultiTabPrompt(
 
 	const tabSections = tabs
 		.map(({ tabId, currentMd, lastMd }) => {
-			const path = tabAgentFile(tabId);
 			const kind = tabKind(tabId);
 			const isActive = tabId === activeTabId;
 			const hasDiff = lastMd !== null && lastMd !== currentMd;
@@ -102,9 +106,12 @@ function buildMultiTabPrompt(
 					? ' (**plain text** — preserve it as-is; do NOT add markdown formatting)'
 					: ' (markdown)';
 			const fence = kind === 'markdown' ? 'markdown' : 'text';
+			// `path` here is the value the agent will pass to
+			// `edit_doc` / `write_doc` / `read_doc` — the workspace-relative
+			// tab id, which the path-router resolves to the live Y.Doc.
 			return `### ${isActive ? '⭐ ' : ''}\`${tabId}\`${kindNote}${isActive ? ' (active — the user is currently looking at this one)' : ''}
 
-Path: \`${path}\`
+Path (use as \`path\` argument to edit_doc / write_doc / read_doc): \`${tabId}\`
 
 \`\`\`${fence}
 ${currentMd}
@@ -142,10 +149,15 @@ ${agencyBlock}
 
 ## How to edit
 
-- Edit any file by calling the Edit tool with its path (shown above).
-- The content is inlined above. Jump straight to Edit using that content. Only call Read if an Edit fails on \`old_string\` mismatch (meaning the user typed into the range you were targeting).
+- For the **open tab files** listed above, use \`edit_doc\` / \`write_doc\` / \`read_doc\` (NOT the built-in Edit / Write / Read). The \`path\` argument should be the tab id (shown above in bold as \`\\\`tabid\\\`\`) or the absolute path shown in each file's "Path:" line.
+- \`edit_doc({ path, old_string, new_string })\` replaces exactly one occurrence. Fails if \`old_string\` is not found or matches more than once — in that case call \`read_doc(path)\` to see the current content and retry.
+- \`write_doc({ path, content })\` replaces the file's entire content. Only works for already-open tabs; does NOT create new ones.
+- \`read_doc(path)\` returns the live content of an open tab.
+- Each \`edit_doc\` / \`write_doc\` call lands atomically into the user's live document and shows up as a reviewable round in the outline. Its tool_result reflects reality (success = the user now sees your change).
+- For files outside the open-tab list, read with the built-in \`Read\` / \`Glob\` / \`Grep\`, and for your scratch workspace under \`${AGENT_SCRATCH_DIR}/\` you may use either \`edit_doc\` / \`write_doc\` / \`read_doc\` (they fall through to plain filesystem I/O on scratch paths) or the built-in \`Edit\` / \`Write\` tools.
+- The content is inlined above. Jump straight to \`edit_doc\` using that content. Only call \`read_doc\` if an \`edit_doc\` fails on \`old_string\` mismatch (meaning the user typed into the range you were targeting).
 - Preserve the user's voice — don't rewrite sentences that aren't broken.
-- Do NOT create new files. Only edit the files listed above.
+- Do NOT create new tab files. Only edit the files listed above.
 - If the user's message is about the active file, prefer editing that one. Edit other files when the request genuinely spans them.
 - Do NOT write a summary. Edit silently and stop.
 
@@ -155,11 +167,11 @@ If the request is genuinely ambiguous and has multiple reasonable directions (to
 
 ## What you can read vs. what you can write
 
-- **Read**: anywhere in the workspace. Use Read, Glob, Grep to explore the project freely (existing docs, references, code, hooks.json, whatever helps).
-- **Write / Edit** is sandboxed to two places. Everywhere else is hard-denied by a PreToolUse hook.
-  1. **Open-file shadows** — the paths listed in the Files section above (under \`${AGENT_DIR}/\`). Edits here become the user's reviewable proposal.
-  2. **Your scratch space** at \`${AGENT_SCRATCH_DIR}/\` — any path under here. Use it for drafts, outlines, notes-to-self, intermediate passes. Not surfaced to the user; persists across rounds in the same session; wiped on "New session". Think of it as your working memory.
-- For adding **hooks** → call \`propose_hook\`. For **rules** → \`propose_rule\`. Don't try to edit \`.docwriter/hooks.json\` or anywhere outside the sandbox directly.
+- **Read**: anywhere in the workspace. Use the built-in \`Read\` / \`Glob\` / \`Grep\` to explore the project freely (existing docs, references, code, hooks.json, whatever helps). For the open tabs listed above, prefer \`read_doc(path)\` — it returns the live Y.Doc content instead of whatever is on disk.
+- **Write / Edit** has two channels:
+  1. **Open tabs** — use \`edit_doc\` / \`write_doc\` exclusively, with the tab id from the Files section as \`path\`. These land in the live Y.Doc and become the user's reviewable round. The built-in \`Edit\` / \`Write\` tools are intentionally disabled for this render.
+  2. **Your scratch space** at \`${AGENT_SCRATCH_DIR}/\` — any path under here. Use it for drafts, outlines, notes-to-self, intermediate passes. Either \`edit_doc\` / \`write_doc\` (they fall through to plain file I/O on scratch paths) or a subagent's shell tools work. Not surfaced to the user; persists across rounds in the same session; wiped on "New session". Think of it as your working memory.
+- For adding **hooks** → call \`propose_hook\`. For **rules** → \`propose_rule\`. Don't try to edit \`.docwriter/hooks.json\` directly.
 
 ## When to use subagents (Agent tool)
 
@@ -167,14 +179,14 @@ You have the \`Agent\` tool (formerly \`Task\`; both names work). Use your judgm
 
 Rough heuristics (guidelines, not rules):
 
-- **Small job → do it yourself.** Short files, one rule, one targeted edit: just Edit directly. No subagent overhead.
-- **Multi-rule review across a long file → consider fanning out.** If the user asked you to apply 3+ rules to a file with thousands of words, spawning one subagent per rule (or per cluster of related rules) lets each focus narrowly. Each subagent gets the rule(s), scans the files, and makes the Edits.
+- **Small job → do it yourself.** Short files, one rule, one targeted edit: just call \`edit_doc\` directly. No subagent overhead.
+- **Multi-rule review across a long file → consider fanning out.** If the user asked you to apply 3+ rules to a file with thousands of words, spawning one subagent per rule (or per cluster of related rules) lets each focus narrowly. Each subagent gets the rule(s), scans the files, and calls \`edit_doc\`.
 - **Big independent chunks → consider chunked subagents.** If a single file is very long and the work splits cleanly by section (e.g. "tighten each chapter"), you can spawn one subagent per chunk.
 - **Don't fan out dependent work.** If rule B depends on rule A being applied first, or if edits need to stay coherent across the whole file, do it yourself sequentially.
 
 When you spawn a subagent, give it:
 - The specific rule(s) or chunk it owns
-- The exact file paths it can Edit (from the Files section above)
+- The exact file paths it can edit via \`edit_doc\` (from the Files section above)
 - A clear stop condition ("fix violations, don't rewrite prose that's already fine")
 
 Otherwise, default to doing the work yourself.
@@ -554,9 +566,13 @@ export const POST: RequestHandler = async ({ request }) => {
 						allowedTools: warmup
 							? ['Read', 'Glob', 'WebSearch', 'WebFetch']
 							: [
+									// Built-in Edit/Write intentionally omitted — tab
+									// edits go through the custom MCP tools
+									// (edit_doc/write_doc/read_doc) so the agent's
+									// tool_result reflects what the user sees. Built-in
+									// Read is kept because the agent may want to look at
+									// files outside the open-tab set.
 									'Read',
-									'Edit',
-									'Write',
 									'Bash',
 									'Glob',
 									'Grep',
@@ -569,9 +585,12 @@ export const POST: RequestHandler = async ({ request }) => {
 									'Task',
 									PROPOSE_RULE_TOOL_NAME,
 									PROPOSE_HOOK_TOOL_NAME,
-									ASK_USER_TOOL_NAME
+									ASK_USER_TOOL_NAME,
+									EDIT_DOC_TOOL_NAME,
+									READ_DOC_TOOL_NAME,
+									WRITE_DOC_TOOL_NAME
 								],
-						mcpServers: { docwriter: docwriterMcp },
+						mcpServers: { docwriter: docwriterMcp, 'docwriter-doc': docToolsMcp },
 						// 'user' lets the SDK pick up Claude.ai subscription credentials
 						// stored by `claude login` (in addition to ANTHROPIC_API_KEY).
 						settingSources: ['user', 'project'],
