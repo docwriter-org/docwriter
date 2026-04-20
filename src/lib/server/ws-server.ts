@@ -30,9 +30,19 @@ import {
 } from './ydoc-persistence';
 
 // Per-tab UndoManager keyed on the Hocuspocus internal Document that syncs
-// with clients. Built in afterLoadDocument so it observes the LIVE doc;
+// with clients. Built in onLoadDocument so it observes the LIVE doc;
 // tearing it down in afterUnloadDocument avoids leaking observers.
 const undoManagers = new Map<string, Y.UndoManager>();
+
+// Tabs whose SQLite log has already been replayed into Hocuspocus's
+// internal Document for this server-process lifetime. Hocuspocus may call
+// onLoadDocument more than once per tab (across reconnects) — we only want
+// to apply the persisted log on the FIRST call, otherwise we'd pile the
+// log on top of the already-live state every refresh (duplicating
+// everything) or resurrect content the user intentionally deleted.
+// Cleared in afterUnloadDocument so a genuinely unloaded tab re-replays
+// on its next load.
+const replayedTabs = new Set<string>();
 
 export function getUndoManagerForTabServerSide(tabId: string): Y.UndoManager | null {
 	return undoManagers.get(tabId) ?? null;
@@ -53,26 +63,32 @@ export function createWsServer(port: number): Server {
 		quiet: true,
 		async onLoadDocument({ documentName: tabId, document }) {
 			// `document` IS Hocuspocus's live internal Y.Doc (Document extends
-			// Y.Doc). Historically we returned a separate registry Y.Doc here,
-			// but Hocuspocus copies state from the returned doc into its own
-			// internal one and never reads from ours again — so our copy went
-			// permanently stale after the first client connected. Work directly
-			// on the payload's document instead.
+			// Y.Doc). Hocuspocus may call this hook multiple times per tab
+			// across reconnects — we only want to apply the persisted SQLite
+			// log on the FIRST load for this tab, otherwise we duplicate
+			// content or resurrect user-deleted state on every refresh.
 			const ydoc = document as unknown as Y.Doc;
-			// Construct UndoManager BEFORE the replay so AGENT_ORIGIN rows
-			// repopulate the undo stack (Phase 7 fix), and dispose any previous
-			// one for this tab so we don't leak observers across reloads.
+			const xmlFragment = ydoc.getXmlFragment('default');
+
+			// Dispose any prior UndoManager attached to (now-stale) state,
+			// and build a fresh one on the live doc. Build BEFORE the replay
+			// (when we do replay) so AGENT_ORIGIN rows repopulate the undo
+			// stack — Phase 7 invariant, now applied to the actual doc
+			// clients sync with.
 			const prior = undoManagers.get(tabId);
 			if (prior) {
 				prior.destroy();
 				undoManagers.delete(tabId);
 			}
-			const xmlFragment = ydoc.getXmlFragment('default');
 			const undoManager = new Y.UndoManager(xmlFragment, {
 				trackedOrigins: new Set([AGENT_ORIGIN])
 			});
 			undoManagers.set(tabId, undoManager);
-			replayUpdatesInto(ydoc, tabId);
+
+			if (!replayedTabs.has(tabId)) {
+				replayUpdatesInto(ydoc, tabId);
+				replayedTabs.add(tabId);
+			}
 			return document;
 		},
 		async afterUnloadDocument({ documentName: tabId }) {
@@ -81,6 +97,10 @@ export function createWsServer(port: number): Server {
 				mgr.destroy();
 				undoManagers.delete(tabId);
 			}
+			// Hocuspocus has genuinely unloaded this tab's Document (all clients
+			// disconnected past the unload timeout). On the next connect the new
+			// Document will be empty and needs the SQLite log replayed into it.
+			replayedTabs.delete(tabId);
 		},
 		async onChange({ documentName: tabId, update, context, document, transactionOrigin }) {
 			// transactionOrigin carries the Yjs origin attached to the
