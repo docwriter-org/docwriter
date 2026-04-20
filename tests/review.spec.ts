@@ -44,6 +44,40 @@ test.describe('review mode', () => {
 		expect(await getEditorText(page)).not.toContain('Original sentence');
 	});
 
+	test('accept persists across reload', async ({ page }) => {
+		await freshPage(page);
+		const name = `t-rev-acc-reload-${SUFFIX}.md`;
+		await createTab(page, name);
+		await setEditor(page, `# ${name}\n\nOriginal sentence.`);
+		await afterAutosave(page);
+
+		await page.evaluate((after) => {
+			(window as any).__docwriterTest.fakeAgentEdit(after);
+		}, `# ${name}\n\nAgent-rewritten sentence.`);
+
+		const pendingCard = page.locator('.pending-card');
+		await expect(pendingCard).toBeVisible();
+		// The test seam applies through the browser Y.Doc; give the provider a
+		// moment to mirror that state to the server before Accept asks the
+		// server to clear the pending rounds.
+		await page.waitForTimeout(150);
+		await pendingCard.locator('.btn-accept').click();
+		await expect(pendingCard).toHaveCount(0);
+
+		await page.reload();
+		await page.waitForSelector('.tab-bar');
+		await page.waitForFunction(() => !!(window as any).__docwriterEditor);
+
+		const active = await page.locator('.tab.active .tab-name').innerText();
+		if (active !== name) {
+			await switchTab(page, name);
+		}
+
+		await expect(page.locator('.pending-card')).toHaveCount(0);
+		expect(await getEditorText(page)).toContain('Agent-rewritten sentence');
+		expect(await getEditorText(page)).not.toContain('Original sentence');
+	});
+
 	test('reject reverts to baseline, clears pending UI', async ({ page }) => {
 		await freshPage(page);
 		const name = `t-rev-rej-${SUFFIX}.md`;
@@ -62,6 +96,22 @@ test.describe('review mode', () => {
 		await expect(pendingCard).toHaveCount(0);
 		expect(await getEditorText(page)).toContain('Keep this line');
 		expect(await getEditorText(page)).not.toContain('Agent overwrote');
+	});
+
+	test('plain-text agent edits preserve line breaks', async ({ page }) => {
+		await freshPage(page);
+		const name = `t-rev-plain-${SUFFIX}.txt`;
+		await createTab(page, name);
+		await setEditor(page, 'line 1\nline 2\n\nline 4');
+		await afterAutosave(page);
+
+		await page.evaluate((after) => {
+			(window as any).__docwriterTest.fakeAgentEdit(after);
+		}, 'line 1\nline 2 updated\n\nline 4');
+
+		await expect(page.locator('.pending-card')).toBeVisible();
+		await expect(page.locator('.pending-card .btn-accept')).toBeVisible();
+		expect(await getEditorText(page)).toBe('line 1\nline 2 updated\n\nline 4');
 	});
 
 	test('pending dot appears on inactive tab when agent edits it', async ({ page }) => {

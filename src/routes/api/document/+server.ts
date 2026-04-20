@@ -3,7 +3,7 @@ import type { RequestHandler } from './$types';
 import { readUserDoc, readMeta, writeMeta } from '$lib/server/document-io';
 import { isValidTabId } from '$lib/server/document-files';
 import { getTabsState } from '$lib/server/runtime-state';
-import { flushTabMarkdownNow } from '$lib/server/ws-server';
+import { acceptTabRounds, flushTabMarkdownNow } from '$lib/server/ws-server';
 
 /**
  * Per-tab document endpoint.
@@ -15,9 +15,9 @@ import { flushTabMarkdownNow } from '$lib/server/ws-server';
  *     since Y.Doc sync owns editor content; the PUT is kept for meta-only
  *     writes from the AgentSettings / Rules panels.
  *
- * `POST { action: 'accept' | 'reject' }` was removed — accept/reject is
- * now a pure Y.Map('review') operation driven by the browser (see
- * `acceptAgentEdit` / `rejectAgentEdit` in `src/routes/+page.svelte`).
+ * `POST` handles review-state mutations that need a server ack before the
+ * UI clears, so a hard refresh cannot race ahead of the browser's
+ * WebSocket send and resurrect already-accepted rounds.
  */
 
 function resolveTabId(url: URL): string {
@@ -61,6 +61,21 @@ export const PUT: RequestHandler = async ({ request }) => {
 			await writeMeta(body.meta);
 		}
 		return json({ ok: true });
+	} catch (e) {
+		return json({ error: String(e) }, { status: 500 });
+	}
+};
+
+export const POST: RequestHandler = async ({ request, url }) => {
+	try {
+		const tabId = resolveTabId(url);
+		const body = await request.json().catch(() => ({}));
+		if (body?.action !== 'accept_rounds') {
+			return json({ error: 'Unknown action' }, { status: 400 });
+		}
+		const roundId = typeof body.roundId === 'string' ? body.roundId : undefined;
+		const result = await acceptTabRounds(tabId, roundId);
+		return json({ ok: true, ...result });
 	} catch (e) {
 		return json({ error: String(e) }, { status: 500 });
 	}

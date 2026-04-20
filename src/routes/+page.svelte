@@ -861,30 +861,38 @@
 		const tabId = getCurrentActiveTab();
 		if (!tabId) return;
 		const rounds = currentRounds();
-		// No id → accept all (legacy call sites, "Accept all" button).
-		let next: PendingReviewRound[];
-		if (!roundId) {
-			next = [];
-		} else {
-			const idx = rounds.findIndex((r) => r.id === roundId);
-			if (idx < 0) return;
-			// Monotonic: drop rounds[0..=idx]. Leaves rounds[idx+1..] pending.
-			next = rounds.slice(idx + 1);
+		const idx = roundId ? rounds.findIndex((r) => r.id === roundId) : -1;
+		if (roundId && idx < 0) return;
+		try {
+			const res = await fetch(`/api/document?tab=${encodeURIComponent(tabId)}`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					action: 'accept_rounds',
+					roundId
+				})
+			});
+			const data = await res.json().catch(() => ({}));
+			if (!res.ok || !data?.ok || !Array.isArray(data.rounds)) {
+				throw new Error(data?.error || `HTTP ${res.status}`);
+			}
+			writeTabRounds(tabId, data.rounds as PendingReviewRound[]);
+			const acceptedCount =
+				typeof data.acceptedCount === 'number'
+					? data.acceptedCount
+					: rounds.length - (data.rounds as PendingReviewRound[]).length;
+			if (acceptedCount <= 0) return;
+			pushHistory({
+				type: 'user_action',
+				timestamp: Date.now(),
+				description:
+					acceptedCount === rounds.length
+						? `Accepted all ${rounds.length} agent edit${rounds.length === 1 ? '' : 's'}`
+						: `Accepted ${acceptedCount} agent edit${acceptedCount === 1 ? '' : 's'}`
+			});
+		} catch (e) {
+			console.error('Failed to accept agent edit:', e);
 		}
-		const acceptedCount = rounds.length - next.length;
-		// Accept is a pure Y.Map('review') mutation: remove the round
-		// entries, leave the content in place. The mutation propagates to
-		// every connected client (just this browser in single-user mode)
-		// via Hocuspocus sync. No server endpoint to call.
-		writeTabRounds(tabId, next);
-		pushHistory({
-			type: 'user_action',
-			timestamp: Date.now(),
-			description:
-				acceptedCount === rounds.length
-					? `Accepted all ${rounds.length} agent edit${rounds.length === 1 ? '' : 's'}`
-					: `Accepted ${acceptedCount} agent edit${acceptedCount === 1 ? '' : 's'}`
-		});
 	}
 
 	/**

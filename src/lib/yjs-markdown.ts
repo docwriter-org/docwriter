@@ -1,4 +1,4 @@
-import { Editor } from '@tiptap/core';
+import { Editor, type JSONContent } from '@tiptap/core';
 import { prosemirrorJSONToYXmlFragment } from 'y-prosemirror';
 import { markdownBaseExtensions, plainBaseExtensions } from './editor-extensions';
 import { getXmlFragment, isYDocEmpty } from './yjs-doc';
@@ -25,15 +25,15 @@ function getPlainHeadless(): Editor {
 	return plainHeadless;
 }
 
-export function markdownToPMJson(md: string): unknown {
+export function markdownToPMJson(md: string): JSONContent {
 	const ed = getMarkdownHeadless();
 	ed.commands.setContent(md, { emitUpdate: false });
-	return ed.getJSON();
+	return ed.getJSON() as JSONContent;
 }
 
 /** Convert a raw text string into PM JSON for the plain-text schema. Each
  * line becomes its own paragraph; empty lines become empty paragraphs. */
-export function plainTextToPMJson(text: string): unknown {
+export function plainTextToPMJson(text: string): JSONContent {
 	const lines = text.split('\n');
 	return {
 		type: 'doc',
