@@ -13,6 +13,7 @@ import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { DOCWRITER_DIR, ensureDocWriterDir } from './document-files';
 import { writeJsonAtomic } from './file-utils';
+import { dbReplaceHooks } from './db-writes';
 
 /** Hook events we surface in the UI. Subset of the SDK's full list (see
  * https://code.claude.com/docs/en/agent-sdk/hooks) — we omit the niche ones
@@ -76,6 +77,7 @@ export function readHooks(): HooksConfig {
 export function writeHooks(cfg: HooksConfig) {
 	ensureDocWriterDir();
 	writeJsonAtomic(HOOKS_FILE, cfg);
+	dbReplaceHooks(cfg.hooks);
 }
 
 /** Substitute template placeholders in a hook command. */

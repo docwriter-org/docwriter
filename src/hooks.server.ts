@@ -8,11 +8,22 @@
 import type { Handle } from '@sveltejs/kit';
 import { readRuntimeState, setSessionId } from '$lib/server/runtime-state';
 import { installBundledSkills } from '$lib/server/skills-install';
+import { seedFromJsonFilesIfNeeded } from '$lib/server/db-seed';
 
-// Install docwriter's bundled skills (e.g. hooks-creator) into the
-// workspace's `.claude/skills/` dir so the SDK picks them up via the
-// 'project' settingSource. Idempotent — only overwrites on version bumps.
+// Install DocWriter's bundled project skill(s) into the workspace's
+// `.claude/skills/` dir so the SDK picks them up via the 'project'
+// settingSource. Idempotent — only overwrites the built-in skill files.
 installBundledSkills();
+
+// Phase 1 SQLite scaffolding: open the DB and prime it from the existing
+// JSON files on first run. No read paths consume this yet — the JSON files
+// remain the source of truth. Wrapped in try/catch so a DB-init failure
+// can't take down the server startup path.
+try {
+	seedFromJsonFilesIfNeeded();
+} catch (err) {
+	console.error('[docwriter] SQLite seed failed (non-fatal):', err);
+}
 
 // Run at module load (= server startup), not per-request.
 if (process.env.DOCWRITER_NEW_SESSION === '1') {

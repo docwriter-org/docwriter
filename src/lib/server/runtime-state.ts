@@ -1,6 +1,15 @@
 import { existsSync, readFileSync } from 'fs';
 import { STATE_FILE, ensureDocWriterDir } from './document-files';
 import { writeJsonAtomic } from './file-utils';
+import {
+	dbClearSessionState,
+	dbReplaceActionUsageCounts,
+	dbReplaceRecentActions,
+	dbReplaceRules,
+	dbSetAgentSettings,
+	dbSetSessionId,
+	dbUpsertTabs
+} from './db-writes';
 
 /**
  * All server-side runtime state lives in `.docwriter/state.json`. This single
@@ -9,18 +18,11 @@ import { writeJsonAtomic } from './file-utils';
  *   - Session resume for the Claude Agent SDK (`sessionId`)
  *   - The selection-feedback action toolbar (`recentActions`, `actionUsageCounts`)
  *   - Writing rules (`rules`) — consumed by `/api/render` when building the agent prompt
- *   - User edit regions (`userEditRegions`) — surfaced in the diff overlay as orange highlights
  *   - Agent behavior settings (`agentSettings`) — autonomy level and review-mode toggle
  */
 export interface Rule {
 	id: string;
 	text: string;
-}
-
-export interface UserEditRegion {
-	from: number;
-	to: number;
-	timestamp: number;
 }
 
 export interface AgentSettings {
@@ -53,7 +55,6 @@ interface RuntimeState {
 	}>;
 	actionUsageCounts?: Record<string, number>;
 	rules?: Rule[];
-	userEditRegions?: UserEditRegion[];
 	agentSettings?: AgentSettings;
 	tabs?: TabsState;
 }
@@ -79,6 +80,7 @@ export function getSessionId(): string | null {
 
 export function setSessionId(sessionId: string) {
 	writeRuntimeState({ ...readRuntimeState(), sessionId });
+	dbSetSessionId(sessionId);
 }
 
 export function clearSessionState() {
@@ -86,9 +88,9 @@ export function clearSessionState() {
 		...readRuntimeState(),
 		sessionId: undefined,
 		recentActions: [],
-		actionUsageCounts: {},
-		userEditRegions: []
+		actionUsageCounts: {}
 	});
+	dbClearSessionState();
 }
 
 export function getRecentActions(): RuntimeState['recentActions'] {
@@ -97,6 +99,7 @@ export function getRecentActions(): RuntimeState['recentActions'] {
 
 export function setRecentActions(actions: RuntimeState['recentActions']) {
 	writeRuntimeState({ ...readRuntimeState(), recentActions: actions });
+	dbReplaceRecentActions(actions);
 }
 
 export function getActionUsageCounts(): Record<string, number> {
@@ -105,6 +108,7 @@ export function getActionUsageCounts(): Record<string, number> {
 
 export function setActionUsageCounts(counts: Record<string, number>) {
 	writeRuntimeState({ ...readRuntimeState(), actionUsageCounts: counts });
+	dbReplaceActionUsageCounts(counts);
 }
 
 export function getRules(): Rule[] {
@@ -113,14 +117,7 @@ export function getRules(): Rule[] {
 
 export function setRules(rules: Rule[]) {
 	writeRuntimeState({ ...readRuntimeState(), rules });
-}
-
-export function getUserEditRegions(): UserEditRegion[] {
-	return readRuntimeState().userEditRegions || [];
-}
-
-export function setUserEditRegions(regions: UserEditRegion[]) {
-	writeRuntimeState({ ...readRuntimeState(), userEditRegions: regions });
+	dbReplaceRules(rules);
 }
 
 export function getAgentSettings(): AgentSettings {
@@ -129,6 +126,7 @@ export function getAgentSettings(): AgentSettings {
 
 export function setAgentSettings(settings: AgentSettings) {
 	writeRuntimeState({ ...readRuntimeState(), agentSettings: settings });
+	dbSetAgentSettings(settings);
 }
 
 export function getTabsState(): TabsState {
@@ -137,4 +135,5 @@ export function getTabsState(): TabsState {
 
 export function setTabsState(tabs: TabsState) {
 	writeRuntimeState({ ...readRuntimeState(), tabs });
+	dbUpsertTabs(tabs);
 }
