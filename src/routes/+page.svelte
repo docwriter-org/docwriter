@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
+	import type * as Y from 'yjs';
 	import { ScrollText, PanelLeftClose, PanelLeftOpen } from 'lucide-svelte';
 	import MenuBar, { type MenuSpec } from '$lib/components/MenuBar.svelte';
 	import OutlinePane from '$lib/components/OutlinePane.svelte';
@@ -77,6 +78,7 @@
 		renameTab
 	} from '$lib/yjs-doc';
 	import type { Editor } from '@tiptap/core';
+	import { plainTextToPMJson } from '$lib/yjs-markdown';
 	import {
 		userMd,
 		reviewBaseline,
@@ -235,9 +237,52 @@
 			pendingReviewRounds.set(rounds);
 			reviewBaseline.set(rounds.length > 0 ? rounds[0].beforeMd : null);
 			preAgentSnapshot.set(rounds.length > 0 ? rounds[0].beforeMd : null);
+
+			// Agent edits now mutate Y.Map('review') server-side via edit_doc.
+			// The change syncs to us over Hocuspocus, but nothing auto-reflects
+			// those remote Y.Map updates into the `pendingReviewRounds` store
+			// — the store was only ever set from explicit code paths. Attach
+			// an observer for the active tab so server-created rounds show up
+			// as review cards without a tab switch.
+			attachActiveReviewObserver(tabId);
 		} catch (e) {
 			console.error(`Failed to load tab "${tabId}":`, e);
 		}
+	}
+
+	let activeReviewObserver: {
+		tabId: string;
+		map: Y.Map<unknown>;
+		handler: (event: Y.YMapEvent<unknown>) => void;
+	} | null = null;
+
+	function attachActiveReviewObserver(tabId: string) {
+		// Detach any previous tab's observer first.
+		if (activeReviewObserver) {
+			activeReviewObserver.map.unobserve(activeReviewObserver.handler);
+			activeReviewObserver = null;
+		}
+		const map = getReviewMapForTab(tabId);
+		const handler = (event: Y.YMapEvent<unknown>) => {
+			if (!event.changes.keys.has('pendingRounds')) return;
+			if (tabId !== getCurrentActiveTab()) return;
+			const raw = map.get('pendingRounds');
+			const rounds: PendingReviewRound[] = Array.isArray(raw)
+				? (raw as PendingReviewRound[]).map((r) => ({
+						...r,
+						kind: r.kind ?? classifyRoundKind(r.beforeMd, r.afterMd)
+				  }))
+				: [];
+			pendingReviewRounds.set(rounds);
+			reviewBaseline.set(rounds.length > 0 ? rounds[0].beforeMd : null);
+			preAgentSnapshot.set(rounds.length > 0 ? rounds[0].beforeMd : null);
+			const nextPending = new Map(pendingReviewTabs);
+			if (rounds.length > 0) nextPending.set(tabId, rounds.length);
+			else nextPending.delete(tabId);
+			pendingReviewTabs = nextPending;
+		};
+		map.observe(handler);
+		activeReviewObserver = { tabId, map, handler };
 	}
 
 	/** Switch the editor to a different tab. Tears down the editor, sets
@@ -1435,6 +1480,7 @@
 					if (!tabId) return;
 					const ed = editorRef?.getEditor();
 					if (!ed) return;
+					const kind = getTabKind(tabId);
 					const before = getEditorMarkdownNow();
 					// Ensure the UndoManager is listening before we transact
 					// so the agent-origin transaction is captured (matches the
@@ -1442,7 +1488,19 @@
 					getUndoManagerForTab(tabId);
 					const ydoc = getYDocForTab(tabId);
 					ydoc.transact(() => {
-						ed.commands.setContent(content, { emitUpdate: false });
+						if (kind === 'plain') {
+							// Cast: plainTextToPMJson returns our own PM-JSON shape which
+							// Tiptap's setContent accepts at runtime but its Content type
+							// only surfaces a subset.
+							ed.commands.setContent(
+								plainTextToPMJson(content) as unknown as Parameters<
+									typeof ed.commands.setContent
+								>[0],
+								{ emitUpdate: false }
+							);
+						} else {
+							ed.commands.setContent(content, { emitUpdate: false });
+						}
 					}, AGENT_ORIGIN);
 					const after = getEditorMarkdownNow();
 					if (after === before) return;
