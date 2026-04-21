@@ -148,16 +148,43 @@ test.describe('review mode', () => {
 		await freshPage(page);
 		const name = `t-rev-plain-${SUFFIX}.txt`;
 		await createTab(page, name);
-		await setEditor(page, 'line 1\nline 2\n\nline 4');
+		await setEditor(page, '[[ write a haiku here ]]');
 		await afterAutosave(page);
 
 		await page.evaluate((after) => {
 			(window as any).__docwriterTest.fakeAgentEdit(after);
-		}, 'line 1\nline 2 updated\n\nline 4');
+		}, 'the kettle exhales\na long slow breath of spring air\nthen quiet again');
 
 		await expect(page.locator('.pending-card')).toBeVisible();
 		await expect(page.locator('.pending-card .btn-accept')).toBeVisible();
-		expect(await getEditorText(page)).toBe('line 1\nline 2 updated\n\nline 4');
+		await expect(
+			page.locator('.tiptap-editor .diff-added, .tiptap-editor .diff-removed-widget').first()
+		).toBeVisible();
+		expect(await getEditorText(page)).toBe(
+			'the kettle exhales\na long slow breath of spring air\nthen quiet again'
+		);
+	});
+
+	test('reject rewinds a multiline plain-text agent edit to the original line', async ({ page }) => {
+		await freshPage(page);
+		const name = `t-rev-plain-reject-${SUFFIX}.txt`;
+		await createTab(page, name);
+		await setEditor(page, '[[ write a haiku here ]]');
+		await afterAutosave(page);
+
+		await page.evaluate((after) => {
+			(window as any).__docwriterTest.fakeAgentEdit(after);
+		}, 'the kettle exhales\na long slow breath of spring air\nthen quiet again');
+
+		const pendingCard = page.locator('.pending-card');
+		await expect(pendingCard).toBeVisible();
+		expect(await getEditorText(page)).toBe(
+			'the kettle exhales\na long slow breath of spring air\nthen quiet again'
+		);
+
+		await pendingCard.locator('.btn-reject').click();
+		await expect(pendingCard).toHaveCount(0);
+		expect(await getEditorText(page)).toBe('[[ write a haiku here ]]');
 	});
 
 	test('pending dot appears on inactive tab when agent edits it', async ({ page }) => {

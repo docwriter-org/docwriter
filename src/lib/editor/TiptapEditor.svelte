@@ -7,7 +7,6 @@
 	import { collaborativeExtensions } from '$lib/editor-extensions';
 	import { getYDoc, whenYDocReady, getCurrentTab } from '$lib/yjs-doc';
 	import {
-		userMd,
 		reviewBaseline,
 		annotations,
 		isRendering,
@@ -25,12 +24,8 @@
 
 	interface Props {
 		onSubmit?: (trigger?: string) => void;
-		/** 'markdown' (default) = full StarterKit + markdown parsing.
-		 * 'plain' = minimal schema with no markdown rendering (for .txt,
-		 * .json, and other non-markdown text files). */
-		kind?: 'markdown' | 'plain';
 	}
-	let { onSubmit, kind = 'markdown' }: Props = $props();
+	let { onSubmit }: Props = $props();
 
 	let element: HTMLDivElement;
 	let editor: Editor | undefined = $state();
@@ -45,6 +40,7 @@
 	let softWrap = $state(false);
 	editorSoftWrap.subscribe((v) => (softWrap = v));
 	let plainLineRows = $state<string[]>(['1']);
+	let hasPendingProposal = false;
 	let pointerSelecting = false;
 	let shouldFocusFeedbackInput = false;
 	let detachFeedbackPointerHandlers: (() => void) | null = null;
@@ -175,22 +171,8 @@
 		]);
 	}
 
-	/** Serialize editor content for the autosave / render flow.
-	 *  - Markdown mode uses tiptap-markdown's serializer (preserves headings,
-	 *    bullets, bold, etc.).
-	 *  - Plain mode uses Tiptap's `getText({ blockSeparator: '\n' })` which
-	 *    renders paragraphs as '\n'-joined lines — a 1:1 round-trip with
-	 *    files on disk. */
-	function getEditorMarkdown(): string {
-		if (!editor) return '';
-		if (kind === 'plain') {
-			return editor.getText({ blockSeparator: '\n' });
-		}
-		return (editor.storage as any).markdown?.getMarkdown?.() || '';
-	}
-
 	function logicalPlainLineCount(): number {
-		if (!editor || kind !== 'plain') return 1;
+		if (!editor) return 1;
 		let count = 0;
 		editor.state.doc.forEach((node) => {
 			if (node.content.size === 0) {
@@ -207,13 +189,21 @@
 	}
 
 	function syncPlainLineRows() {
-		if (!editor || kind !== 'plain') return;
+		if (!editor) return;
+		const contentEl = editor.view.dom as HTMLElement | null;
+		const lineHeight = contentEl
+			? parseFloat(getComputedStyle(contentEl).lineHeight || '0')
+			: 0;
+		if (hasPendingProposal && contentEl && lineHeight) {
+			const totalRows = Math.max(1, Math.round(contentEl.getBoundingClientRect().height / lineHeight));
+			plainLineRows = Array.from({ length: totalRows }, (_, i) => String(i + 1));
+			return;
+		}
 		const logicalCount = logicalPlainLineCount();
 		if (!softWrap) {
 			plainLineRows = Array.from({ length: logicalCount }, (_, i) => String(i + 1));
 			return;
 		}
-		const contentEl = editor.view.dom as HTMLElement | null;
 		const paragraphs = contentEl
 			? Array.from(contentEl.querySelectorAll(':scope > p'))
 			: [];
@@ -225,7 +215,6 @@
 			plainLineRows = Array.from({ length: logicalCount }, (_, i) => String(i + 1));
 			return;
 		}
-		const lineHeight = parseFloat(getComputedStyle(contentEl).lineHeight || '0');
 		if (!lineHeight) {
 			plainLineRows = Array.from({ length: logicalCount }, (_, i) => String(i + 1));
 			return;
@@ -241,7 +230,6 @@
 	}
 
 	function schedulePlainLineSync() {
-		if (kind !== 'plain') return;
 		if (plainMetricsRaf) cancelAnimationFrame(plainMetricsRaf);
 		plainMetricsRaf = requestAnimationFrame(() => {
 			plainMetricsRaf = 0;
@@ -260,6 +248,7 @@
 
 	// Diff overlay state — baseline changes when a review starts/ends.
 	let currentBaseline: string | null = null;
+	let currentProposalText: string | null = null;
 	reviewBaseline.subscribe((v) => {
 		currentBaseline = v;
 		updateDiff();
@@ -277,6 +266,9 @@
 	let allRoundsTiny = false;
 	pendingReviewRounds.subscribe((v) => {
 		allRoundsTiny = v.length > 0 && v.every((r) => r.kind === 'tiny');
+		currentProposalText = v.length > 0 ? v[v.length - 1].afterMd : null;
+		hasPendingProposal = v.length > 0;
+		schedulePlainLineSync();
 		updateDiff();
 	});
 
@@ -289,9 +281,10 @@
 		if (!editor) return;
 		setDiffState(editor, {
 			baseline: currentBaseline,
+			proposedText: currentProposalText,
 			annotations: currentAnnotations.filter((annotation) => annotation.tabId === getCurrentTab()),
 			activeFeedbackRange: feedbackSelectionRange,
-			isPlainText: kind === 'plain',
+			isPlainText: true,
 			allRoundsTiny
 		});
 	}
@@ -345,17 +338,14 @@
 	 * │ user-edit   │ restart    │
 	 * └─────────────┴────────────┘
 	 *
-	 * `userMd.set(md)` still runs for local stores (outline, diff overlay)
-	 * but the markdown reaches disk via the WebSocket-driven server flush,
-	 * not an HTTP PUT from this component.
+	 * The server persists WebSocket updates; this component only restarts the
+	 * idle submit countdown for user-origin edits.
 	 */
 	function onEditorUpdate({ transaction }: { transaction: Transaction }) {
 		if (!editor) return;
 		schedulePlainLineSync();
 		const kind = classifyUpdate(transaction);
 		if (kind === 'yjs-remote') return;
-		const md = getEditorMarkdown();
-		userMd.set(md);
 		if (kind === 'user-edit') restartIdleCountdown();
 	}
 
@@ -363,27 +353,20 @@
 		// Wait for the Hocuspocus provider's initial sync to finish. The
 		// server is authoritative: it replays the tab's Yjs update log from
 		// SQLite (seeding from the workspace file on first open if the log
-		// is empty) and streams the result here before `synced` fires. If
-		// the Y.Doc is empty after sync, it's genuinely empty on the server
-		// and we should render an empty editor — NOT seed from a stale
-		// userMd that loadTab() primed from a debounced-stale disk file.
-		// Doing so silently re-inserts pre-edit content on top of any
-		// agent-side changes that have since happened (corrupting the doc
-		// as a user-origin update). The server-authoritative invariant is
-		// that the client never writes initial content into the Y.Doc.
+		// is empty) and streams the result here before `synced` fires.
 		const ydoc = getYDoc();
 		await whenYDocReady();
 
 		editor = new Editor({
 			element,
 			extensions: [
-				...collaborativeExtensions(ydoc, { placeholder: 'Start writing...', kind }),
+				...collaborativeExtensions(ydoc, { placeholder: 'Start writing...' }),
 				DiffOverlay
 			],
 			// Collaboration provides initial content from the Y.Doc; do NOT
 			// pass a string `content` here (doing so would wipe the Y.Doc).
 			editorProps: {
-				attributes: { class: `tiptap-content ${kind === 'plain' ? 'tiptap-plain' : ''}` },
+				attributes: { class: 'tiptap-content tiptap-plain' },
 				// Cmd/Ctrl+Enter wakes the agent immediately, skipping the
 				// idle countdown. Plain Enter still inserts a new line.
 				handleKeyDown: (_view, event) => {
@@ -419,15 +402,11 @@
 		editorRoot.addEventListener('pointerdown', handlePointerDown);
 		window.addEventListener('pointerup', handlePointerUp);
 
-		// Prime the store with the Y.Doc's current content so outline and
-		// other local readers see the live text on mount.
-		const initialMd = getEditorMarkdown();
-		userMd.set(initialMd);
 		schedulePlainLineSync();
 		updateDiff();
 		editor.on('update', ({ transaction }) => onEditorUpdate({ transaction }));
 
-		if (kind === 'plain' && typeof ResizeObserver !== 'undefined') {
+		if (typeof ResizeObserver !== 'undefined') {
 			plainResizeObserver = new ResizeObserver(() => schedulePlainLineSync());
 			plainResizeObserver.observe(editorRoot);
 		}
@@ -465,15 +444,13 @@
 	});
 
 	$effect(() => {
-		if (kind !== 'plain' || !editor) return;
+		if (!editor) return;
 		softWrap;
 		fontScale;
 		schedulePlainLineSync();
 	});
 
-	let rendering = $state(false);
 	isRendering.subscribe((v) => {
-		rendering = v;
 		if (v) {
 			if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
 			clearCountdown();
@@ -488,22 +465,18 @@
 
 <div
 	class="tiptap-wrapper"
-	class:plain-mode-wrapper={kind === 'plain'}
+	class:plain-mode-wrapper={true}
 	class:soft-wrap-enabled={softWrap}
 	style:--font-scale={fontScale}
 >
-	{#if kind === 'plain'}
-		<div class="plain-editor-shell" class:soft-wrap-enabled={softWrap}>
-			<div class="plain-line-gutter" aria-hidden="true">
-				{#each plainLineRows as line}
-					<div class="plain-line-number">{line}</div>
-				{/each}
-			</div>
-			<div class="tiptap-editor plain-mode" class:soft-wrap-enabled={softWrap} bind:this={element}></div>
+	<div class="plain-editor-shell" class:soft-wrap-enabled={softWrap}>
+		<div class="plain-line-gutter" aria-hidden="true">
+			{#each plainLineRows as line}
+				<div class="plain-line-number">{line}</div>
+			{/each}
 		</div>
-	{:else}
-		<div class="tiptap-editor" bind:this={element}></div>
-	{/if}
+		<div class="tiptap-editor plain-mode" class:soft-wrap-enabled={softWrap} bind:this={element}></div>
+	</div>
 	{#if feedbackPopup}
 		<div
 			class="feedback-popup"
@@ -752,10 +725,22 @@
 		color: var(--diff-added-color);
 		background: var(--diff-added-bg);
 	}
+	.tiptap-editor :global(.diff-added-line) {
+		display: block;
+		color: var(--diff-added-color);
+		background: var(--diff-added-bg);
+		white-space: pre-wrap;
+	}
 	.tiptap-editor :global(.diff-removed) {
 		color: var(--diff-removed-color);
 		text-decoration: line-through;
 		opacity: 0.7;
+	}
+	.tiptap-editor :global(.tiptap-plain p.diff-removed-line) {
+		color: var(--diff-removed-color);
+		background: color-mix(in srgb, var(--diff-removed-color) 10%, transparent);
+		text-decoration: line-through;
+		opacity: 0.72;
 	}
 	/* Ghost strikethrough widget for agent removals. The removed text isn't
 	 * in the editor's doc tree (the editor displays the live Y.Doc state),
@@ -780,6 +765,11 @@
 		border-bottom: 1px dotted color-mix(in srgb, var(--diff-added-color) 60%, transparent);
 	}
 	.tiptap-editor :global(.tiptap-plain p.diff-added-line.diff-added-line-tiny) {
+		color: var(--diff-added-color);
+		background: transparent;
+		border-bottom: 1px dotted color-mix(in srgb, var(--diff-added-color) 60%, transparent);
+	}
+	.tiptap-editor :global(.diff-added-line.diff-added-line-tiny) {
 		color: var(--diff-added-color);
 		background: transparent;
 		border-bottom: 1px dotted color-mix(in srgb, var(--diff-added-color) 60%, transparent);

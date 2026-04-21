@@ -1,5 +1,7 @@
-<script lang="ts">
+	<script lang="ts">
 	import { tick, onMount, onDestroy } from 'svelte';
+	import type { Unsubscriber } from 'svelte/store';
+	import * as Y from 'yjs';
 	import { fly } from 'svelte/transition';
 	import { cubicOut } from 'svelte/easing';
 	import {
@@ -13,13 +15,14 @@
 		RotateCcw
 	} from 'lucide-svelte';
 	import {
-		userMd,
+		activeTab,
 		proposedRules,
 		proposedHooks,
 		pendingReviewRounds,
 		pendingUserQuestions,
 		type PendingUserQuestion
 	} from '$lib/stores';
+	import { getYDocForTab } from '$lib/yjs-doc';
 	import type { ProposedRule, ProposedHook, PendingReviewRound } from '$lib/types';
 	import {
 		summarizeRound,
@@ -55,7 +58,62 @@
 	}: Props = $props();
 
 	let md = $state('');
-	userMd.subscribe((v) => (md = v));
+
+	function textOf(node: unknown): string {
+		if (node instanceof Y.XmlText) return node.toString();
+		if (node instanceof Y.XmlElement || node instanceof Y.XmlFragment) {
+			const parts: string[] = [];
+			(node as Y.XmlElement | Y.XmlFragment).forEach((child: unknown) => {
+				if (
+					child instanceof Y.XmlElement &&
+					typeof child.nodeName === 'string' &&
+					child.nodeName === 'hardBreak'
+				) {
+					parts.push('\n');
+					return;
+				}
+				parts.push(textOf(child));
+			});
+			return parts.join('');
+		}
+		return '';
+	}
+
+	function textFromFragment(fragment: Y.XmlFragment): string {
+		const lines: string[] = [];
+		fragment.forEach((child: unknown) => {
+			lines.push(textOf(child));
+		});
+		return lines.join('\n');
+	}
+
+	let activeTabUnsubscribe: Unsubscriber | null = null;
+	let observedFragment: Y.XmlFragment | null = null;
+	let observedHandler: (() => void) | null = null;
+
+	function detachOutlineObserver() {
+		if (observedFragment && observedHandler) {
+			observedFragment.unobserve(observedHandler);
+		}
+		observedFragment = null;
+		observedHandler = null;
+	}
+
+	function attachOutlineObserver(tabId: string | null) {
+		detachOutlineObserver();
+		if (!tabId) {
+			md = '';
+			return;
+		}
+		const fragment = getYDocForTab(tabId).getXmlFragment('default');
+		const sync = () => {
+			md = textFromFragment(fragment);
+		};
+		sync();
+		fragment.observe(sync);
+		observedFragment = fragment;
+		observedHandler = sync;
+	}
 
 	let rounds = $state<PendingReviewRound[]>([]);
 	pendingReviewRounds.subscribe((v) => (rounds = v));
@@ -130,9 +188,12 @@
 	let tickHandle: ReturnType<typeof setInterval> | null = null;
 	onMount(() => {
 		tickHandle = setInterval(() => (nowTick = Date.now()), 15_000);
+		activeTabUnsubscribe = activeTab.subscribe((tabId) => attachOutlineObserver(tabId));
 	});
 	onDestroy(() => {
 		if (tickHandle) clearInterval(tickHandle);
+		activeTabUnsubscribe?.();
+		detachOutlineObserver();
 	});
 
 	/** Short relative-time label for a round card. */

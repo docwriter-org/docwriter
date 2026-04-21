@@ -44,6 +44,12 @@ function readLiveTabMarkdown(tabId: string): string {
 	const hp = holder.__docwriterWsServer?.hocuspocus;
 	const liveDoc = hp?.documents?.get(tabId) as Y.Doc | undefined;
 	const ydoc = liveDoc ?? getTabYDoc(tabId).ydoc;
+	const reviewMap = ydoc.getMap('review');
+	const rounds = reviewMap.get('pendingRounds');
+	if (Array.isArray(rounds) && rounds.length > 0) {
+		const latest = rounds[rounds.length - 1] as { afterMd?: unknown };
+		if (typeof latest?.afterMd === 'string') return latest.afterMd;
+	}
 	return serializeYDocToMarkdown(ydoc);
 }
 
@@ -117,8 +123,8 @@ Every file is treated as raw text — including \`.md\` / \`.markdown\`. The edi
 - For the **open tab files** shown in each user turn, use \`edit_doc\` / \`write_doc\` / \`read_doc\` (NOT the built-in Edit / Write / Read). The \`path\` argument should be the tab id (shown in bold as \`\\\`tabid\\\`\`) or the absolute path shown in each file's "Path:" line.
 - \`edit_doc({ path, old_string, new_string })\` replaces exactly one occurrence. Fails if \`old_string\` is not found or matches more than once — in that case call \`read_doc(path)\` to see the current content and retry.
 - \`write_doc({ path, content })\` replaces the file's entire content. Only works for already-open tabs; does NOT create new ones.
-- \`read_doc(path)\` returns the live content of an open tab.
-- Each \`edit_doc\` / \`write_doc\` call lands atomically into the user's live document and shows up as a reviewable round in the outline. Its tool_result reflects reality (success = the user now sees your change).
+- \`read_doc(path)\` returns the current review-aware content of an open tab: the newest pending proposal if one exists, otherwise the committed content.
+- Each \`edit_doc\` / \`write_doc\` call creates or updates a reviewable proposal round in the outline. The live document changes only when the user accepts that proposal.
 - For files outside the open-tab list, read with the built-in \`Read\` / \`Glob\` / \`Grep\`, and for your scratch workspace under \`${AGENT_SCRATCH_DIR}/\` you may use either \`edit_doc\` / \`write_doc\` / \`read_doc\` (they fall through to plain filesystem I/O on scratch paths) or the built-in \`Edit\` / \`Write\` tools.
 - Preserve the user's voice — don't rewrite sentences that aren't broken.
 - Do NOT create new tab files. Only edit the files listed above.
@@ -131,15 +137,15 @@ If the request is genuinely ambiguous and has multiple reasonable directions (to
 
 ## What you can read vs. what you can write
 
-- **Read**: anywhere in the workspace. Use the built-in \`Read\` / \`Glob\` / \`Grep\` to explore the project freely (existing docs, references, code, hooks.json, whatever helps). For the open tabs shown in each user turn, prefer \`read_doc(path)\` — it returns the live Y.Doc content instead of whatever is on disk.
+- **Read**: anywhere in the workspace. Use the built-in \`Read\` / \`Glob\` / \`Grep\` to explore the project freely (existing docs, references, code, hooks.json, whatever helps). For the open tabs shown in each user turn, prefer \`read_doc(path)\` — it returns the current review-aware content instead of whatever is on disk.
 - **Write / Edit** has two channels:
-  1. **Open tabs** — use \`edit_doc\` / \`write_doc\` exclusively, with the tab id as \`path\`. These land in the live Y.Doc and become the user's reviewable round. The built-in \`Edit\` / \`Write\` tools are intentionally disabled for this render.
+  1. **Open tabs** — use \`edit_doc\` / \`write_doc\` exclusively, with the tab id as \`path\`. These create pending review rounds; the user's committed document only changes on Accept. The built-in \`Edit\` / \`Write\` tools are intentionally disabled for this render.
   2. **Your scratch space** at \`${AGENT_SCRATCH_DIR}/\` — any path under here. Use it for drafts, outlines, notes-to-self, intermediate passes. Either \`edit_doc\` / \`write_doc\` (they fall through to plain file I/O on scratch paths) or a subagent's shell tools work. Not surfaced to the user; persists across rounds in the same session; wiped on "New session". Think of it as your working memory.
 - For adding **hooks** → call \`propose_hook\`. For **rules** → \`propose_rule\`. Don't try to edit \`.docwriter/hooks.json\` directly.
 
 ## When to use subagents (Agent tool)
 
-You have the \`Agent\` tool (formerly \`Task\`; both names work). Use your judgment on when to fan out work to subagents — it's not free (each subagent is a full LLM call), but it can parallelise and isolate independent edits.
+You have the \`Agent\` tool. Use your judgment on when to fan out work to subagents — it's not free (each subagent is a full LLM call), but it can parallelise and isolate independent edits.
 
 Rough heuristics (guidelines, not rules):
 
@@ -197,12 +203,10 @@ function buildMultiTabPrompt(
 			const isActive = tabId === activeTabId;
 			const hasLastSeen = lastSeenMd !== null;
 			const hasDiff = hasLastSeen && lastSeenMd !== currentMd;
-			// Every file is plain text. The user keeps the original extension
-			// (.md / .txt / .json / etc.) — the editor doesn't render markdown
-			// or do any syntax-aware transformation. Inline content as a plain
-			// fenced block; the agent should preserve the user's exact text
-			// (including whatever markdown / JSON / code syntax it contains)
-			// when editing.
+			// Every file is treated as raw source text regardless of extension.
+			// Inline content as a plain fenced block; the agent should preserve
+			// the user's exact text (including any markdown / JSON / code
+			// syntax it contains) when editing.
 			const kindNote = '';
 			const fence = 'text';
 			const star = isActive ? '⭐ ' : '';
@@ -531,11 +535,7 @@ export const POST: RequestHandler = async ({ request }) => {
 									'Grep',
 									'WebSearch',
 									'WebFetch',
-									// Subagent invocation: renamed from Task → Agent in
-									// Claude Code v2.1.63. Include both for SDK version
-									// compatibility (init list still references Task).
 									'Agent',
-									'Task',
 									PROPOSE_RULE_TOOL_NAME,
 									PROPOSE_HOOK_TOOL_NAME,
 									ASK_USER_TOOL_NAME,

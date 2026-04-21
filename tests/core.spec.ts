@@ -94,7 +94,7 @@ test.describe('tabs: create, switch, isolate', () => {
 	});
 });
 
-test.describe('plain-text tabs', () => {
+test.describe('raw text editor', () => {
 	test('markdown syntax is preserved literally in .txt files', async ({
 		page,
 		isolatedServer

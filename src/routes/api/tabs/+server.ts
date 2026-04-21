@@ -5,13 +5,12 @@ import type { RequestHandler } from './$types';
 import {
 	isValidTabId,
 	tabFile,
-	tabKind,
 	ensureDocWriterDir
 } from '$lib/server/document-files';
 import { getTabsState, setTabsState } from '$lib/server/runtime-state';
 import { writeTextAtomic } from '$lib/server/file-utils';
 
-/** GET /api/tabs  →  { order, active, tabs: [{id, kind}] }
+/** GET /api/tabs  →  { order, active, tabs: string[] }
  *
  * The tabs list is the source of truth now (was: scan notes/). If a
  * tab's file no longer exists on disk (user deleted it externally), we
@@ -21,7 +20,7 @@ export const GET: RequestHandler = async () => {
 	return json({
 		order: state.order,
 		active: state.active,
-		tabs: state.order.map((id) => ({ id, kind: tabKind(id) }))
+		tabs: state.order
 	});
 };
 

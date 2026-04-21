@@ -11,9 +11,9 @@ import { runTabWrite } from '$lib/server/mcp-doc-tools';
  * Per-tab document endpoint.
  *
  * Post Phase 5+6: this endpoint is only used for:
- *   - `GET` — read the current on-disk markdown + JSON meta (rules /
+ *   - `GET` — read the current on-disk text + JSON meta (rules /
  *     agentSettings). Used by the client's initial `loadTab`.
- *   - `PUT` — persist `meta` (rules / agentSettings). `userMd` is ignored
+ *   - `PUT` — persist `meta` (rules / agentSettings). Content writes are ignored
  *     since Y.Doc sync owns editor content; the PUT is kept for meta-only
  *     writes from the AgentSettings / Rules panels.
  *
@@ -45,16 +45,16 @@ export const GET: RequestHandler = async ({ url }) => {
 	}
 	return json({
 		tabId,
-		userMd: readUserDoc(tabId),
+		content: readUserDoc(tabId),
 		meta: readMeta()
 	});
 };
 
 /**
- * Ignored `userMd` — the Y.Doc path delivers every keystroke over
- * WebSocket and the server writes the workspace file itself. A `meta`
- * payload (rules / agent settings) is still honored since those flow
- * through separate save paths.
+ * Content writes are ignored — the Y.Doc path delivers every keystroke over
+ * WebSocket and the server writes the workspace file itself. A `meta` payload
+ * (rules / agent settings) is still honored since those flow through separate
+ * save paths.
  */
 export const PUT: RequestHandler = async ({ request }) => {
 	try {

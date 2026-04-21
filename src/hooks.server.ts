@@ -9,23 +9,11 @@ import type { Handle } from '@sveltejs/kit';
 import { getSessionId, setSessionId } from '$lib/server/runtime-state';
 import { installBundledSkills } from '$lib/server/skills-install';
 import { createWsServer } from '$lib/server/ws-server';
-import { existsSync, unlinkSync } from 'fs';
-import { join } from 'path';
-import { DOCWRITER_DIR } from '$lib/server/document-files';
 
 // Install DocWriter's bundled project skill(s) into the workspace's
 // `.claude/skills/` dir so the SDK picks them up via the 'project'
 // settingSource. Idempotent — only overwrites the built-in skill files.
 installBundledSkills();
-
-// `state.json` used to mirror runtime state that now lives in SQLite. Drop
-// the obsolete file so the workspace stops carrying dead duplicate state.
-try {
-	const obsoleteStateFile = join(DOCWRITER_DIR, 'state.json');
-	if (existsSync(obsoleteStateFile)) unlinkSync(obsoleteStateFile);
-} catch (err) {
-	console.error('[docwriter] failed to remove obsolete state.json:', err);
-}
 
 // Phase 2: start the Hocuspocus WebSocket Y.Doc sync server on a separate
 // port alongside Vite's HTTP server. Module-scope singleton guard keeps

@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { X, FileText, FileCode } from 'lucide-svelte';
-	import { tabs, activeTab, type TabInfo } from '$lib/stores';
+	import { X, FileCode } from 'lucide-svelte';
+	import { tabs, activeTab } from '$lib/stores';
 
 	interface Props {
 		onSwitch: (id: string) => void | Promise<void>;
@@ -17,7 +17,7 @@
 	}
 	let { onSwitch, onClose, onDelete, onRename, pendingTabs }: Props = $props();
 
-	let tabList: TabInfo[] = $state([]);
+	let tabList: string[] = $state([]);
 	tabs.subscribe((v) => (tabList = v));
 
 	let active = $state<string | null>(null);
@@ -142,14 +142,13 @@
 </script>
 
 <div class="tab-bar" role="tablist">
-	{#each tabList as { id, kind }}
+	{#each tabList as id}
 		<!-- svelte-ignore a11y_click_events_have_key_events -->
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<div
 			class="tab"
 			class:active={id === active}
 			class:pending={(pendingTabs?.get(id) ?? 0) > 0}
-			class:plain={kind === 'plain'}
 			role="tab"
 			tabindex={id === active ? 0 : -1}
 			aria-selected={id === active}
@@ -158,11 +157,7 @@
 			oncontextmenu={(e) => openMenu(e, id)}
 			title={id}
 		>
-			{#if kind === 'plain'}
-				<FileCode size={11} />
-			{:else}
-				<FileText size={11} />
-			{/if}
+			<FileCode size={11} />
 			{#if renamingId === id}
 				<input
 					class="tab-rename"

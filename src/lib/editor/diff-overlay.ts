@@ -1,7 +1,7 @@
 import { Editor, Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
-import { diffWords } from 'diff';
+import { diffLines, diffWords } from 'diff';
 import type { Annotation } from '$lib/types';
 import { buildReviewDiffPreview, normalizeReviewText } from '$lib/review-diff';
 
@@ -22,6 +22,7 @@ import { buildReviewDiffPreview, normalizeReviewText } from '$lib/review-diff';
 
 export interface DiffState {
 	baseline: string | null;
+	proposedText?: string | null;
 	annotations?: Annotation[];
 	activeFeedbackRange?: { from: number; to: number } | null;
 	isPlainText?: boolean;
@@ -34,6 +35,7 @@ export interface DiffState {
 const diffKey = new PluginKey<DiffState>('diffOverlay');
 	const INITIAL_STATE: DiffState = {
 	baseline: null,
+	proposedText: null,
 	annotations: [],
 	activeFeedbackRange: null,
 	isPlainText: false,
@@ -62,15 +64,17 @@ export const DiffOverlay = Extension.create({
 					decorations(state) {
 						const {
 							baseline,
+							proposedText,
 							annotations = [],
 							activeFeedbackRange,
 							isPlainText,
 							allRoundsTiny
 						} = diffKey.getState(state) ?? INITIAL_STATE;
 						const addedClass = allRoundsTiny ? 'diff-added diff-added-tiny' : 'diff-added';
-						const removedClass = allRoundsTiny
+						const removedWidgetClass = allRoundsTiny
 							? 'diff-removed-widget diff-removed-tiny'
 							: 'diff-removed-widget';
+						const removedInlineClass = 'diff-removed';
 						const annotationClass = 'feedback-annotation';
 						const activeFeedbackClass = 'feedback-selection';
 
@@ -82,15 +86,6 @@ export const DiffOverlay = Extension.create({
 						// exclusions from the agent-added pass below; without a
 						// baseline there is nothing to compare against.
 						if (baseline === null) {
-							return DecorationSet.create(state.doc, decorations);
-						}
-
-						if (isPlainText) {
-							// Plain-text review cards are currently the source of truth
-							// for add/remove hunks. The in-editor plain-text overlay was
-							// still producing misleading line highlights during the
-							// ongoing refactor, so keep the editor honest by rendering
-							// only annotations/selection there for now.
 							return DecorationSet.create(state.doc, decorations);
 						}
 
@@ -109,50 +104,131 @@ export const DiffOverlay = Extension.create({
 							return true;
 						});
 
-						// ── Agent diff: editor (current) vs baseline ─────────────
+						// ── Agent diff overlay ──────────────────────────────────
 						if (baseline !== null) {
-							const baselinePlain = markdownToPlain(baseline);
+							const baselinePlain = isPlainText
+								? normalizeReviewText(baseline).replace(/\n/g, '')
+								: markdownToPlain(baseline);
+							const targetPlain =
+								proposedText !== null && proposedText !== undefined
+									? isPlainText
+										? normalizeReviewText(proposedText).replace(/\n/g, '')
+										: markdownToPlain(proposedText)
+									: plainText;
 
-							if (baselinePlain !== plainText) {
-								const parts = diffWords(baselinePlain, plainText);
-								let editorIdx = 0;
+							if (baselinePlain !== targetPlain) {
+								const parts = diffWords(baselinePlain, targetPlain);
 
-								for (const part of parts) {
-									if (part.added) {
-										// Text is in the editor but not in baseline → addition.
-										applyInlineClassRange(
-											decorations,
-											charPositions,
-											editorIdx,
-											editorIdx + part.value.length,
-											addedClass
-										);
-										editorIdx += part.value.length;
-									} else if (part.removed) {
-										// Text is in baseline but not in editor → agent
-										// removed it. Not present in the doc tree; render as
-										// a ghost widget with strikethrough.
-										const editorPos = resolveWidgetPos(charPositions, editorIdx);
-										if (editorPos >= 0) {
-											const value = part.value;
-											decorations.push(
-												Decoration.widget(
-													editorPos,
-													() => {
-														const span = document.createElement('span');
-														span.className = removedClass;
-														span.textContent = value;
-														span.setAttribute('contenteditable', 'false');
-														return span;
-													},
-													{ side: -1 }
-												)
-											);
+								if (proposedText !== null && proposedText !== undefined && isPlainText) {
+									const paragraphs = paragraphRanges(state.doc);
+									const lineParts = diffLines(normalizeReviewText(baseline), normalizeReviewText(proposedText));
+									let baselineLineIdx = 0;
+									for (const part of lineParts) {
+										const lines = splitLogicalLines(part.value);
+										if (part.added) {
+											const widgetPos = resolveParagraphWidgetPos(state.doc.content.size, paragraphs, baselineLineIdx);
+											for (const line of lines) {
+												decorations.push(
+													Decoration.widget(
+														widgetPos,
+														() => {
+															const block = document.createElement('div');
+															block.className = allRoundsTiny
+																? 'diff-added-line diff-added-line-tiny'
+																: 'diff-added-line';
+															block.textContent = line || ' ';
+															block.setAttribute('contenteditable', 'false');
+															return block;
+														},
+														{ side: -1 }
+													)
+												);
+											}
+											continue;
 										}
-										// Don't advance editorIdx — removed text isn't in editor.
-									} else {
-										// same — advance editor cursor
-										editorIdx += part.value.length;
+										if (part.removed) {
+											for (const _line of lines) {
+												const paragraph = paragraphs[baselineLineIdx];
+												if (paragraph) {
+													decorations.push(
+														Decoration.node(paragraph.pos, paragraph.pos + paragraph.nodeSize, {
+															class: 'diff-removed-line'
+														})
+													);
+												}
+												baselineLineIdx += 1;
+											}
+											continue;
+										}
+										baselineLineIdx += lines.length;
+									}
+								} else if (proposedText !== null && proposedText !== undefined) {
+									let baselineIdx = 0;
+									for (const part of parts) {
+										if (part.added) {
+											const editorPos = resolveWidgetPos(charPositions, baselineIdx);
+											if (editorPos >= 0) {
+												const value = part.value;
+												decorations.push(
+													Decoration.widget(
+														editorPos,
+														() => {
+															const span = document.createElement('span');
+															span.className = addedClass;
+															span.textContent = value;
+															span.setAttribute('contenteditable', 'false');
+															return span;
+														},
+														{ side: -1 }
+													)
+												);
+											}
+										} else if (part.removed) {
+											applyInlineClassRange(
+												decorations,
+												charPositions,
+												baselineIdx,
+												baselineIdx + part.value.length,
+												removedInlineClass
+											);
+											baselineIdx += part.value.length;
+										} else {
+											baselineIdx += part.value.length;
+										}
+									}
+								} else {
+									let editorIdx = 0;
+									for (const part of parts) {
+										if (part.added) {
+											applyInlineClassRange(
+												decorations,
+												charPositions,
+												editorIdx,
+												editorIdx + part.value.length,
+												addedClass
+											);
+											editorIdx += part.value.length;
+										} else if (part.removed) {
+											const editorPos = resolveWidgetPos(charPositions, editorIdx);
+											if (editorPos >= 0) {
+												const value = part.value;
+												decorations.push(
+													Decoration.widget(
+														editorPos,
+														() => {
+															const span = document.createElement('span');
+															span.className = removedWidgetClass;
+															span.textContent = value;
+															span.setAttribute('contenteditable', 'false');
+															return span;
+														},
+														{ side: -1 }
+													)
+												);
+											}
+										} else {
+											editorIdx += part.value.length;
+										}
 									}
 								}
 							}
@@ -240,6 +316,29 @@ function applyInlineClassRange(
 function resolveWidgetPos(charPositions: number[], idx: number): number {
 	if (idx < charPositions.length) return charPositions[idx];
 	return (charPositions[charPositions.length - 1] ?? 0) + 1;
+}
+
+function splitLogicalLines(value: string): string[] {
+	const lines = value.split('\n');
+	if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+	return lines.length > 0 ? lines : [''];
+}
+
+function paragraphRanges(doc: any): Array<{ pos: number; nodeSize: number }> {
+	const ranges: Array<{ pos: number; nodeSize: number }> = [];
+	doc.forEach((node: any, offset: number) => {
+		ranges.push({ pos: offset, nodeSize: node.nodeSize });
+	});
+	return ranges;
+}
+
+function resolveParagraphWidgetPos(
+	docEnd: number,
+	paragraphs: Array<{ pos: number; nodeSize: number }>,
+	lineIdx: number
+): number {
+	if (lineIdx < paragraphs.length) return paragraphs[lineIdx].pos;
+	return docEnd;
 }
 
 /** Strip markdown syntax to plain text, matching node.textContent semantics. */

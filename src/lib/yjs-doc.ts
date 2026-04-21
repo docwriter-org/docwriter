@@ -9,8 +9,7 @@ import { HocuspocusProvider } from '@hocuspocus/provider';
  *
  * Each Y.Doc holds:
  *   - an XmlFragment named `default` (the editor content, via y-prosemirror)
- *   - a Y.Map named `review` with `pendingRounds` (plus legacy `baseline` /
- *     `preAgent` strings for backward compatibility)
+ *   - a Y.Map named `review` with `pendingRounds`
  *
  * Phase 3: IndexedDB persistence is gone. The server is the single source
  * of truth — it replays each tab's Yjs update log from SQLite on first
@@ -114,9 +113,8 @@ export function getXmlFragment(): Y.XmlFragment {
 	return requireCurrent().ydoc.getXmlFragment(FRAGMENT_NAME);
 }
 
-/** The current tab's review map. Values are serializable JSON — legacy keys
- * like `baseline`/`preAgent` hold strings, and `pendingRounds` holds an
- * array of PendingReviewRound objects. */
+/** The current tab's review map. Values are serializable JSON;
+ * `pendingRounds` holds an array of PendingReviewRound objects. */
 export function getReviewMap(): Y.Map<unknown> {
 	return requireCurrent().ydoc.getMap(REVIEW_MAP_NAME);
 }

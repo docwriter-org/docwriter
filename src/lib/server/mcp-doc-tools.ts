@@ -5,43 +5,29 @@
  *   - **Scratch path** (`.docwriter/agent/scratch/...`) → plain filesystem
  *     I/O. Nothing the user sees; no Y.Doc involvement.
  *   - **Open tab** (workspace-relative id or absolute path to the real file)
- *     → Hocuspocus `openDirectConnection` + `document.transact(...,
- *     AGENT_ORIGIN)`. Mutating the registry Y.Doc wouldn't reach the browser
- *     because Hocuspocus copies state into its own internal `Document` on
- *     first load; the live Document is the only authoritative copy.
+ *     → Hocuspocus `openDirectConnection` + append a pending review round
+ *     into the live Document's `review` map. The live document content does
+ *     NOT change until the user accepts a round.
  *   - **Unknown path** → isError:true with a clear message. `write_doc`
  *     never creates new tabs.
  *
- * The replacement + review-round map write happen inside one
- * `document.transact(..., AGENT_ORIGIN)` so clients receive them as a single
- * Yjs update — the content change and the pending review card land atomically.
- *
- * Coarse full-replace delta: rather than trying to convert a string offset
- * into a ProseMirror position, we bind a headless Tiptap editor (the same
- * `collaborativeExtensions`-equivalent used elsewhere on the server) to the
- * live document and call `setContent(newMd, { emitUpdate: false })`. The
- * ySyncPlugin translates the PM diff into the minimal Yjs ops inside our
- * transact. That's coarser than an in-place splice but correct — user ops
- * outside the changed region are preserved by the CRDT's item-level merge.
+ * Agent edits are review proposals, not live-doc mutations. The proposal
+ * round lands in the document's review map immediately; Accept later commits
+ * the chosen `afterMd` into the live Y.Doc.
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
-import { Editor } from '@tiptap/core';
-import Collaboration from '@tiptap/extension-collaboration';
 import * as Y from 'yjs';
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import type { Document } from '@hocuspocus/server';
 
-import { AGENT_ORIGIN } from './ydoc-registry';
 import { serializeYDocToMarkdown } from './ydoc-markdown';
-import { plainBaseExtensions } from '$lib/editor-extensions';
 import { isScratchPath, resolveTabFromPath, isOpenTab } from './path-router';
 import { classifyRoundKind } from '$lib/review-diff';
 import type { PendingReviewRound } from '$lib/types';
 
-const FRAGMENT_NAME = 'default';
 const REVIEW_MAP_NAME = 'review';
 
 function toolError(message: string): CallToolResult {
@@ -94,12 +80,21 @@ interface TabWriteResult {
 	afterMd: string;
 }
 
+function getPendingRounds(doc: Y.Doc): PendingReviewRound[] {
+	const reviewMap = doc.getMap(REVIEW_MAP_NAME);
+	const existing = reviewMap.get('pendingRounds');
+	return Array.isArray(existing) ? (existing as PendingReviewRound[]) : [];
+}
+
+function currentProposalText(doc: Y.Doc): string {
+	const existing = getPendingRounds(doc);
+	return existing.length > 0 ? existing[existing.length - 1].afterMd : serializeYDocToMarkdown(doc);
+}
+
 /** Run a write-transaction against the live Hocuspocus Document for `tabId`.
- * `mutator` receives the current text and returns the new text string, or
- * null to abort (no write, no review round). The new content is written
- * directly into the Y.Doc as plain-text paragraph elements (one per line)
- * inside `document.transact(..., AGENT_ORIGIN)` alongside the review-map
- * update so clients receive one atomic Yjs update. */
+ * `mutator` receives the current proposal text (latest pending `afterMd`, or
+ * the committed live doc if no proposal is pending) and returns the next
+ * proposal string, or null to abort. */
 export async function runTabWrite(
 	tabId: string,
 	trigger: PendingReviewRound['trigger'],
@@ -114,7 +109,7 @@ export async function runTabWrite(
 	try {
 		await direct.transact((document) => {
 			const doc = document as unknown as Y.Doc;
-			const beforeMd = serializeYDocToMarkdown(doc);
+			const beforeMd = currentProposalText(doc);
 			const afterMd = mutator(beforeMd);
 			if (afterMd === null) {
 				result = { error: 'mutator-aborted' };
@@ -126,40 +121,8 @@ export async function runTabWrite(
 				return;
 			}
 			doc.transact(() => {
-				// Rebuild the live fragment through the same plain-text PM schema
-				// the browser uses. This keeps multiline source edits aligned with
-				// the collaboration binding instead of hand-authoring Y.Xml nodes.
-				const lines = afterMd.split('\n');
-				const headless = new Editor({
-					extensions: [
-						...plainBaseExtensions(),
-						Collaboration.configure({ document: doc, field: FRAGMENT_NAME })
-					]
-				});
-				try {
-					headless.commands.setContent(
-						{
-							type: 'doc',
-							content: lines.map((line) =>
-								line.length === 0
-									? { type: 'paragraph' }
-									: {
-											type: 'paragraph',
-											content: [{ type: 'text', text: line }]
-										}
-							)
-						},
-						{ emitUpdate: false }
-					);
-				} finally {
-					headless.destroy();
-				}
-
-				// Append a pending review round in the same transact so the
-				// browser receives content + review card as one update.
 				const reviewMap = doc.getMap(REVIEW_MAP_NAME);
-				const existing =
-					(reviewMap.get('pendingRounds') as PendingReviewRound[] | undefined) ?? [];
+				const existing = getPendingRounds(doc);
 				const round: PendingReviewRound = {
 					id: cryptoRandomId(),
 					beforeMd,
@@ -170,7 +133,7 @@ export async function runTabWrite(
 					stepCount: 1
 				};
 				reviewMap.set('pendingRounds', [...existing, round]);
-			}, AGENT_ORIGIN);
+			}, 'agent');
 			result = { beforeMd, afterMd };
 		});
 	} finally {
@@ -239,7 +202,7 @@ function editScratch(path: string, oldString: string, newString: string): CallTo
 
 const editDocTool = tool(
 	'edit_doc',
-	'Replace `old_string` with `new_string` in the given file. For an open tab (.md/plain file the user has open), this goes straight into the live Y.Doc as an atomic agent-origin change and a reviewable round appears in the outline. For a file under `.docwriter/agent/scratch/` it writes plain text. Fails if `old_string` is not found or matches more than once.',
+	'Replace `old_string` with `new_string` in the given file. For an open tab, this creates or updates a pending review proposal; the live document changes only after the user accepts it. For a file under `.docwriter/agent/scratch/` it writes plain text. Fails if `old_string` is not found or matches more than once.',
 	{
 		path: z
 			.string()
@@ -286,7 +249,7 @@ const editDocTool = tool(
 
 const readDocTool = tool(
 	'read_doc',
-	'Read the current content of an open tab or a scratch file. For tabs, returns the live Y.Doc content (matches what the user sees). For scratch, returns the file from disk.',
+	'Read the current content of an open tab or a scratch file. For tabs, returns the latest review-aware content: the newest pending proposal if one exists, otherwise the committed live document.',
 	{
 		path: z
 			.string()
@@ -312,7 +275,7 @@ const readDocTool = tool(
 		try {
 			let content = '';
 			await direct.transact((document) => {
-				content = serializeYDocToMarkdown(document as unknown as Y.Doc);
+				content = currentProposalText(document as unknown as Y.Doc);
 			});
 			return { content: [{ type: 'text', text: content }] };
 		} catch (err) {
@@ -325,7 +288,7 @@ const readDocTool = tool(
 
 const writeDocTool = tool(
 	'write_doc',
-	'Replace the entire content of an open tab or a scratch file. For tabs, this lands as one atomic agent-origin change and emits a single reviewable round. write_doc does NOT create new tabs — the target must already be open.',
+	'Replace the entire content of an open tab or a scratch file. For tabs, this creates a pending review proposal without mutating the committed live document until Accept. write_doc does NOT create new tabs — the target must already be open.',
 	{
 		path: z
 			.string()

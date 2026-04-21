@@ -12,21 +12,11 @@ import type {
 
 // ── Document state ────────────────────────────────────────────────────
 // The canonical client state is a Y.Doc (see src/lib/yjs-doc.ts) bound into
-// the Tiptap editor via @tiptap/extension-collaboration. The stores below
-// are derived projections used by components that don't touch the editor
-// directly (the Outline pane, the server autosave loop, the diff overlay).
+// the Tiptap editor via @tiptap/extension-collaboration.
 
-/** Current editor markdown, projected from the live Y.Doc after each update.
- * Used for: outline TOC, server autosave, `lastMarkdown` on render submit. */
-export const userMd = writable<string>('');
-
-/** Snapshot of `userMd` captured at render start. The diff overlay compares
- * the current editor content against this baseline to highlight what the
- * agent changed. Null when no review is pending.
- *
- * Accept: set to null (changes are already in the Y.Doc; nothing to commit).
- * Reject: the server rewinds agent-origin Yjs ops via its live-doc
- * UndoManager, then this baseline is cleared. */
+/** Baseline text for the active tab's pending review stack. The diff overlay
+ * compares the live editor content against this string. Null when no review
+ * is pending. */
 export const reviewBaseline = writable<string | null>(null);
 
 /** Pending agent-edit rounds for the ACTIVE tab, oldest first. Each round
@@ -35,12 +25,6 @@ export const reviewBaseline = writable<string | null>(null);
  * removes just that round; rejecting a round rewinds to its beforeMd
  * (also dropping all later rounds). */
 export const pendingReviewRounds = writable<PendingReviewRound[]>([]);
-
-/** Legacy: snapshot of the editor's markdown before the first pending
- * round's agent ops landed. Today it's simply `rounds[0].beforeMd`. Kept
- * as a separate store for backward-compat with code paths (and the diff
- * overlay) that still read it directly. Null when no review is pending. */
-export const preAgentSnapshot = writable<string | null>(null);
 
 /** Writing rules (mirror of document.meta.json rules). */
 export const rules = writable<Rule[]>([]);
@@ -82,9 +66,8 @@ export const submitCountdown = writable<number>(0);
 
 /** User preference: editor font size scale (1.0 = default 17px). */
 export const editorFontScale = writable<number>(1.0);
-/** User preference: wrap long lines in the editor. Primarily affects
- * plain-text tabs, where wrapping keeps logical line numbers in the gutter
- * while continuation rows render as blanks. */
+/** User preference: wrap long lines in the editor while keeping logical line
+ * numbers aligned in the gutter and continuation rows blank. */
 export const editorSoftWrap = writable<boolean>(false);
 
 // ── Actions toolbar ───────────────────────────────────────────────────
@@ -186,27 +169,15 @@ export function pushHistory(entry: HistoryEntry) {
 
 // ── Tabs ──────────────────────────────────────────────────────────────
 //
-// Each tab is a markdown file under `notes/`. The active tab's Y.Doc is
+// Each tab is a workspace-relative text file. The active tab's Y.Doc is
 // bound into the editor; switching tabs tears down the editor and rebuilds
-// it against the new tab's Y.Doc (with its own IndexedDB store, undo
+// it against the new tab's Y.Doc (with its own Yjs state, undo
 // history, and review state).
-
-export type TabKind = 'markdown' | 'plain';
-export interface TabInfo {
-	/** Workspace-relative path — e.g. "drafts/chapter-1.md", "script.py". */
-	id: string;
-	kind: TabKind;
-}
-
-/** Ordered list of tab descriptors (id + kind). Kind drives editor mode:
- * `.md` tabs render as markdown; other text extensions render as plain. */
-export const tabs = writable<TabInfo[]>([]);
+/** Ordered list of workspace-relative tab paths. */
+export const tabs = writable<string[]>([]);
 /** Which tab the editor is currently showing. null on a fresh install with
  * no tabs yet — the bootstrap flow creates a default tab. */
 export const activeTab = writable<string | null>(null);
-/** Kind of the currently active tab (derived from the tabs list + activeTab).
- * Components read this to pick the editor extension set. */
-export const activeTabKind = writable<TabKind>('markdown');
 
 // ── Preferences ───────────────────────────────────────────────────────
 

@@ -8,13 +8,34 @@
  * line of the file becomes one `<paragraph>` XmlElement.
  */
 import * as Y from 'yjs';
+import { Schema } from 'prosemirror-model';
+import { prosemirrorJSONToYXmlFragment } from 'y-prosemirror';
 
 const FRAGMENT_NAME = 'default';
+const plainTextSchema = new Schema({
+	nodes: {
+		doc: { content: 'block*' },
+		paragraph: { group: 'block', content: 'text*' },
+		text: { group: 'inline' }
+	},
+	marks: {}
+});
+
+export function plainTextToPmJson(text: string): Record<string, unknown> {
+	return {
+		type: 'doc',
+		content: text.split('\n').map((line) =>
+			line.length === 0
+				? { type: 'paragraph' }
+				: { type: 'paragraph', content: [{ type: 'text', text: line }] }
+		)
+	};
+}
 
 /** Serialize a Y.Doc's `default` XmlFragment to plain text — paragraphs
  * joined by '\n', `<hardBreak/>` children rendered as their own '\n' inside
  * a paragraph. Round-trips byte-identically with `seedYDocFromContent`. */
-export function serializeYDocToMarkdown(ydoc: Y.Doc, _kind?: 'markdown' | 'plain'): string {
+export function serializeYDocToMarkdown(ydoc: Y.Doc): string {
 	const fragment = ydoc.getXmlFragment(FRAGMENT_NAME);
 	const lines: string[] = [];
 	fragment.forEach((child) => {
@@ -47,22 +68,22 @@ function textOf(node: unknown): string {
  * if the fragment is already populated — seeding a non-empty doc would
  * produce merge garbage.
  *
- * Server-side mirror of `seedYDocFromContent` in src/lib/yjs-markdown.ts.
  * One paragraph per `\n`-delimited line; empty lines become empty paragraphs. */
-export function seedYDocFromContent(
-	ydoc: Y.Doc,
-	content: string,
-	_kind?: 'markdown' | 'plain'
-): void {
+export function seedYDocFromContent(ydoc: Y.Doc, content: string): void {
 	const fragment = ydoc.getXmlFragment(FRAGMENT_NAME);
 	if (fragment.length > 0) return;
 	if (!content) return;
+	prosemirrorJSONToYXmlFragment(plainTextSchema, plainTextToPmJson(content), fragment);
+}
 
-	const lines = content.split('\n');
-	const elements = lines.map((line) => {
-		const p = new Y.XmlElement('paragraph');
-		if (line.length > 0) p.insert(0, [new Y.XmlText(line)]);
-		return p;
-	});
-	fragment.insert(0, elements);
+/** Replace a Y.Doc's `default` XmlFragment with the plain-text schema shape
+ * produced by y-prosemirror itself. This avoids hand-building XmlElements in
+ * a way the bound collaboration client may later normalize back out. */
+export function replaceYDocText(ydoc: Y.Doc, content: string): void {
+	const fragment = ydoc.getXmlFragment(FRAGMENT_NAME);
+	if (fragment.length > 0) {
+		fragment.delete(0, fragment.length);
+	}
+	if (!content) return;
+	prosemirrorJSONToYXmlFragment(plainTextSchema, plainTextToPmJson(content), fragment);
 }

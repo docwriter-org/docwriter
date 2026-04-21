@@ -22,6 +22,8 @@ import type { Document } from '@hocuspocus/server';
 import * as Y from 'yjs';
 import type { PendingReviewRound } from '$lib/types';
 import { AGENT_ORIGIN } from './ydoc-registry';
+import { serializeYDocToMarkdown } from './ydoc-markdown';
+import { applyTextToYDoc } from './ydoc-apply';
 import {
 	appendUpdate,
 	replayUpdatesInto,
@@ -186,50 +188,42 @@ export function flushTabMarkdownNow(tabId: string) {
 }
 
 /** Accept one pending review round (or all of them) on the server-
- * authoritative Y.Doc so the mutation is durably persisted before the UI
- * clears. This avoids a hard refresh racing ahead of the browser's
- * WebSocket send and resurrecting already-accepted review cards. */
+ * authoritative Y.Doc. Pending rounds are proposals only; Accept commits the
+ * chosen `afterMd` into the live Y.Doc and drops the accepted rounds. */
 export async function acceptTabRounds(
 	tabId: string,
 	roundId?: string
 ): Promise<{ acceptedCount: number; rounds: PendingReviewRound[] }> {
 	const server = globalHolder().__docwriterWsServer;
 	const applyAccept = (ydoc: Y.Doc) => {
-		let result: { acceptedCount: number; rounds: PendingReviewRound[] } = {
-			acceptedCount: 0,
-			rounds: []
-		};
+		const reviewMap = ydoc.getMap('review');
+		const currentRaw = reviewMap.get('pendingRounds');
+		const current = Array.isArray(currentRaw)
+			? (currentRaw as PendingReviewRound[])
+			: [];
+		let next: PendingReviewRound[];
+		let commitTarget: string | null = null;
+		if (!roundId) {
+			if (current.length > 0) commitTarget = current[current.length - 1].afterMd;
+			next = [];
+		} else {
+			const idx = current.findIndex((round) => round.id === roundId);
+			if (idx < 0) {
+				return { acceptedCount: 0, rounds: current };
+			}
+			commitTarget = current[idx].afterMd;
+			next = current.slice(idx + 1);
+		}
+		if (commitTarget !== null && serializeYDocToMarkdown(ydoc) !== commitTarget) {
+			applyTextToYDoc(ydoc, commitTarget);
+		}
 		ydoc.transact(() => {
-			const reviewMap = ydoc.getMap('review');
-			const currentRaw = reviewMap.get('pendingRounds');
-			const current = Array.isArray(currentRaw)
-				? (currentRaw as PendingReviewRound[])
-				: [];
-			let next: PendingReviewRound[];
-			if (!roundId) {
-				next = [];
-			} else {
-				const idx = current.findIndex((round) => round.id === roundId);
-				if (idx < 0) {
-					result = { acceptedCount: 0, rounds: current };
-					return;
-				}
-				next = current.slice(idx + 1);
-			}
-			result = {
-				acceptedCount: current.length - next.length,
-				rounds: next
-			};
 			reviewMap.set('pendingRounds', next);
-			if (next.length === 0) {
-				reviewMap.set('baseline', null);
-				reviewMap.set('preAgent', null);
-			} else {
-				reviewMap.set('baseline', next[0].beforeMd);
-				reviewMap.set('preAgent', next[0].beforeMd);
-			}
 		}, 'user');
-		return result;
+		return {
+			acceptedCount: current.length - next.length,
+			rounds: next
+		};
 	};
 
 	if (server?.hocuspocus) {
@@ -262,25 +256,15 @@ export async function acceptTabRounds(
 	return result;
 }
 
-/** Reject one pending review round (or all of them). Rejecting undoes the
- * agent-origin transactions that produced the round's content via the
- * server-side UndoManager, then drops the round from the review map.
- *
- * Reject MUST run on the server, not the client: agent edits arrive at the
- * browser via Hocuspocus sync with the provider's internal origin, not
- * AGENT_ORIGIN, so a client-side UndoManager tracking AGENT_ORIGIN can't see
- * them. The server IS where the AGENT_ORIGIN transact happened, so its
- * UndoManager has the stack items. */
+/** Reject one pending review round (or all of them). Pending rounds are only
+ * proposals, so Reject just drops the selected proposal stack; the committed
+ * live document content stays as-is. */
 export async function rejectTabRounds(
 	tabId: string,
 	roundId?: string
 ): Promise<{ rejectedCount: number; rounds: PendingReviewRound[] }> {
 	const server = globalHolder().__docwriterWsServer;
 	if (!server?.hocuspocus) {
-		// No live connection — nothing meaningful to undo (the UndoManager
-		// lives with the Hocuspocus Document). Fall back to deleting the
-		// rounds without rewinding content; the next real reject on a live
-		// connection will behave correctly.
 		const ydoc = new Y.Doc();
 		replayUpdatesInto(ydoc, tabId);
 		const before = Y.encodeStateVector(ydoc);
@@ -305,13 +289,6 @@ export async function rejectTabRounds(
 			rejectedCount = current.length - next.length;
 			rounds = next;
 			reviewMap.set('pendingRounds', next);
-			if (next.length === 0) {
-				reviewMap.set('baseline', null);
-				reviewMap.set('preAgent', null);
-			} else {
-				reviewMap.set('baseline', next[0].beforeMd);
-				reviewMap.set('preAgent', next[0].beforeMd);
-			}
 		}, 'user');
 		const update = Y.encodeStateAsUpdate(ydoc, before);
 		if (update.length > 0) appendUpdate(tabId, update, 'user');
@@ -325,7 +302,6 @@ export async function rejectTabRounds(
 		let rounds: PendingReviewRound[] = [];
 		await direct.transact((document) => {
 			const ydoc = document as unknown as Y.Doc;
-			const undoManager = ensureUndoManager(tabId, ydoc);
 			const reviewMap = ydoc.getMap('review');
 			const current =
 				(reviewMap.get('pendingRounds') as PendingReviewRound[] | undefined) ?? [];
@@ -340,28 +316,13 @@ export async function rejectTabRounds(
 					rounds = current;
 					return;
 				}
-				// Per the FIFO reject policy: rejecting round idx also rejects
-				// every later round (their content stacks on top and can't be
-				// kept without this one). Rewind their undo steps in reverse.
 				rejected = current.slice(idx);
 				keep = current.slice(0, idx);
-			}
-
-			const totalSteps = rejected.reduce((s, r) => s + (r.stepCount || 1), 0);
-			for (let i = 0; i < totalSteps; i++) {
-				if (!undoManager.undo()) break;
 			}
 
 			rejectedCount = rejected.length;
 			rounds = keep;
 			reviewMap.set('pendingRounds', keep);
-			if (keep.length === 0) {
-				reviewMap.set('baseline', null);
-				reviewMap.set('preAgent', null);
-			} else {
-				reviewMap.set('baseline', keep[0].beforeMd);
-				reviewMap.set('preAgent', keep[0].beforeMd);
-			}
 		});
 		return { rejectedCount, rounds };
 	} finally {

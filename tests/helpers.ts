@@ -64,12 +64,9 @@ export async function switchTab(page: Page, name: string) {
 
 /**
  * Set editor content, preserving line structure. `setContent(string)` on a
- * Tiptap editor treats raw strings as HTML by default, which mangles multi-
- * line markdown and collapses newlines in plain tabs. Branch on the active
- * tab's schema: markdown tabs route through tiptap-markdown's parser (via
- * `setContent(markdown)` — the Markdown extension overrides the command);
- * plain tabs build PM JSON directly (one paragraph per line) to mirror
- * `plainTextToPMJson` in production.
+ * Tiptap editor treats raw strings as HTML by default, which mangles
+ * multi-line plain text. The production editor is plain-text-only now, so
+ * tests always build one paragraph per line.
  */
 export async function setEditor(page: Page, content: string) {
 	// Make sure we're writing into the *current* tab's editor, not a stale
@@ -78,30 +75,21 @@ export async function setEditor(page: Page, content: string) {
 		const ed = (window as any).__docwriterEditor;
 		return ed && !ed.isDestroyed;
 	});
-	const isPlain = await page.evaluate(() => {
-		const active = document.querySelector('.tab.active');
-		return !!active?.classList.contains('plain');
-	});
 	await page.evaluate(
-		({ text, plain }) => {
+		({ text }) => {
 			const editor = (window as any).__docwriterEditor;
-			if (plain) {
-				const lines = text.split('\n');
-				const json = {
-					type: 'doc',
-					content: lines.map((line) =>
-						line.length === 0
-							? { type: 'paragraph' }
-							: { type: 'paragraph', content: [{ type: 'text', text: line }] }
-					)
-				};
-				editor.commands.setContent(json, { emitUpdate: true });
-			} else {
-				// tiptap-markdown overrides setContent to parse the string as markdown.
-				editor.commands.setContent(text, { emitUpdate: true });
-			}
+			const lines = text.split('\n');
+			const json = {
+				type: 'doc',
+				content: lines.map((line) =>
+					line.length === 0
+						? { type: 'paragraph' }
+						: { type: 'paragraph', content: [{ type: 'text', text: line }] }
+				)
+			};
+			editor.commands.setContent(json, { emitUpdate: true });
 		},
-		{ text: content, plain: isPlain }
+		{ text: content }
 	);
 }
 

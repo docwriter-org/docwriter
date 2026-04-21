@@ -29,7 +29,7 @@ export function plainBaseExtensions(options?: { placeholder?: string }): Extensi
  * text — see `plainBaseExtensions` for why. */
 export function collaborativeExtensions(
 	ydoc: Y.Doc,
-	options?: { placeholder?: string; kind?: 'markdown' | 'plain' }
+	options?: { placeholder?: string }
 ): Extensions {
 	return [
 		...plainBaseExtensions(options),

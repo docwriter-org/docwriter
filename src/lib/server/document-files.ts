@@ -28,8 +28,7 @@ export const DOCWRITER_DIR = join(ROOT, '.docwriter');
  * directory is created unless the agent actually writes a scratch file. */
 export const AGENT_SCRATCH_DIR = join(DOCWRITER_DIR, 'agent', 'scratch');
 
-/** File extensions we treat as text-editable tabs. `.md`/`.markdown`/`.mdx`
- * render as markdown in the editor; others render as plain text. */
+/** File extensions we treat as text-editable tabs. */
 const TEXT_EXTENSIONS = new Set([
 	'md',
 	'markdown',
@@ -88,15 +87,6 @@ export function isValidTabId(id: string): boolean {
 		if (seg === '..' || seg === '.' || seg === '') return false;
 	}
 	return true;
-}
-
-/** Classify a tab file. Every file is rendered as plain text in the editor
- * — markdown source isn't parsed into headings/lists/marks. The function is
- * kept (always returning 'plain') for back-compat with callers and the
- * `TabInfo.kind` field exposed to the client; it can be removed once those
- * call sites are simplified. */
-export function tabKind(_tabId: string): 'markdown' | 'plain' {
-	return 'plain';
 }
 
 export function isKnownTextExtension(tabId: string): boolean {

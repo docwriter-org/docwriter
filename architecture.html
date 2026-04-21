@@ -416,7 +416,7 @@
               <text x="485" y="82" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">SvelteKit /api/*</text>
               <text x="485" y="102" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">Hocuspocus WebSocket (3001)</text>
               <text x="485" y="122" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">Hocuspocus Document + UndoManager per tab</text>
-              <text x="485" y="142" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">custom MCP tools (edit_doc, ...)</text>
+              <text x="485" y="142" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">custom MCP servers: docwriter + docwriter-doc</text>
               <text x="485" y="175" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" font-style="italic" fill="#7a6f62">authoritative copy of each tab's Y.Doc</text>
             </g>
 
@@ -445,8 +445,8 @@
               <rect x="510" y="250" width="230" height="100" rx="12" fill="#fdfbf7" stroke="#d8c9b0" />
               <text x="625" y="278" text-anchor="middle" font-family="Inter, sans-serif" font-size="14" font-weight="600" fill="#2d2a26">Workspace on disk</text>
               <text x="625" y="302" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">document.md, drafts/intro.md, ...</text>
-              <text x="625" y="320" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">.docwriter/state.json (JSON mirror)</text>
-              <text x="625" y="338" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" font-style="italic" fill="#7a6f62">debounced backup from Y.Doc</text>
+              <text x="625" y="320" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">workspace files + .docwriter/ metadata</text>
+              <text x="625" y="338" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" font-style="italic" fill="#7a6f62">server flush target for live Y.Doc text</text>
             </g>
 
             <!-- Arrows -->
@@ -742,31 +742,31 @@
               <p class="meta">
                 Concretely: <code>if (transaction.getMeta(ySyncPluginKey) !== undefined) return;</code>.
                 That marker fires while the ySyncPlugin catches up to a fresh Y.Doc state &mdash; for
-                example, right after the <code>synced</code> event on page load. Touching <code>userMd</code>
-                or triggering any side effects during hydration can desynchronize the editor.
+                example, right after the <code>synced</code> event on page load. Hydration is a
+                remote sync step, not "the user typed", so the editor must not restart the idle timer
+                or try to reseed content during it.
               </p>
             </div>
           </li>
           <li>
             <div>
-              <strong>Serialize the editor content and publish to the <code>userMd</code> store.</strong>
-              Markdown tabs run a markdown serializer; plain tabs emit raw text. Subscribers to
-              <code>userMd</code> (outline pane, diff overlay, some UI projections) re-render.
+              <strong>Update local UI projections from the live editor / Y.Doc.</strong>
+              The outline, pending diff overlay, and related UI read from the active Y.Doc/editor
+              state directly. There is no separate serialized markdown mirror store anymore.
               <p class="meta">
-                The store does not drive disk writes &mdash; the server owns the markdown flush.
-                <code>userMd</code> is a pure convenience projection so reactive UI code doesn't each
-                re-serialize the Y.Doc.
+                Disk writes still belong to the server's Y.Doc flush path. The browser keeps only
+                lightweight UI state around the live document; it does not maintain a second copy of
+                the tab text in a Svelte store.
               </p>
             </div>
           </li>
           <li>
             <div>
-              <strong>If the transaction carries <code>AGENT_APPLY_KEY</code>, stop here.</strong>
+              <strong>If the transaction is a remote sync, stop here.</strong>
               <p class="meta">
-                The update came from the WebSocket with Yjs origin <code>'agent'</code>. It's a valid
-                document change, but not "the user is writing," so we don't restart the 3-second idle
-                timer. (If we did, every agent edit would reset the auto-submit clock and the agent
-                would never fire again.)
+                Agent edits arrive through Hocuspocus like any other remote Yjs update. They are
+                valid document changes, but not "the user is writing," so we do not restart the
+                3-second idle timer. If we did, every agent edit would retrigger the loop.
               </p>
             </div>
           </li>
@@ -846,7 +846,7 @@
 }</pre>
         <p style="margin-top: 10px; color: var(--muted); font-size: 14px;">
           Rules, references, agency, and tab content are <em>not</em> in the POST body. The server
-          reads rules / agentSettings from <code>state.json</code>, tab content from the live
+          reads rules / agentSettings from SQLite-backed runtime state, tab content from the live
           Hocuspocus <code>Document</code>, and per-tab "last seen" markdown from the <code>kv</code>
           table. Add a rule mid-session and the next render sees it automatically.
         </p>
@@ -895,6 +895,14 @@
               <p class="meta">
                 <code>docwriter</code> &mdash; <code>propose_rule</code>, <code>propose_hook</code>.<br>
                 <code>docwriter-doc</code> &mdash; <code>edit_doc</code>, <code>read_doc</code>, <code>write_doc</code>.
+              </p>
+              <p class="meta">
+                In SDK event streams these appear under fully qualified tool ids:
+                <code>mcp__docwriter__propose_rule</code>,
+                <code>mcp__docwriter__propose_hook</code>,
+                <code>mcp__docwriter-doc__read_doc</code>,
+                <code>mcp__docwriter-doc__edit_doc</code>, and
+                <code>mcp__docwriter-doc__write_doc</code>.
               </p>
               <p class="meta">
                 <code>docwriter</code> holds proposal-only tools: they never mutate files directly,
@@ -1202,12 +1210,6 @@ async onLoadDocument({ documentName: tabId, document }) {
                 <code>last_seen:&lt;tabId&gt;</code>, etc.).</td>
             </tr>
             <tr>
-              <td><strong>JSON mirror</strong></td>
-              <td><code>.docwriter/state.json</code></td>
-              <td>Session id, tab order &amp; active tab, writing rules, agent settings, recent
-                feedback actions, usage counts. Dual-written alongside the DB for portability.</td>
-            </tr>
-            <tr>
               <td><strong>Agent scratch</strong></td>
               <td><code>.docwriter/agent/scratch/</code></td>
               <td>Session-scoped drafts and notes the agent can freely write. Not surfaced as tabs;
@@ -1241,13 +1243,12 @@ async onLoadDocument({ documentName: tabId, document }) {
         </table>
 
         <h3>Example layout on disk</h3>
-        <pre>workspace/
+<pre>workspace/
   ch12.asciidoc
   drafts/intro.md
   scripts/cleanup.py
   .docwriter/
     docwriter.db             ← SQLite (authoritative)
-    state.json               ← JSON mirror
     agent/
       scratch/               ← agent drafts (lazy-created)
     references/              ← saved style-reference samples</pre>
@@ -1335,42 +1336,66 @@ async onLoadDocument({ documentName: tabId, document }) {
 
         <h3>The custom MCP tools (<code>src/lib/server/mcp-doc-tools.ts</code>)</h3>
         <p>
-          DocWriter exposes five custom tools across two in-process MCP servers. The important split
-          is that proposal tools never write directly, while document tools route between the agent's
-          scratch workspace and the user's live open tabs.
+          DocWriter exposes exactly five custom tools across two in-process MCP servers. They are not
+          generic filesystem tools: they exist so the agent can either propose changes for user review
+          or edit the live tab documents the browser already has open.
+        </p>
+        <p>
+          The split is intentional:
+          <code>docwriter</code> is the proposal/configuration server and never mutates files directly;
+          <code>docwriter-doc</code> is the document server and routes between the agent's scratch
+          workspace and the user's live open tabs.
+        </p>
+
+        <h4>Exact custom tool ids</h4>
+        <ul>
+          <li><code>mcp__docwriter__propose_rule</code> &mdash; propose a persistent writing rule for user review.</li>
+          <li><code>mcp__docwriter__propose_hook</code> &mdash; propose a shell hook / automation change for user review.</li>
+          <li><code>mcp__docwriter-doc__read_doc</code> &mdash; read the current contents of an open tab or agent scratch file.</li>
+          <li><code>mcp__docwriter-doc__edit_doc</code> &mdash; replace one matched string in an open tab or scratch file.</li>
+          <li><code>mcp__docwriter-doc__write_doc</code> &mdash; replace the full contents of an open tab or scratch file.</li>
+        </ul>
+        <p class="meta">
+          When you see tool events in the sidebar or stream logs, these fully qualified ids are the
+          names you should expect.
         </p>
 
         <table>
           <thead>
-            <tr><th style="width: 16%">MCP server</th><th style="width: 18%">Tool</th><th>What it does</th><th style="width: 28%">Where it operates</th></tr>
+            <tr><th style="width: 14%">MCP server</th><th style="width: 22%">SDK tool id</th><th style="width: 14%">Short name</th><th>What it does</th><th style="width: 24%">Where it operates</th></tr>
           </thead>
           <tbody>
             <tr>
               <td><code>docwriter</code></td>
+              <td><code>mcp__docwriter__propose_rule</code></td>
               <td><code>propose_rule</code></td>
               <td>Suggests a persistent writing rule. The tool ACKs immediately; the real effect is an SSE rule-proposal card in the UI.</td>
               <td>No file write. User review only.</td>
             </tr>
             <tr>
               <td><code>docwriter</code></td>
+              <td><code>mcp__docwriter__propose_hook</code></td>
               <td><code>propose_hook</code></td>
               <td>Suggests a shell hook such as post-tool automation. Like <code>propose_rule</code>, it creates a review card instead of mutating config directly.</td>
               <td>No file write. User review only.</td>
             </tr>
             <tr>
               <td><code>docwriter-doc</code></td>
+              <td><code>mcp__docwriter-doc__read_doc</code></td>
               <td><code>read_doc</code></td>
               <td>Reads the current content of a DocWriter-managed path. For open tabs it serializes the live Hocuspocus Y.Doc, so the result matches the editor.</td>
               <td>Open tabs: live Y.Doc. Scratch: plain file read.</td>
             </tr>
             <tr>
               <td><code>docwriter-doc</code></td>
+              <td><code>mcp__docwriter-doc__edit_doc</code></td>
               <td><code>edit_doc</code></td>
               <td>Replaces exactly one occurrence of <code>old_string</code>. On open tabs it mutates the live Y.Doc and appends a pending review round in the same transaction.</td>
               <td>Open tabs: live Y.Doc. Scratch: plain file edit.</td>
             </tr>
             <tr>
               <td><code>docwriter-doc</code></td>
+              <td><code>mcp__docwriter-doc__write_doc</code></td>
               <td><code>write_doc</code></td>
               <td>Replaces the full file content using the same transaction path as <code>edit_doc</code>. It does not create new tabs.</td>
               <td>Open tabs: live Y.Doc. Scratch: plain file write.</td>
@@ -1430,7 +1455,7 @@ async onLoadDocument({ documentName: tabId, document }) {
             <div>
               <strong>Inside <code>direct.transact(document =&gt; ...)</code>:</strong>
               <ul style="margin-top: 6px;">
-                <li>Serialize the current markdown (<code>serializeYDocToMarkdown(document, kind)</code>).</li>
+                <li>Serialize the current editor text (<code>serializeYDocToMarkdown(document)</code>).</li>
                 <li><code>edit_doc</code>-specific: count <code>old_string</code> matches; 0 or &gt;1
                   &rarr; early-return without mutating.</li>
                 <li>Open an inner <code>document.transact(() =&gt; { ... }, AGENT_ORIGIN)</code>:
@@ -1515,7 +1540,7 @@ async onLoadDocument({ documentName: tabId, document }) {
           <div class="panel">
             <span class="panel-label">Document</span>
             <ul style="margin: 6px 0 0 18px;">
-              <li><code>userMd</code> — last serialized markdown from the active tab</li>
+              <li><code>reviewBaseline</code> — baseline text for the active tab's pending review stack</li>
               <li><code>pendingReviewRounds</code> — mirror of the active tab's <code>Y.Map('review')</code></li>
             </ul>
           </div>
@@ -1542,7 +1567,6 @@ async onLoadDocument({ documentName: tabId, document }) {
             <span class="panel-label">Tabs</span>
             <ul style="margin: 6px 0 0 18px;">
               <li><code>tabs</code>, <code>activeTab</code></li>
-              <li><code>activeTabKind</code> (<code>markdown</code> or <code>plain</code>)</li>
               <li>Per-tab Y.Doc + HocuspocusProvider registry in <code>src/lib/yjs-doc.ts</code></li>
             </ul>
           </div>
@@ -1559,9 +1583,9 @@ async onLoadDocument({ documentName: tabId, document }) {
           </thead>
           <tbody>
             <tr><td><code>ws://host:3001/&lt;tabId&gt;</code></td><td>WebSocket</td><td>Hocuspocus Y.Doc sync. The real transport for editor state; HTTP endpoints below are for everything else.</td></tr>
-            <tr><td><code>/api/document</code></td><td>GET</td><td>Read on-disk markdown + metadata for a tab. Force-flushes the Y.Doc to disk before reading so the response reflects any unflushed keystrokes.</td></tr>
-            <tr><td></td><td>PUT</td><td>Meta-only write (rules / agent settings). <code>userMd</code> is ignored — WebSocket sync owns editor content.</td></tr>
-            <tr><td><code>/api/tabs</code></td><td>GET / POST / PATCH / DELETE</td><td>Open/create/focus/rename/close tabs. Tab order persists to <code>state.json</code> and the <code>tabs</code> table.</td></tr>
+            <tr><td><code>/api/document</code></td><td>GET</td><td>Read on-disk text + metadata for a tab. Force-flushes the Y.Doc to disk before reading so the response reflects any unflushed keystrokes.</td></tr>
+            <tr><td></td><td>PUT</td><td>Meta-only write (rules / agent settings). WebSocket sync owns editor content.</td></tr>
+            <tr><td><code>/api/tabs</code></td><td>GET / POST / PATCH / DELETE</td><td>Open/create/focus/rename/close tabs. Tab order persists in SQLite-backed runtime state.</td></tr>
             <tr><td><code>/api/files</code></td><td>GET / POST / PATCH / DELETE</td><td>Workspace tree: listing, create, rename/move, delete. Guarded by the workspace-path resolver.</td></tr>
             <tr><td><code>/api/file-content</code></td><td>GET / PUT</td><td>Raw read/write for non-editor files.</td></tr>
             <tr><td><code>/api/render</code></td><td>POST (SSE)</td><td>Claude Agent SDK orchestration. See the <a href="#flow-render">render flow</a>.</td></tr>
@@ -1621,7 +1645,7 @@ src/lib/server/path-router.ts       scratch vs. open-tab routing
 src/lib/server/ydoc-markdown.ts     Y.Doc ↔ markdown serializer
 src/routes/api/render/+server.ts    Claude Agent SDK orchestration + SSE
 src/lib/server/document-io.ts       rules/agentSettings meta I/O
-src/lib/server/runtime-state.ts     .docwriter/state.json model
+src/lib/server/runtime-state.ts     SQLite-backed runtime state
 src/lib/server/workspace-path.ts    sandboxing &amp; symlink-safe resolver
 src/lib/stores.ts                   UI/projection stores</pre>
 
