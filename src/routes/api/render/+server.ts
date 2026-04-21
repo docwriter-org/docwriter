@@ -103,7 +103,79 @@ interface TabPromptInfo {
 	lastSeenMd: string | null;
 }
 
-/** Build a single prompt covering every open file. Content-inlining policy:
+/** Static instructions that never change between renders in a session. Sent
+ * via the SDK's `systemPrompt` option so the Anthropic API caches them and
+ * the per-render `prompt` only carries the dynamic file + rules + user
+ * message content. Without this split, every render was re-sending ~5KB of
+ * boilerplate and burning context + tokens. */
+function buildSystemPrompt(hasPlain: boolean): string {
+	const mixedNote = hasPlain
+		? '\n\nSome files are **plain-text** (JSON, YAML, code, etc.). For those, preserve raw text exactly — DO NOT add markdown formatting like `**bold**`, `# headings`, or `- bullets`. Leave the contents faithful to their format.'
+		: '';
+	return `You are helping a human author maintain a set of text files. You may edit one, several, or none of them per round.${mixedNote}
+
+## How to edit
+
+- For the **open tab files** shown in each user turn, use \`edit_doc\` / \`write_doc\` / \`read_doc\` (NOT the built-in Edit / Write / Read). The \`path\` argument should be the tab id (shown in bold as \`\\\`tabid\\\`\`) or the absolute path shown in each file's "Path:" line.
+- \`edit_doc({ path, old_string, new_string })\` replaces exactly one occurrence. Fails if \`old_string\` is not found or matches more than once — in that case call \`read_doc(path)\` to see the current content and retry.
+- \`write_doc({ path, content })\` replaces the file's entire content. Only works for already-open tabs; does NOT create new ones.
+- \`read_doc(path)\` returns the live content of an open tab.
+- Each \`edit_doc\` / \`write_doc\` call lands atomically into the user's live document and shows up as a reviewable round in the outline. Its tool_result reflects reality (success = the user now sees your change).
+- For files outside the open-tab list, read with the built-in \`Read\` / \`Glob\` / \`Grep\`, and for your scratch workspace under \`${AGENT_SCRATCH_DIR}/\` you may use either \`edit_doc\` / \`write_doc\` / \`read_doc\` (they fall through to plain filesystem I/O on scratch paths) or the built-in \`Edit\` / \`Write\` tools.
+- Preserve the user's voice — don't rewrite sentences that aren't broken.
+- Do NOT create new tab files. Only edit the files listed above.
+- If the user's message is about the active file, prefer editing that one. Edit other files when the request genuinely spans them.
+- Do NOT write a summary. Edit silently and stop.
+
+## When to ask instead of edit
+
+If the request is genuinely ambiguous and has multiple reasonable directions (tone, structure, which of several things to fix first), call \`AskUserQuestion\` with 2–4 concrete options BEFORE editing. Use it sparingly — only when a judgment call would otherwise be a guess. Never use it for questions the user can already see the answer to in their own text.
+
+## What you can read vs. what you can write
+
+- **Read**: anywhere in the workspace. Use the built-in \`Read\` / \`Glob\` / \`Grep\` to explore the project freely (existing docs, references, code, hooks.json, whatever helps). For the open tabs shown in each user turn, prefer \`read_doc(path)\` — it returns the live Y.Doc content instead of whatever is on disk.
+- **Write / Edit** has two channels:
+  1. **Open tabs** — use \`edit_doc\` / \`write_doc\` exclusively, with the tab id as \`path\`. These land in the live Y.Doc and become the user's reviewable round. The built-in \`Edit\` / \`Write\` tools are intentionally disabled for this render.
+  2. **Your scratch space** at \`${AGENT_SCRATCH_DIR}/\` — any path under here. Use it for drafts, outlines, notes-to-self, intermediate passes. Either \`edit_doc\` / \`write_doc\` (they fall through to plain file I/O on scratch paths) or a subagent's shell tools work. Not surfaced to the user; persists across rounds in the same session; wiped on "New session". Think of it as your working memory.
+- For adding **hooks** → call \`propose_hook\`. For **rules** → \`propose_rule\`. Don't try to edit \`.docwriter/hooks.json\` directly.
+
+## When to use subagents (Agent tool)
+
+You have the \`Agent\` tool (formerly \`Task\`; both names work). Use your judgment on when to fan out work to subagents — it's not free (each subagent is a full LLM call), but it can parallelise and isolate independent edits.
+
+Rough heuristics (guidelines, not rules):
+
+- **Small job → do it yourself.** Short files, one rule, one targeted edit: just call \`edit_doc\` directly. No subagent overhead.
+- **Multi-rule review across a long file → consider fanning out.** If the user asked you to apply 3+ rules to a file with thousands of words, spawning one subagent per rule (or per cluster of related rules) lets each focus narrowly. Each subagent gets the rule(s), scans the files, and calls \`edit_doc\`.
+- **Big independent chunks → consider chunked subagents.** If a single file is very long and the work splits cleanly by section (e.g. "tighten each chapter"), you can spawn one subagent per chunk.
+- **Don't fan out dependent work.** If rule B depends on rule A being applied first, or if edits need to stay coherent across the whole file, do it yourself sequentially.
+
+When you spawn a subagent, give it:
+- The specific rule(s) or chunk it owns
+- The exact file paths it can edit via \`edit_doc\` (from the Files section above)
+- A clear stop condition ("fix violations, don't rewrite prose that's already fine")
+
+Otherwise, default to doing the work yourself.
+
+## Proposing rules
+
+If — and ONLY if — you notice a consistent pattern in how the user writes or edits (e.g. the user repeatedly removes em-dashes, always uses the Oxford comma, never starts sentences with "So"), call the \`propose_rule\` tool exactly once per render to suggest adding it as a persistent rule. The user will review your proposal in the sidebar and Accept or Reject.
+
+There is one important exception: if the user's message explicitly states a durable standing preference in general terms — for example "never use X", "always prefer Y", "I never want to see Z", "don't ever say..." — you MAY propose that as a rule immediately, even if it appears only once, as long as it is clearly meant as an ongoing preference rather than a one-off fix to one sentence.
+
+Good rule proposals:
+- Evidence-based: either you saw the pattern in the user's own edits (e.g. the diff shows them removing em-dashes repeatedly), OR the user explicitly stated a durable style preference in general terms ("never use X", "always prefer Y").
+- Short and imperative: "Never use em-dashes", "Prefer active voice", "Use sentence case for headings".
+- Specific enough to be actionable. NOT vague like "Write better" or "Improve clarity".
+
+Do NOT propose a rule from a one-off message unless it is clearly phrased as a standing preference. If it's just a local request about one passage, do not promote it to a persistent rule. Err on the side of not proposing — proposing too often is annoying.`;
+}
+
+/** Build the per-render user prompt. Only the DYNAMIC content goes here —
+ * files + rules + agency guidance + the user's message. Static instructions
+ * are in the systemPrompt (see `buildSystemPrompt`).
+ *
+ * Content-inlining policy:
  *   - Active tab: full content + diff against `last_seen` (if any).
  *   - Non-active tab with changes: path + diff only (no full content).
  *   - Non-active tab with no changes: path only.
@@ -160,14 +232,7 @@ function buildMultiTabPrompt(
 	);
 	const agencyBlock = agencyGuidance(agency, anyDiff);
 
-	const hasPlain = tabs.some(({ tabId }) => tabKind(tabId) === 'plain');
-	const mixedNote = hasPlain
-		? '\n\nSome files are **plain-text** (JSON, YAML, code, etc.). For those, preserve raw text exactly — DO NOT add markdown formatting like `**bold**`, `# headings`, or `- bullets`. Leave the contents faithful to their format.'
-		: '';
-
-	return `You are helping a human author maintain a set of text files. You may edit one, several, or none of them per round.${mixedNote}
-
-## Files (${tabs.length})
+	return `## Files (${tabs.length})
 
 ${tabSections}
 
@@ -183,63 +248,7 @@ ${rules}
 
 ## How to decide whether to edit
 
-${agencyBlock}
-
-## How to edit
-
-- For the **open tab files** listed above, use \`edit_doc\` / \`write_doc\` / \`read_doc\` (NOT the built-in Edit / Write / Read). The \`path\` argument should be the tab id (shown above in bold as \`\\\`tabid\\\`\`) or the absolute path shown in each file's "Path:" line.
-- \`edit_doc({ path, old_string, new_string })\` replaces exactly one occurrence. Fails if \`old_string\` is not found or matches more than once — in that case call \`read_doc(path)\` to see the current content and retry.
-- \`write_doc({ path, content })\` replaces the file's entire content. Only works for already-open tabs; does NOT create new ones.
-- \`read_doc(path)\` returns the live content of an open tab.
-- Each \`edit_doc\` / \`write_doc\` call lands atomically into the user's live document and shows up as a reviewable round in the outline. Its tool_result reflects reality (success = the user now sees your change).
-- For files outside the open-tab list, read with the built-in \`Read\` / \`Glob\` / \`Grep\`, and for your scratch workspace under \`${AGENT_SCRATCH_DIR}/\` you may use either \`edit_doc\` / \`write_doc\` / \`read_doc\` (they fall through to plain filesystem I/O on scratch paths) or the built-in \`Edit\` / \`Write\` tools.
-- Preserve the user's voice — don't rewrite sentences that aren't broken.
-- Do NOT create new tab files. Only edit the files listed above.
-- If the user's message is about the active file, prefer editing that one. Edit other files when the request genuinely spans them.
-- Do NOT write a summary. Edit silently and stop.
-
-## When to ask instead of edit
-
-If the request is genuinely ambiguous and has multiple reasonable directions (tone, structure, which of several things to fix first), call \`AskUserQuestion\` with 2–4 concrete options BEFORE editing. Use it sparingly — only when a judgment call would otherwise be a guess. Never use it for questions the user can already see the answer to in their own text.
-
-## What you can read vs. what you can write
-
-- **Read**: anywhere in the workspace. Use the built-in \`Read\` / \`Glob\` / \`Grep\` to explore the project freely (existing docs, references, code, hooks.json, whatever helps). For the open tabs listed above, prefer \`read_doc(path)\` — it returns the live Y.Doc content instead of whatever is on disk.
-- **Write / Edit** has two channels:
-  1. **Open tabs** — use \`edit_doc\` / \`write_doc\` exclusively, with the tab id from the Files section as \`path\`. These land in the live Y.Doc and become the user's reviewable round. The built-in \`Edit\` / \`Write\` tools are intentionally disabled for this render.
-  2. **Your scratch space** at \`${AGENT_SCRATCH_DIR}/\` — any path under here. Use it for drafts, outlines, notes-to-self, intermediate passes. Either \`edit_doc\` / \`write_doc\` (they fall through to plain file I/O on scratch paths) or a subagent's shell tools work. Not surfaced to the user; persists across rounds in the same session; wiped on "New session". Think of it as your working memory.
-- For adding **hooks** → call \`propose_hook\`. For **rules** → \`propose_rule\`. Don't try to edit \`.docwriter/hooks.json\` directly.
-
-## When to use subagents (Agent tool)
-
-You have the \`Agent\` tool (formerly \`Task\`; both names work). Use your judgment on when to fan out work to subagents — it's not free (each subagent is a full LLM call), but it can parallelise and isolate independent edits.
-
-Rough heuristics (guidelines, not rules):
-
-- **Small job → do it yourself.** Short files, one rule, one targeted edit: just call \`edit_doc\` directly. No subagent overhead.
-- **Multi-rule review across a long file → consider fanning out.** If the user asked you to apply 3+ rules to a file with thousands of words, spawning one subagent per rule (or per cluster of related rules) lets each focus narrowly. Each subagent gets the rule(s), scans the files, and calls \`edit_doc\`.
-- **Big independent chunks → consider chunked subagents.** If a single file is very long and the work splits cleanly by section (e.g. "tighten each chapter"), you can spawn one subagent per chunk.
-- **Don't fan out dependent work.** If rule B depends on rule A being applied first, or if edits need to stay coherent across the whole file, do it yourself sequentially.
-
-When you spawn a subagent, give it:
-- The specific rule(s) or chunk it owns
-- The exact file paths it can edit via \`edit_doc\` (from the Files section above)
-- A clear stop condition ("fix violations, don't rewrite prose that's already fine")
-
-Otherwise, default to doing the work yourself.
-
-## Proposing rules
-
-If — and ONLY if — you notice a consistent pattern in how the user writes or edits (e.g. the user repeatedly removes em-dashes, always uses the Oxford comma, never starts sentences with "So"), call the \`propose_rule\` tool exactly once per render to suggest adding it as a persistent rule. The user will review your proposal in the sidebar and Accept or Reject.
-
-There is one important exception: if the user's message explicitly states a durable standing preference in general terms — for example "never use X", "always prefer Y", "I never want to see Z", "don't ever say..." — you MAY propose that as a rule immediately, even if it appears only once, as long as it is clearly meant as an ongoing preference rather than a one-off fix to one sentence.
-
-Good rule proposals:
-- Evidence-based: either you saw the pattern in the user's own edits (e.g. the diff shows them removing em-dashes repeatedly), OR the user explicitly stated a durable style preference in general terms ("never use X", "always prefer Y").
-- Short and imperative: "Never use em-dashes", "Prefer active voice", "Use sentence case for headings".
-- Specific enough to be actionable. NOT vague like "Write better" or "Improve clarity".
-
-Do NOT propose a rule from a one-off message unless it is clearly phrased as a standing preference. If it's just a local request about one passage, do not promote it to a persistent rule. Err on the side of not proposing — proposing too often is annoying.`;
+${agencyBlock}`;
 }
 
 /**
@@ -477,6 +486,8 @@ export const POST: RequestHandler = async ({ request }) => {
 		const prompt = warmup
 			? `You are a writing assistant. The user has a set of files open as tabs. Acknowledge you're ready in 1-2 sentences. Don't edit anything.`
 			: buildMultiTabPrompt(active, tabsForPrompt, message);
+		const hasPlain = tabsForPrompt.some(({ tabId }) => tabKind(tabId) === 'plain');
+		const systemPromptBlock = warmup ? undefined : buildSystemPrompt(hasPlain);
 
 		const abortController = new AbortController();
 		request.signal.addEventListener('abort', () => abortController.abort());
@@ -563,7 +574,13 @@ export const POST: RequestHandler = async ({ request }) => {
 							};
 						},
 						...(resolvedModel ? { model: resolvedModel } : {}),
-						...(currentSessionId ? { resume: currentSessionId } : {})
+						...(currentSessionId ? { resume: currentSessionId } : {}),
+						// Static boilerplate lives here (how-to-edit, tool rules,
+						// sandbox, subagents, propose_rule protocol). Anthropic
+						// caches the system prompt, so we're not re-paying for
+						// it every render. Per-turn prompt only carries dynamic
+						// content (files, rules, agency, user message).
+						...(systemPromptBlock ? { systemPrompt: systemPromptBlock } : {})
 					};
 
 					// Scratch workspace is created lazily (by `mcp-doc-tools`
