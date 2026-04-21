@@ -231,3 +231,112 @@ export async function acceptTabRounds(
 	ydoc.destroy();
 	return result;
 }
+
+/** Reject one pending review round (or all of them). Rejecting undoes the
+ * agent-origin transactions that produced the round's content via the
+ * server-side UndoManager, then drops the round from the review map.
+ *
+ * Reject MUST run on the server, not the client: agent edits arrive at the
+ * browser via Hocuspocus sync with the provider's internal origin, not
+ * AGENT_ORIGIN, so a client-side UndoManager tracking AGENT_ORIGIN can't see
+ * them. The server IS where the AGENT_ORIGIN transact happened, so its
+ * UndoManager has the stack items. */
+export async function rejectTabRounds(
+	tabId: string,
+	roundId?: string
+): Promise<{ rejectedCount: number; rounds: PendingReviewRound[] }> {
+	const server = globalHolder().__docwriterWsServer;
+	if (!server?.hocuspocus) {
+		// No live connection — nothing meaningful to undo (the UndoManager
+		// lives with the Hocuspocus Document). Fall back to deleting the
+		// rounds without rewinding content; the next real reject on a live
+		// connection will behave correctly.
+		const ydoc = new Y.Doc();
+		replayUpdatesInto(ydoc, tabId);
+		const before = Y.encodeStateVector(ydoc);
+		let rejectedCount = 0;
+		let rounds: PendingReviewRound[] = [];
+		ydoc.transact(() => {
+			const reviewMap = ydoc.getMap('review');
+			const current =
+				(reviewMap.get('pendingRounds') as PendingReviewRound[] | undefined) ?? [];
+			let next: PendingReviewRound[];
+			if (!roundId) {
+				next = [];
+			} else {
+				const idx = current.findIndex((r) => r.id === roundId);
+				if (idx < 0) {
+					rejectedCount = 0;
+					rounds = current;
+					return;
+				}
+				next = current.slice(idx + 1);
+			}
+			rejectedCount = current.length - next.length;
+			rounds = next;
+			reviewMap.set('pendingRounds', next);
+			if (next.length === 0) {
+				reviewMap.set('baseline', null);
+				reviewMap.set('preAgent', null);
+			} else {
+				reviewMap.set('baseline', next[0].beforeMd);
+				reviewMap.set('preAgent', next[0].beforeMd);
+			}
+		}, 'user');
+		const update = Y.encodeStateAsUpdate(ydoc, before);
+		if (update.length > 0) appendUpdate(tabId, update, 'user');
+		ydoc.destroy();
+		return { rejectedCount, rounds };
+	}
+
+	const undoManager = undoManagers.get(tabId);
+	const direct = await server.hocuspocus.openDirectConnection(tabId);
+	try {
+		let rejectedCount = 0;
+		let rounds: PendingReviewRound[] = [];
+		await direct.transact((document) => {
+			const ydoc = document as unknown as Y.Doc;
+			const reviewMap = ydoc.getMap('review');
+			const current =
+				(reviewMap.get('pendingRounds') as PendingReviewRound[] | undefined) ?? [];
+			let keep: PendingReviewRound[];
+			let rejected: PendingReviewRound[];
+			if (!roundId) {
+				keep = [];
+				rejected = current;
+			} else {
+				const idx = current.findIndex((r) => r.id === roundId);
+				if (idx < 0) {
+					rounds = current;
+					return;
+				}
+				// Per the FIFO reject policy: rejecting round idx also rejects
+				// every later round (their content stacks on top and can't be
+				// kept without this one). Rewind their undo steps in reverse.
+				rejected = current.slice(idx);
+				keep = current.slice(0, idx);
+			}
+
+			if (undoManager) {
+				const totalSteps = rejected.reduce((s, r) => s + (r.stepCount || 1), 0);
+				for (let i = 0; i < totalSteps; i++) {
+					if (!undoManager.undo()) break;
+				}
+			}
+
+			rejectedCount = rejected.length;
+			rounds = keep;
+			reviewMap.set('pendingRounds', keep);
+			if (keep.length === 0) {
+				reviewMap.set('baseline', null);
+				reviewMap.set('preAgent', null);
+			} else {
+				reviewMap.set('baseline', keep[0].beforeMd);
+				reviewMap.set('preAgent', keep[0].beforeMd);
+			}
+		});
+		return { rejectedCount, rounds };
+	} finally {
+		await direct.disconnect();
+	}
+}

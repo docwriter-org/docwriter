@@ -3,7 +3,7 @@ import type { RequestHandler } from './$types';
 import { readUserDoc, readMeta, writeMeta } from '$lib/server/document-io';
 import { isValidTabId } from '$lib/server/document-files';
 import { getTabsState } from '$lib/server/runtime-state';
-import { acceptTabRounds, flushTabMarkdownNow } from '$lib/server/ws-server';
+import { acceptTabRounds, rejectTabRounds, flushTabMarkdownNow } from '$lib/server/ws-server';
 
 /**
  * Per-tab document endpoint.
@@ -70,12 +70,16 @@ export const POST: RequestHandler = async ({ request, url }) => {
 	try {
 		const tabId = resolveTabId(url);
 		const body = await request.json().catch(() => ({}));
-		if (body?.action !== 'accept_rounds') {
-			return json({ error: 'Unknown action' }, { status: 400 });
-		}
 		const roundId = typeof body.roundId === 'string' ? body.roundId : undefined;
-		const result = await acceptTabRounds(tabId, roundId);
-		return json({ ok: true, ...result });
+		if (body?.action === 'accept_rounds') {
+			const result = await acceptTabRounds(tabId, roundId);
+			return json({ ok: true, ...result });
+		}
+		if (body?.action === 'reject_rounds') {
+			const result = await rejectTabRounds(tabId, roundId);
+			return json({ ok: true, ...result });
+		}
+		return json({ error: 'Unknown action' }, { status: 400 });
 	} catch (e) {
 		return json({ error: String(e) }, { status: 500 });
 	}

@@ -974,25 +974,33 @@
 		// that take the rejection into account.
 		const shouldReconsider = laterCount > 0 || !!retryFeedback;
 
-		// Pop the right number of agent-op steps. Each `edit_doc` /
-		// `write_doc` call lands as one AGENT_ORIGIN transaction containing
-		// both the content change and the `pendingRounds` push — that
-		// transaction is a single undo step regardless of whether the
-		// server-side tool made two sub-transacts, because the client's
-		// UndoManager observes the combined update as one agent-origin op.
-		// For rounds created by the new server-side flow `stepCount` is 1.
-		// Legacy rounds (pre-refactor, composite diff) may still have
-		// higher stepCount — respect it.
-		let stepsToPop = 0;
-		for (let i = firstIdx; i < rounds.length; i++) {
-			stepsToPop += rounds[i].stepCount ?? 1;
+		// Reject MUST go through the server. Agent edits arrive at the
+		// browser via Hocuspocus sync with the provider's internal origin
+		// (NOT 'agent'), so the client's UndoManager — which tracks
+		// AGENT_ORIGIN only — never captures them. The SERVER's UndoManager
+		// does (edit_doc's transact uses AGENT_ORIGIN there), so the server
+		// is the only place the undo stack actually exists.
+		let rejectedRounds: PendingReviewRound[] = rounds.slice(0, firstIdx);
+		try {
+			const res = await fetch(`/api/document?tab=${encodeURIComponent(tabId)}`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					action: 'reject_rounds',
+					roundId
+				})
+			});
+			const data = await res.json().catch(() => ({}));
+			if (!res.ok || !data?.ok || !Array.isArray(data.rounds)) {
+				throw new Error(data?.error || `HTTP ${res.status}`);
+			}
+			rejectedRounds = data.rounds as PendingReviewRound[];
+		} catch (e) {
+			console.error('reject failed:', e);
+			// Fall through to updating the local rounds list anyway so the UI
+			// doesn't stay stuck on a card the user already dismissed.
 		}
-		for (let i = 0; i < stepsToPop; i++) {
-			if (!undoAgentChanges(tabId)) break;
-		}
-
-		const keep = rounds.slice(0, firstIdx);
-		writeTabRounds(tabId, keep);
+		writeTabRounds(tabId, rejectedRounds);
 		pushHistory({
 			type: 'user_action',
 			timestamp: Date.now(),
@@ -1165,16 +1173,19 @@
 			await fetch('/api/session', { method: 'DELETE' });
 			agentHistory.set([]);
 			// Reject any pending agent edits — fresh start across all tabs.
-			// Each round's AGENT_ORIGIN transactions are in the UndoManager;
-			// rewinding them restores the pre-agent state before clearing
-			// the `pendingRounds` Y.Map entries.
+			// Must go through the server; see rejectAgentEdit for why.
 			for (const id of getCurrentTabList()) {
 				const rounds = getReviewMapForTab(id).get('pendingRounds');
 				const list = Array.isArray(rounds) ? (rounds as PendingReviewRound[]) : [];
-				let steps = 0;
-				for (const r of list) steps += r.stepCount ?? 1;
-				for (let i = 0; i < steps; i++) {
-					if (!undoAgentChanges(id)) break;
+				if (list.length === 0) continue;
+				try {
+					await fetch(`/api/document?tab=${encodeURIComponent(id)}`, {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({ action: 'reject_rounds' })
+					});
+				} catch {
+					// best-effort; we'll still clear the local map below
 				}
 				writeTabRounds(id, []);
 			}
