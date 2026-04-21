@@ -29,14 +29,56 @@ import {
 	flushMarkdownNow
 } from './ydoc-persistence';
 
-// Per-tab UndoManager keyed on the Hocuspocus internal Document that syncs
-// with clients. Built in onLoadDocument so it observes the LIVE doc;
-// tearing it down in afterUnloadDocument avoids leaking observers.
-const undoManagers = new Map<string, Y.UndoManager>();
+interface LiveUndoState {
+	document: Y.Doc;
+	manager: Y.UndoManager;
+}
+
+// One UndoManager per LIVE Hocuspocus Document. Keying only by tab id is
+// too weak because `onLoadDocument` can be reached multiple times for the
+// same live document over its lifetime; recreating the manager in those
+// re-entries wipes the undo stack and makes Reject a no-op. Keep both a
+// tab-id index and a doc-object index so the same live doc always reuses the
+// same manager, while a genuinely new live doc (after unload/reload) gets a
+// fresh manager that can repopulate from replay.
+const undoManagers = new Map<string, LiveUndoState>();
+const undoManagersByDoc = new WeakMap<Y.Doc, Y.UndoManager>();
 const hydratedDocuments = new WeakSet<Y.Doc>();
 
 export function getUndoManagerForTabServerSide(tabId: string): Y.UndoManager | null {
-	return undoManagers.get(tabId) ?? null;
+	return undoManagers.get(tabId)?.manager ?? null;
+}
+
+function ensureUndoManager(tabId: string, document: Y.Doc): Y.UndoManager {
+	const existingForDoc = undoManagersByDoc.get(document);
+	if (existingForDoc) {
+		undoManagers.set(tabId, { document, manager: existingForDoc });
+		return existingForDoc;
+	}
+
+	const prior = undoManagers.get(tabId);
+	if (prior && prior.document !== document) {
+		prior.manager.destroy();
+		undoManagersByDoc.delete(prior.document);
+		undoManagers.delete(tabId);
+	}
+
+	const manager = new Y.UndoManager(document.getXmlFragment('default'), {
+		trackedOrigins: new Set([AGENT_ORIGIN]),
+		// One MCP write -> one review round -> one undo step.
+		captureTimeout: 0
+	});
+	undoManagersByDoc.set(document, manager);
+	undoManagers.set(tabId, { document, manager });
+	return manager;
+}
+
+function destroyUndoManager(tabId: string): void {
+	const existing = undoManagers.get(tabId);
+	if (!existing) return;
+	existing.manager.destroy();
+	undoManagersByDoc.delete(existing.document);
+	undoManagers.delete(tabId);
 }
 
 /** Singleton guard — kept on `globalThis` so SvelteKit route handlers can
@@ -71,17 +113,9 @@ export function createWsServer(port: number): Server {
 			const alreadyHydrated =
 				hydratedDocuments.has(ydoc) || xmlFragment.length > 0;
 
-			// Fresh UndoManager on the live doc. Built BEFORE replay so
-			// AGENT_ORIGIN rows repopulate the undo stack (Phase 7 invariant).
-			const prior = undoManagers.get(tabId);
-			if (prior) {
-				prior.destroy();
-				undoManagers.delete(tabId);
-			}
-			const undoManager = new Y.UndoManager(xmlFragment, {
-				trackedOrigins: new Set([AGENT_ORIGIN])
-			});
-			undoManagers.set(tabId, undoManager);
+			// Fresh manager only for a genuinely new live document, and built
+			// BEFORE replay so AGENT_ORIGIN rows repopulate the undo stack.
+			ensureUndoManager(tabId, ydoc);
 
 			if (!alreadyHydrated) {
 				replayUpdatesInto(ydoc, tabId);
@@ -90,11 +124,7 @@ export function createWsServer(port: number): Server {
 			return document;
 		},
 		async afterUnloadDocument({ documentName: tabId }) {
-			const mgr = undoManagers.get(tabId);
-			if (mgr) {
-				mgr.destroy();
-				undoManagers.delete(tabId);
-			}
+			destroyUndoManager(tabId);
 		},
 		async onChange({ documentName: tabId, update, context, document, transactionOrigin }) {
 			// transactionOrigin carries the Yjs origin attached to the
@@ -289,13 +319,13 @@ export async function rejectTabRounds(
 		return { rejectedCount, rounds };
 	}
 
-	const undoManager = undoManagers.get(tabId);
 	const direct = await server.hocuspocus.openDirectConnection(tabId);
 	try {
 		let rejectedCount = 0;
 		let rounds: PendingReviewRound[] = [];
 		await direct.transact((document) => {
 			const ydoc = document as unknown as Y.Doc;
+			const undoManager = ensureUndoManager(tabId, ydoc);
 			const reviewMap = ydoc.getMap('review');
 			const current =
 				(reviewMap.get('pendingRounds') as PendingReviewRound[] | undefined) ?? [];
@@ -317,11 +347,9 @@ export async function rejectTabRounds(
 				keep = current.slice(0, idx);
 			}
 
-			if (undoManager) {
-				const totalSteps = rejected.reduce((s, r) => s + (r.stepCount || 1), 0);
-				for (let i = 0; i < totalSteps; i++) {
-					if (!undoManager.undo()) break;
-				}
+			const totalSteps = rejected.reduce((s, r) => s + (r.stepCount || 1), 0);
+			for (let i = 0; i < totalSteps; i++) {
+				if (!undoManager.undo()) break;
 			}
 
 			rejectedCount = rejected.length;

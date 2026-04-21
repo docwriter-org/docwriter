@@ -44,3 +44,7 @@ vite.config.ts.timestamp-*
 # Agent worktrees and locks
 .claude/worktrees/
 .claude/scheduled_tasks.lock
+
+# bug-hunting scratch scripts
+scratch-*.ts
+scratch-*.mjs
