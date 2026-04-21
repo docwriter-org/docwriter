@@ -63,23 +63,14 @@
 	}
 
 	import {
-		undoAgentChanges,
-		disposeAgentUndo,
-		getUndoManagerForTab,
-		AGENT_ORIGIN,
-		AGENT_APPLY_KEY
-	} from '$lib/yjs-agent';
-	import {
 		getReviewMap,
 		getReviewMapForTab,
-		getYDocForTab,
 		whenYDocReady,
 		setCurrentTab,
 		destroyTab,
 		renameTab
 	} from '$lib/yjs-doc';
 	import type { Editor } from '@tiptap/core';
-	import { plainTextToPMJson } from '$lib/yjs-markdown';
 	import {
 		userMd,
 		reviewBaseline,
@@ -994,11 +985,24 @@
 			if (!res.ok || !data?.ok || !Array.isArray(data.rounds)) {
 				throw new Error(data?.error || `HTTP ${res.status}`);
 			}
+			if (
+				typeof data.rejectedCount === 'number' &&
+				data.rejectedCount < droppedCount
+			) {
+				throw new Error(
+					`Server rejected only ${data.rejectedCount} of ${droppedCount} expected round${droppedCount === 1 ? '' : 's'}`
+				);
+			}
 			rejectedRounds = data.rounds as PendingReviewRound[];
 		} catch (e) {
 			console.error('reject failed:', e);
-			// Fall through to updating the local rounds list anyway so the UI
-			// doesn't stay stuck on a card the user already dismissed.
+			pushHistory({
+				type: 'notification',
+				timestamp: Date.now(),
+				text: `Reject failed: ${(e as Error).message}`,
+				priority: 'high'
+			});
+			return;
 		}
 		writeTabRounds(tabId, rejectedRounds);
 		pushHistory({
@@ -1512,62 +1516,25 @@
 		void connectLive();
 
 		// Dev-only test seam: lets Playwright simulate an agent edit without
-		// hitting the Claude SDK. Mirrors what the /api/render result handler
-		// does locally — capture baseline, apply markdown, set review state.
+		// hitting the Claude SDK. Route it through the server so tests
+		// exercise the same write/review/undo path as production.
 		if (import.meta.env.DEV && typeof window !== 'undefined') {
 			(window as any).__docwriterTest = {
-				fakeAgentEdit(content: string) {
+				async fakeAgentEdit(content: string) {
 					const tabId = getCurrentActiveTab();
 					if (!tabId) return;
-					const ed = editorRef?.getEditor();
-					if (!ed) return;
-					const kind = getTabKind(tabId);
-					const readEditorContent = () =>
-						kind === 'plain'
-							? ed.getText({ blockSeparator: '\n' })
-							: ((ed.storage as any).markdown?.getMarkdown?.() ?? '');
-					const before = readEditorContent();
-					// Ensure the UndoManager is listening before we transact
-					// so the agent-origin transaction is captured (matches the
-					// real flow, where edit_doc lands one tracked transaction).
-					getUndoManagerForTab(tabId);
-					const ydoc = getYDocForTab(tabId);
-					ydoc.transact(() => {
-						if (kind === 'plain') {
-							// Cast: plainTextToPMJson returns our own PM-JSON shape which
-							// Tiptap's setContent accepts at runtime but its Content type
-							// only surfaces a subset.
-							ed.chain()
-								.setMeta(AGENT_APPLY_KEY, true)
-								.setContent(
-									plainTextToPMJson(content) as unknown as Parameters<
-										typeof ed.commands.setContent
-									>[0],
-									{ emitUpdate: false }
-								)
-								.run();
-						} else {
-							ed.chain()
-								.setMeta(AGENT_APPLY_KEY, true)
-								.setContent(content, { emitUpdate: false })
-								.run();
-						}
-					}, AGENT_ORIGIN);
-					const after = readEditorContent();
-					if (after === before) return;
-					const existing = getReviewMapForTab(tabId).get('pendingRounds');
-					const prior: PendingReviewRound[] = Array.isArray(existing)
-						? (existing as PendingReviewRound[])
-						: [];
-					const newRound: PendingReviewRound = {
-						id: 'rr_fake_' + Date.now().toString(36),
-						beforeMd: before,
-						afterMd: after,
-						timestamp: Date.now(),
-						kind: classifyRoundKind(before, after),
-						stepCount: 1
-					};
-					writeTabRounds(tabId, [...prior, newRound]);
+					const res = await fetch(`/api/document?tab=${encodeURIComponent(tabId)}`, {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({
+							action: 'dev_fake_agent_write',
+							content
+						})
+					});
+					const data = await res.json().catch(() => ({}));
+					if (!res.ok || !data?.ok) {
+						throw new Error(data?.error || `HTTP ${res.status}`);
+					}
 				},
 				accept: acceptAgentEdit,
 				reject: rejectAgentEdit
@@ -1579,7 +1546,6 @@
 
 	onDestroy(() => {
 		removeSidebarResizeListener();
-		disposeAgentUndo();
 	});
 
 	/**

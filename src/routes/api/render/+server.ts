@@ -7,8 +7,7 @@ import { spawn } from 'child_process';
 import * as Y from 'yjs';
 import {
 	AGENT_SCRATCH_DIR,
-	isValidTabId,
-	tabKind
+	isValidTabId
 } from '$lib/server/document-files';
 import {
 	readHooks,
@@ -45,7 +44,7 @@ function readLiveTabMarkdown(tabId: string): string {
 	const hp = holder.__docwriterWsServer?.hocuspocus;
 	const liveDoc = hp?.documents?.get(tabId) as Y.Doc | undefined;
 	const ydoc = liveDoc ?? getTabYDoc(tabId).ydoc;
-	return serializeYDocToMarkdown(ydoc, tabKind(tabId));
+	return serializeYDocToMarkdown(ydoc);
 }
 
 const LAST_SEEN_PREFIX = 'last_seen:';
@@ -108,11 +107,10 @@ interface TabPromptInfo {
  * the per-render `prompt` only carries the dynamic file + rules + user
  * message content. Without this split, every render was re-sending ~5KB of
  * boilerplate and burning context + tokens. */
-function buildSystemPrompt(hasPlain: boolean): string {
-	const mixedNote = hasPlain
-		? '\n\nSome files are **plain-text** (JSON, YAML, code, etc.). For those, preserve raw text exactly — DO NOT add markdown formatting like `**bold**`, `# headings`, or `- bullets`. Leave the contents faithful to their format.'
-		: '';
-	return `You are helping a human author maintain a set of text files. You may edit one, several, or none of them per round.${mixedNote}
+function buildSystemPrompt(): string {
+	return `You are helping a human author maintain a set of text files. You may edit one, several, or none of them per round.
+
+Every file is treated as raw text — including \`.md\` / \`.markdown\`. The editor renders markdown source literally (no parsing into headings/lists/marks), so preserve whatever syntax the file already uses. If the file is JSON / YAML / code, keep it valid and faithful to its format. Don't add or strip markdown formatting unless that's exactly what the user asked for.
 
 ## How to edit
 
@@ -196,15 +194,17 @@ function buildMultiTabPrompt(
 
 	const tabSections = tabs
 		.map(({ tabId, currentMd, lastSeenMd }) => {
-			const kind = tabKind(tabId);
 			const isActive = tabId === activeTabId;
 			const hasLastSeen = lastSeenMd !== null;
 			const hasDiff = hasLastSeen && lastSeenMd !== currentMd;
-			const kindNote =
-				kind === 'plain'
-					? ' (**plain text** — preserve it as-is; do NOT add markdown formatting)'
-					: ' (markdown)';
-			const fence = kind === 'markdown' ? 'markdown' : 'text';
+			// Every file is plain text. The user keeps the original extension
+			// (.md / .txt / .json / etc.) — the editor doesn't render markdown
+			// or do any syntax-aware transformation. Inline content as a plain
+			// fenced block; the agent should preserve the user's exact text
+			// (including whatever markdown / JSON / code syntax it contains)
+			// when editing.
+			const kindNote = '';
+			const fence = 'text';
 			const star = isActive ? '⭐ ' : '';
 			const activeNote = isActive ? ' (active — the user is currently looking at this one)' : '';
 			const header = `### ${star}\`${tabId}\`${kindNote}${activeNote}\n\nPath (use as \`path\` argument to edit_doc / write_doc / read_doc): \`${tabId}\``;
@@ -486,8 +486,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		const prompt = warmup
 			? `You are a writing assistant. The user has a set of files open as tabs. Acknowledge you're ready in 1-2 sentences. Don't edit anything.`
 			: buildMultiTabPrompt(active, tabsForPrompt, message);
-		const hasPlain = tabsForPrompt.some(({ tabId }) => tabKind(tabId) === 'plain');
-		const systemPromptBlock = warmup ? undefined : buildSystemPrompt(hasPlain);
+		const systemPromptBlock = warmup ? undefined : buildSystemPrompt();
 
 		const abortController = new AbortController();
 		request.signal.addEventListener('abort', () => abortController.abort());

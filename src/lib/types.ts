@@ -37,7 +37,7 @@ export interface PendingReviewRound {
 	 * full green/red diff treatment. */
 	kind: 'tiny' | 'big';
 	/** How many AGENT_ORIGIN undo steps this round contributed to the
-	 * tab's Y.UndoManager. With incremental streaming (one apply per
+	 * server's live-doc Y.UndoManager. With incremental streaming (one apply per
 	 * Edit/Write tool call + one final apply at result time), this can be
 	 * >1 per round. Reject pops this many steps to fully rewind. Defaults
 	 * to 1 when absent (backward compat with rounds written before

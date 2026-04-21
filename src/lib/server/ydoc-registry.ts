@@ -9,14 +9,14 @@
  * afterward (the Phase 2 shape), the stack would always be empty at boot
  * and a Reject of a pending round would silently do nothing.
  *
- * `AGENT_ORIGIN` matches the string constant in the browser's
- * `src/lib/yjs-agent.ts`. Both sides must agree, or the UndoManager won't
- * correctly isolate agent transactions.
+ * `AGENT_ORIGIN` is the transaction-origin tag used for server-side agent
+ * writes. The UndoManager relies on that tag to isolate agent edits from
+ * user edits.
  */
 import * as Y from 'yjs';
 import { replayUpdatesInto } from './ydoc-persistence';
 
-export const AGENT_ORIGIN = 'agent'; // match the browser's yjs-agent.ts
+export const AGENT_ORIGIN = 'agent';
 
 const FRAGMENT_NAME = 'default';
 const REVIEW_MAP_NAME = 'review';

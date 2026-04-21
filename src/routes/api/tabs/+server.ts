@@ -43,8 +43,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	const path = tabFile(id);
 	if (!existsSync(path)) {
 		mkdirSync(dirname(path), { recursive: true });
-		const seed = tabKind(id) === 'markdown' ? `# ${stripExtBase(id)}\n\n` : '';
-		writeTextAtomic(path, seed);
+		writeTextAtomic(path, '');
 	}
 
 	const state = reconcileTabsState();
@@ -117,14 +116,6 @@ export const PATCH: RequestHandler = async ({ request }) => {
 
 	return json({ ok: true, id, order: state.order, active: state.active });
 };
-
-/** Compute a display label for a fresh tab's markdown heading. Strips the
- * last extension and returns just the file's basename. */
-function stripExtBase(id: string): string {
-	const base = id.split('/').pop() || id;
-	const idx = base.lastIndexOf('.');
-	return idx > 0 ? base.slice(0, idx) : base;
-}
 
 /** Reconcile the persisted tabs list against what's on disk. Drops any
  * entry whose file no longer exists (e.g. the user deleted it in their

@@ -25,7 +25,8 @@ export const userMd = writable<string>('');
  * agent changed. Null when no review is pending.
  *
  * Accept: set to null (changes are already in the Y.Doc; nothing to commit).
- * Reject: rewind agent-origin Yjs ops via the agent UndoManager, then null. */
+ * Reject: the server rewinds agent-origin Yjs ops via its live-doc
+ * UndoManager, then this baseline is cleared. */
 export const reviewBaseline = writable<string | null>(null);
 
 /** Pending agent-edit rounds for the ACTIVE tab, oldest first. Each round

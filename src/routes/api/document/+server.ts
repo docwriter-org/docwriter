@@ -1,9 +1,11 @@
+import { dev } from '$app/environment';
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { readUserDoc, readMeta, writeMeta } from '$lib/server/document-io';
 import { isValidTabId } from '$lib/server/document-files';
 import { getTabsState } from '$lib/server/runtime-state';
 import { acceptTabRounds, rejectTabRounds, flushTabMarkdownNow } from '$lib/server/ws-server';
+import { runTabWrite } from '$lib/server/mcp-doc-tools';
 
 /**
  * Per-tab document endpoint.
@@ -77,6 +79,20 @@ export const POST: RequestHandler = async ({ request, url }) => {
 		}
 		if (body?.action === 'reject_rounds') {
 			const result = await rejectTabRounds(tabId, roundId);
+			return json({ ok: true, ...result });
+		}
+		if (body?.action === 'dev_fake_agent_write') {
+			if (!dev) {
+				return json({ error: 'Not available outside dev mode' }, { status: 404 });
+			}
+			const content = typeof body.content === 'string' ? body.content : null;
+			if (content === null) {
+				return json({ error: 'Missing content' }, { status: 400 });
+			}
+			const result = await runTabWrite(tabId, 'dev_fake_agent_write', () => content);
+			if ('error' in result) {
+				return json({ error: result.error }, { status: 500 });
+			}
 			return json({ ok: true, ...result });
 		}
 		return json({ error: 'Unknown action' }, { status: 400 });

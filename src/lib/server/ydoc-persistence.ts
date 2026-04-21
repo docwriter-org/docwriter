@@ -20,7 +20,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 import * as Y from 'yjs';
 import { getDb } from './db';
-import { tabFile, tabKind } from './document-files';
+import { tabFile } from './document-files';
 import { serializeYDocToMarkdown, seedYDocFromContent } from './ydoc-markdown';
 
 /** Replay persisted updates into an existing Y.Doc.
@@ -68,7 +68,7 @@ export function replayUpdatesInto(ydoc: Y.Doc, tabId: string): void {
 				// (which only tracks AGENT_ORIGIN) ignores it, and the origin
 				// matches the row we persist for next time.
 				ydoc.transact(() => {
-					seedYDocFromContent(ydoc, content, tabKind(tabId));
+					seedYDocFromContent(ydoc, content);
 				}, 'system');
 				// Persist the seed as a single update row so the next
 				// load replays it instead of re-reading the file.
@@ -134,13 +134,12 @@ export function scheduleMarkdownFlush(tabId: string, ydoc: Y.Doc) {
 		setTimeout(() => {
 			flushTimers.delete(tabId);
 			try {
-				const kind = tabKind(tabId);
-				const content = serializeYDocToMarkdown(ydoc, kind);
+				const content = serializeYDocToMarkdown(ydoc);
 				const path = tabFile(tabId);
 				mkdirSync(dirname(path), { recursive: true });
 				writeFileSync(path, content);
 			} catch (err) {
-				console.error(`[docwriter] markdown flush failed for tab "${tabId}":`, err);
+				console.error(`[docwriter] flush failed for tab "${tabId}":`, err);
 			}
 		}, FLUSH_DEBOUNCE_MS)
 	);
@@ -154,12 +153,11 @@ export function flushMarkdownNow(tabId: string, ydoc: Y.Doc) {
 	if (existing) clearTimeout(existing);
 	flushTimers.delete(tabId);
 	try {
-		const kind = tabKind(tabId);
-		const content = serializeYDocToMarkdown(ydoc, kind);
+		const content = serializeYDocToMarkdown(ydoc);
 		const path = tabFile(tabId);
 		mkdirSync(dirname(path), { recursive: true });
 		writeFileSync(path, content);
 	} catch (err) {
-		console.error(`[docwriter] markdown flush (sync) failed for tab "${tabId}":`, err);
+		console.error(`[docwriter] flush (sync) failed for tab "${tabId}":`, err);
 	}
 }

@@ -115,6 +115,35 @@ test.describe('review mode', () => {
 		expect(await getEditorText(page)).not.toContain('Agent overwrote');
 	});
 
+	test('rejecting the latest of two agent rounds only rewinds that round', async ({ page }) => {
+		await freshPage(page);
+		const name = `t-rev-rej-latest-${SUFFIX}.md`;
+		await createTab(page, name);
+		await setEditor(page, `# ${name}\n\nOriginal sentence.`);
+		await afterAutosave(page);
+
+		await page.evaluate((after) => {
+			(window as any).__docwriterTest.fakeAgentEdit(after);
+		}, `# ${name}\n\nFirst agent sentence.`);
+
+		await page.evaluate((after) => {
+			(window as any).__docwriterTest.fakeAgentEdit(after);
+		}, `# ${name}\n\nSecond agent sentence.`);
+
+		const cards = page.locator('.pending-card.round-card');
+		await expect(cards).toHaveCount(2);
+		// The newest round renders first (OutlinePane reverses the list), so
+		// rejecting the first visible card should restore the earlier agent
+		// round, not the original baseline.
+		await cards.first().locator('.btn-reject').click();
+		await expect(cards).toHaveCount(1);
+
+		const text = await getEditorText(page);
+		expect(text).toContain('First agent sentence.');
+		expect(text).not.toContain('Second agent sentence.');
+		expect(text).not.toContain('Original sentence.');
+	});
+
 	test('plain-text agent edits preserve line breaks', async ({ page }) => {
 		await freshPage(page);
 		const name = `t-rev-plain-${SUFFIX}.txt`;

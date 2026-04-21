@@ -90,12 +90,12 @@ export function isValidTabId(id: string): boolean {
 	return true;
 }
 
-/** Classify a tab file. `.md` family → markdown editor; anything else that's
- * a recognized text extension → plain editor. Unknown extensions still get
- * 'plain' so we don't hard-block weird file types. */
-export function tabKind(tabId: string): 'markdown' | 'plain' {
-	const ext = extensionOf(tabId);
-	if (ext === 'md' || ext === 'markdown' || ext === 'mdx') return 'markdown';
+/** Classify a tab file. Every file is rendered as plain text in the editor
+ * — markdown source isn't parsed into headings/lists/marks. The function is
+ * kept (always returning 'plain') for back-compat with callers and the
+ * `TabInfo.kind` field exposed to the client; it can be removed once those
+ * call sites are simplified. */
+export function tabKind(_tabId: string): 'markdown' | 'plain' {
 	return 'plain';
 }
 

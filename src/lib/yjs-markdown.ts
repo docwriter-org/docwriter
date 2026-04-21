@@ -1,34 +1,21 @@
 import { Editor, type JSONContent } from '@tiptap/core';
 import { prosemirrorJSONToYXmlFragment } from 'y-prosemirror';
-import { markdownBaseExtensions, plainBaseExtensions } from './editor-extensions';
+import { plainBaseExtensions } from './editor-extensions';
 import { getXmlFragment, isYDocEmpty } from './yjs-doc';
 
 /**
- * Detached, headless tiptap editors for converting file content ↔ PM JSON
- * without going through the live editor. We keep one per mode because the
- * schemas differ: markdown mode has headings / lists / marks; plain mode
- * has just paragraph+text+hardBreak.
+ * Detached headless Tiptap editor used to convert raw file content into
+ * ProseMirror JSON for the plain-text schema. Every file — including
+ * `.md` / `.markdown` — uses this path now; markdown is kept as literal source
+ * rather than parsed into headings/lists/marks.
  */
 
-let mdHeadless: Editor | null = null;
 let plainHeadless: Editor | null = null;
-
-function getMarkdownHeadless(): Editor {
-	if (mdHeadless) return mdHeadless;
-	mdHeadless = new Editor({ extensions: markdownBaseExtensions(), content: '' });
-	return mdHeadless;
-}
 
 function getPlainHeadless(): Editor {
 	if (plainHeadless) return plainHeadless;
 	plainHeadless = new Editor({ extensions: plainBaseExtensions(), content: '' });
 	return plainHeadless;
-}
-
-export function markdownToPMJson(md: string): JSONContent {
-	const ed = getMarkdownHeadless();
-	ed.commands.setContent(md, { emitUpdate: false });
-	return ed.getJSON() as JSONContent;
 }
 
 /** Convert a raw text string into PM JSON for the plain-text schema. Each
@@ -47,25 +34,15 @@ export function plainTextToPMJson(text: string): JSONContent {
 
 /** Seed an empty Y.XmlFragment from file content. No-op if the fragment is
  * already populated (seeding a non-empty fragment wipes history). */
-export function seedYDocFromContent(content: string, kind: 'markdown' | 'plain' = 'markdown'): void {
+export function seedYDocFromContent(content: string): void {
 	if (!isYDocEmpty()) return;
 	if (!content) return;
-	if (kind === 'plain') {
-		const json = plainTextToPMJson(content);
-		const schema = getPlainHeadless().schema;
-		prosemirrorJSONToYXmlFragment(schema, json, getXmlFragment());
-	} else {
-		const json = markdownToPMJson(content);
-		const schema = getMarkdownHeadless().schema;
-		prosemirrorJSONToYXmlFragment(schema, json, getXmlFragment());
-	}
+	const json = plainTextToPMJson(content);
+	const schema = getPlainHeadless().schema;
+	prosemirrorJSONToYXmlFragment(schema, json, getXmlFragment());
 }
 
 export function destroyHeadless(): void {
-	if (mdHeadless) {
-		mdHeadless.destroy();
-		mdHeadless = null;
-	}
 	if (plainHeadless) {
 		plainHeadless.destroy();
 		plainHeadless = null;

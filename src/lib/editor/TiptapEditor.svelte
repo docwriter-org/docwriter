@@ -6,7 +6,6 @@
 	import { DiffOverlay, setDiffState } from './diff-overlay';
 	import { collaborativeExtensions } from '$lib/editor-extensions';
 	import { getYDoc, whenYDocReady, getCurrentTab } from '$lib/yjs-doc';
-	import { AGENT_APPLY_KEY } from '$lib/yjs-agent';
 	import {
 		userMd,
 		reviewBaseline,
@@ -328,11 +327,10 @@
 		}, IDLE_MS);
 	}
 
-	type UpdateKind = 'yjs-remote' | 'agent-apply' | 'user-edit';
+	type UpdateKind = 'yjs-remote' | 'user-edit';
 
 	function classifyUpdate(transaction: Transaction): UpdateKind {
 		const syncMeta = transaction.getMeta(ySyncPluginKey);
-		if (transaction.getMeta(AGENT_APPLY_KEY) || syncMeta?.isUndoRedoOperation) return 'agent-apply';
 		if (syncMeta !== undefined) return 'yjs-remote';
 		return 'user-edit';
 	}
@@ -343,8 +341,6 @@
 	 * │    Kind     │ Idle timer │
 	 * ├─────────────┼────────────┤
 	 * │ yjs-remote  │ skip       │
-	 * ├─────────────┼────────────┤
-	 * │ agent-apply │ skip       │
 	 * ├─────────────┼────────────┤
 	 * │ user-edit   │ restart    │
 	 * └─────────────┴────────────┘
@@ -484,9 +480,7 @@
 		}
 	});
 
-	// Export the live editor instance so +page.svelte can reach for it
-	// (e.g. the dev-only fakeAgentEdit test seam that transacts agent-
-	// origin ops directly on the Y.Doc).
+	// Export the live editor instance for tests and interactive debugging.
 	export function getEditor(): Editor | undefined {
 		return editor;
 	}

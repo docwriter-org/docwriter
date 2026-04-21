@@ -34,11 +34,9 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import type { Document } from '@hocuspocus/server';
 
-import '$lib/server/dom-shim';
 import { AGENT_ORIGIN } from './ydoc-registry';
 import { serializeYDocToMarkdown } from './ydoc-markdown';
-import { markdownBaseExtensions, plainBaseExtensions } from '$lib/editor-extensions';
-import { tabKind } from './document-files';
+import { plainBaseExtensions } from '$lib/editor-extensions';
 import { isScratchPath, resolveTabFromPath, isOpenTab } from './path-router';
 import { classifyRoundKind } from '$lib/review-diff';
 import type { PendingReviewRound } from '$lib/types';
@@ -97,29 +95,27 @@ interface TabWriteResult {
 }
 
 /** Run a write-transaction against the live Hocuspocus Document for `tabId`.
- * `mutator` receives (currentMd, kind) and returns the new markdown string,
- * or null to abort (no write, no review round). Any work the mutator wants
- * to do on the live document happens via the returned newMd — we then bind
- * a headless Collaboration editor to the document and `setContent(newMd)`,
- * wrapping that in `document.transact(..., AGENT_ORIGIN)` alongside the
- * review-map update so clients receive one atomic update. */
-async function runTabWrite(
+ * `mutator` receives the current text and returns the new text string, or
+ * null to abort (no write, no review round). The new content is written
+ * directly into the Y.Doc as plain-text paragraph elements (one per line)
+ * inside `document.transact(..., AGENT_ORIGIN)` alongside the review-map
+ * update so clients receive one atomic Yjs update. */
+export async function runTabWrite(
 	tabId: string,
 	trigger: PendingReviewRound['trigger'],
-	mutator: (currentMd: string, kind: 'markdown' | 'plain') => string | null
+	mutator: (currentText: string) => string | null
 ): Promise<TabWriteResult | { error: string }> {
 	const ws = getHocuspocus();
 	if (!ws) {
 		return { error: 'WebSocket server not initialized — Y.Doc sync is offline.' };
 	}
-	const kind = tabKind(tabId);
 	const direct = await ws.openDirectConnection(tabId);
 	let result: TabWriteResult | { error: string } | null = null;
 	try {
 		await direct.transact((document) => {
 			const doc = document as unknown as Y.Doc;
-			const beforeMd = serializeYDocToMarkdown(doc, kind);
-			const afterMd = mutator(beforeMd, kind);
+			const beforeMd = serializeYDocToMarkdown(doc);
+			const afterMd = mutator(beforeMd);
 			if (afterMd === null) {
 				result = { error: 'mutator-aborted' };
 				return;
@@ -130,44 +126,31 @@ async function runTabWrite(
 				return;
 			}
 			doc.transact(() => {
-				// Rebuild the default fragment from the new content via a
-				// headless Collaboration editor. ySyncPlugin emits minimal
-				// Yjs ops on the live document inside this transact so
-				// everything carries AGENT_ORIGIN.
-				//
-				// Plain-text kind: Tiptap's setContent(string) treats the arg
-				// as HTML, which collapses "\n" into a single paragraph. For
-				// plain files we must hand it ProseMirror JSON — one paragraph
-				// per line, matching how seedYDocFromContent builds the doc.
-				// Markdown kind: tiptap-markdown hooks setContent to parse the
-				// string as markdown, so the string form is correct there.
-				const base = kind === 'plain' ? plainBaseExtensions() : markdownBaseExtensions();
+				// Rebuild the live fragment through the same plain-text PM schema
+				// the browser uses. This keeps multiline source edits aligned with
+				// the collaboration binding instead of hand-authoring Y.Xml nodes.
+				const lines = afterMd.split('\n');
 				const headless = new Editor({
 					extensions: [
-						...base,
+						...plainBaseExtensions(),
 						Collaboration.configure({ document: doc, field: FRAGMENT_NAME })
 					]
 				});
 				try {
-					if (kind === 'plain') {
-						const lines = afterMd.split('\n');
-						headless.commands.setContent(
-							{
-								type: 'doc',
-								content: lines.map((line) =>
-									line.length === 0
-										? { type: 'paragraph' }
-										: {
-												type: 'paragraph',
-												content: [{ type: 'text', text: line }]
-											}
-								)
-							},
-							{ emitUpdate: false }
-						);
-					} else {
-						headless.commands.setContent(afterMd, { emitUpdate: false });
-					}
+					headless.commands.setContent(
+						{
+							type: 'doc',
+							content: lines.map((line) =>
+								line.length === 0
+									? { type: 'paragraph' }
+									: {
+											type: 'paragraph',
+											content: [{ type: 'text', text: line }]
+										}
+							)
+						},
+						{ emitUpdate: false }
+					);
 				} finally {
 					headless.destroy();
 				}
@@ -325,12 +308,11 @@ const readDocTool = tool(
 		if (!ws) {
 			return toolError('WebSocket server not initialized — Y.Doc sync is offline.');
 		}
-		const kind = tabKind(tabId);
 		const direct = await ws.openDirectConnection(tabId);
 		try {
 			let content = '';
 			await direct.transact((document) => {
-				content = serializeYDocToMarkdown(document as unknown as Y.Doc, kind);
+				content = serializeYDocToMarkdown(document as unknown as Y.Doc);
 			});
 			return { content: [{ type: 'text', text: content }] };
 		} catch (err) {
