@@ -8,18 +8,8 @@
  * line of the file becomes one `<paragraph>` XmlElement.
  */
 import * as Y from 'yjs';
-import { Schema } from 'prosemirror-model';
-import { prosemirrorJSONToYXmlFragment } from 'y-prosemirror';
 
 const FRAGMENT_NAME = 'default';
-const plainTextSchema = new Schema({
-	nodes: {
-		doc: { content: 'block*' },
-		paragraph: { group: 'block', content: 'text*' },
-		text: { group: 'inline' }
-	},
-	marks: {}
-});
 
 export function plainTextToPmJson(text: string): Record<string, unknown> {
 	return {
@@ -30,6 +20,21 @@ export function plainTextToPmJson(text: string): Record<string, unknown> {
 				: { type: 'paragraph', content: [{ type: 'text', text: line }] }
 		)
 	};
+}
+
+/** Build the plain-text `<paragraph>*` XmlElement shape directly, without
+ * going through prosemirror-model's JSON API. Using y-prosemirror's
+ * `prosemirrorJSONToYXmlFragment` pulls in prosemirror-model's Schema/Node
+ * classes; Vite's SSR bundler was inlining one copy into this chunk while
+ * y-prosemirror imported another from node_modules, so `instanceof` checks
+ * inside `Fragment.from` failed with "multiple versions of prosemirror-model
+ * were loaded". Hand-building the XmlElements avoids the dependency. */
+function buildPlainTextElements(content: string): Y.XmlElement[] {
+	return content.split('\n').map((line) => {
+		const p = new Y.XmlElement('paragraph');
+		if (line.length > 0) p.insert(0, [new Y.XmlText(line)]);
+		return p;
+	});
 }
 
 /** Serialize a Y.Doc's `default` XmlFragment to plain text — paragraphs
@@ -73,17 +78,16 @@ export function seedYDocFromContent(ydoc: Y.Doc, content: string): void {
 	const fragment = ydoc.getXmlFragment(FRAGMENT_NAME);
 	if (fragment.length > 0) return;
 	if (!content) return;
-	prosemirrorJSONToYXmlFragment(plainTextSchema, plainTextToPmJson(content), fragment);
+	fragment.insert(0, buildPlainTextElements(content));
 }
 
-/** Replace a Y.Doc's `default` XmlFragment with the plain-text schema shape
- * produced by y-prosemirror itself. This avoids hand-building XmlElements in
- * a way the bound collaboration client may later normalize back out. */
+/** Replace a Y.Doc's `default` XmlFragment with the plain-text paragraph
+ * shape used by the collaboration binding. */
 export function replaceYDocText(ydoc: Y.Doc, content: string): void {
 	const fragment = ydoc.getXmlFragment(FRAGMENT_NAME);
 	if (fragment.length > 0) {
 		fragment.delete(0, fragment.length);
 	}
 	if (!content) return;
-	prosemirrorJSONToYXmlFragment(plainTextSchema, plainTextToPmJson(content), fragment);
+	fragment.insert(0, buildPlainTextElements(content));
 }

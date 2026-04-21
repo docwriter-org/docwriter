@@ -247,6 +247,89 @@ test.describe('review mode', () => {
 		expect(text).toContain('My note.');
 		expect(text).not.toContain('Line 1 agent.');
 	});
+
+	test('accepting a targeted agent edit preserves later user typing', async ({ page }) => {
+		await freshPage(page);
+		const name = `t-rev-accept-merge-${SUFFIX}.md`;
+		await createTab(page, name);
+		await setEditor(page, `# ${name}\n\nOriginal sentence.\n\nUser tail.`);
+		await afterAutosave(page);
+
+		await page.evaluate(() => {
+			(window as any).__docwriterTest.fakeAgentReplace(
+				'Original sentence.',
+				'Agent sentence.'
+			);
+		});
+
+		const pendingCard = page.locator('.pending-card');
+		await expect(pendingCard).toBeVisible();
+
+		await setEditor(page, `# ${name}\n\nOriginal sentence.\n\nUser tail.\n\nMy note.`);
+		await afterAutosave(page);
+
+		await pendingCard.locator('.btn-accept').click();
+		await expect(pendingCard).toHaveCount(0);
+
+		const text = await getEditorText(page);
+		expect(text).toContain('Agent sentence.');
+		expect(text).toContain('User tail.');
+		expect(text).toContain('My note.');
+		expect(text).not.toContain('Original sentence.');
+	});
+
+	test('accepting a narrow write proposal preserves later user typing', async ({ page }) => {
+		await freshPage(page);
+		const name = `t-rev-accept-write-merge-${SUFFIX}.md`;
+		await createTab(page, name);
+		await setEditor(page, `# ${name}\n\nOriginal sentence.`);
+		await afterAutosave(page);
+
+		await page.evaluate((after) => {
+			(window as any).__docwriterTest.fakeAgentEdit(after);
+		}, `# ${name}\n\nAgent sentence.`);
+
+		const pendingCard = page.locator('.pending-card');
+		await expect(pendingCard).toBeVisible();
+
+		await setEditor(page, `# ${name}\n\nOriginal sentence.\n\nMy note.`);
+		await afterAutosave(page);
+
+		await pendingCard.locator('.btn-accept').click();
+		await expect(pendingCard).toHaveCount(0);
+
+		const text = await getEditorText(page);
+		expect(text).toContain('Agent sentence.');
+		expect(text).toContain('My note.');
+		expect(text).not.toContain('Original sentence.');
+	});
+
+	test('accepting a stale whole-doc rewrite is blocked', async ({ page }) => {
+		await freshPage(page);
+		const name = `t-rev-accept-stale-write-${SUFFIX}.md`;
+		await createTab(page, name);
+		await setEditor(page, `# ${name}\n\nOriginal sentence.`);
+		await afterAutosave(page);
+
+		await page.evaluate((after) => {
+			(window as any).__docwriterTest.fakeAgentEdit(after);
+		}, `# ${name}\n\nIntro line.\n\nOriginal sentence.`);
+
+		const pendingCard = page.locator('.pending-card');
+		await expect(pendingCard).toBeVisible();
+
+		await setEditor(page, `# ${name}\n\nOriginal sentence.\n\nMy note.`);
+		await afterAutosave(page);
+
+		await pendingCard.locator('.btn-accept').click();
+
+		await expect(pendingCard).toBeVisible();
+		const text = await getEditorText(page);
+		expect(text).toContain('Original sentence.');
+		expect(text).toContain('My note.');
+		expect(text).not.toContain('Intro line.');
+		await expect(page.locator('.entry.notification')).toContainText(/Accept failed|stale/i);
+	});
 });
 
 test.describe('history restore', () => {

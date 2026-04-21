@@ -55,6 +55,77 @@ function waitForSynced(provider: HocuspocusProvider): Promise<void> {
 	});
 }
 
+/** Wait until the provider has no local changes left to send/ack. This is
+ * stricter than `synced`: we use it before submit / accept / reject so the
+ * server sees the user's latest local typing before it makes decisions
+ * based on the document text. */
+function waitForProviderQuiescent(
+	provider: HocuspocusProvider,
+	timeoutMs = 2_000
+): Promise<boolean> {
+	return new Promise((resolve) => {
+		const isIdle = () => provider.synced && !provider.hasUnsyncedChanges;
+		if (isIdle()) {
+			resolve(true);
+			return;
+		}
+
+		let settled = false;
+		const cleanup = () => {
+			provider.off('unsyncedChanges', onUnsyncedChanges);
+			provider.off('synced', onSynced);
+			if (timer) clearTimeout(timer);
+		};
+		const finish = (ok: boolean) => {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			resolve(ok);
+		};
+		const maybeFinish = () => {
+			if (isIdle()) finish(true);
+		};
+		const onUnsyncedChanges = () => maybeFinish();
+		const onSynced = () => maybeFinish();
+		const timer = setTimeout(() => finish(isIdle()), timeoutMs);
+
+		provider.on('unsyncedChanges', onUnsyncedChanges);
+		provider.on('synced', onSynced);
+		maybeFinish();
+	});
+}
+
+/** sessionStorage key the client uses to remember which server instance its
+ * in-memory Y.Docs have been synced against. Exported so the preflight check
+ * and the WS-auth handler share the same key. */
+export const SERVER_INSTANCE_STORAGE_KEY = 'docwriter.serverInstanceId';
+
+/** Token the HocuspocusProvider presents on every (re)connect. The server's
+ * `onAuthenticate` rejects if this is non-empty and doesn't match its own
+ * `serverInstanceId` — the sign that this client's Y.Doc was synced against
+ * a different server process than the one now listening. Reads fresh from
+ * sessionStorage so a successful preflight reconcile between connections
+ * shows up without rebuilding the provider. */
+function currentInstanceToken(): string {
+	if (typeof window === 'undefined') return '';
+	return sessionStorage.getItem(SERVER_INSTANCE_STORAGE_KEY) ?? '';
+}
+
+/** Handle a server rejection due to an instance-id mismatch. The client's
+ * in-memory Y.Doc holds ops from a previous server process; if we let it
+ * keep running, the reconnect loop would either retry endlessly or sync
+ * those stale ops up on a later successful auth. Drop everything and do a
+ * full page reload — the fresh page's preflight fetch of /api/session will
+ * observe the new serverInstanceId and start clean. */
+let instanceMismatchHandled = false;
+function handleInstanceMismatch(): void {
+	if (typeof window === 'undefined') return;
+	if (instanceMismatchHandled) return;
+	instanceMismatchHandled = true;
+	sessionStorage.removeItem(SERVER_INSTANCE_STORAGE_KEY);
+	window.location.reload();
+}
+
 /** Get (or create) the Y.Doc for a tab. Instantiating a Y.Doc also attaches
  * the WebSocket provider, so the first call for a tab kicks off the server
  * handshake. Subsequent calls return the same instance. */
@@ -68,7 +139,9 @@ export function getYDocForTab(tabId: string): Y.Doc {
 		wsProvider = new HocuspocusProvider({
 			url: wsUrl(),
 			name: tabId,
-			document: ydoc
+			document: ydoc,
+			token: currentInstanceToken,
+			onAuthenticationFailed: handleInstanceMismatch
 		});
 		readyPromise = waitForSynced(wsProvider);
 	} else {
@@ -132,6 +205,15 @@ export function whenYDocReady(): Promise<void> {
 	return requireCurrent().readyPromise;
 }
 
+/** Wait until the current tab's local Yjs updates have been acknowledged by
+ * the server. Returns false on timeout so callers can avoid racing server
+ * reads/mutations against still-in-flight local typing. */
+export function waitForCurrentTabSync(timeoutMs = 2_000): Promise<boolean> {
+	const doc = requireCurrent();
+	if (!doc.wsProvider) return Promise.resolve(true);
+	return waitForProviderQuiescent(doc.wsProvider, timeoutMs);
+}
+
 /** True if the current tab's XmlFragment has no content. */
 export function isYDocEmpty(): boolean {
 	return getXmlFragment().length === 0;
@@ -185,7 +267,9 @@ export async function renameTab(oldId: string, newId: string): Promise<void> {
 		wsProvider = new HocuspocusProvider({
 			url: wsUrl(),
 			name: newId,
-			document: newYdoc
+			document: newYdoc,
+			token: currentInstanceToken,
+			onAuthenticationFailed: handleInstanceMismatch
 		});
 		readyPromise = waitForSynced(wsProvider);
 	} else {
@@ -202,4 +286,28 @@ export async function resetAllYDocs(): Promise<void> {
 		await destroyTab(id);
 	}
 	currentTabId = null;
+}
+
+/** Compare the server's current `serverInstanceId` to the one this browser
+ * tab last observed. If they differ (e.g. the server was restarted while the
+ * tab stayed open, or the workspace was wiped), destroy every in-memory Y.Doc
+ * BEFORE the next WebSocket provider attaches. Otherwise stale Yjs ops from
+ * the pre-restart session would sync up into the freshly-seeded server doc
+ * and the debounced markdown flush would clobber disk edits made while the
+ * server was down.
+ *
+ * This is layer 1 of the anti-clobber defense: the HTTP preflight caught on
+ * initial page load. Layer 2 is the WS `onAuthenticate` token check that
+ * kicks in when the tab stays open across a server restart (no reload to
+ * trigger this preflight). Keep both — they cover different cases.
+ *
+ * Must be awaited before any `setCurrentTab` / `getYDocForTab` call on app
+ * mount. Safe to call repeatedly: it only resets on an actual mismatch. */
+export async function reconcileServerInstance(currentId: string): Promise<void> {
+	if (typeof window === 'undefined') return;
+	const stored = sessionStorage.getItem(SERVER_INSTANCE_STORAGE_KEY);
+	if (stored && stored !== currentId) {
+		await resetAllYDocs();
+	}
+	sessionStorage.setItem(SERVER_INSTANCE_STORAGE_KEY, currentId);
 }

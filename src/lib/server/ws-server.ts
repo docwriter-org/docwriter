@@ -24,6 +24,7 @@ import type { PendingReviewRound } from '$lib/types';
 import { AGENT_ORIGIN } from './ydoc-registry';
 import { serializeYDocToMarkdown } from './ydoc-markdown';
 import { applyTextToYDoc } from './ydoc-apply';
+import { applyPendingReviewRound } from '$lib/review-rounds';
 import {
 	appendUpdate,
 	replayUpdatesInto,
@@ -90,12 +91,40 @@ function globalHolder() {
 	return globalThis as unknown as { __docwriterWsServer?: Server };
 }
 
+/** Process-unique id generated in `hooks.server.ts`; used to reject a WS
+ * reconnect from a client whose Y.Doc was synced with a different server
+ * process than this one. Read lazily so `createWsServer` doesn't care
+ * about hook ordering. */
+function currentServerInstanceId(): string {
+	return (
+		(globalThis as unknown as { __docwriterServerInstanceId?: string })
+			.__docwriterServerInstanceId ?? ''
+	);
+}
+
 export function createWsServer(port: number): Server {
 	const server = new Server({
 		port,
 		// `quiet: true` — we print our own startup log in `hooks.server.ts`;
 		// Hocuspocus's default start-screen is too chatty for our dev output.
 		quiet: true,
+		async onAuthenticate({ token }) {
+			// Clients send their last-known `serverInstanceId` here (see
+			// `src/lib/yjs-doc.ts`). A matching token means the client's
+			// in-memory Y.Doc was last synced against THIS server process,
+			// so it's safe to merge its ops into our freshly-loaded doc.
+			// An empty token means a fresh client with nothing cached. A
+			// non-empty, non-matching token means the client has state tied
+			// to a different server process (we restarted); rejecting here
+			// forces the client's `onAuthenticationFailed` to fire, which
+			// discards its stale Y.Doc before any sync can happen — without
+			// this, the client would upload stale ops via Yjs CRDT merge
+			// and the debounced flush would clobber disk edits made while
+			// the server was down.
+			const expected = currentServerInstanceId();
+			if (!token || token === expected) return;
+			throw new Error('server-instance-mismatch');
+		},
 		async onLoadDocument({ documentName: tabId, document }) {
 			// `document` IS Hocuspocus's live internal Y.Doc (Document extends
 			// Y.Doc). Hydrate it from SQLite — but only once per live Document
@@ -188,8 +217,10 @@ export function flushTabMarkdownNow(tabId: string) {
 }
 
 /** Accept one pending review round (or all of them) on the server-
- * authoritative Y.Doc. Pending rounds are proposals only; Accept commits the
- * chosen `afterMd` into the live Y.Doc and drops the accepted rounds. */
+ * authoritative Y.Doc. Pending rounds are proposals only; Accept replays the
+ * queued operations against the CURRENT live doc and drops the accepted
+ * rounds. This preserves newer user edits for `edit` proposals and blocks
+ * stale whole-document rewrites instead of clobbering them. */
 export async function acceptTabRounds(
 	tabId: string,
 	roundId?: string
@@ -202,19 +233,33 @@ export async function acceptTabRounds(
 			? (currentRaw as PendingReviewRound[])
 			: [];
 		let next: PendingReviewRound[];
-		let commitTarget: string | null = null;
+		let accepted: PendingReviewRound[];
 		if (!roundId) {
-			if (current.length > 0) commitTarget = current[current.length - 1].afterMd;
+			accepted = current;
 			next = [];
 		} else {
 			const idx = current.findIndex((round) => round.id === roundId);
 			if (idx < 0) {
 				return { acceptedCount: 0, rounds: current };
 			}
-			commitTarget = current[idx].afterMd;
+			accepted = current.slice(0, idx + 1);
 			next = current.slice(idx + 1);
 		}
-		if (commitTarget !== null && serializeYDocToMarkdown(ydoc) !== commitTarget) {
+		let commitTarget = serializeYDocToMarkdown(ydoc);
+		for (const round of accepted) {
+			const applied = applyPendingReviewRound(commitTarget, round);
+			if (applied.stale) {
+				const err = new Error(
+					round.staleReason ??
+						applied.staleReason ??
+						'This proposal is stale and needs to be regenerated before it can be accepted.'
+				);
+				err.name = 'StalePendingReviewError';
+				throw err;
+			}
+			commitTarget = applied.nextText;
+		}
+		if (serializeYDocToMarkdown(ydoc) !== commitTarget) {
 			applyTextToYDoc(ydoc, commitTarget);
 		}
 		ydoc.transact(() => {

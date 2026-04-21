@@ -23,7 +23,8 @@
 		type PendingUserQuestion
 	} from '$lib/stores';
 	import { getYDocForTab } from '$lib/yjs-doc';
-	import type { ProposedRule, ProposedHook, PendingReviewRound } from '$lib/types';
+	import type { ProposedRule, ProposedHook } from '$lib/types';
+	import type { MaterializedPendingReviewRound } from '$lib/review-rounds';
 	import {
 		summarizeRound,
 		buildReviewDiffPreview,
@@ -59,33 +60,7 @@
 
 	let md = $state('');
 
-	function textOf(node: unknown): string {
-		if (node instanceof Y.XmlText) return node.toString();
-		if (node instanceof Y.XmlElement || node instanceof Y.XmlFragment) {
-			const parts: string[] = [];
-			(node as Y.XmlElement | Y.XmlFragment).forEach((child: unknown) => {
-				if (
-					child instanceof Y.XmlElement &&
-					typeof child.nodeName === 'string' &&
-					child.nodeName === 'hardBreak'
-				) {
-					parts.push('\n');
-					return;
-				}
-				parts.push(textOf(child));
-			});
-			return parts.join('');
-		}
-		return '';
-	}
-
-	function textFromFragment(fragment: Y.XmlFragment): string {
-		const lines: string[] = [];
-		fragment.forEach((child: unknown) => {
-			lines.push(textOf(child));
-		});
-		return lines.join('\n');
-	}
+	import { plainTextFromFragment } from '$lib/yjs-text';
 
 	let activeTabUnsubscribe: Unsubscriber | null = null;
 	let observedFragment: Y.XmlFragment | null = null;
@@ -107,7 +82,7 @@
 		}
 		const fragment = getYDocForTab(tabId).getXmlFragment('default');
 		const sync = () => {
-			md = textFromFragment(fragment);
+			md = plainTextFromFragment(fragment);
 		};
 		sync();
 		fragment.observe(sync);
@@ -115,7 +90,7 @@
 		observedHandler = sync;
 	}
 
-	let rounds = $state<PendingReviewRound[]>([]);
+	let rounds = $state<MaterializedPendingReviewRound[]>([]);
 	pendingReviewRounds.subscribe((v) => (rounds = v));
 
 	let pendingRuleProposals = $state<ProposedRule[]>([]);
@@ -218,7 +193,7 @@
 		}
 	}
 
-	function diffPreview(round: PendingReviewRound): ReviewPreviewLine[] {
+	function diffPreview(round: MaterializedPendingReviewRound): ReviewPreviewLine[] {
 		return buildReviewDiffPreview(round.beforeMd, round.afterMd, 1);
 	}
 

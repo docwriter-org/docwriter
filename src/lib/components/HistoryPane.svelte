@@ -245,15 +245,20 @@
 						{#if entry.durationMs}<span class="duration">{formatDuration(entry.durationMs)}</span>{/if}
 					</div>
 				{:else}
-					<details class="entry tool-call">
+					<details class="entry tool-call" class:tool-failed={entry.isError}>
 						<summary class="tool-summary">
-							<FileEdit size={11} color="#7c3aed" />
+							<FileEdit size={11} color={entry.isError ? '#dc2626' : '#7c3aed'} />
 							<span class="tool-name">{entry.tool_name}</span>
 							<span class="tool-hint">{summarizeToolInput(entry.input)}</span>
+							{#if entry.isError}<span class="tool-error-badge">failed</span>{/if}
 							<span class="entry-time">{relativeTime(entry.timestamp)}</span>
 							{#if entry.durationMs}<span class="duration">{formatDuration(entry.durationMs)}</span>{/if}
 						</summary>
 						<pre class="tool-detail">{formatToolInput(entry.input)}</pre>
+						{#if entry.result}
+							<div class="tool-result-label">{entry.isError ? 'Error' : 'Result'}</div>
+							<pre class="tool-result" class:tool-result-error={entry.isError}>{entry.result}</pre>
+						{/if}
 					</details>
 				{/if}
 			{:else if entry.type === 'assistant_text'}
@@ -674,6 +679,47 @@
 		max-height: 200px;
 		overflow-y: auto;
 		margin: 0;
+	}
+	/* Tool-call response (from MCP CallToolResult). Rendered as a second
+	 * section below the args so you can see BOTH what the agent tried and
+	 * how the tool replied — particularly the error text when a tool fails
+	 * silently (e.g. "old_string not found" from edit_doc). */
+	.tool-result-label {
+		padding: 6px 10px 0;
+		font-size: 10px;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		color: var(--text-secondary);
+		background: var(--bg-surface);
+	}
+	.tool-result {
+		padding: 4px 10px 10px;
+		margin: 0;
+		font-size: 12px;
+		color: var(--text-primary);
+		background: var(--bg-surface);
+		white-space: pre-wrap;
+		word-break: break-word;
+		font-family: 'SF Mono', 'Menlo', monospace;
+		line-height: 1.5;
+		max-height: 200px;
+		overflow-y: auto;
+	}
+	.tool-result-error {
+		color: #b91c1c;
+	}
+	.tool-failed {
+		border-color: color-mix(in srgb, #dc2626 35%, var(--tool-border));
+		background: color-mix(in srgb, #dc2626 6%, var(--tool-bg));
+	}
+	.tool-error-badge {
+		font-size: 10px;
+		padding: 1px 6px;
+		border-radius: 4px;
+		background: color-mix(in srgb, #dc2626 15%, transparent);
+		color: #b91c1c;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
 	}
 
 	/* Assistant text — collapsible <details>. Collapsed state shows a single

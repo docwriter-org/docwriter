@@ -41,6 +41,7 @@ export const test = base.extend<{ baseURL: string }, WorkerFixtures>({
 	isolatedServer: [
 		async ({}, use, workerInfo) => {
 			const port = 5300 + workerInfo.workerIndex;
+			const wsPort = 6300 + workerInfo.workerIndex;
 			const root = mkdtempSync(join(tmpdir(), `docwriter-w${workerInfo.workerIndex}-`));
 			const proc: ChildProcess = spawn(
 				'npx',
@@ -49,6 +50,8 @@ export const test = base.extend<{ baseURL: string }, WorkerFixtures>({
 					env: {
 						...process.env,
 						DOCWRITER_ROOT: root,
+						DOCWRITER_WS_PORT: String(wsPort),
+						PUBLIC_DOCWRITER_WS_PORT: String(wsPort),
 						BROWSER: 'none',
 						FORCE_COLOR: '0'
 					},

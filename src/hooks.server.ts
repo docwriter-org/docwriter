@@ -6,9 +6,23 @@
  *                               next render starts a fresh conversation.
  */
 import type { Handle } from '@sveltejs/kit';
+import { randomUUID } from 'node:crypto';
 import { getSessionId, setSessionId } from '$lib/server/runtime-state';
 import { installBundledSkills } from '$lib/server/skills-install';
 import { createWsServer } from '$lib/server/ws-server';
+
+// A fresh UUID per server process. Clients compare this against the one they
+// last synced with; a mismatch means they're talking to a different server
+// instance than the one their in-memory Y.Docs were synced against, so
+// those Y.Docs must be discarded before the WebSocket provider attaches —
+// otherwise stale client state syncs up and the server flushes it back to
+// disk, silently overwriting external edits made while docwriter was down.
+// Stashed on globalThis so the same module scope survives Vite HMR.
+const SERVER_INSTANCE_ID_KEY = '__docwriterServerInstanceId';
+const globalAny = globalThis as unknown as Record<string, string | undefined>;
+if (!globalAny[SERVER_INSTANCE_ID_KEY]) {
+	globalAny[SERVER_INSTANCE_ID_KEY] = randomUUID();
+}
 
 // Install DocWriter's bundled project skill(s) into the workspace's
 // `.claude/skills/` dir so the SDK picks them up via the 'project'

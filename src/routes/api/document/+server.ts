@@ -7,6 +7,17 @@ import { getTabsState } from '$lib/server/runtime-state';
 import { acceptTabRounds, rejectTabRounds, flushTabMarkdownNow } from '$lib/server/ws-server';
 import { runTabWrite } from '$lib/server/mcp-doc-tools';
 
+function countOccurrences(haystack: string, needle: string): number {
+	if (!needle) return 0;
+	let count = 0;
+	let idx = 0;
+	while ((idx = haystack.indexOf(needle, idx)) !== -1) {
+		count += 1;
+		idx += needle.length;
+	}
+	return count;
+}
+
 /**
  * Per-tab document endpoint.
  *
@@ -74,8 +85,27 @@ export const POST: RequestHandler = async ({ request, url }) => {
 		const body = await request.json().catch(() => ({}));
 		const roundId = typeof body.roundId === 'string' ? body.roundId : undefined;
 		if (body?.action === 'accept_rounds') {
-			const result = await acceptTabRounds(tabId, roundId);
-			return json({ ok: true, ...result });
+			let result;
+			try {
+				result = await acceptTabRounds(tabId, roundId);
+			} catch (e) {
+				if ((e as Error).name === 'StalePendingReviewError') {
+					return json({ error: (e as Error).message }, { status: 409 });
+				}
+				throw e;
+			}
+			try {
+				flushTabMarkdownNow(tabId);
+				return json({ ok: true, diskFlushed: true, ...result });
+			} catch (e) {
+				console.error(`[docwriter] accept flush failed for tab "${tabId}":`, e);
+				return json({
+					ok: true,
+					diskFlushed: false,
+					diskFlushError: String(e),
+					...result
+				});
+			}
 		}
 		if (body?.action === 'reject_rounds') {
 			const result = await rejectTabRounds(tabId, roundId);
@@ -89,8 +119,44 @@ export const POST: RequestHandler = async ({ request, url }) => {
 			if (content === null) {
 				return json({ error: 'Missing content' }, { status: 400 });
 			}
-			const result = await runTabWrite(tabId, 'dev_fake_agent_write', () => content);
+			const result = await runTabWrite(tabId, 'dev_fake_agent_write', () => ({
+				operation: { type: 'write', content },
+				afterMd: content
+			}));
 			if ('error' in result) {
+				return json({ error: result.error }, { status: 500 });
+			}
+			return json({ ok: true, ...result });
+		}
+		if (body?.action === 'dev_fake_agent_edit') {
+			if (!dev) {
+				return json({ error: 'Not available outside dev mode' }, { status: 404 });
+			}
+			const oldString = typeof body.oldString === 'string' ? body.oldString : null;
+			const newString = typeof body.newString === 'string' ? body.newString : null;
+			if (oldString === null || newString === null) {
+				return json({ error: 'Missing oldString/newString' }, { status: 400 });
+			}
+			let failure: string | null = null;
+			const result = await runTabWrite(tabId, 'dev_fake_agent_edit', (currentMd) => {
+				const hits = countOccurrences(currentMd, oldString);
+				if (hits === 0) {
+					failure = 'oldString not found in current document';
+					return null;
+				}
+				if (hits > 1) {
+					failure = `oldString matched ${hits} locations in current document`;
+					return null;
+				}
+				return {
+					operation: { type: 'edit', oldString, newString },
+					afterMd: currentMd.replace(oldString, newString)
+				};
+			});
+			if ('error' in result) {
+				if (failure) {
+					return json({ error: failure }, { status: 409 });
+				}
 				return json({ error: result.error }, { status: 500 });
 			}
 			return json({ ok: true, ...result });

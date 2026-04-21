@@ -6,9 +6,9 @@ import type {
 	HistoryEntry,
 	AgentSettings,
 	ProposedRule,
-	ProposedHook,
-	PendingReviewRound
+	ProposedHook
 } from './types';
+import type { MaterializedPendingReviewRound } from './review-rounds';
 
 // ── Document state ────────────────────────────────────────────────────
 // The canonical client state is a Y.Doc (see src/lib/yjs-doc.ts) bound into
@@ -24,7 +24,7 @@ export const reviewBaseline = writable<string | null>(null);
  * composes them all (anchored at rounds[0].beforeMd). Accepting a round
  * removes just that round; rejecting a round rewinds to its beforeMd
  * (also dropping all later rounds). */
-export const pendingReviewRounds = writable<PendingReviewRound[]>([]);
+export const pendingReviewRounds = writable<MaterializedPendingReviewRound[]>([]);
 
 /** Writing rules (mirror of document.meta.json rules). */
 export const rules = writable<Rule[]>([]);
@@ -67,8 +67,10 @@ export const submitCountdown = writable<number>(0);
 /** User preference: editor font size scale (1.0 = default 17px). */
 export const editorFontScale = writable<number>(1.0);
 /** User preference: wrap long lines in the editor while keeping logical line
- * numbers aligned in the gutter and continuation rows blank. */
-export const editorSoftWrap = writable<boolean>(false);
+ * numbers aligned in the gutter and continuation rows blank. Default on so
+ * long lines don't silently clip off the right edge of the editor; the
+ * server mirrors this default in `runtime-state.ts`. */
+export const editorSoftWrap = writable<boolean>(true);
 
 // ── Actions toolbar ───────────────────────────────────────────────────
 

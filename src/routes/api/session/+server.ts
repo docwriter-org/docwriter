@@ -2,6 +2,7 @@ import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import {
 	getSessionId,
+	getServerInstanceId,
 	getRecentActions,
 	setRecentActions,
 	getActionUsageCounts,
@@ -16,6 +17,7 @@ import { existsSync, rmSync } from 'fs';
 export const GET: RequestHandler = async () => {
 	return json({
 		sessionId: getSessionId(),
+		serverInstanceId: getServerInstanceId(),
 		recentActions: getRecentActions(),
 		actionUsageCounts: getActionUsageCounts(),
 		editorSoftWrap: getEditorSoftWrap()

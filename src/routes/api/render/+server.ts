@@ -4,10 +4,12 @@ import { query, createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk'
 import type { HookCallback } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import { spawn } from 'child_process';
+import { normalize, resolve } from 'path';
 import * as Y from 'yjs';
 import {
 	AGENT_SCRATCH_DIR,
-	isValidTabId
+	isValidTabId,
+	tabFile
 } from '$lib/server/document-files';
 import {
 	readHooks,
@@ -24,6 +26,8 @@ import { serializeYDocToMarkdown } from '$lib/server/ydoc-markdown';
 import { registerPendingAskUser } from '$lib/server/ask-user-state';
 import { unifiedLineDiff } from '$lib/diff';
 import { buildStyleReferencesPromptBlock } from '$lib/server/references';
+import { materializePendingReviewText } from '$lib/review-rounds';
+import type { PendingReviewRound } from '$lib/types';
 import {
 	docToolsMcp,
 	EDIT_DOC_TOOL_NAME,
@@ -46,17 +50,120 @@ function readLiveTabMarkdown(tabId: string): string {
 	const ydoc = liveDoc ?? getTabYDoc(tabId).ydoc;
 	const reviewMap = ydoc.getMap('review');
 	const rounds = reviewMap.get('pendingRounds');
+	const committed = serializeYDocToMarkdown(ydoc);
 	if (Array.isArray(rounds) && rounds.length > 0) {
-		const latest = rounds[rounds.length - 1] as { afterMd?: unknown };
-		if (typeof latest?.afterMd === 'string') return latest.afterMd;
+		return materializePendingReviewText(committed, rounds as PendingReviewRound[]);
 	}
-	return serializeYDocToMarkdown(ydoc);
+	return committed;
 }
 
 const LAST_SEEN_PREFIX = 'last_seen:';
+const GENERIC_WAKEUP_MESSAGE =
+	'The user clicked Wake-up without a specific request. Decide what (if anything) to do per the agency guidance above.';
+const WORKSPACE_ROOT = resolve(process.env.DOCWRITER_ROOT || process.cwd());
 
 function lastSeenKey(tabId: string): string {
 	return LAST_SEEN_PREFIX + tabId;
+}
+
+function normalizeToolPath(pathLike: string): string {
+	return normalize(resolve(WORKSPACE_ROOT, pathLike));
+}
+
+function extractInlineDirectives(text: string, limit = 8): string[] {
+	const directives: string[] = [];
+	const re = /\[\[([\s\S]*?)\]\]/g;
+	let match: RegExpExecArray | null;
+	while ((match = re.exec(text)) && directives.length < limit) {
+		const normalized = match[1].replace(/\s+/g, ' ').trim();
+		if (!normalized) continue;
+		directives.push(
+			normalized.length > 280 ? normalized.slice(0, 277) + '...' : normalized
+		);
+	}
+	return directives;
+}
+
+function buildImplicitWakeupMessage(
+	activeTabId: string,
+	tabs: TabPromptInfo[]
+): string {
+	const directivesByTab = tabs
+		.map(({ tabId, currentMd }) => ({
+			tabId,
+			directives: extractInlineDirectives(currentMd)
+		}))
+		.filter((entry) => entry.directives.length > 0);
+
+	if (directivesByTab.length === 0) {
+		return GENERIC_WAKEUP_MESSAGE;
+	}
+
+	const lines = [
+		'The user clicked Wake-up without a specific request.',
+		'Use these inline `[[ ... ]]` directives as the most likely tasks to handle next.'
+	];
+	const activeDirectives =
+		directivesByTab.find((entry) => entry.tabId === activeTabId) ?? null;
+	if (activeDirectives) {
+		lines.push('', `Active tab \`${activeDirectives.tabId}\`:`);
+		for (const directive of activeDirectives.directives) {
+			lines.push(`- ${directive}`);
+		}
+	}
+
+	const otherDirectiveTabs = directivesByTab.filter((entry) => entry.tabId !== activeTabId);
+	if (otherDirectiveTabs.length > 0) {
+		lines.push('', 'Other open tabs with inline directives:');
+		for (const entry of otherDirectiveTabs) {
+			for (const directive of entry.directives) {
+				lines.push(`- \`${entry.tabId}\`: ${directive}`);
+			}
+		}
+	}
+
+	lines.push(
+		'',
+		'Read other files or use other tools first if that helps you resolve these correctly. For open tabs, use `read_doc`, `edit_doc`, and `write_doc` instead of the built-in file tools.'
+	);
+	return lines.join('\n');
+}
+
+function shellTokenCandidates(command: string): string[] {
+	const rawTokens = command.match(/"[^"]*"|'[^']*'|`[^`]*`|[^\s]+/g) ?? [];
+	const tokens = new Set<string>();
+	for (const rawToken of rawTokens) {
+		for (const piece of rawToken.split('=')) {
+			const cleaned = piece.replace(
+				/^[\s"'`([{<]+|[\s"'`)\]}>;,]+$/g,
+				''
+			);
+			if (!cleaned || cleaned === '-' || cleaned === '--') continue;
+			tokens.add(cleaned);
+		}
+	}
+	return [...tokens];
+}
+
+function findReferencedOpenTabPath(
+	value: unknown,
+	openTabPaths: Set<string>
+): string | null {
+	if (typeof value !== 'string' || !value.trim()) return null;
+	const normalized = normalizeToolPath(value.trim());
+	return openTabPaths.has(normalized) ? normalized : null;
+}
+
+function findOpenTabPathInCommand(
+	command: unknown,
+	openTabPaths: Set<string>
+): string | null {
+	if (typeof command !== 'string' || !command.trim()) return null;
+	for (const token of shellTokenCandidates(command)) {
+		const matched = findReferencedOpenTabPath(token, openTabPaths);
+		if (matched) return matched;
+	}
+	return null;
 }
 
 function agencyGuidance(
@@ -485,12 +592,12 @@ export const POST: RequestHandler = async ({ request }) => {
 
 		const currentSessionId = getSessionId();
 		const message =
-			userMessage ||
-			"The user clicked Wake-up without a specific request. Decide what (if anything) to do per the agency guidance above.";
+			userMessage || buildImplicitWakeupMessage(active, tabsForPrompt);
 		const prompt = warmup
 			? `You are a writing assistant. The user has a set of files open as tabs. Acknowledge you're ready in 1-2 sentences. Don't edit anything.`
 			: buildMultiTabPrompt(active, tabsForPrompt, message);
 		const systemPromptBlock = warmup ? undefined : buildSystemPrompt();
+		const openTabPaths = new Set(allTabIds.map((tabId) => normalizeToolPath(tabFile(tabId))));
 
 		const abortController = new AbortController();
 		request.signal.addEventListener('abort', () => abortController.abort());
@@ -557,6 +664,47 @@ export const POST: RequestHandler = async ({ request }) => {
 						// the tool call's `updatedInput`. Every other tool passes
 						// through with `allow` + no modification.
 						canUseTool: async (toolName: string, toolInput: any) => {
+							if (!warmup) {
+								if (toolName === 'Read') {
+									const matched = findReferencedOpenTabPath(
+										toolInput?.file_path,
+										openTabPaths
+									);
+									if (matched) {
+										return {
+											behavior: 'deny' as const,
+											message:
+												'Open tab files must be read with `read_doc(path)` so you see the review-aware content instead of reading the file directly.'
+										};
+									}
+								}
+								if (toolName === 'Glob' || toolName === 'Grep') {
+									const matched = findReferencedOpenTabPath(
+										toolInput?.path,
+										openTabPaths
+									);
+									if (matched) {
+										return {
+											behavior: 'deny' as const,
+											message:
+												'Open tab files should not be targeted through built-in search tools. Use `read_doc(path)` for the tab itself and use Glob/Grep elsewhere in the workspace.'
+										};
+									}
+								}
+								if (toolName === 'Bash') {
+									const matched = findOpenTabPathInCommand(
+										toolInput?.command,
+										openTabPaths
+									);
+									if (matched) {
+										return {
+											behavior: 'deny' as const,
+											message:
+												'Open tab files must be accessed through `read_doc`, `edit_doc`, or `write_doc`, not through Bash commands.'
+										};
+									}
+								}
+							}
 							if (toolName !== ASK_USER_TOOL_NAME) {
 								return { behavior: 'allow' as const, updatedInput: toolInput };
 							}
@@ -658,6 +806,38 @@ export const POST: RequestHandler = async ({ request }) => {
 								usage: anyMsg.usage,
 								subtype: anyMsg.subtype
 							});
+						}
+
+						if (msg.type === 'user') {
+							// The SDK surfaces each MCP tool's response as a user
+							// message whose `content` contains one or more
+							// `tool_result` blocks. Relay those to the browser so
+							// the Agent History pane can show the tool's actual
+							// output — especially the `isError` path, which is
+							// otherwise invisible: the user sees "edit_doc was
+							// called with args X" but has no way to tell the
+							// call actually failed with "old_string not found".
+							const anyMsg = msg as any;
+							const content = anyMsg?.message?.content;
+							if (Array.isArray(content)) {
+								for (const block of content) {
+									if (block?.type !== 'tool_result') continue;
+									let text = '';
+									if (typeof block.content === 'string') {
+										text = block.content;
+									} else if (Array.isArray(block.content)) {
+										text = block.content
+											.map((c: any) => (typeof c?.text === 'string' ? c.text : ''))
+											.filter(Boolean)
+											.join('\n');
+									}
+									send('tool_result', {
+										tool_use_id: block.tool_use_id,
+										is_error: !!block.is_error,
+										text
+									});
+								}
+							}
 						}
 
 						if (msg.type === 'stream_event') {

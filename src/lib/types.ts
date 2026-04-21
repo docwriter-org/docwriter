@@ -15,17 +15,33 @@ export interface ProposedRule {
 /** One round of agent edits pending the user's review. The outline pane
  * shows one card per round so each can be accepted/rejected independently,
  * while the editor's diff overlay composes them all into a single view
- * anchored at the EARLIEST round's `beforeMd`. */
+ * derived from the live doc plus the queued operations. */
+export type PendingReviewOperation =
+	| {
+			type: 'edit';
+			oldString: string;
+			newString: string;
+	  }
+	| {
+			type: 'write';
+			content: string;
+	  };
+
 export interface PendingReviewRound {
 	id: string;
-	/** Editor markdown captured immediately before this round applied.
-	 * Used as the baseline for the diff overlay (when this is the earliest
-	 * pending round) and as the restore target when the user rejects this
-	 * round. */
-	beforeMd: string;
-	/** Agent's output for this round — recorded for auditing / diff
-	 * summary; the Y.Doc already has it merged in. */
-	afterMd: string;
+	/** Stored edit intent. `edit` proposals can be replayed safely against
+	 * the latest live doc on Accept; `write` proposals are whole-document
+	 * rewrites and require a matching base hash. */
+	operation?: PendingReviewOperation;
+	/** Lightweight fingerprint of the proposal base text. Used to detect a
+	 * stale whole-document `write` before Accept clobbers newer user edits. */
+	baseHash?: string;
+	/** Derived preview strings. These are computed on demand from the live
+	 * document plus `operation`, and may be absent on the persisted round.
+	 * Legacy rounds written before the op-based model may still persist
+	 * these directly. */
+	beforeMd?: string;
+	afterMd?: string;
 	/** User-facing prompt or trigger that produced this round. */
 	trigger?: string;
 	timestamp: number;
@@ -35,7 +51,7 @@ export interface PendingReviewRound {
 	 * overlay, compact inline pill in the outline — so small corrections
 	 * don't look like a big paragraph-level rewrite. `big` edits get the
 	 * full green/red diff treatment. */
-	kind: 'tiny' | 'big';
+	kind?: 'tiny' | 'big';
 	/** How many AGENT_ORIGIN undo steps this round contributed to the
 	 * server's live-doc Y.UndoManager. With incremental streaming (one apply per
 	 * Edit/Write tool call + one final apply at result time), this can be
@@ -43,6 +59,10 @@ export interface PendingReviewRound {
 	 * to 1 when absent (backward compat with rounds written before
 	 * streaming). */
 	stepCount?: number;
+	/** Derived marker: this proposal can no longer be replayed cleanly
+	 * against the current live doc and needs regeneration. */
+	stale?: boolean;
+	staleReason?: string;
 }
 
 /** Character-delta threshold for classifying rounds as `tiny` vs `big`.
@@ -110,7 +130,27 @@ export type HistoryEntry =
 			 * label. */
 			quote?: string;
 	  }
-	| { type: 'tool_call'; timestamp: number; tool_name: string; input: Record<string, unknown>; durationMs?: number; subagent?: boolean }
+	| {
+			type: 'tool_call';
+			timestamp: number;
+			tool_name: string;
+			input: Record<string, unknown>;
+			durationMs?: number;
+			subagent?: boolean;
+			/** SDK-assigned id for matching a later `tool_result` back to this
+			 * call. Set on `tool_call_start`; optional on legacy entries
+			 * restored from older transcripts. */
+			tool_use_id?: string;
+			/** Text payload of the tool's return value (first text block of
+			 * the MCP `CallToolResult`). Populated when the SDK emits the
+			 * user message carrying the tool_result. Absent if the call is
+			 * still pending. */
+			result?: string;
+			/** `isError: true` on the MCP tool response — surfaces so the UI
+			 * can show why `edit_doc` / `write_doc` / etc. failed instead of
+			 * leaving the user guessing. */
+			isError?: boolean;
+	  }
 	| { type: 'assistant_text'; timestamp: number; text: string }
 	| { type: 'assistant_thinking'; timestamp: number; text: string }
 	| { type: 'render_start'; timestamp: number; trigger: string }

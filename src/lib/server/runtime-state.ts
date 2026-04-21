@@ -31,7 +31,10 @@ export interface AgentSettings {
 	trackChanges: boolean;
 }
 
-const DEFAULT_EDITOR_SOFT_WRAP = false;
+// Default soft-wrap on so long lines (e.g. a paragraph with inline [[ agent ]]
+// directives) don't silently clip off the right edge of the editor with no
+// visible scroll affordance. Users can still flip it off via Settings.
+const DEFAULT_EDITOR_SOFT_WRAP = true;
 
 export interface TabsState {
 	/** Tab IDs in display order. Tab ID = filename without the .md extension. */
@@ -46,6 +49,20 @@ const DEFAULT_AGENT_SETTINGS: AgentSettings = {
 	agency: 'conservative',
 	trackChanges: true
 };
+
+/** A process-unique UUID generated once in `hooks.server.ts`. Clients read
+ * this over HTTP and compare to their last-known value; a mismatch means
+ * they're talking to a different server process than last time and must
+ * discard their in-memory Y.Docs before the WebSocket provider attaches,
+ * or stale client state would sync up and clobber disk. */
+export function getServerInstanceId(): string {
+	const value = (globalThis as unknown as { __docwriterServerInstanceId?: string })
+		.__docwriterServerInstanceId;
+	// Fallback covers the (unreachable in normal flow) case where
+	// `hooks.server.ts` never ran; a stable fallback here still lets the
+	// client compare against itself.
+	return value ?? 'unknown';
+}
 
 export function getSessionId(): string | null {
 	return kvGet('sessionId');

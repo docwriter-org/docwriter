@@ -16,12 +16,18 @@
  * The `yjs_updates` column is literally named `update` (a SQLite reserved
  * word), so every SELECT/INSERT must quote it as `"update"`.
  */
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 import * as Y from 'yjs';
 import { getDb } from './db';
 import { tabFile } from './document-files';
 import { serializeYDocToMarkdown, seedYDocFromContent } from './ydoc-markdown';
+
+/** Filesystem mtime can lag our `Date.now()` row-insert by a few hundred ms
+ * (and HFS+ quantizes to 1s), so requiring a couple seconds of slack before
+ * we treat a newer mtime as "externally edited" keeps us from spuriously
+ * invalidating the log right after our own debounced flush. */
+const EXTERNAL_EDIT_SKEW_MS = 2_000;
 
 /** Replay persisted updates into an existing Y.Doc.
  *
@@ -40,11 +46,25 @@ import { serializeYDocToMarkdown, seedYDocFromContent } from './ydoc-markdown';
  * existing .md file and its content shows up" UX after IndexedDB is gone. */
 export function replayUpdatesInto(ydoc: Y.Doc, tabId: string): void {
 	const db = getDb();
-	const rows = db
+	let rows = db
 		.prepare(
-			`SELECT "update", origin FROM yjs_updates WHERE tab_id = ? ORDER BY seq`
+			`SELECT "update", origin, created FROM yjs_updates WHERE tab_id = ? ORDER BY seq`
 		)
-		.all(tabId) as Array<{ update: Buffer; origin: string }>;
+		.all(tabId) as Array<{ update: Buffer; origin: string; created: number }>;
+
+	if (rows.length > 0 && diskNewerThanLog(tabId, rows)) {
+		// Someone edited the workspace file outside docwriter while we were
+		// stopped (or via another tool), and the SQLite log still reflects
+		// the pre-edit state. Treat disk as authoritative: purge the stale
+		// log so we fall through to the seed-from-disk path below. Without
+		// this, replaying SQLite would hydrate the pre-edit Y.Doc and the
+		// next debounced flush would clobber the external edit.
+		console.log(
+			`[docwriter] tab "${tabId}" was edited externally since last sync; disk wins, purging stale Y.Doc log`
+		);
+		db.prepare(`DELETE FROM yjs_updates WHERE tab_id = ?`).run(tabId);
+		rows = [];
+	}
 
 	if (rows.length > 0) {
 		for (const row of rows) {
@@ -80,6 +100,54 @@ export function replayUpdatesInto(ydoc: Y.Doc, tabId: string): void {
 		}
 	} catch (err) {
 		console.error(`[docwriter] seed from disk failed for tab "${tabId}":`, err);
+	}
+}
+
+/** True if the workspace file exists AND its content differs from what the
+ * Y.Doc log would produce AND its mtime is newer than the most recent row —
+ * i.e., someone edited the file outside docwriter since the log was last
+ * appended. Only callable with at least one row in `rows`. */
+function diskNewerThanLog(
+	tabId: string,
+	rows: Array<{ update: Buffer; origin: string; created: number }>
+): boolean {
+	const workspacePath = tabFile(tabId);
+	if (!existsSync(workspacePath)) return false;
+	let st;
+	try {
+		st = statSync(workspacePath);
+	} catch {
+		return false;
+	}
+	const maxCreated = rows.reduce(
+		(max, row) => (row.created > max ? row.created : max),
+		0
+	);
+	if (st.mtimeMs <= maxCreated + EXTERNAL_EDIT_SKEW_MS) return false;
+
+	// mtime alone is a necessary but not sufficient signal — the user may
+	// have `touch`-ed the file, or a backup tool may have rewritten it
+	// byte-identically. Confirm there's a real content delta by replaying
+	// the log into a throwaway doc and comparing to disk.
+	let diskContent: string;
+	try {
+		diskContent = readFileSync(workspacePath, 'utf-8');
+	} catch {
+		return false;
+	}
+	const scratch = new Y.Doc();
+	try {
+		for (const row of rows) {
+			scratch.transact(
+				() => Y.applyUpdate(scratch, new Uint8Array(row.update)),
+				row.origin
+			);
+		}
+		const logContent = serializeYDocToMarkdown(scratch);
+		// Tolerate the one-trailing-newline quirk of `writeFile`'d text.
+		return logContent.replace(/\n$/, '') !== diskContent.replace(/\n$/, '');
+	} finally {
+		scratch.destroy();
 	}
 }
 

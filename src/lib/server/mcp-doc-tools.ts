@@ -26,7 +26,11 @@ import type { Document } from '@hocuspocus/server';
 import { serializeYDocToMarkdown } from './ydoc-markdown';
 import { isScratchPath, resolveTabFromPath, isOpenTab } from './path-router';
 import { classifyRoundKind } from '$lib/review-diff';
-import type { PendingReviewRound } from '$lib/types';
+import {
+	materializePendingReviewText,
+	reviewTextHash
+} from '$lib/review-rounds';
+import type { PendingReviewOperation, PendingReviewRound } from '$lib/types';
 
 const REVIEW_MAP_NAME = 'review';
 
@@ -80,6 +84,46 @@ interface TabWriteResult {
 	afterMd: string;
 }
 
+interface RoundMutation {
+	operation: PendingReviewOperation;
+	afterMd: string;
+}
+
+function narrowWriteOperation(
+	beforeMd: string,
+	afterMd: string
+): PendingReviewOperation | null {
+	let prefix = 0;
+	while (
+		prefix < beforeMd.length &&
+		prefix < afterMd.length &&
+		beforeMd[prefix] === afterMd[prefix]
+	) {
+		prefix += 1;
+	}
+
+	let beforeTail = beforeMd.length - 1;
+	let afterTail = afterMd.length - 1;
+	while (
+		beforeTail >= prefix &&
+		afterTail >= prefix &&
+		beforeMd[beforeTail] === afterMd[afterTail]
+	) {
+		beforeTail -= 1;
+		afterTail -= 1;
+	}
+
+	const oldString = beforeMd.slice(prefix, beforeTail + 1);
+	const newString = afterMd.slice(prefix, afterTail + 1);
+	if (!oldString) return null;
+	if (countOccurrences(beforeMd, oldString) !== 1) return null;
+	return {
+		type: 'edit',
+		oldString,
+		newString
+	};
+}
+
 function getPendingRounds(doc: Y.Doc): PendingReviewRound[] {
 	const reviewMap = doc.getMap(REVIEW_MAP_NAME);
 	const existing = reviewMap.get('pendingRounds');
@@ -87,8 +131,7 @@ function getPendingRounds(doc: Y.Doc): PendingReviewRound[] {
 }
 
 function currentProposalText(doc: Y.Doc): string {
-	const existing = getPendingRounds(doc);
-	return existing.length > 0 ? existing[existing.length - 1].afterMd : serializeYDocToMarkdown(doc);
+	return materializePendingReviewText(serializeYDocToMarkdown(doc), getPendingRounds(doc));
 }
 
 /** Run a write-transaction against the live Hocuspocus Document for `tabId`.
@@ -98,7 +141,7 @@ function currentProposalText(doc: Y.Doc): string {
 export async function runTabWrite(
 	tabId: string,
 	trigger: PendingReviewRound['trigger'],
-	mutator: (currentText: string) => string | null
+	mutator: (currentText: string) => RoundMutation | null
 ): Promise<TabWriteResult | { error: string }> {
 	const ws = getHocuspocus();
 	if (!ws) {
@@ -110,23 +153,31 @@ export async function runTabWrite(
 		await direct.transact((document) => {
 			const doc = document as unknown as Y.Doc;
 			const beforeMd = currentProposalText(doc);
-			const afterMd = mutator(beforeMd);
-			if (afterMd === null) {
+			const mutation = mutator(beforeMd);
+			if (mutation === null) {
 				result = { error: 'mutator-aborted' };
 				return;
 			}
+			const { operation, afterMd } = mutation;
 			if (afterMd === beforeMd) {
 				// No-op write. Still succeeds, but don't emit a review round.
 				result = { beforeMd, afterMd };
 				return;
 			}
+			const normalizedOperation =
+				operation.type === 'write'
+					? (narrowWriteOperation(beforeMd, afterMd) ?? operation)
+					: operation;
 			doc.transact(() => {
 				const reviewMap = doc.getMap(REVIEW_MAP_NAME);
 				const existing = getPendingRounds(doc);
 				const round: PendingReviewRound = {
 					id: cryptoRandomId(),
-					beforeMd,
-					afterMd,
+					operation: normalizedOperation,
+					baseHash:
+						normalizedOperation.type === 'write'
+							? reviewTextHash(beforeMd)
+							: undefined,
 					trigger,
 					timestamp: Date.now(),
 					kind: classifyRoundKind(beforeMd, afterMd),
@@ -233,7 +284,14 @@ const editDocTool = tool(
 				failure = `old_string matches ${hits} locations in ${path}. Make it more specific (add surrounding context).`;
 				return null;
 			}
-			return currentMd.replace(old_string, new_string);
+			return {
+				operation: {
+					type: 'edit',
+					oldString: old_string,
+					newString: new_string
+				},
+				afterMd: currentMd.replace(old_string, new_string)
+			};
 		});
 		if (failure) return toolError(failure);
 		if ('error' in result) {
@@ -307,7 +365,10 @@ const writeDocTool = tool(
 			);
 		}
 
-		const result = await runTabWrite(tabId, 'agent_write_doc', () => content);
+		const result = await runTabWrite(tabId, 'agent_write_doc', () => ({
+			operation: { type: 'write', content },
+			afterMd: content
+		}));
 		if ('error' in result) {
 			return toolError(`write_doc failed for ${path}: ${result.error}`);
 		}

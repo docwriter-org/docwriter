@@ -16,6 +16,12 @@ export function classifyRoundKind(beforeMd: string, afterMd: string): 'tiny' | '
 }
 
 export function summarizeRound(round: PendingReviewRound): string {
+	if (round.stale) return 'stale proposal';
+	if (typeof round.beforeMd !== 'string' || typeof round.afterMd !== 'string') {
+		if (round.operation?.type === 'edit') return 'targeted text replacement';
+		if (round.operation?.type === 'write') return 'document rewrite';
+		return 'small edits';
+	}
 	let added = 0;
 	let removed = 0;
 	for (const part of diffLines(normalizeReviewText(round.beforeMd), normalizeReviewText(round.afterMd))) {

@@ -5,7 +5,7 @@
 	import { ySyncPluginKey } from 'y-prosemirror';
 	import { DiffOverlay, setDiffState } from './diff-overlay';
 	import { collaborativeExtensions } from '$lib/editor-extensions';
-	import { getYDoc, whenYDocReady, getCurrentTab } from '$lib/yjs-doc';
+	import { getYDoc, whenYDocReady, getCurrentTab, waitForCurrentTabSync } from '$lib/yjs-doc';
 	import {
 		reviewBaseline,
 		annotations,
@@ -237,13 +237,24 @@
 		});
 	}
 
-	/** Previously flushed a pending HTTP autosave; now a no-op. The server
-	 * is authoritative and every keystroke has already been delivered over
-	 * the WebSocket by the time this is called. Callers (most notably
-	 * `submit()` in +page.svelte) still await it so the contract is
-	 * preserved across the Phase 3 cutover. */
-	export function flushAutosave(): Promise<void> {
-		return Promise.resolve();
+	/** Wait until the current tab's local Yjs updates have been acknowledged
+	 * by the server. This preserves the old "flush before server reads"
+	 * contract even though HTTP autosave is gone. */
+	export async function flushAutosave(): Promise<boolean> {
+		// Let the local ProseMirror/Yjs transaction settle into the provider
+		// before we ask whether there are unsynced changes. Without this small
+		// defer, an accept/reject click immediately after typing can observe
+		// `hasUnsyncedChanges === false` one tick too early and race the
+		// browser's pending local update against the server-side review action.
+		await Promise.resolve();
+		await new Promise<void>((resolve) => {
+			if (typeof requestAnimationFrame === 'function') {
+				requestAnimationFrame(() => resolve());
+				return;
+			}
+			setTimeout(resolve, 0);
+		});
+		return waitForCurrentTabSync();
 	}
 
 	// Diff overlay state — baseline changes when a review starts/ends.
@@ -266,8 +277,15 @@
 	let allRoundsTiny = false;
 	pendingReviewRounds.subscribe((v) => {
 		allRoundsTiny = v.length > 0 && v.every((r) => r.kind === 'tiny');
-		currentProposalText = v.length > 0 ? v[v.length - 1].afterMd : null;
+		currentProposalText = v.length > 0 ? v[v.length - 1].afterMd ?? null : null;
 		hasPendingProposal = v.length > 0;
+		if (hasPendingProposal) {
+			if (idleTimer) {
+				clearTimeout(idleTimer);
+				idleTimer = null;
+			}
+			clearCountdown();
+		}
 		schedulePlainLineSync();
 		updateDiff();
 	});
@@ -312,6 +330,14 @@
 	}
 
 	function restartIdleCountdown() {
+		if (hasPendingProposal) {
+			if (idleTimer) {
+				clearTimeout(idleTimer);
+				idleTimer = null;
+			}
+			clearCountdown();
+			return;
+		}
 		if (idleTimer) clearTimeout(idleTimer);
 		startCountdown();
 		idleTimer = setTimeout(() => {

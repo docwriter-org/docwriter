@@ -17,7 +17,8 @@
 	import HooksPanel from '$lib/components/HooksPanel.svelte';
 	import { themes, applyTheme } from '$lib/themes';
 	import { unifiedLineDiff } from '$lib/diff';
-	import { classifyRoundKind } from '$lib/review-diff';
+	import { materializePendingReviewRounds } from '$lib/review-rounds';
+	import { plainTextFromFragment } from '$lib/yjs-text';
 
 	/** Turn a submit trigger into a compact description for the history
 	 * pane. Full text of long prompts (including feedback-on-passage quotes)
@@ -53,12 +54,14 @@
 	}
 
 	import {
+		getYDocForTab,
 		getReviewMap,
 		getReviewMapForTab,
 		whenYDocReady,
 		setCurrentTab,
 		destroyTab,
-		renameTab
+		renameTab,
+		reconcileServerInstance
 	} from '$lib/yjs-doc';
 	import type { Editor } from '@tiptap/core';
 	import {
@@ -90,10 +93,11 @@
 	} from '$lib/stores';
 	import TabBar from '$lib/components/TabBar.svelte';
 	import type { AgentSettings, HistoryEntry, PendingReviewRound } from '$lib/types';
+	import type { MaterializedPendingReviewRound } from '$lib/review-rounds';
 
 	type EditorRef = {
 		getEditor: () => Editor | undefined;
-		flushAutosave: () => Promise<void>;
+		flushAutosave: () => Promise<boolean>;
 	};
 
 	let rendering = $state(false);
@@ -116,6 +120,27 @@
 		let v: string[] = [];
 		tabs.subscribe((x) => (v = x))();
 		return v;
+	}
+
+	function currentTabText(tabId: string): string {
+		return plainTextFromFragment(getYDocForTab(tabId).getXmlFragment('default'));
+	}
+
+	function materializedRoundsForTab(
+		tabId: string,
+		rawRounds: PendingReviewRound[]
+	): MaterializedPendingReviewRound[] {
+		return materializePendingReviewRounds(currentTabText(tabId), rawRounds);
+	}
+
+	function syncActiveReviewState(tabId: string, rawRounds: PendingReviewRound[]) {
+		const rounds = materializedRoundsForTab(tabId, rawRounds);
+		pendingReviewRounds.set(rounds);
+		reviewBaseline.set(rounds.length > 0 ? currentTabText(tabId) : null);
+		const nextPending = new Map(pendingReviewTabs);
+		if (rawRounds.length > 0) nextPending.set(tabId, rawRounds.length);
+		else nextPending.delete(tabId);
+		pendingReviewTabs = nextPending;
 	}
 
 	function clearFeedbackAnnotationsForTab(tabId: string) {
@@ -174,16 +199,10 @@
 			await whenYDocReady();
 			const reviewMap = getReviewMap();
 			const persistedRounds = reviewMap.get('pendingRounds');
-			let rounds: PendingReviewRound[] = Array.isArray(persistedRounds)
-				? (persistedRounds as PendingReviewRound[]).map((r) => ({
-						...r,
-						// Backfill `kind` on rounds written before the tiny/big
-						// classification existed.
-						kind: r.kind ?? classifyRoundKind(r.beforeMd, r.afterMd)
-				  }))
+			const rounds: PendingReviewRound[] = Array.isArray(persistedRounds)
+				? (persistedRounds as PendingReviewRound[])
 				: [];
-			pendingReviewRounds.set(rounds);
-			reviewBaseline.set(rounds.length > 0 ? rounds[0].beforeMd : null);
+			syncActiveReviewState(tabId, rounds);
 
 			// Agent edits now mutate Y.Map('review') server-side via edit_doc.
 			// The change syncs to us over Hocuspocus, but nothing auto-reflects
@@ -202,6 +221,11 @@
 		map: Y.Map<unknown>;
 		handler: (event: Y.YMapEvent<unknown>) => void;
 	} | null = null;
+	let activeReviewTextObserver: {
+		tabId: string;
+		fragment: Y.XmlFragment;
+		handler: () => void;
+	} | null = null;
 
 	async function remountActiveTabFromServer(tabId: string) {
 		if (tabId !== getCurrentActiveTab()) return;
@@ -212,32 +236,50 @@
 		docLoaded = true;
 	}
 
-	function attachActiveReviewObserver(tabId: string) {
-		// Detach any previous tab's observer first.
-		if (activeReviewObserver) {
+	function detachActiveReviewObservers(tabId: string) {
+		if (activeReviewObserver?.tabId === tabId) {
 			activeReviewObserver.map.unobserve(activeReviewObserver.handler);
 			activeReviewObserver = null;
 		}
+		if (activeReviewTextObserver?.tabId === tabId) {
+			activeReviewTextObserver.fragment.unobserve(activeReviewTextObserver.handler);
+			activeReviewTextObserver = null;
+		}
+	}
+
+	async function disconnectActiveTabForServerMutation(tabId: string) {
+		if (tabId !== getCurrentActiveTab()) return;
+		docLoaded = false;
+		detachActiveReviewObservers(tabId);
+		await destroyTab(tabId);
+	}
+
+	function attachActiveReviewObserver(tabId: string) {
+		// Detach any previous tab's observer first.
+		detachActiveReviewObservers(activeReviewObserver?.tabId ?? activeReviewTextObserver?.tabId ?? tabId);
 		const map = getReviewMapForTab(tabId);
 		const handler = (event: Y.YMapEvent<unknown>) => {
 			if (!event.changes.keys.has('pendingRounds')) return;
 			if (tabId !== getCurrentActiveTab()) return;
 			const raw = map.get('pendingRounds');
-			const rounds: PendingReviewRound[] = Array.isArray(raw)
-				? (raw as PendingReviewRound[]).map((r) => ({
-						...r,
-						kind: r.kind ?? classifyRoundKind(r.beforeMd, r.afterMd)
-				  }))
-				: [];
-			pendingReviewRounds.set(rounds);
-			reviewBaseline.set(rounds.length > 0 ? rounds[0].beforeMd : null);
-			const nextPending = new Map(pendingReviewTabs);
-			if (rounds.length > 0) nextPending.set(tabId, rounds.length);
-			else nextPending.delete(tabId);
-			pendingReviewTabs = nextPending;
+			const rounds: PendingReviewRound[] = Array.isArray(raw) ? (raw as PendingReviewRound[]) : [];
+			syncActiveReviewState(tabId, rounds);
 		};
 		map.observe(handler);
 		activeReviewObserver = { tabId, map, handler };
+		const fragment = getYDocForTab(tabId).getXmlFragment('default');
+		const textHandler = () => {
+			if (tabId !== getCurrentActiveTab()) return;
+			const raw = map.get('pendingRounds');
+			const rounds: PendingReviewRound[] = Array.isArray(raw) ? (raw as PendingReviewRound[]) : [];
+			if (rounds.length === 0) {
+				reviewBaseline.set(null);
+				return;
+			}
+			syncActiveReviewState(tabId, rounds);
+		};
+		fragment.observe(textHandler);
+		activeReviewTextObserver = { tabId, fragment, handler: textHandler };
 	}
 
 	/** Switch the editor to a different tab. Tears down the editor, sets
@@ -392,8 +434,7 @@
 		const map = getReviewMapForTab(tabId);
 		map.set('pendingRounds', rounds);
 		if (tabId === getCurrentActiveTab()) {
-			pendingReviewRounds.set(rounds);
-			reviewBaseline.set(rounds.length > 0 ? rounds[0].beforeMd : null);
+			syncActiveReviewState(tabId, rounds);
 		}
 		// Tab-bar badge bookkeeping — count reflects rounds length.
 		const nextPending = new Map(pendingReviewTabs);
@@ -439,7 +480,16 @@
 		// submitting within ~50ms of typing reads stale content and the
 		// server-side shadow diff can come back empty.
 		try {
-			await editorRef?.flushAutosave();
+			const synced = await editorRef?.flushAutosave();
+			if (synced === false) {
+				pushHistory({
+					type: 'notification',
+					timestamp: Date.now(),
+					text: 'Latest local edits are still syncing to the server. Try again in a moment.',
+					priority: 'high'
+				});
+				return;
+			}
 		} catch (e) {
 			console.error('flushAutosave failed:', e);
 		}
@@ -524,13 +574,37 @@
 							timestamp: Date.now(),
 							tool_name: parsed.tool_name,
 							input: {},
+							tool_use_id: parsed.tool_use_id,
 							subagent: parsed.subagent
 						});
 					} else if (event === 'tool_call') {
 						agentHistory.update((h) => {
 							const last = h[h.length - 1];
 							if (last && last.type === 'tool_call' && last.tool_name === parsed.tool_name) {
-								return [...h.slice(0, -1), { ...last, input: parsed.input }];
+								return [...h.slice(0, -1), { ...last, input: parsed.input, tool_use_id: parsed.tool_use_id ?? last.tool_use_id }];
+							}
+							return h;
+						});
+					} else if (event === 'tool_result') {
+						// The SDK surfaces a tool's MCP return value here; find
+						// the matching tool_call entry by tool_use_id and
+						// attach the text + isError so HistoryPane can render
+						// the reason a failed edit_doc / write_doc didn't land.
+						agentHistory.update((h) => {
+							const targetId = parsed.tool_use_id;
+							if (!targetId) return h;
+							// Walk from newest to oldest to catch the latest
+							// pending entry with this id.
+							for (let i = h.length - 1; i >= 0; i--) {
+								const entry = h[i];
+								if (entry.type === 'tool_call' && entry.tool_use_id === targetId) {
+									const updated = {
+										...entry,
+										result: typeof parsed.text === 'string' ? parsed.text : '',
+										isError: !!parsed.is_error
+									};
+									return [...h.slice(0, i), updated, ...h.slice(i + 1)];
+								}
 							}
 							return h;
 						});
@@ -777,8 +851,8 @@
 	}
 
 	/** Read the pending-rounds array for the active tab from the store. */
-	function currentRounds(): PendingReviewRound[] {
-		let rounds: PendingReviewRound[] = [];
+	function currentRounds(): MaterializedPendingReviewRound[] {
+		let rounds: MaterializedPendingReviewRound[] = [];
 		pendingReviewRounds.subscribe((v) => (rounds = v))();
 		return rounds;
 	}
@@ -792,9 +866,8 @@
 	 * rounds 0..=idx) is kept as a safety net in case something triggers
 	 * this with a non-first id.
 	 *
-	 * Nothing to do on the Yjs side — agent ops stay in the doc as-is;
-	 * we just drop the cards and let the diff overlay re-anchor at the
-	 * next pending round's `beforeMd` (or clear entirely if none left).
+	 * The server replays the accepted operations against the current live
+	 * doc, then drops the accepted cards.
 	 */
 	async function acceptAgentEdit(roundId?: string) {
 		const tabId = getCurrentActiveTab();
@@ -803,6 +876,11 @@
 		const idx = roundId ? rounds.findIndex((r) => r.id === roundId) : -1;
 		if (roundId && idx < 0) return;
 		try {
+			const synced = await editorRef?.flushAutosave();
+			if (synced === false) {
+				throw new Error('Latest local edits are still syncing to the server. Try again in a moment.');
+			}
+			await disconnectActiveTabForServerMutation(tabId);
 			const res = await fetch(`/api/document?tab=${encodeURIComponent(tabId)}`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -816,6 +894,7 @@
 				throw new Error(data?.error || `HTTP ${res.status}`);
 			}
 			writeTabRounds(tabId, data.rounds as PendingReviewRound[]);
+			await remountActiveTabFromServer(tabId);
 			const acceptedCount =
 				typeof data.acceptedCount === 'number'
 					? data.acceptedCount
@@ -831,6 +910,13 @@
 			});
 		} catch (e) {
 			console.error('Failed to accept agent edit:', e);
+			await remountActiveTabFromServer(tabId);
+			pushHistory({
+				type: 'notification',
+				timestamp: Date.now(),
+				text: `Accept failed: ${(e as Error).message}`,
+				priority: 'high'
+			});
 		}
 	}
 
@@ -845,8 +931,8 @@
 	 */
 	function buildRejectedEditFollowup(
 		tabId: string,
-		rejected: PendingReviewRound,
-		droppedLater: PendingReviewRound[],
+		rejected: MaterializedPendingReviewRound,
+		droppedLater: MaterializedPendingReviewRound[],
 		feedback?: string
 	): string {
 		const rejectedDiff = unifiedLineDiff(rejected.beforeMd, rejected.afterMd, 1);
@@ -919,6 +1005,11 @@
 		// is the only place the undo stack actually exists.
 		let rejectedRounds: PendingReviewRound[] = rounds.slice(0, firstIdx);
 		try {
+			const synced = await editorRef?.flushAutosave();
+			if (synced === false) {
+				throw new Error('Latest local edits are still syncing to the server. Try again in a moment.');
+			}
+			await disconnectActiveTabForServerMutation(tabId);
 			const res = await fetch(`/api/document?tab=${encodeURIComponent(tabId)}`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -942,6 +1033,7 @@
 			rejectedRounds = data.rounds as PendingReviewRound[];
 		} catch (e) {
 			console.error('reject failed:', e);
+			await remountActiveTabFromServer(tabId);
 			pushHistory({
 				type: 'notification',
 				timestamp: Date.now(),
@@ -951,6 +1043,7 @@
 			return;
 		}
 		writeTabRounds(tabId, rejectedRounds);
+		await remountActiveTabFromServer(tabId);
 		pushHistory({
 			type: 'user_action',
 			timestamp: Date.now(),
@@ -1342,12 +1435,35 @@
 	 * Load the persisted selection-toolbar state (recent actions + LRU usage
 	 * counts) from /api/session and hydrate the stores. Refresh would
 	 * otherwise wipe both back to empty arrays/objects.
+	 *
+	 * Also acts as the preflight for Y.Doc reconciliation: if the server's
+	 * `serverInstanceId` doesn't match the one this browser tab last synced
+	 * with, destroy every in-memory Y.Doc before the WebSocket provider can
+	 * attach. Otherwise stale Yjs ops from the previous server instance
+	 * would sync up into the freshly-seeded server doc and the debounced
+	 * markdown flush would clobber disk edits made while the server was
+	 * down. Must run BEFORE any `setCurrentTab` / `getYDocForTab` call.
 	 */
 	async function restoreSessionState() {
 		try {
 			const res = await fetch('/api/session');
 			if (!res.ok) return;
 			const data = await res.json();
+			if (typeof data.serverInstanceId === 'string') {
+				const prior =
+					typeof window !== 'undefined'
+						? sessionStorage.getItem('docwriter.serverInstanceId')
+						: null;
+				await reconcileServerInstance(data.serverInstanceId);
+				// Server-instance change means a different docwriter process
+				// (restart, --new-session, different workspace). Any cost
+				// accumulated under the previous process belongs to a
+				// different conversation; drop it so the agent dock starts
+				// at 0¢ for the new session.
+				if (prior && prior !== data.serverInstanceId) {
+					resetSessionCost();
+				}
+			}
 			if (Array.isArray(data.recentActions)) recentActions.set(data.recentActions);
 			if (data.actionUsageCounts && typeof data.actionUsageCounts === 'object') {
 				actionUsageCounts.set(data.actionUsageCounts);
@@ -1480,6 +1596,23 @@
 						throw new Error(data?.error || `HTTP ${res.status}`);
 					}
 				},
+				async fakeAgentReplace(oldString: string, newString: string) {
+					const tabId = getCurrentActiveTab();
+					if (!tabId) return;
+					const res = await fetch(`/api/document?tab=${encodeURIComponent(tabId)}`, {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({
+							action: 'dev_fake_agent_edit',
+							oldString,
+							newString
+						})
+					});
+					const data = await res.json().catch(() => ({}));
+					if (!res.ok || !data?.ok) {
+						throw new Error(data?.error || `HTTP ${res.status}`);
+					}
+				},
 				accept: acceptAgentEdit,
 				reject: rejectAgentEdit
 			};
@@ -1489,6 +1622,14 @@
 	});
 
 	onDestroy(() => {
+		if (activeReviewObserver) {
+			activeReviewObserver.map.unobserve(activeReviewObserver.handler);
+			activeReviewObserver = null;
+		}
+		if (activeReviewTextObserver) {
+			activeReviewTextObserver.fragment.unobserve(activeReviewTextObserver.handler);
+			activeReviewTextObserver = null;
+		}
 		removeSidebarResizeListener();
 	});
 
