@@ -81,6 +81,10 @@ export const submitCountdown = writable<number>(0);
 
 /** User preference: editor font size scale (1.0 = default 17px). */
 export const editorFontScale = writable<number>(1.0);
+/** User preference: wrap long lines in the editor. Primarily affects
+ * plain-text tabs, where wrapping keeps logical line numbers in the gutter
+ * while continuation rows render as blanks. */
+export const editorSoftWrap = writable<boolean>(false);
 
 // ── Actions toolbar ───────────────────────────────────────────────────
 
@@ -234,8 +238,8 @@ if (typeof window !== 'undefined') {
 	showFilesPane.subscribe((v) => window.localStorage.setItem(SHOW_FILES_PANE_KEY, String(v)));
 }
 
-/** Agent behavior settings. Mirrored into `.docwriter/state.json` by
- * +page.svelte whenever the user changes them via the AgentDock popover. */
+/** Agent behavior settings. Persisted through the server runtime-state
+ * layer (SQLite-backed) whenever the user changes them via the settings UI. */
 export const agentSettings = writable<AgentSettings>({
 	agency: 'conservative',
 	trackChanges: true

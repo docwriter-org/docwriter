@@ -1,10 +1,6 @@
 /**
  * SQLite connection singleton. Lazily opens `.docwriter/docwriter.db` on
  * first use and runs any pending migrations.
- *
- * Phase 1: this DB only receives dual-writes alongside the existing JSON
- * files in `.docwriter/`. Nothing reads from it yet — JSON files remain
- * authoritative. See `db-schema.ts` for the tables and migration policy.
  */
 import BetterSqlite3, { type Database } from 'better-sqlite3';
 import { join } from 'path';

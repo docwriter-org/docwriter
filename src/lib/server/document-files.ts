@@ -11,8 +11,6 @@ import { existsSync, mkdirSync } from 'fs';
 //     docwriter.db                    ← SQLite: Y.Doc updates, tabs, rules,
 //                                       hooks, recent_actions, kv (sessionId
 //                                       + last_seen:<tabId>).
-//     state.json                      ← JSON mirror of rules / agent
-//                                       settings / tabs (for portability).
 //     agent/scratch/                  ← agent scratch workspace — created
 //                                       lazily on first scratch write.
 //
@@ -29,7 +27,6 @@ export const DOCWRITER_DIR = join(ROOT, '.docwriter');
  * when the user starts a new session. Created lazily — no `.docwriter/agent/`
  * directory is created unless the agent actually writes a scratch file. */
 export const AGENT_SCRATCH_DIR = join(DOCWRITER_DIR, 'agent', 'scratch');
-export const STATE_FILE = join(DOCWRITER_DIR, 'state.json');
 
 /** File extensions we treat as text-editable tabs. `.md`/`.markdown`/`.mdx`
  * render as markdown in the editor; others render as plain text. */

@@ -5,8 +5,7 @@
 	import { ySyncPluginKey } from 'y-prosemirror';
 	import { DiffOverlay, setDiffState } from './diff-overlay';
 	import { collaborativeExtensions } from '$lib/editor-extensions';
-	import { getYDoc, whenYDocReady, isYDocEmpty, getCurrentTab } from '$lib/yjs-doc';
-	import { seedYDocFromContent } from '$lib/yjs-markdown';
+	import { getYDoc, whenYDocReady, getCurrentTab } from '$lib/yjs-doc';
 	import { AGENT_APPLY_KEY } from '$lib/yjs-agent';
 	import {
 		userMd,
@@ -15,6 +14,7 @@
 		isRendering,
 		submitCountdown,
 		editorFontScale,
+		editorSoftWrap,
 		pinnedActions,
 		recentActions,
 		trackActionUsage,
@@ -38,10 +38,14 @@
 	let idleTimer: ReturnType<typeof setTimeout> | null = null;
 	let countdownInterval: ReturnType<typeof setInterval> | null = null;
 	let idleDeadline = 0;
+	let plainMetricsRaf = 0;
+	let plainResizeObserver: ResizeObserver | null = null;
 
 	let fontScale = $state(1.0);
 	editorFontScale.subscribe((v) => (fontScale = v));
-	let plainLineCount = $state(1);
+	let softWrap = $state(false);
+	editorSoftWrap.subscribe((v) => (softWrap = v));
+	let plainLineRows = $state<string[]>(['1']);
 	let pointerSelecting = false;
 	let shouldFocusFeedbackInput = false;
 	let detachFeedbackPointerHandlers: (() => void) | null = null;
@@ -186,10 +190,10 @@
 		return (editor.storage as any).markdown?.getMarkdown?.() || '';
 	}
 
-	function syncPlainLineCount() {
-		if (!editor || kind !== 'plain') return;
+	function logicalPlainLineCount(): number {
+		if (!editor || kind !== 'plain') return 1;
 		let count = 0;
-		editor.state.doc.forEach((node, offset) => {
+		editor.state.doc.forEach((node) => {
 			if (node.content.size === 0) {
 				count += 1;
 				return;
@@ -200,7 +204,50 @@
 			});
 			count += blockLines;
 		});
-		plainLineCount = Math.max(1, count);
+		return Math.max(1, count);
+	}
+
+	function syncPlainLineRows() {
+		if (!editor || kind !== 'plain') return;
+		const logicalCount = logicalPlainLineCount();
+		if (!softWrap) {
+			plainLineRows = Array.from({ length: logicalCount }, (_, i) => String(i + 1));
+			return;
+		}
+		const contentEl = editor.view.dom as HTMLElement | null;
+		const paragraphs = contentEl
+			? Array.from(contentEl.querySelectorAll(':scope > p'))
+			: [];
+		if (paragraphs.length === 0) {
+			plainLineRows = Array.from({ length: logicalCount }, (_, i) => String(i + 1));
+			return;
+		}
+		if (!contentEl) {
+			plainLineRows = Array.from({ length: logicalCount }, (_, i) => String(i + 1));
+			return;
+		}
+		const lineHeight = parseFloat(getComputedStyle(contentEl).lineHeight || '0');
+		if (!lineHeight) {
+			plainLineRows = Array.from({ length: logicalCount }, (_, i) => String(i + 1));
+			return;
+		}
+		const rows: string[] = [];
+		paragraphs.forEach((paragraph, index) => {
+			const height = paragraph.getBoundingClientRect().height;
+			const visualRows = Math.max(1, Math.round(height / lineHeight));
+			rows.push(String(index + 1));
+			for (let i = 1; i < visualRows; i += 1) rows.push('');
+		});
+		plainLineRows = rows.length > 0 ? rows : ['1'];
+	}
+
+	function schedulePlainLineSync() {
+		if (kind !== 'plain') return;
+		if (plainMetricsRaf) cancelAnimationFrame(plainMetricsRaf);
+		plainMetricsRaf = requestAnimationFrame(() => {
+			plainMetricsRaf = 0;
+			syncPlainLineRows();
+		});
 	}
 
 	/** Previously flushed a pending HTTP autosave; now a no-op. The server
@@ -308,7 +355,7 @@
 	 */
 	function onEditorUpdate({ transaction }: { transaction: Transaction }) {
 		if (!editor) return;
-		syncPlainLineCount();
+		schedulePlainLineSync();
 		const kind = classifyUpdate(transaction);
 		if (kind === 'yjs-remote') return;
 		const md = getEditorMarkdown();
@@ -320,19 +367,16 @@
 		// Wait for the Hocuspocus provider's initial sync to finish. The
 		// server is authoritative: it replays the tab's Yjs update log from
 		// SQLite (seeding from the workspace file on first open if the log
-		// is empty) and streams the result here before `synced` fires.
+		// is empty) and streams the result here before `synced` fires. If
+		// the Y.Doc is empty after sync, it's genuinely empty on the server
+		// and we should render an empty editor — NOT seed from a stale
+		// userMd that loadTab() primed from a debounced-stale disk file.
+		// Doing so silently re-inserts pre-edit content on top of any
+		// agent-side changes that have since happened (corrupting the doc
+		// as a user-origin update). The server-authoritative invariant is
+		// that the client never writes initial content into the Y.Doc.
 		const ydoc = getYDoc();
 		await whenYDocReady();
-
-		if (isYDocEmpty()) {
-			// Last-resort fallback: the server didn't seed the Y.Doc for
-			// any reason (file missing, persistence error). +page.svelte's
-			// loadTab() primed `userMd` from a GET /api/document response,
-			// so use that to avoid showing a blank editor.
-			let initialMd = '';
-			userMd.subscribe((v) => (initialMd = v))();
-			if (initialMd) seedYDocFromContent(initialMd, kind);
-		}
 
 		editor = new Editor({
 			element,
@@ -383,9 +427,14 @@
 		// other local readers see the live text on mount.
 		const initialMd = getEditorMarkdown();
 		userMd.set(initialMd);
-		syncPlainLineCount();
+		schedulePlainLineSync();
 		updateDiff();
 		editor.on('update', ({ transaction }) => onEditorUpdate({ transaction }));
+
+		if (kind === 'plain' && typeof ResizeObserver !== 'undefined') {
+			plainResizeObserver = new ResizeObserver(() => schedulePlainLineSync());
+			plainResizeObserver.observe(editorRoot);
+		}
 
 		// Dev-only: expose the editor on window for stress tests and
 		// interactive debugging via devtools. Guarded so production bundles
@@ -402,6 +451,10 @@
 
 	onDestroy(() => {
 		if (editor) editor.destroy();
+		if (plainMetricsRaf) cancelAnimationFrame(plainMetricsRaf);
+		plainMetricsRaf = 0;
+		plainResizeObserver?.disconnect();
+		plainResizeObserver = null;
 		detachFeedbackPointerHandlers?.();
 		detachFeedbackPointerHandlers = null;
 		// Clear the dev-only window handle so tests (or anyone polling on it)
@@ -413,6 +466,13 @@
 		}
 		if (idleTimer) clearTimeout(idleTimer);
 		if (countdownInterval) clearInterval(countdownInterval);
+	});
+
+	$effect(() => {
+		if (kind !== 'plain' || !editor) return;
+		softWrap;
+		fontScale;
+		schedulePlainLineSync();
 	});
 
 	let rendering = $state(false);
@@ -435,16 +495,17 @@
 <div
 	class="tiptap-wrapper"
 	class:plain-mode-wrapper={kind === 'plain'}
+	class:soft-wrap-enabled={softWrap}
 	style:--font-scale={fontScale}
 >
 	{#if kind === 'plain'}
-		<div class="plain-editor-shell">
+		<div class="plain-editor-shell" class:soft-wrap-enabled={softWrap}>
 			<div class="plain-line-gutter" aria-hidden="true">
-				{#each Array.from({ length: plainLineCount }, (_, i) => i + 1) as line}
+				{#each plainLineRows as line}
 					<div class="plain-line-number">{line}</div>
 				{/each}
 			</div>
-			<div class="tiptap-editor plain-mode" bind:this={element}></div>
+			<div class="tiptap-editor plain-mode" class:soft-wrap-enabled={softWrap} bind:this={element}></div>
 		</div>
 	{:else}
 		<div class="tiptap-editor" bind:this={element}></div>
@@ -537,6 +598,9 @@
 		margin: 0 auto;
 		align-items: start;
 	}
+	.plain-editor-shell.soft-wrap-enabled {
+		width: 100%;
+	}
 	.plain-line-gutter {
 		padding: 2px 12px 0 0;
 		border-right: 1px solid var(--border-light);
@@ -566,6 +630,9 @@
 		max-width: none;
 		margin: 0;
 	}
+	.tiptap-editor.plain-mode.soft-wrap-enabled :global(.tiptap-content) {
+		width: 100%;
+	}
 	/* Plain-text mode: Geist Mono — clean, modern, narrow letterforms that
 	 * read like a writing app rather than a code editor. Tight line-height
 	 * + narrow column for focus; ui-monospace is the OS fallback. */
@@ -576,6 +643,11 @@
 		white-space: pre;
 		overflow-wrap: normal;
 		tab-size: 2;
+	}
+	.tiptap-wrapper.soft-wrap-enabled .tiptap-editor :global(.tiptap-plain) {
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
+		word-break: break-word;
 	}
 	/* Zero out paragraph margins — every line is its own paragraph in plain
 	 * mode, so any vertical margin becomes visible blank-line gaps. Empty

@@ -34,8 +34,8 @@ interface Entry {
 	/** True for files in the `notes/` tree — the directory the agent reads
 	 * from. Lets the client style agent-watched files differently. */
 	watched: boolean;
-	/** True for anything inside `.docwriter/` — the agent's own state
-	 * (hooks.json, state.json, shadow copies). Rendered with an accent. */
+	/** True for anything inside `.docwriter/` — the app's own state
+	 * (SQLite DB, hooks.json, scratch files). Rendered with an accent. */
 	internal: boolean;
 }
 

@@ -12,6 +12,13 @@ import type { Page } from '@playwright/test';
 export async function freshPage(page: Page) {
 	await page.goto('/');
 	await page.evaluate(async () => {
+		await fetch('/api/session', {
+			method: 'PUT',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ editorSoftWrap: false })
+		});
+	});
+	await page.evaluate(async () => {
 		const dbs = await indexedDB.databases();
 		await Promise.all(
 			dbs.map(
@@ -30,12 +37,17 @@ export async function freshPage(page: Page) {
 }
 
 export async function createTab(page: Page, name: string) {
-	// `+` button now opens a window.prompt() dialog rather than an inline
-	// input. Pre-register a one-shot dialog handler that types the name and
-	// accepts before clicking `+`, so the dialog never blocks.
-	page.once('dialog', (d) => void d.accept(name));
-	await page.locator('.tab-add').click();
-	// Wait for the new tab to become active and the editor to re-bind.
+	const addTabButton = page.locator('.tab-add');
+	if (await addTabButton.count()) {
+		page.once('dialog', (d) => void d.accept(name));
+		await addTabButton.click();
+	} else {
+		await page.locator('.tree-action-btn[title="New file"]').click();
+		const input = page.locator('.tree-inline-input');
+		await input.waitFor({ state: 'visible' });
+		await input.fill(name);
+		await input.press('Enter');
+	}
 	await page
 		.locator(`.tab.active .tab-name:has-text("${name}")`)
 		.waitFor({ state: 'visible' });

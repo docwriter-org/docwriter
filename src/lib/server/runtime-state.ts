@@ -1,6 +1,3 @@
-import { existsSync, readFileSync } from 'fs';
-import { STATE_FILE, ensureDocWriterDir } from './document-files';
-import { writeJsonAtomic } from './file-utils';
 import {
 	dbClearSessionState,
 	dbReplaceActionUsageCounts,
@@ -8,17 +5,21 @@ import {
 	dbReplaceRules,
 	dbSetAgentSettings,
 	dbSetSessionId,
-	dbUpsertTabs
+	dbSetEditorSoftWrap,
+	dbUpsertTabs,
+	kvGet
 } from './db-writes';
+import { getDb } from './db';
 
 /**
- * All server-side runtime state lives in `.docwriter/state.json`. This single
- * file covers:
+ * Server-side runtime state lives in SQLite (`.docwriter/docwriter.db`).
+ * It covers:
  *
  *   - Session resume for the Claude Agent SDK (`sessionId`)
  *   - The selection-feedback action toolbar (`recentActions`, `actionUsageCounts`)
  *   - Writing rules (`rules`) — consumed by `/api/render` when building the agent prompt
  *   - Agent behavior settings (`agentSettings`) — autonomy level and review-mode toggle
+ *   - Open tab order + active tab
  */
 export interface Rule {
 	id: string;
@@ -29,6 +30,8 @@ export interface AgentSettings {
 	agency: 'conservative' | 'balanced' | 'aggressive';
 	trackChanges: boolean;
 }
+
+const DEFAULT_EDITOR_SOFT_WRAP = false;
 
 export interface TabsState {
 	/** Tab IDs in display order. Tab ID = filename without the .md extension. */
@@ -44,96 +47,104 @@ const DEFAULT_AGENT_SETTINGS: AgentSettings = {
 	trackChanges: true
 };
 
-interface RuntimeState {
-	sessionId?: string;
-	recentActions?: Array<{
-		id: string;
-		label: string;
-		icon: string;
-		pinned: boolean;
-		color: string;
-	}>;
-	actionUsageCounts?: Record<string, number>;
-	rules?: Rule[];
-	agentSettings?: AgentSettings;
-	tabs?: TabsState;
-}
-
-function writeRuntimeState(state: RuntimeState) {
-	ensureDocWriterDir();
-	writeJsonAtomic(STATE_FILE, state);
-}
-
-export function readRuntimeState(): RuntimeState {
-	ensureDocWriterDir();
-	if (!existsSync(STATE_FILE)) return {};
-	try {
-		return JSON.parse(readFileSync(STATE_FILE, 'utf-8')) as RuntimeState;
-	} catch {
-		return {};
-	}
-}
-
 export function getSessionId(): string | null {
-	return readRuntimeState().sessionId || null;
+	return kvGet('sessionId');
 }
 
 export function setSessionId(sessionId: string) {
-	writeRuntimeState({ ...readRuntimeState(), sessionId });
 	dbSetSessionId(sessionId);
 }
 
 export function clearSessionState() {
-	writeRuntimeState({
-		...readRuntimeState(),
-		sessionId: undefined,
-		recentActions: [],
-		actionUsageCounts: {}
-	});
 	dbClearSessionState();
 }
 
-export function getRecentActions(): RuntimeState['recentActions'] {
-	return readRuntimeState().recentActions || [];
+export function getRecentActions(): Array<{
+	id: string;
+	label: string;
+	icon: string;
+	pinned: boolean;
+	color: string;
+}> {
+	const rows = getDb()
+		.prepare('SELECT rowid, label FROM recent_actions ORDER BY rowid ASC')
+		.all() as Array<{ rowid: number; label: string }>;
+	return rows.map((row) => ({
+		id: `custom_${row.rowid}`,
+		label: row.label,
+		icon: 'message-square',
+		pinned: false,
+		color: '#7c3aed'
+	}));
 }
 
-export function setRecentActions(actions: RuntimeState['recentActions']) {
-	writeRuntimeState({ ...readRuntimeState(), recentActions: actions });
+export function setRecentActions(
+	actions: Array<{ label: string }> | undefined
+) {
 	dbReplaceRecentActions(actions);
 }
 
 export function getActionUsageCounts(): Record<string, number> {
-	return readRuntimeState().actionUsageCounts || {};
+	const rows = getDb()
+		.prepare('SELECT action, count FROM action_usage_counts')
+		.all() as Array<{ action: string; count: number }>;
+	return Object.fromEntries(rows.map((row) => [row.action, row.count]));
 }
 
 export function setActionUsageCounts(counts: Record<string, number>) {
-	writeRuntimeState({ ...readRuntimeState(), actionUsageCounts: counts });
 	dbReplaceActionUsageCounts(counts);
 }
 
 export function getRules(): Rule[] {
-	return readRuntimeState().rules || [];
+	return getDb()
+		.prepare('SELECT id, text FROM rules ORDER BY rowid ASC')
+		.all() as Rule[];
 }
 
 export function setRules(rules: Rule[]) {
-	writeRuntimeState({ ...readRuntimeState(), rules });
 	dbReplaceRules(rules);
 }
 
 export function getAgentSettings(): AgentSettings {
-	return { ...DEFAULT_AGENT_SETTINGS, ...(readRuntimeState().agentSettings || {}) };
+	try {
+		const raw = kvGet('agentSettings');
+		if (!raw) return { ...DEFAULT_AGENT_SETTINGS };
+		return { ...DEFAULT_AGENT_SETTINGS, ...(JSON.parse(raw) as Partial<AgentSettings>) };
+	} catch {
+		return { ...DEFAULT_AGENT_SETTINGS };
+	}
 }
 
 export function setAgentSettings(settings: AgentSettings) {
-	writeRuntimeState({ ...readRuntimeState(), agentSettings: settings });
 	dbSetAgentSettings(settings);
 }
 
+export function getEditorSoftWrap(): boolean {
+	const raw = kvGet('editorSoftWrap');
+	if (raw === null) return DEFAULT_EDITOR_SOFT_WRAP;
+	return raw === 'true';
+}
+
+export function setEditorSoftWrap(enabled: boolean) {
+	dbSetEditorSoftWrap(enabled);
+}
+
 export function getTabsState(): TabsState {
-	return { ...DEFAULT_TABS, ...(readRuntimeState().tabs || {}) };
+	const rows = getDb()
+		.prepare(
+			'SELECT tab_id, order_index, is_active FROM tabs ORDER BY order_index ASC'
+		)
+		.all() as Array<{
+			tab_id: string;
+			order_index: number;
+			is_active: number;
+		}>;
+	if (rows.length === 0) return { ...DEFAULT_TABS };
+	const order = rows.map((row) => row.tab_id);
+	const active = rows.find((row) => row.is_active === 1)?.tab_id ?? null;
+	return { order, active };
 }
 
 export function setTabsState(tabs: TabsState) {
-	writeRuntimeState({ ...readRuntimeState(), tabs });
 	dbUpsertTabs(tabs);
 }

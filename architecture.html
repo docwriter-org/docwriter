@@ -415,7 +415,7 @@
               <text x="485" y="56" text-anchor="middle" font-family="Inter, sans-serif" font-size="14" font-weight="700" fill="#245a7a">Node process</text>
               <text x="485" y="82" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">SvelteKit /api/*</text>
               <text x="485" y="102" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">Hocuspocus WebSocket (3001)</text>
-              <text x="485" y="122" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">ydoc-registry: Y.Doc + UndoManager</text>
+              <text x="485" y="122" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">Hocuspocus Document + UndoManager per tab</text>
               <text x="485" y="142" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#2d2a26">custom MCP tools (edit_doc, ...)</text>
               <text x="485" y="175" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" font-style="italic" fill="#7a6f62">authoritative copy of each tab's Y.Doc</text>
             </g>
@@ -666,9 +666,11 @@
       │           that transact against the live Hocuspocus Document
       │
       └── Hocuspocus WebSocket server (port 3001)
-            ├── onLoadDocument → lazy-hydrates from yjs_updates
+            ├── onLoadDocument → lazy-hydrates live Document from yjs_updates
+            │                    (WeakSet-guarded, runs once per Y.Doc)
+            ├── afterUnloadDocument → disposes UndoManager
             ├── onChange → appendUpdate + scheduleMarkdownFlush
-            └── in-memory ydoc-registry (Y.Doc + UndoManager per tab)</pre>
+            └── per-tab Y.UndoManager attached to Hocuspocus's live Document</pre>
 
         <h3>Launch modes</h3>
         <div class="two-up">
@@ -895,6 +897,12 @@
                 <code>docwriter-doc</code> &mdash; <code>edit_doc</code>, <code>read_doc</code>, <code>write_doc</code>.
               </p>
               <p class="meta">
+                <code>docwriter</code> holds proposal-only tools: they never mutate files directly,
+                they emit sidebar review cards the user can accept or reject. <code>docwriter-doc</code>
+                holds the document tools that understand live tabs, scratch paths, review rounds,
+                and origin-tagged undo.
+              </p>
+              <p class="meta">
                 Built-in <code>Read</code> / <code>Glob</code> / <code>Grep</code> are available for
                 exploring the workspace. Built-in <code>Edit</code> / <code>Write</code> are still
                 registered but the prompt forbids their use on open-tab paths &mdash; scratch paths
@@ -1102,32 +1110,55 @@
 
         <h3>The critical ordering</h3>
         <p>
-          In <code>src/lib/server/ydoc-registry.ts</code>:
+          In <code>src/lib/server/ws-server.ts</code>, inside the <code>onLoadDocument</code> hook
+          Hocuspocus calls when it first needs a Document for a tab:
         </p>
-        <pre>function getTabYDoc(tabId) {
-  const ydoc = new Y.Doc();
+        <pre>const hydratedDocuments = new WeakSet&lt;Y.Doc&gt;();
 
-  // Step 1 — attach UndoManager FIRST.
-  const undoManager = new Y.UndoManager(
-    ydoc.getXmlFragment('default'),
-    { trackedOrigins: new Set([AGENT_ORIGIN]) }
-  );
+async onLoadDocument({ documentName: tabId, document }) {
+  // `document` IS Hocuspocus's live internal Y.Doc (Document extends Y.Doc).
+  // We populate it in place; Hocuspocus keeps it going forward.
 
-  // Step 2 — THEN replay the persisted updates. Each row's origin is
-  // restored via ydoc.transact(..., row.origin), so agent-origin
-  // transactions from prior sessions fire through the already-attached
-  // UndoManager observer and repopulate its undo stack.
-  replayUpdatesInto(ydoc, tabId);
+  const ydoc = document as unknown as Y.Doc;
+  const xmlFragment = ydoc.getXmlFragment('default');
+  const alreadyHydrated =
+    hydratedDocuments.has(ydoc) || xmlFragment.length &gt; 0;
 
-  return { ydoc, undoManager, reviewMap: ydoc.getMap('review') };
+  // Step 1 — attach UndoManager FIRST, on the LIVE doc.
+  const prior = undoManagers.get(tabId);
+  if (prior) { prior.destroy(); undoManagers.delete(tabId); }
+  const undoManager = new Y.UndoManager(xmlFragment, {
+    trackedOrigins: new Set([AGENT_ORIGIN])
+  });
+  undoManagers.set(tabId, undoManager);
+
+  // Step 2 — THEN replay persisted updates, exactly once per live Document.
+  // Each row's origin is restored via ydoc.transact(..., row.origin) so
+  // agent-origin transactions from prior sessions fire through the
+  // already-attached UndoManager observer and repopulate the undo stack.
+  if (!alreadyHydrated) {
+    replayUpdatesInto(ydoc, tabId);
+  }
+  hydratedDocuments.add(ydoc);
+  return document;
 }</pre>
 
         <p style="margin-top: 12px;">
-          Swap steps 1 and 2 and the UndoManager never observes the replayed transactions. The
-          undo stack is empty at cold start, and Reject on any pending round silently does
-          nothing. This is the whole content of "Phase 7" of the refactor; the fix is one
-          reordering.
+          Two invariants carry the weight here:
         </p>
+        <ol>
+          <li><strong>UndoManager before replay.</strong> Swap those and the observer never sees
+            the replayed transactions — the undo stack is empty at cold start and Reject on any
+            pending round silently does nothing. This is Phase 7 of the refactor.</li>
+          <li><strong>Replay at most once per live Y.Doc instance.</strong> Keyed on the doc
+            object via <code>WeakSet</code>, not on <code>tabId</code>. If the same live Document
+            is re-handed to <code>onLoadDocument</code> (reconnect reuse, extension-ordering
+            quirks, <code>DirectConnection</code> paths re-entering <code>createDocument</code>),
+            the guard skips the replay. Without it, the persisted log piles onto the already-live
+            state and every browser refresh roughly doubles the on-screen content. WeakSet
+            auto-clears when the Document is garbage-collected after Hocuspocus unloads the tab,
+            so a truly fresh reload replays cleanly.</li>
+        </ol>
 
         <div class="panel accent">
           <span class="panel-label">Why it works</span>
@@ -1137,7 +1168,7 @@
             replay, <code>ydoc.transact(() =&gt; applyUpdate(...), row.origin)</code> reinstates
             both the CRDT state and the origin tag. The UndoManager's origin-based filter sees the
             same sequence of transactions it would have seen if the server had been running all
-            along.
+            along &mdash; provided it sees them exactly once.
           </p>
         </div>
       </section>
@@ -1183,18 +1214,28 @@
                 wiped on New Session. Directory lazy-created on first scratch write.</td>
             </tr>
             <tr>
-              <td><strong>Server Y.Doc registry</strong></td>
-              <td>Node heap (<code>ydoc-registry.ts</code>)</td>
-              <td>One entry per loaded tab: <code>{ ydoc, undoManager, reviewMap }</code>. Hydrated
-                from <code>yjs_updates</code> on first access. Becomes stale once Hocuspocus
-                copies state into its own <code>Document</code> &mdash; use DirectConnection from
-                that point on.</td>
-            </tr>
-            <tr>
               <td><strong>Hocuspocus internal Document</strong></td>
               <td>Node heap (<code>@hocuspocus/server</code>)</td>
-              <td>The live authoritative Y.Doc once any client has connected. What DirectConnection
-                transacts against. What every browser client is synced with.</td>
+              <td>The live authoritative Y.Doc for each loaded tab. Populated in
+                <code>onLoadDocument</code> by replaying <code>yjs_updates</code> into the live
+                doc exactly once (<code>WeakSet</code>-guarded). What DirectConnection transacts
+                against. What every browser client is synced with.</td>
+            </tr>
+            <tr>
+              <td><strong>Server per-tab UndoManager</strong></td>
+              <td>Node heap (<code>ws-server.ts</code>)</td>
+              <td>Attached to the live Hocuspocus Document, tracks <code>AGENT_ORIGIN</code>
+                transactions. Disposed in <code>afterUnloadDocument</code> and rebuilt on next
+                load so agent-origin rows in <code>yjs_updates</code> repopulate the undo stack
+                across restarts.</td>
+            </tr>
+            <tr>
+              <td><strong>Vestigial registry (fallback only)</strong></td>
+              <td>Node heap (<code>ydoc-registry.ts</code>)</td>
+              <td><code>getTabYDoc(tabId)</code> lazily constructs its own Y.Doc and replays from
+                SQLite. Only used by <code>/api/render</code> for prompt construction when no
+                client has connected yet. Goes permanently stale the moment a client connects
+                (Hocuspocus takes over); never use for writes.</td>
             </tr>
           </tbody>
         </table>
@@ -1214,10 +1255,15 @@
         <div class="panel">
           <span class="panel-label">Cold start path</span>
           <p style="margin: 0;">
-            On <code>getTabYDoc(tabId)</code>: construct Y.Doc, attach UndoManager, then replay
-            every <code>yjs_updates</code> row through <code>ydoc.transact(..., row.origin)</code>.
-            If there are no rows, seed from the workspace file (origin <code>'system'</code>) and
-            persist that seed as a single row so future loads skip the disk read.
+            First client connect for a tab triggers Hocuspocus's <code>onLoadDocument</code> hook
+            (in <code>ws-server.ts</code>). We attach an <code>AGENT_ORIGIN</code>-tracking
+            <code>Y.UndoManager</code> to the live Document, then replay every
+            <code>yjs_updates</code> row through <code>ydoc.transact(..., row.origin)</code>. A
+            <code>WeakSet</code>-keyed hydration guard ensures the replay runs exactly once per
+            live Y.Doc instance &mdash; see <a href="#undo-persistence">§9</a>. If there are no
+            rows, <code>replayUpdatesInto</code> seeds from the workspace file (origin
+            <code>'system'</code>) and persists that seed as a single row so future cold starts
+            skip the disk read.
           </p>
         </div>
       </section>
@@ -1227,25 +1273,46 @@
         <span class="section-tag">Section 11</span>
         <h2>Y.Doc registry &amp; review internals</h2>
 
-        <h3>The server registry (<code>src/lib/server/ydoc-registry.ts</code>)</h3>
-        <pre>interface TabYDocEntry {
-  ydoc: Y.Doc;
-  undoManager: Y.UndoManager;  // trackedOrigins: { 'agent' }
-  reviewMap: Y.Map&lt;unknown&gt;;    // ydoc.getMap('review')
-}</pre>
+        <h3>Where server state lives</h3>
+        <p>
+          Per-tab state is held on Hocuspocus's own internal <code>Document</code> (a subclass
+          of <code>Y.Doc</code>). We don't maintain a parallel registry Y.Doc on the load path
+          &mdash; that design was tried and caused content loss on refresh, because Hocuspocus
+          copies state out of whatever we hand it and any separate Y.Doc of ours goes permanently
+          stale. Two auxiliary per-tab maps stay on the server:
+        </p>
+        <ul>
+          <li><code>undoManagers: Map&lt;tabId, Y.UndoManager&gt;</code> &mdash; attached to the
+            live Hocuspocus Document inside <code>onLoadDocument</code>, tracks
+            <code>AGENT_ORIGIN</code> transactions for Reject.</li>
+          <li><code>hydratedDocuments: WeakSet&lt;Y.Doc&gt;</code> &mdash; object-identity guard
+            so the SQLite log is replayed at most once per live Document. See
+            <a href="#undo-persistence">§9</a>.</li>
+        </ul>
         <p class="meta">
-          One entry per tab. Constructed lazily on first <code>getTabYDoc(tabId)</code> call.
-          <code>destroyTabYDoc(tabId)</code> tears it down (tab deleted / explicit unload); the
-          persisted <code>yjs_updates</code> rows are not touched.
+          A vestigial <code>ydoc-registry.ts</code> with <code>getTabYDoc</code> still exists but
+          is used only as a fallback by <code>/api/render</code> when no live connection is open
+          yet (prompt construction before the browser connects). The load path goes through
+          <code>onLoadDocument</code>.
         </p>
 
         <h3>The Hocuspocus plumbing (<code>src/lib/server/ws-server.ts</code>)</h3>
         <ol class="flow">
           <li>
             <div>
-              <strong><code>onLoadDocument({ documentName: tabId })</code></strong>
-              returns <code>getTabYDoc(tabId).ydoc</code>. Hocuspocus copies its state into its own
-              <code>Document</code> and holds that going forward.
+              <strong><code>onLoadDocument({ documentName: tabId, document })</code></strong>
+              populates Hocuspocus's live <code>document</code> directly. Attaches a fresh
+              <code>Y.UndoManager</code> before replay; calls
+              <code>replayUpdatesInto(document, tabId)</code> exactly once per live Y.Doc via the
+              <code>hydratedDocuments</code> WeakSet. Returns <code>document</code> so
+              Hocuspocus's return-value handler sees a no-op self-apply.
+            </div>
+          </li>
+          <li>
+            <div>
+              <strong><code>afterUnloadDocument({ documentName: tabId })</code></strong>
+              destroys this tab's <code>Y.UndoManager</code> so observers don't leak across
+              Hocuspocus's load/unload cycle.
             </div>
           </li>
           <li>
@@ -1259,14 +1326,90 @@
                 <li><code>appendUpdate(tabId, update, origin)</code> &mdash; one row into
                   <code>yjs_updates</code>.</li>
                 <li><code>scheduleMarkdownFlush(tabId, document)</code> &mdash; pass the live
-                  <code>document</code> from the payload (NOT the registry Y.Doc), because the registry
-                  one is stale.</li>
+                  <code>document</code> from the payload. The vestigial registry Y.Doc, if any, is
+                  stale.</li>
               </ul>
             </div>
           </li>
         </ol>
 
         <h3>The custom MCP tools (<code>src/lib/server/mcp-doc-tools.ts</code>)</h3>
+        <p>
+          DocWriter exposes five custom tools across two in-process MCP servers. The important split
+          is that proposal tools never write directly, while document tools route between the agent's
+          scratch workspace and the user's live open tabs.
+        </p>
+
+        <table>
+          <thead>
+            <tr><th style="width: 16%">MCP server</th><th style="width: 18%">Tool</th><th>What it does</th><th style="width: 28%">Where it operates</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>docwriter</code></td>
+              <td><code>propose_rule</code></td>
+              <td>Suggests a persistent writing rule. The tool ACKs immediately; the real effect is an SSE rule-proposal card in the UI.</td>
+              <td>No file write. User review only.</td>
+            </tr>
+            <tr>
+              <td><code>docwriter</code></td>
+              <td><code>propose_hook</code></td>
+              <td>Suggests a shell hook such as post-tool automation. Like <code>propose_rule</code>, it creates a review card instead of mutating config directly.</td>
+              <td>No file write. User review only.</td>
+            </tr>
+            <tr>
+              <td><code>docwriter-doc</code></td>
+              <td><code>read_doc</code></td>
+              <td>Reads the current content of a DocWriter-managed path. For open tabs it serializes the live Hocuspocus Y.Doc, so the result matches the editor.</td>
+              <td>Open tabs: live Y.Doc. Scratch: plain file read.</td>
+            </tr>
+            <tr>
+              <td><code>docwriter-doc</code></td>
+              <td><code>edit_doc</code></td>
+              <td>Replaces exactly one occurrence of <code>old_string</code>. On open tabs it mutates the live Y.Doc and appends a pending review round in the same transaction.</td>
+              <td>Open tabs: live Y.Doc. Scratch: plain file edit.</td>
+            </tr>
+            <tr>
+              <td><code>docwriter-doc</code></td>
+              <td><code>write_doc</code></td>
+              <td>Replaces the full file content using the same transaction path as <code>edit_doc</code>. It does not create new tabs.</td>
+              <td>Open tabs: live Y.Doc. Scratch: plain file write.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p class="meta">
+          <code>AskUserQuestion</code> is not a custom DocWriter MCP tool. It is a built-in SDK tool
+          that DocWriter intercepts in <code>canUseTool</code> so the question can be rendered in the UI.
+        </p>
+
+        <h4>Path routing</h4>
+        <table>
+          <thead><tr><th style="width: 32%">Path shape</th><th style="width: 22%">Resolution</th><th>Behavior</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><code>.docwriter/agent/scratch/...</code></td>
+              <td>Scratch path</td>
+              <td>Falls through to plain filesystem I/O. Private agent workspace; not shown as user tabs.</td>
+            </tr>
+            <tr>
+              <td><code>drafts/ch1.md</code></td>
+              <td>Workspace-relative open tab id</td>
+              <td>Resolved from <code>tabs.order</code>, then routed to the live Hocuspocus document.</td>
+            </tr>
+            <tr>
+              <td><code>/abs/path/to/workspace/drafts/ch1.md</code></td>
+              <td>Absolute path to an open tab</td>
+              <td>Matched by suffix against open-tab ids, then routed to the live Hocuspocus document.</td>
+            </tr>
+            <tr>
+              <td>Anything else</td>
+              <td>Unknown path</td>
+              <td>Rejected with <code>isError: true</code>. <code>write_doc</code> never creates new tabs implicitly.</td>
+            </tr>
+          </tbody>
+        </table>
+
         <ol class="flow">
           <li>
             <div>
@@ -1306,6 +1449,20 @@
             </div>
           </li>
         </ol>
+
+        <h4>Why these tools exist instead of default file tools</h4>
+        <div class="panel accent">
+          <span class="panel-label">Design reason</span>
+          <p style="margin: 0;">
+            Built-in <code>Edit</code>/<code>Write</code> operate on plain files, but an open DocWriter
+            tab is authoritative in the live server-side Y.Doc. The custom tools exist so the agent edits
+            the same document instance the browser is rendering, the tool result reflects what actually
+            landed in that live doc, the pending review round is created atomically with the content
+            change, and Reject can work via <code>AGENT_ORIGIN</code> + <code>Y.UndoManager</code>.
+            Scratch paths stay cheap plain files because they are private agent workspace, not user-facing
+            tabs.
+          </p>
+        </div>
 
         <h3>Client-side review (<code>src/routes/+page.svelte</code>)</h3>
         <p>
@@ -1452,9 +1609,13 @@ src/routes/+page.svelte             app shell + render/review loop
 src/lib/editor/TiptapEditor.svelte  editor, feedback UI, idle timer
 src/lib/yjs-doc.ts                  per-tab Y.Doc + HocuspocusProvider
 src/lib/yjs-agent.ts                client-side agent UndoManager + apply-key
-src/lib/server/ydoc-registry.ts     server per-tab Y.Doc + UndoManager
+src/lib/server/ws-server.ts         Hocuspocus setup, onLoadDocument
+                                    hydration guard, per-tab UndoManager,
+                                    onChange → SQLite, markdown-flush,
+                                    acceptTabRounds
 src/lib/server/ydoc-persistence.ts  SQLite ↔ Y.Doc bridge + markdown flush
-src/lib/server/ws-server.ts         Hocuspocus setup + onChange plumbing
+src/lib/server/ydoc-registry.ts     vestigial fallback Y.Doc for prompt
+                                    construction before clients connect
 src/lib/server/mcp-doc-tools.ts     edit_doc / read_doc / write_doc
 src/lib/server/path-router.ts       scratch vs. open-tab routing
 src/lib/server/ydoc-markdown.ts     Y.Doc ↔ markdown serializer

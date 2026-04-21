@@ -44,6 +44,23 @@ test.describe('review mode', () => {
 		expect(await getEditorText(page)).not.toContain('Original sentence');
 	});
 
+	test('markdown agent edits show inline diff overlay in the editor', async ({ page }) => {
+		await freshPage(page);
+		const name = `t-rev-inline-${SUFFIX}.md`;
+		await createTab(page, name);
+		await setEditor(page, `# ${name}\n\nOriginal sentence.`);
+		await afterAutosave(page);
+
+		await page.evaluate((after) => {
+			(window as any).__docwriterTest.fakeAgentEdit(after);
+		}, `# ${name}\n\nAgent-rewritten sentence.`);
+
+		await expect(page.locator('.pending-card')).toBeVisible();
+		await expect(
+			page.locator('.tiptap-editor .diff-added, .tiptap-editor .diff-removed-widget').first()
+		).toBeVisible();
+	});
+
 	test('accept persists across reload', async ({ page }) => {
 		await freshPage(page);
 		const name = `t-rev-acc-reload-${SUFFIX}.md`;

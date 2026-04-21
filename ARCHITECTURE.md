@@ -42,7 +42,6 @@ Persistence
   -> .docwriter/docwriter.db — SQLite
         yjs_updates  (append-only Y.Doc ops per tab, origin-tagged)
         tabs, rules, hooks, recent_actions, action_usage_counts, kv
-  -> .docwriter/state.json — JSON mirror of rules / agent settings / tabs
   -> document.md — debounced 1s flush from the server Y.Doc (per tab)
 
 Agent runtime
@@ -86,8 +85,8 @@ Any workspace-relative text file can be an open tab.
 - Other recognized text extensions (`.txt`, `.json`, `.py`, `.html`, etc.)
   use plain-text mode.
 
-Tabs are stored in `.docwriter/state.json` as an ordered list plus an
-active-tab pointer, and mirrored into the SQLite `tabs` table.
+Tabs are stored in the SQLite `tabs` table as an ordered list plus an
+active-tab pointer.
 
 ## Persistence Layers
 
@@ -114,7 +113,6 @@ Machine-managed runtime state:
 ```text
 .docwriter/
   docwriter.db        ← SQLite (authoritative)
-  state.json          ← JSON mirror (portability)
   agent/
     scratch/          ← agent's own drafts (lazy-created)
   references/         ← saved writing-style samples
@@ -127,16 +125,6 @@ Machine-managed runtime state:
   origin-tagged), `tabs`, `rules`, `hooks`, `recent_actions`,
   `action_usage_counts`, `kv`. The `kv` table holds singletons like
   `sessionId` and `last_seen:<tabId>`.
-
-- `state.json`
-  JSON mirror of:
-  - Claude SDK `sessionId`
-  - `recentActions` / `actionUsageCounts`
-  - `rules`
-  - `agentSettings`
-  - `tabs.order` and `tabs.active`
-  Maintained in lockstep with the DB. The mirror exists so a user can
-  inspect or hand-edit runtime state; the code reads from it today.
 
 - `.docwriter/agent/scratch/`
   Session-scoped scratch space for the agent's own drafts and notes.
@@ -275,7 +263,7 @@ The render flow lives in `src/routes/api/render/+server.ts`.
   to call `read_doc(path)` if it needs full content.
 - **Non-active tab unchanged:** path only.
 - **First-render tab (no `last_seen`):** full content.
-- Plus: persistent writing rules (read from `state.json` /
+- Plus: persistent writing rules (read from SQLite-backed
   `runtime-state.ts`), style references index, agency guidance
   (`conservative` / `balanced` / `aggressive`), tool usage rules, and
   `propose_rule` / `propose_hook` tool definitions.
@@ -283,37 +271,85 @@ The render flow lives in `src/routes/api/render/+server.ts`.
 After render completes, the handler writes
 `kv['last_seen:<tabId>'] = currentMd` for every tab the agent saw.
 
-### Custom MCP tools (`src/lib/server/mcp-doc-tools.ts`)
+### Custom MCP tools
 
-Three tools in the `docwriter-doc` MCP server:
+DocWriter registers two in-process MCP servers during `/api/render`:
 
-- **`edit_doc({ path, old_string, new_string })`** — replaces exactly
-  one occurrence of `old_string`. For scratch paths, plain filesystem
-  I/O. For open tabs: opens a `DirectConnection` to the live Hocuspocus
-  Document, serializes current content, looks for exactly one match,
-  and in a single `document.transact(..., AGENT_ORIGIN)` rebuilds the
-  XmlFragment from the new markdown (via a headless Tiptap Collaboration
-  editor that emits minimal Yjs ops) and appends a new
-  `PendingReviewRound` to `Y.Map('review').pendingRounds`. Content
-  change + review card land atomically in one Yjs update.
+- **`docwriter`** (`src/routes/api/render/+server.ts`)
+  Non-file-writing proposals that the user must explicitly review.
+- **`docwriter-doc`** (`src/lib/server/mcp-doc-tools.ts`)
+  File/document tools that understand DocWriter's live-tab model.
 
-- **`read_doc({ path })`** — serializes the live Y.Doc XmlFragment to
-  markdown. Free in-process call; matches what the user sees.
+The full custom tool set is:
 
-- **`write_doc({ path, content })`** — same transact shape as
-  `edit_doc`, but replaces the whole content. Does NOT create new tabs.
+| MCP server | Tool | What it does | Where it writes/reads |
+| --- | --- | --- | --- |
+| `docwriter` | `propose_rule({ text, reason? })` | Suggests a persistent writing rule. The tool itself only ACKs; the real side effect is an SSE `rule_proposal` event that creates an Accept/Reject card in the UI. | No file write. User review only. |
+| `docwriter` | `propose_hook({ event, matcher?, command, reason? })` | Suggests an automation hook. Like `propose_rule`, this only emits a proposal for user review. | No file write. User review only. |
+| `docwriter-doc` | `read_doc({ path })` | Reads the current content of a path that DocWriter understands. For open tabs it serializes the live Hocuspocus Y.Doc, so the result matches what the browser is showing right now. | Open tabs: live Y.Doc. Scratch: plain file read. |
+| `docwriter-doc` | `edit_doc({ path, old_string, new_string })` | Replaces exactly one occurrence of `old_string`. On open tabs it edits the live Y.Doc and appends a pending review round in the same `AGENT_ORIGIN` transaction. | Open tabs: live Y.Doc. Scratch: plain file edit. |
+| `docwriter-doc` | `write_doc({ path, content })` | Replaces the full content at `path`. Same transaction/review flow as `edit_doc` for open tabs. Does not create new tabs. | Open tabs: live Y.Doc. Scratch: plain file write. |
 
-Path routing (`src/lib/server/path-router.ts`):
+The built-in SDK tools are still available where appropriate:
 
-- Paths under `.docwriter/agent/scratch/` → fall through to plain
-  filesystem I/O.
-- Workspace-relative tab IDs or absolute paths to currently-open tab
-  files → live Y.Doc.
-- Anything else → `isError: true` with a clear message.
+- `Read` / `Glob` / `Grep` can inspect the wider workspace.
+- `AskUserQuestion` is an SDK tool, not a DocWriter MCP tool; DocWriter
+  intercepts it in `canUseTool` and renders the question in the UI.
+- Built-in `Edit` / `Write` are intentionally not the authority for open
+  tabs because they would bypass the live Y.Doc, review rounds, and
+  origin-tagged undo flow.
 
-The agent prompt disables built-in `Edit` / `Write` for open-tab paths
-and steers explicitly toward the custom tools; `Read` / `Glob` / `Grep`
-remain available for reading anywhere in the workspace.
+#### Path routing (`src/lib/server/path-router.ts`)
+
+The document tools route by `path` before doing any work:
+
+| Path shape | Resolution | Behavior |
+| --- | --- | --- |
+| `.docwriter/agent/scratch/...` | Scratch path | Plain filesystem I/O. Private agent workspace; not surfaced as user tabs. |
+| `drafts/ch1.md` (workspace-relative tab id) | Open tab | Resolve directly from `tabs.order`, then operate on the live Hocuspocus document. |
+| `/abs/path/to/workspace/drafts/ch1.md` | Open tab | Match by suffix against the open-tab ids, then operate on the live Hocuspocus document. |
+| Anything else | Unknown path | Reject with `isError: true`. `write_doc` never creates a new tab implicitly. |
+
+#### Open-tab tool flow
+
+For `edit_doc` / `write_doc` on an open tab:
+
+1. `resolveTabFromPath(path)` maps the tool input to an existing open tab.
+2. `getHocuspocus().openDirectConnection(tabId)` opens a handle to the
+   live Hocuspocus `Document`, not the stale registry copy.
+3. The tool serializes the current live doc (`beforeMd`), computes the
+   requested new content, and validates edit preconditions (`old_string`
+   count for `edit_doc`).
+4. Inside one `document.transact(..., AGENT_ORIGIN)`, a headless Tiptap
+   Collaboration editor calls `setContent(...)` against the live Y.Doc.
+   That is what turns markdown/plain text into the actual CRDT updates.
+5. In the same transaction, the tool appends a `PendingReviewRound` into
+   `Y.Map('review').pendingRounds`.
+6. Hocuspocus broadcasts the combined Yjs update to every browser, and
+   `onChange` persists it into SQLite's `yjs_updates` log.
+
+This "content mutation + review metadata in one Yjs transaction" is the
+core behavior the default file tools cannot provide.
+
+#### Why these tools exist instead of default file tools
+
+DocWriter does not use built-in `Edit` / `Write` for open tabs because
+those tools operate on plain files, while the app's source of truth for
+an open document is the live server-side Y.Doc. The custom tools exist
+so that:
+
+- the agent edits the exact same document instance the browser is
+  rendering
+- `tool_result` reflects what actually landed in the live doc, not what
+  was written to a shadow file
+- content changes and pending review cards arrive atomically
+- Reject works via `AGENT_ORIGIN` + `Y.UndoManager`
+- scratch work can still use cheap plain filesystem I/O without being
+  confused with user-facing tabs
+
+The render prompt therefore disables built-in `Edit` / `Write` for
+open-tab paths and steers explicitly toward `edit_doc` / `write_doc`;
+`Read` / `Glob` / `Grep` remain available for general workspace reads.
 
 ### SSE stream
 
@@ -588,7 +624,7 @@ Hook configuration is never agent-writable. The agent can only
 - `src/lib/server/ydoc-markdown.ts` — Y.Doc ↔ markdown serializer
 - `src/routes/api/render/+server.ts` — Claude Agent SDK orchestration
 - `src/lib/server/document-io.ts` — rules / agentSettings meta I/O
-- `src/lib/server/runtime-state.ts` — `.docwriter/state.json` model
+- `src/lib/server/runtime-state.ts` — SQLite-backed runtime state
 - `src/lib/server/workspace-path.ts` — sandboxing & symlink-safe resolver
 
 ## Bottom Line

@@ -6,7 +6,9 @@ import {
 	setRecentActions,
 	getActionUsageCounts,
 	setActionUsageCounts,
-	clearSessionState
+	clearSessionState,
+	getEditorSoftWrap,
+	setEditorSoftWrap
 } from '$lib/server/runtime-state';
 import { AGENT_SCRATCH_DIR } from '$lib/server/document-files';
 import { existsSync, rmSync } from 'fs';
@@ -15,7 +17,8 @@ export const GET: RequestHandler = async () => {
 	return json({
 		sessionId: getSessionId(),
 		recentActions: getRecentActions(),
-		actionUsageCounts: getActionUsageCounts()
+		actionUsageCounts: getActionUsageCounts(),
+		editorSoftWrap: getEditorSoftWrap()
 	});
 };
 
@@ -23,6 +26,7 @@ export const PUT: RequestHandler = async ({ request }) => {
 	const body = await request.json();
 	if (body.recentActions) setRecentActions(body.recentActions);
 	if (body.actionUsageCounts) setActionUsageCounts(body.actionUsageCounts);
+	if (typeof body.editorSoftWrap === 'boolean') setEditorSoftWrap(body.editorSoftWrap);
 	return json({ ok: true });
 };
 

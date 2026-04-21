@@ -131,6 +131,34 @@ test.describe('plain-text tabs', () => {
 		const onDisk = readFileSync(join(isolatedServer.root, name), 'utf-8');
 		expect(onDisk).toContain('Nested body');
 	});
+
+	test('wrap long lines keeps plain-text gutter aligned to visual rows', async ({ page }) => {
+		await freshPage(page);
+		await page.evaluate(async () => {
+			await fetch('/api/session', {
+				method: 'PUT',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ editorSoftWrap: true })
+			});
+		});
+		await page.reload();
+		await page.waitForSelector('.tab-bar');
+
+		const name = `t-wrap-${SUFFIX}.txt`;
+		await createTab(page, name);
+		await setEditor(
+			page,
+			'This is one intentionally long plain-text line that should wrap across multiple visual rows in the editor gutter without creating fake logical line numbers.'
+		);
+		await afterAutosave(page);
+
+		const gutterRows = await page.locator('.plain-line-number').evaluateAll((nodes) =>
+			nodes.map((node) => node.textContent ?? '')
+		);
+		expect(gutterRows.length).toBeGreaterThan(1);
+		expect(gutterRows[0]).toBe('1');
+		expect(gutterRows.slice(1).every((value) => value === '')).toBe(true);
+	});
 });
 
 test.describe('persistence', () => {
@@ -138,15 +166,21 @@ test.describe('persistence', () => {
 		await freshPage(page);
 		const name = `t-reload-${SUFFIX}.md`;
 		await createTab(page, name);
-		const marker = `reload-${SUFFIX}`;
-		await setEditor(page, `# ${name}\n\n${marker}`);
+		const markerA = `reload-a-${SUFFIX}`;
+		const markerB = `reload-b-${SUFFIX}`;
+		await setEditor(page, `# ${name}\n\n${markerA}\n\n${markerB}`);
 		await afterAutosave(page);
 
-		await page.reload();
-		await page.waitForSelector('.tab-bar');
-		await page.waitForFunction(() => !!(window as any).__docwriterEditor);
-		await switchTab(page, name);
-		expect(await getEditorText(page)).toContain(marker);
+		for (let i = 0; i < 2; i += 1) {
+			await page.reload();
+			await page.waitForSelector('.tab-bar');
+			await page.waitForFunction(() => !!(window as any).__docwriterEditor);
+			await switchTab(page, name);
+
+			const text = await getEditorText(page);
+			expect(text.match(new RegExp(markerA, 'g')) ?? []).toHaveLength(1);
+			expect(text.match(new RegExp(markerB, 'g')) ?? []).toHaveLength(1);
+		}
 	});
 
 	test('new agent session preserves tabs after reload', async ({ page }) => {

@@ -17,8 +17,8 @@ import {
  * Post Phase 5+6: the agent edits flow through custom MCP tools that mutate
  * the live Hocuspocus Y.Doc directly (see `mcp-doc-tools.ts`). The old
  * `.docwriter/agent/<tabId>` shadow files and the 3-way merge machinery are
- * gone. This module now only handles the user-facing file on disk + the
- * rules / agent-settings JSON meta in `.docwriter/state.json`.
+ * gone. This module now only handles the user-facing file on disk plus the
+ * rules / agent-settings metadata backed by SQLite runtime state.
  */
 
 export interface DocMeta {

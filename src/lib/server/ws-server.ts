@@ -33,6 +33,7 @@ import {
 // with clients. Built in onLoadDocument so it observes the LIVE doc;
 // tearing it down in afterUnloadDocument avoids leaking observers.
 const undoManagers = new Map<string, Y.UndoManager>();
+const hydratedDocuments = new WeakSet<Y.Doc>();
 
 export function getUndoManagerForTabServerSide(tabId: string): Y.UndoManager | null {
 	return undoManagers.get(tabId) ?? null;
@@ -53,12 +54,22 @@ export function createWsServer(port: number): Server {
 		quiet: true,
 		async onLoadDocument({ documentName: tabId, document }) {
 			// `document` IS Hocuspocus's live internal Y.Doc (Document extends
-			// Y.Doc). Always replay: Yjs's applyUpdate is idempotent per
-			// (clientID, clock), so re-applying ops the doc already has is a
-			// no-op. If duplication reappears, something in the replay loop is
-			// producing synthetic new ops rather than deduplicating — revisit.
+			// Y.Doc). Hydrate it from SQLite — but only once per live Document
+			// instance. Replaying the persisted log onto a doc that already has
+			// the same logical content under a different clientID tree merges in
+			// a second copy of the document, which is exactly the "refresh makes
+			// the editor double" failure mode.
+			//
+			// In normal flow Hocuspocus only calls this hook once per Document
+			// and the fragment IS empty here, so the guard is inert. It exists
+			// as a structural guarantee: no matter how many times this hook
+			// runs on the same live doc (reconnect reuse, direct-connection
+			// paths re-entering createDocument, extension-ordering quirks), the
+			// SQLite log lands exactly once.
 			const ydoc = document as unknown as Y.Doc;
 			const xmlFragment = ydoc.getXmlFragment('default');
+			const alreadyHydrated =
+				hydratedDocuments.has(ydoc) || xmlFragment.length > 0;
 
 			// Fresh UndoManager on the live doc. Built BEFORE replay so
 			// AGENT_ORIGIN rows repopulate the undo stack (Phase 7 invariant).
@@ -72,7 +83,10 @@ export function createWsServer(port: number): Server {
 			});
 			undoManagers.set(tabId, undoManager);
 
-			replayUpdatesInto(ydoc, tabId);
+			if (!alreadyHydrated) {
+				replayUpdatesInto(ydoc, tabId);
+			}
+			hydratedDocuments.add(ydoc);
 			return document;
 		},
 		async afterUnloadDocument({ documentName: tabId }) {

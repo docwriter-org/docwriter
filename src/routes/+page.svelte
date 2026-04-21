@@ -66,7 +66,8 @@
 		undoAgentChanges,
 		disposeAgentUndo,
 		getUndoManagerForTab,
-		AGENT_ORIGIN
+		AGENT_ORIGIN,
+		AGENT_APPLY_KEY
 	} from '$lib/yjs-agent';
 	import {
 		getReviewMap,
@@ -97,6 +98,7 @@
 		selectedTheme,
 		submitCountdown,
 		editorFontScale,
+		editorSoftWrap,
 		historyVerbosity,
 		showFilesPane,
 		agentSettings,
@@ -1222,6 +1224,9 @@
 	let fontScale = $state(1.0);
 	editorFontScale.subscribe((v) => (fontScale = v));
 
+	let softWrap = $state(false);
+	editorSoftWrap.subscribe((v) => (softWrap = v));
+
 	// Preset font sizes exposed in the View → Font size submenu. The inline
 	// keyboard path (Ctrl+/Ctrl-) still bumps by 0.1.
 	const FONT_PRESETS: Array<{ label: string; scale: number }> = [
@@ -1270,6 +1275,12 @@
 						checked: Math.abs(fontScale - p.scale) < 0.01,
 						onClick: () => editorFontScale.set(p.scale)
 					}))
+				},
+				{
+					kind: 'action',
+					label: 'Wrap long lines',
+					checked: softWrap,
+					onClick: () => editorSoftWrap.update((v) => !v)
 				},
 				{ kind: 'panel', label: 'Writing references', panelKey: 'references' },
 				{ kind: 'panel', label: 'Writing rules', panelKey: 'rules' },
@@ -1382,6 +1393,9 @@
 			if (data.actionUsageCounts && typeof data.actionUsageCounts === 'object') {
 				actionUsageCounts.set(data.actionUsageCounts);
 			}
+			if (typeof data.editorSoftWrap === 'boolean') {
+				editorSoftWrap.set(data.editorSoftWrap);
+			}
 		} catch (e) {
 			console.error('Failed to restore session state:', e);
 		}
@@ -1401,11 +1415,17 @@
 			recentActions.subscribe((v) => (recent = v))();
 			let counts: Record<string, number> = {};
 			actionUsageCounts.subscribe((v) => (counts = v))();
+			let wrapLongLines = false;
+			editorSoftWrap.subscribe((v) => (wrapLongLines = v))();
 			try {
 				await fetch('/api/session', {
 					method: 'PUT',
 					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ recentActions: recent, actionUsageCounts: counts })
+					body: JSON.stringify({
+						recentActions: recent,
+						actionUsageCounts: counts,
+						editorSoftWrap: wrapLongLines
+					})
 				});
 			} catch (e) {
 				console.error('Failed to persist session state:', e);
@@ -1449,6 +1469,13 @@
 		// Load the tab list, pick or create an active tab, bind its Y.Doc
 		// as current, then hydrate its content. TiptapEditor mounts after
 		// docLoaded flips true, so by then the right Y.Doc is registered.
+		// Restore the selection-toolbar recents + LRU usage counts from
+		// server state so refresh doesn't wipe cached feedback pills or editor
+		// view prefs like soft wrap. Must complete BEFORE the editor mounts and
+		// before we attach the persist subscribers, otherwise defaults could
+		// overwrite the real values.
+		await restoreSessionState();
+
 		const active = await loadTabs();
 		if (active) {
 			setCurrentTab(active);
@@ -1462,16 +1489,11 @@
 		// back and convert to our HistoryEntry format.
 		void restoreAgentHistory();
 
-		// Restore the selection-toolbar recents + LRU usage counts from
-		// state.json so refresh doesn't wipe the cached-pill feedback list.
-		// Must complete BEFORE we attach the persist subscribers, otherwise
-		// the initial `set([])` would persist empty arrays over the real data.
-		await restoreSessionState();
-
 		// Now that stores are populated, attach persist-on-change subscribers.
 		// The debounced write coalesces bursts of clicks into one PUT.
 		recentActions.subscribe(() => schedulePersistSession());
 		actionUsageCounts.subscribe(() => schedulePersistSession());
+		editorSoftWrap.subscribe(() => schedulePersistSession());
 
 		// Subscribe to the file-watcher event bus (used by `docwriter --watch`).
 		// When the bin's fs.watch sees external changes it POSTs to /api/live,
@@ -1489,7 +1511,11 @@
 					const ed = editorRef?.getEditor();
 					if (!ed) return;
 					const kind = getTabKind(tabId);
-					const before = getEditorMarkdownNow();
+					const readEditorContent = () =>
+						kind === 'plain'
+							? ed.getText({ blockSeparator: '\n' })
+							: ((ed.storage as any).markdown?.getMarkdown?.() ?? '');
+					const before = readEditorContent();
 					// Ensure the UndoManager is listening before we transact
 					// so the agent-origin transaction is captured (matches the
 					// real flow, where edit_doc lands one tracked transaction).
@@ -1500,17 +1526,23 @@
 							// Cast: plainTextToPMJson returns our own PM-JSON shape which
 							// Tiptap's setContent accepts at runtime but its Content type
 							// only surfaces a subset.
-							ed.commands.setContent(
-								plainTextToPMJson(content) as unknown as Parameters<
-									typeof ed.commands.setContent
-								>[0],
-								{ emitUpdate: false }
-							);
+							ed.chain()
+								.setMeta(AGENT_APPLY_KEY, true)
+								.setContent(
+									plainTextToPMJson(content) as unknown as Parameters<
+										typeof ed.commands.setContent
+									>[0],
+									{ emitUpdate: false }
+								)
+								.run();
 						} else {
-							ed.commands.setContent(content, { emitUpdate: false });
+							ed.chain()
+								.setMeta(AGENT_APPLY_KEY, true)
+								.setContent(content, { emitUpdate: false })
+								.run();
 						}
 					}, AGENT_ORIGIN);
-					const after = getEditorMarkdownNow();
+					const after = readEditorContent();
 					if (after === before) return;
 					const existing = getReviewMapForTab(tabId).get('pendingRounds');
 					const prior: PendingReviewRound[] = Array.isArray(existing)

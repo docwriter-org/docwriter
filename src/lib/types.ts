@@ -158,7 +158,7 @@ export type HistoryEntry =
 			durationMs?: number;
 	  };
 
-/** Agent behavior settings. Persisted to .docwriter/state.json.
+/** Agent behavior settings. Persisted in SQLite runtime state.
  *
  *  - `agency`: how eager the agent is to make edits. `conservative` keeps
  *    the current "default to NO edits" posture; `balanced` makes one focused

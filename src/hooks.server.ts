@@ -6,24 +6,25 @@
  *                               next render starts a fresh conversation.
  */
 import type { Handle } from '@sveltejs/kit';
-import { readRuntimeState, setSessionId } from '$lib/server/runtime-state';
+import { getSessionId, setSessionId } from '$lib/server/runtime-state';
 import { installBundledSkills } from '$lib/server/skills-install';
-import { seedFromJsonFilesIfNeeded } from '$lib/server/db-seed';
 import { createWsServer } from '$lib/server/ws-server';
+import { existsSync, unlinkSync } from 'fs';
+import { join } from 'path';
+import { DOCWRITER_DIR } from '$lib/server/document-files';
 
 // Install DocWriter's bundled project skill(s) into the workspace's
 // `.claude/skills/` dir so the SDK picks them up via the 'project'
 // settingSource. Idempotent — only overwrites the built-in skill files.
 installBundledSkills();
 
-// Phase 1 SQLite scaffolding: open the DB and prime it from the existing
-// JSON files on first run. No read paths consume this yet — the JSON files
-// remain the source of truth. Wrapped in try/catch so a DB-init failure
-// can't take down the server startup path.
+// `state.json` used to mirror runtime state that now lives in SQLite. Drop
+// the obsolete file so the workspace stops carrying dead duplicate state.
 try {
-	seedFromJsonFilesIfNeeded();
+	const obsoleteStateFile = join(DOCWRITER_DIR, 'state.json');
+	if (existsSync(obsoleteStateFile)) unlinkSync(obsoleteStateFile);
 } catch (err) {
-	console.error('[docwriter] SQLite seed failed (non-fatal):', err);
+	console.error('[docwriter] failed to remove obsolete state.json:', err);
 }
 
 // Phase 2: start the Hocuspocus WebSocket Y.Doc sync server on a separate
@@ -45,14 +46,13 @@ if (!wsServer) {
 // Run at module load (= server startup), not per-request.
 if (process.env.DOCWRITER_NEW_SESSION === '1') {
 	try {
-		const state = readRuntimeState();
-		if (state.sessionId) {
+		if (getSessionId()) {
 			// Overwrite with an empty session; the next query() will create a new one.
 			setSessionId('');
 			console.log('[docwriter] --new-session: cleared persisted session ID');
 		}
 	} catch {
-		// State file may not exist yet on a fresh workspace — that's fine.
+		// Fresh workspace or early DB init failure — ignore.
 	}
 }
 

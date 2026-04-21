@@ -1,13 +1,8 @@
 /**
- * Dual-write helpers: mirror JSON-file state changes into the SQLite DB.
+ * SQLite persistence helpers for DocWriter runtime state.
  *
- * Phase 1: these are called alongside the existing `writeJsonAtomic()` paths
- * in `runtime-state.ts` and `hooks-config.ts`. The JSON file is still the
- * source of truth; these writes exist so we can verify the DB stays in
- * sync as the user exercises the app, ahead of the Phase 2+ read cutover.
- *
- * Every helper wraps its DB work in try/catch and logs on failure — a DB
- * error must never break the existing JSON write path.
+ * Every helper wraps its DB work in try/catch and logs on failure so a
+ * persistence error can't take down the request path that triggered it.
  */
 import { getDb } from './db';
 import type { Rule, AgentSettings, TabsState } from './runtime-state';
@@ -72,6 +67,18 @@ export function dbSetSessionId(sessionId: string) {
 		);
 	} catch (err) {
 		logDbError('setSessionId', err);
+	}
+}
+
+export function dbSetEditorSoftWrap(enabled: boolean) {
+	try {
+		const db = getDb();
+		db.prepare('INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)').run(
+			'editorSoftWrap',
+			String(enabled)
+		);
+	} catch (err) {
+		logDbError('setEditorSoftWrap', err);
 	}
 }
 
