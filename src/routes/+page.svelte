@@ -19,13 +19,6 @@
 	import { unifiedLineDiff } from '$lib/diff';
 	import { classifyRoundKind } from '$lib/review-diff';
 
-	/** Legacy marker left on triggers by the pre-refactor conflict-retry flow.
-	 * The conflict-retry path is gone (Phase 5+6 — edits land atomically into
-	 * the live Y.Doc so there are no 3-way merge conflicts to retry), but the
-	 * marker remains in `shortDescription` so a replayed SDK transcript from
-	 * an older session still renders a sensible label. */
-	const CONFLICT_RETRY_MARKER = '[docwriter-conflict-retry]';
-
 	/** Turn a submit trigger into a compact description for the history
 	 * pane. Full text of long prompts (including feedback-on-passage quotes)
 	 * becomes a single-line label; the agent still gets the full prompt.
@@ -33,9 +26,6 @@
 	 * prompt the agent actually receives, not a vague "Submitted". */
 	function shortDescription(trigger: string | undefined): string {
 		if (!trigger) return 'Review document and improve';
-		if (trigger.includes(CONFLICT_RETRY_MARKER)) {
-			return 'Retry skipped edits against your latest changes';
-		}
 		// `The user flagged this passage as|with feedback "Too verbose"…` → `Feedback: Too verbose`
 		const feedbackMatch = trigger.match(
 			/^The user flagged this passage (?:as|with feedback) "([^"]+)"/
@@ -72,9 +62,7 @@
 	} from '$lib/yjs-doc';
 	import type { Editor } from '@tiptap/core';
 	import {
-		userMd,
 		reviewBaseline,
-		preAgentSnapshot,
 		pendingReviewRounds,
 		rules,
 		proposedRules,
@@ -95,12 +83,10 @@
 		agentSettings,
 		tabs,
 		activeTab,
-		activeTabKind,
 		recentActions,
 		addRoundCost,
 		resetSessionCost,
-		actionUsageCounts,
-		type TabInfo
+		actionUsageCounts
 	} from '$lib/stores';
 	import TabBar from '$lib/components/TabBar.svelte';
 	import type { AgentSettings, HistoryEntry, PendingReviewRound } from '$lib/types';
@@ -127,16 +113,9 @@
 	let pendingReviewTabs: Map<string, number> = $state(new Map());
 
 	function getCurrentTabList(): string[] {
-		let v: TabInfo[] = [];
+		let v: string[] = [];
 		tabs.subscribe((x) => (v = x))();
-		return v.map((t) => t.id);
-	}
-
-	function getTabKind(tabId: string): 'markdown' | 'plain' {
-		let v: TabInfo[] = [];
-		tabs.subscribe((x) => (v = x))();
-		const match = v.find((t) => t.id === tabId);
-		return match?.kind ?? 'markdown';
+		return v;
 	}
 
 	function clearFeedbackAnnotationsForTab(tabId: string) {
@@ -156,22 +135,20 @@
 		try {
 			const res = await fetch('/api/tabs');
 			const data = await res.json();
-			let tabInfo: TabInfo[] =
-				(data.tabs as TabInfo[] | undefined) ??
-				(data.order || []).map((id: string) => ({ id, kind: 'markdown' as const }));
+			const tabIds: string[] = Array.isArray(data.tabs)
+				? data.tabs
+				: Array.isArray(data.order)
+					? data.order
+					: [];
 			let active: string | null = data.active ?? null;
-			tabs.set(tabInfo);
+			tabs.set(tabIds);
 			activeTab.set(active);
-			if (active) activeTabKind.set(getTabKind(active));
 			const pending = new Map<string, number>();
-			for (const info of tabInfo) {
-				const map = getReviewMapForTab(info.id);
+			for (const id of tabIds) {
+				const map = getReviewMapForTab(id);
 				const rounds = map.get('pendingRounds');
-				const legacyBaseline = map.get('baseline');
 				if (Array.isArray(rounds) && rounds.length > 0) {
-					pending.set(info.id, rounds.length);
-				} else if (typeof legacyBaseline === 'string') {
-					pending.set(info.id, 1);
+					pending.set(id, rounds.length);
 				}
 			}
 			pendingReviewTabs = pending;
@@ -182,15 +159,13 @@
 		}
 	}
 
-	/** Load a single tab's markdown + meta, and hydrate the per-tab review
-	 * state from its Y.Doc. Must be called after `setCurrentTab(tabId)` so
-	 * `getReviewMap()` operates on the right Y.Doc. */
+	/** Load a single tab's meta and hydrate the per-tab review state from its
+	 * Y.Doc. Must be called after `setCurrentTab(tabId)` so `getReviewMap()`
+	 * operates on the right Y.Doc. */
 	async function loadTab(tabId: string) {
 		try {
 			const res = await fetch(`/api/document?tab=${encodeURIComponent(tabId)}`);
 			const data = await res.json();
-			// userMd seeds the Y.Doc via TiptapEditor's mount/remount flow.
-			userMd.set(data.userMd || '');
 			rules.set(data.meta?.rules || []);
 			if (data.meta?.agentSettings) {
 				agentSettings.set(data.meta.agentSettings);
@@ -199,11 +174,6 @@
 			await whenYDocReady();
 			const reviewMap = getReviewMap();
 			const persistedRounds = reviewMap.get('pendingRounds');
-			// `pendingRounds` is the authoritative source in the new per-round
-			// model. `baseline` / `preAgent` are legacy single-round fields
-			// we still read for backward compat (old review maps written
-			// before the composition refactor). If we find them, convert
-			// into a synthetic single-round array so the UI still lights up.
 			let rounds: PendingReviewRound[] = Array.isArray(persistedRounds)
 				? (persistedRounds as PendingReviewRound[]).map((r) => ({
 						...r,
@@ -212,24 +182,8 @@
 						kind: r.kind ?? classifyRoundKind(r.beforeMd, r.afterMd)
 				  }))
 				: [];
-			if (rounds.length === 0) {
-				const legacyBaseline = reviewMap.get('baseline');
-				if (typeof legacyBaseline === 'string') {
-					const after = data.userMd || '';
-					rounds = [
-						{
-							id: 'legacy_' + Date.now(),
-							beforeMd: legacyBaseline,
-							afterMd: after,
-							timestamp: Date.now(),
-							kind: classifyRoundKind(legacyBaseline, after)
-						}
-					];
-				}
-			}
 			pendingReviewRounds.set(rounds);
 			reviewBaseline.set(rounds.length > 0 ? rounds[0].beforeMd : null);
-			preAgentSnapshot.set(rounds.length > 0 ? rounds[0].beforeMd : null);
 
 			// Agent edits now mutate Y.Map('review') server-side via edit_doc.
 			// The change syncs to us over Hocuspocus, but nothing auto-reflects
@@ -248,6 +202,15 @@
 		map: Y.Map<unknown>;
 		handler: (event: Y.YMapEvent<unknown>) => void;
 	} | null = null;
+
+	async function remountActiveTabFromServer(tabId: string) {
+		if (tabId !== getCurrentActiveTab()) return;
+		docLoaded = false;
+		await destroyTab(tabId);
+		setCurrentTab(tabId);
+		await loadTab(tabId);
+		docLoaded = true;
+	}
 
 	function attachActiveReviewObserver(tabId: string) {
 		// Detach any previous tab's observer first.
@@ -268,7 +231,6 @@
 				: [];
 			pendingReviewRounds.set(rounds);
 			reviewBaseline.set(rounds.length > 0 ? rounds[0].beforeMd : null);
-			preAgentSnapshot.set(rounds.length > 0 ? rounds[0].beforeMd : null);
 			const nextPending = new Map(pendingReviewTabs);
 			if (rounds.length > 0) nextPending.set(tabId, rounds.length);
 			else nextPending.delete(tabId);
@@ -287,7 +249,6 @@
 		docLoaded = false; // unmounts TiptapEditor
 		setCurrentTab(tabId);
 		activeTab.set(tabId);
-		activeTabKind.set(getTabKind(tabId));
 		try {
 			await fetch('/api/tabs', {
 				method: 'PATCH',
@@ -312,7 +273,6 @@
 			throw new Error(err || 'Failed to create tab');
 		}
 		const data = await res.json();
-		// Refetch the full tab list to get kinds for every tab (including the new one).
 		const listRes = await fetch('/api/tabs');
 		const listData = await listRes.json();
 		tabs.set(listData.tabs || []);
@@ -363,7 +323,6 @@
 		tabs.set(listData.tabs || []);
 		if (getCurrentActiveTab() === oldId) {
 			activeTab.set(newId);
-			activeTabKind.set(getTabKind(newId));
 		}
 	}
 
@@ -428,26 +387,13 @@
 	 * the currently active one, mirror into the live stores so the diff
 	 * overlay and the OutlinePane cards update immediately.
 	 *
-	 * Also clears the legacy `baseline`/`preAgent` keys when the new rounds
-	 * array is empty, so a fully-accepted tab doesn't flicker back on reload.
 	 */
 	function writeTabRounds(tabId: string, rounds: PendingReviewRound[]) {
 		const map = getReviewMapForTab(tabId);
 		map.set('pendingRounds', rounds);
-		// Keep legacy keys in sync so older code paths / tests that still
-		// read `baseline`/`preAgent` see a sane value. Earliest round's
-		// beforeMd doubles as both.
-		if (rounds.length === 0) {
-			map.set('baseline', null);
-			map.set('preAgent', null);
-		} else {
-			map.set('baseline', rounds[0].beforeMd);
-			map.set('preAgent', rounds[0].beforeMd);
-		}
 		if (tabId === getCurrentActiveTab()) {
 			pendingReviewRounds.set(rounds);
 			reviewBaseline.set(rounds.length > 0 ? rounds[0].beforeMd : null);
-			preAgentSnapshot.set(rounds.length > 0 ? rounds[0].beforeMd : null);
 		}
 		// Tab-bar badge bookkeeping — count reflects rounds length.
 		const nextPending = new Map(pendingReviewTabs);
@@ -1391,8 +1337,6 @@
 	}
 
 	let docLoaded = $state(false);
-	let currentTabKind = $state<'markdown' | 'plain'>('markdown');
-	activeTabKind.subscribe((v) => (currentTabKind = v));
 
 	/**
 	 * Load the persisted selection-toolbar state (recent actions + LRU usage
@@ -1565,12 +1509,7 @@
 			es.addEventListener('reload', async () => {
 				const tabId = getCurrentActiveTab();
 				if (!tabId) return;
-				await loadTab(tabId);
-				// If the editor is already mounted, force it to pick up the new
-				// userMd by doing a brief unmount/remount cycle.
-				docLoaded = false;
-				await new Promise((r) => setTimeout(r, 0));
-				docLoaded = true;
+				await remountActiveTabFromServer(tabId);
 			});
 			es.onerror = () => {
 				es.close();
@@ -1579,14 +1518,6 @@
 			};
 		};
 		connect();
-	}
-
-	/** Read the *current* on-disk markdown for the active tab. Used by the
-	 * dev test seam to capture a baseline before faking an agent edit. */
-	function getEditorMarkdownNow(): string {
-		let md = '';
-		userMd.subscribe((v) => (md = v))();
-		return md;
 	}
 
 	/** Pull the last session's messages from the SDK and convert them into
@@ -1750,7 +1681,6 @@
 				<TiptapEditor
 					bind:this={editorRef}
 					onSubmit={(trigger) => submit(trigger)}
-					kind={currentTabKind}
 				/>
 			{:else if docLoaded}
 				<div class="empty-editor-state">
