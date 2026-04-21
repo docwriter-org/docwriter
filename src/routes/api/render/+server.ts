@@ -21,13 +21,12 @@ import {
 import { getSessionId, setSessionId, getTabsState } from '$lib/server/runtime-state';
 import { readMeta } from '$lib/server/document-io';
 import { kvGet, kvSet } from '$lib/server/db-writes';
-import { getTabYDoc } from '$lib/server/ydoc-registry';
-import { serializeYDocToMarkdown } from '$lib/server/ydoc-markdown';
+import { serializeYDoc, readReviewRounds } from '$lib/shared/ydoc-codec';
+import { replayUpdatesInto } from '$lib/server/ydoc-persistence';
 import { registerPendingAskUser } from '$lib/server/ask-user-state';
 import { unifiedLineDiff } from '$lib/diff';
 import { buildStyleReferencesPromptBlock } from '$lib/server/references';
 import { materializePendingReviewText } from '$lib/review-rounds';
-import type { PendingReviewRound } from '$lib/types';
 import {
 	docToolsMcp,
 	EDIT_DOC_TOOL_NAME,
@@ -35,10 +34,10 @@ import {
 	WRITE_DOC_TOOL_NAME
 } from '$lib/server/mcp-doc-tools';
 
-/** Read the live authoritative markdown for a tab. Prefers the Hocuspocus
- * in-memory Document (which is what clients are synced to); falls back to
- * the registry Y.Doc (cold-start / no-client-connected state, which in turn
- * seeds from the workspace file via `seedYDocFromContent`). */
+/** Read the live authoritative markdown for a tab, including any pending
+ * review rounds materialized on top. Prefers the Hocuspocus in-memory
+ * Document (what clients are synced to); falls back to a throwaway Y.Doc
+ * hydrated from SQLite when no client is connected. */
 function readLiveTabMarkdown(tabId: string): string {
 	const holder = globalThis as unknown as {
 		__docwriterWsServer?: {
@@ -47,14 +46,16 @@ function readLiveTabMarkdown(tabId: string): string {
 	};
 	const hp = holder.__docwriterWsServer?.hocuspocus;
 	const liveDoc = hp?.documents?.get(tabId) as Y.Doc | undefined;
-	const ydoc = liveDoc ?? getTabYDoc(tabId).ydoc;
-	const reviewMap = ydoc.getMap('review');
-	const rounds = reviewMap.get('pendingRounds');
-	const committed = serializeYDocToMarkdown(ydoc);
-	if (Array.isArray(rounds) && rounds.length > 0) {
-		return materializePendingReviewText(committed, rounds as PendingReviewRound[]);
+	if (liveDoc) {
+		return materializePendingReviewText(serializeYDoc(liveDoc), readReviewRounds(liveDoc));
 	}
-	return committed;
+	const ydoc = new Y.Doc();
+	try {
+		replayUpdatesInto(ydoc, tabId);
+		return materializePendingReviewText(serializeYDoc(ydoc), readReviewRounds(ydoc));
+	} finally {
+		ydoc.destroy();
+	}
 }
 
 const LAST_SEEN_PREFIX = 'last_seen:';

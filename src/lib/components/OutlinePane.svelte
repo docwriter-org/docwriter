@@ -60,7 +60,7 @@
 
 	let md = $state('');
 
-	import { plainTextFromFragment } from '$lib/yjs-text';
+	import { serializeFragment as plainTextFromFragment } from '$lib/shared/ydoc-codec';
 
 	let activeTabUnsubscribe: Unsubscriber | null = null;
 	let observedFragment: Y.XmlFragment | null = null;

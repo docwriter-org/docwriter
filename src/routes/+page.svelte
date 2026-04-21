@@ -18,7 +18,7 @@
 	import { themes, applyTheme } from '$lib/themes';
 	import { unifiedLineDiff } from '$lib/diff';
 	import { materializePendingReviewRounds } from '$lib/review-rounds';
-	import { plainTextFromFragment } from '$lib/yjs-text';
+	import { serializeFragment as plainTextFromFragment } from '$lib/shared/ydoc-codec';
 
 	/** Turn a submit trigger into a compact description for the history
 	 * pane. Full text of long prompts (including feedback-on-passage quotes)
@@ -55,8 +55,8 @@
 
 	import {
 		getYDocForTab,
-		getReviewMap,
-		getReviewMapForTab,
+		getReviewArray,
+		getReviewArrayForTab,
 		whenYDocReady,
 		setCurrentTab,
 		destroyTab,
@@ -170,11 +170,8 @@
 			activeTab.set(active);
 			const pending = new Map<string, number>();
 			for (const id of tabIds) {
-				const map = getReviewMapForTab(id);
-				const rounds = map.get('pendingRounds');
-				if (Array.isArray(rounds) && rounds.length > 0) {
-					pending.set(id, rounds.length);
-				}
+				const arr = getReviewArrayForTab(id);
+				if (arr.length > 0) pending.set(id, arr.length);
 			}
 			pendingReviewTabs = pending;
 			return active;
@@ -185,7 +182,7 @@
 	}
 
 	/** Load a single tab's meta and hydrate the per-tab review state from its
-	 * Y.Doc. Must be called after `setCurrentTab(tabId)` so `getReviewMap()`
+	 * Y.Doc. Must be called after `setCurrentTab(tabId)` so `getReviewArray()`
 	 * operates on the right Y.Doc. */
 	async function loadTab(tabId: string) {
 		try {
@@ -195,21 +192,9 @@
 			if (data.meta?.agentSettings) {
 				agentSettings.set(data.meta.agentSettings);
 			}
-			// Hydrate review stores from this tab's Y.Doc review map.
 			await whenYDocReady();
-			const reviewMap = getReviewMap();
-			const persistedRounds = reviewMap.get('pendingRounds');
-			const rounds: PendingReviewRound[] = Array.isArray(persistedRounds)
-				? (persistedRounds as PendingReviewRound[])
-				: [];
+			const rounds = getReviewArray().toArray();
 			syncActiveReviewState(tabId, rounds);
-
-			// Agent edits now mutate Y.Map('review') server-side via edit_doc.
-			// The change syncs to us over Hocuspocus, but nothing auto-reflects
-			// those remote Y.Map updates into the `pendingReviewRounds` store
-			// — the store was only ever set from explicit code paths. Attach
-			// an observer for the active tab so server-created rounds show up
-			// as review cards without a tab switch.
 			attachActiveReviewObserver(tabId);
 		} catch (e) {
 			console.error(`Failed to load tab "${tabId}":`, e);
@@ -218,8 +203,8 @@
 
 	let activeReviewObserver: {
 		tabId: string;
-		map: Y.Map<unknown>;
-		handler: (event: Y.YMapEvent<unknown>) => void;
+		arr: Y.Array<PendingReviewRound>;
+		handler: () => void;
 	} | null = null;
 	let activeReviewTextObserver: {
 		tabId: string;
@@ -238,7 +223,7 @@
 
 	function detachActiveReviewObservers(tabId: string) {
 		if (activeReviewObserver?.tabId === tabId) {
-			activeReviewObserver.map.unobserve(activeReviewObserver.handler);
+			activeReviewObserver.arr.unobserve(activeReviewObserver.handler);
 			activeReviewObserver = null;
 		}
 		if (activeReviewTextObserver?.tabId === tabId) {
@@ -255,23 +240,18 @@
 	}
 
 	function attachActiveReviewObserver(tabId: string) {
-		// Detach any previous tab's observer first.
 		detachActiveReviewObservers(activeReviewObserver?.tabId ?? activeReviewTextObserver?.tabId ?? tabId);
-		const map = getReviewMapForTab(tabId);
-		const handler = (event: Y.YMapEvent<unknown>) => {
-			if (!event.changes.keys.has('pendingRounds')) return;
+		const arr = getReviewArrayForTab(tabId);
+		const handler = () => {
 			if (tabId !== getCurrentActiveTab()) return;
-			const raw = map.get('pendingRounds');
-			const rounds: PendingReviewRound[] = Array.isArray(raw) ? (raw as PendingReviewRound[]) : [];
-			syncActiveReviewState(tabId, rounds);
+			syncActiveReviewState(tabId, arr.toArray());
 		};
-		map.observe(handler);
-		activeReviewObserver = { tabId, map, handler };
+		arr.observe(handler);
+		activeReviewObserver = { tabId, arr, handler };
 		const fragment = getYDocForTab(tabId).getXmlFragment('default');
 		const textHandler = () => {
 			if (tabId !== getCurrentActiveTab()) return;
-			const raw = map.get('pendingRounds');
-			const rounds: PendingReviewRound[] = Array.isArray(raw) ? (raw as PendingReviewRound[]) : [];
+			const rounds = arr.toArray();
 			if (rounds.length === 0) {
 				reviewBaseline.set(null);
 				return;
@@ -421,27 +401,6 @@
 		}
 	}
 
-	/**
-	 * Write the pending-rounds array for a specific tab into its Y.Doc
-	 * review map. The map is part of the tab's Y.Doc, so the mutation
-	 * propagates through Hocuspocus sync to every connected client and
-	 * lands in SQLite via the usual `yjs_updates` append. If the tab is
-	 * the currently active one, mirror into the live stores so the diff
-	 * overlay and the OutlinePane cards update immediately.
-	 *
-	 */
-	function writeTabRounds(tabId: string, rounds: PendingReviewRound[]) {
-		const map = getReviewMapForTab(tabId);
-		map.set('pendingRounds', rounds);
-		if (tabId === getCurrentActiveTab()) {
-			syncActiveReviewState(tabId, rounds);
-		}
-		// Tab-bar badge bookkeeping — count reflects rounds length.
-		const nextPending = new Map(pendingReviewTabs);
-		if (rounds.length > 0) nextPending.set(tabId, rounds.length);
-		else nextPending.delete(tabId);
-		pendingReviewTabs = nextPending;
-	}
 
 	/** Persist agent settings through `/api/document` so the server can read
 	 * them at render time (for agency-level prompt injection). */
@@ -520,8 +479,7 @@
 		// (for the zero-edit message and feedback-annotation cleanup).
 		const priorRoundIdsByTab = new Map<string, Set<string>>();
 		for (const id of getCurrentTabList()) {
-			const existing = getReviewMapForTab(id).get('pendingRounds');
-			const rounds = Array.isArray(existing) ? (existing as PendingReviewRound[]) : [];
+			const rounds = getReviewArrayForTab(id).toArray();
 			priorRoundIdsByTab.set(id, new Set(rounds.map((r) => r.id)));
 		}
 
@@ -715,10 +673,7 @@
 						let anyRoundAdded = false;
 						for (const id of getCurrentTabList()) {
 							const priorIds = priorRoundIdsByTab.get(id) ?? new Set<string>();
-							const current = getReviewMapForTab(id).get('pendingRounds');
-							const rounds = Array.isArray(current)
-								? (current as PendingReviewRound[])
-								: [];
+							const rounds = getReviewArrayForTab(id).toArray();
 							const added = rounds.filter((r) => !priorIds.has(r.id));
 							if (added.length > 0) {
 								anyRoundAdded = true;
@@ -910,20 +865,20 @@
 			if (synced === false) {
 				throw new Error('Latest local edits are still syncing to the server. Try again in a moment.');
 			}
+			// Tear down the local Y.Doc before the server mutates its copy.
+			// Otherwise the still-connected client's stale state syncs up and
+			// clobbers the server's accept (the observed "accept didn't hit
+			// the doc" bug). Remount from server after the POST resolves.
 			await disconnectActiveTabForServerMutation(tabId);
 			const res = await fetch(`/api/document?tab=${encodeURIComponent(tabId)}`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					action: 'accept_rounds',
-					roundId
-				})
+				body: JSON.stringify({ action: 'accept_rounds', roundId })
 			});
 			const data = await res.json().catch(() => ({}));
 			if (!res.ok || !data?.ok || !Array.isArray(data.rounds)) {
 				throw new Error(data?.error || `HTTP ${res.status}`);
 			}
-			writeTabRounds(tabId, data.rounds as PendingReviewRound[]);
 			await remountActiveTabFromServer(tabId);
 			const acceptedCount =
 				typeof data.acceptedCount === 'number'
@@ -951,18 +906,17 @@
 	}
 
 	/**
-	 * Reject one round by id: rewinds that round's agent ops AND every
-	 * later round's agent ops (later rounds built on this one, so they no
-	 * longer make sense).
+	 * Reject one round by id. Drops just that round; later rounds stay and
+	 * will surface as stale if their `oldString` no longer matches the
+	 * current text (the materializer flags them). Reject with no id drops
+	 * everything.
 	 *
-	 * Uses the per-tab Yjs UndoManager, which only tracks `AGENT_ORIGIN`
-	 * transactions — so user keystrokes made between / after agent rounds
-	 * are PRESERVED (they're never in the undo stack).
+	 * Optional retry feedback re-submits with the rejection as context so
+	 * the agent can try again.
 	 */
 	function buildRejectedEditFollowup(
 		tabId: string,
 		rejected: MaterializedPendingReviewRound,
-		droppedLater: MaterializedPendingReviewRound[],
 		feedback?: string
 	): string {
 		const rejectedDiff = unifiedLineDiff(rejected.beforeMd, rejected.afterMd, 1);
@@ -987,17 +941,7 @@
 				'Follow that feedback closely in your retry. If it sounds like a standing preference rather than a one-off request, you may also propose a rule.'
 			);
 		}
-		if (droppedLater.length > 0) {
-			lines.push(
-				'',
-				`Because accept/reject applies in order, rejecting that edit also dropped ${droppedLater.length} later edit${droppedLater.length === 1 ? '' : 's'} you had proposed. For each one, decide whether it still makes sense given the rejection — if yes, re-propose (possibly adjusted); if no, skip:`
-			);
-			droppedLater.forEach((r, i) => {
-				const d = unifiedLineDiff(r.beforeMd, r.afterMd, 1);
-				lines.push('', `Dropped edit ${i + 1}:`, '```diff', d, '```');
-			});
-		}
-		lines.push('', 'Propose a new set of edits that takes the rejection into account.');
+		lines.push('', 'Propose a new edit that takes the rejection into account.');
 		return lines.join('\n');
 	}
 
@@ -1009,31 +953,9 @@
 		if (!tabId) return;
 		const rounds = currentRounds();
 		const retryFeedback = options?.retryFeedback?.trim();
+		const rejectedIdx = roundId ? rounds.findIndex((r) => r.id === roundId) : -1;
+		if (roundId && rejectedIdx < 0) return;
 
-		// How many rounds (from the tail) does this reject invalidate?
-		let firstIdx: number;
-		if (!roundId) {
-			firstIdx = 0; // reject-all
-		} else {
-			firstIdx = rounds.findIndex((r) => r.id === roundId);
-			if (firstIdx < 0) return;
-		}
-		const droppedCount = rounds.length - firstIdx;
-		const laterCount = droppedCount - 1;
-
-		// Non-latest rejection: dropping later rounds feels like wasted
-		// work. Instead, after rewinding, re-run the agent with the
-		// rejection as explicit feedback so it can re-propose edits
-		// that take the rejection into account.
-		const shouldReconsider = laterCount > 0 || !!retryFeedback;
-
-		// Reject MUST go through the server. Agent edits arrive at the
-		// browser via Hocuspocus sync with the provider's internal origin
-		// (NOT 'agent'), so the client's UndoManager — which tracks
-		// AGENT_ORIGIN only — never captures them. The SERVER's UndoManager
-		// does (edit_doc's transact uses AGENT_ORIGIN there), so the server
-		// is the only place the undo stack actually exists.
-		let rejectedRounds: PendingReviewRound[] = rounds.slice(0, firstIdx);
 		try {
 			const synced = await editorRef?.flushAutosave();
 			if (synced === false) {
@@ -1043,24 +965,25 @@
 			const res = await fetch(`/api/document?tab=${encodeURIComponent(tabId)}`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					action: 'reject_rounds',
-					roundId
-				})
+				body: JSON.stringify({ action: 'reject_rounds', roundId })
 			});
 			const data = await res.json().catch(() => ({}));
 			if (!res.ok || !data?.ok || !Array.isArray(data.rounds)) {
 				throw new Error(data?.error || `HTTP ${res.status}`);
 			}
-			if (
-				typeof data.rejectedCount === 'number' &&
-				data.rejectedCount < droppedCount
-			) {
-				throw new Error(
-					`Server rejected only ${data.rejectedCount} of ${droppedCount} expected round${droppedCount === 1 ? '' : 's'}`
-				);
-			}
-			rejectedRounds = data.rounds as PendingReviewRound[];
+			await remountActiveTabFromServer(tabId);
+			const rejectedCount =
+				typeof data.rejectedCount === 'number'
+					? data.rejectedCount
+					: Math.max(0, rounds.length - (data.rounds as PendingReviewRound[]).length);
+			pushHistory({
+				type: 'user_action',
+				timestamp: Date.now(),
+				description:
+					!roundId
+						? `Rejected all ${rounds.length} agent edit${rounds.length === 1 ? '' : 's'}`
+						: `Rejected ${rejectedCount} agent edit${rejectedCount === 1 ? '' : 's'}`
+			});
 		} catch (e) {
 			console.error('reject failed:', e);
 			await remountActiveTabFromServer(tabId);
@@ -1072,32 +995,10 @@
 			});
 			return;
 		}
-		writeTabRounds(tabId, rejectedRounds);
-		await remountActiveTabFromServer(tabId);
-		pushHistory({
-			type: 'user_action',
-			timestamp: Date.now(),
-			description:
-				droppedCount === rounds.length
-					? `Rejected all ${rounds.length} agent edit${rounds.length === 1 ? '' : 's'}`
-					: `Rejected ${droppedCount} agent edit${droppedCount === 1 ? '' : 's'}`
-		});
 
-		// If we cascade-dropped later rounds, re-run the agent so it can
-		// reconsider those pending edits in light of the rejection, rather
-		// than throwing away the work entirely. The new render produces
-		// fresh rounds that replace the discarded ones.
-		if (shouldReconsider) {
-			const rejected = rounds[firstIdx];
-			const droppedLater = rounds.slice(firstIdx + 1);
-			const followup = buildRejectedEditFollowup(
-				tabId,
-				rejected,
-				droppedLater,
-				retryFeedback
-			);
-			// Defer to next tick so all state updates settle before the new
-			// submit() re-enters the render loop.
+		// Retry-with-feedback re-runs the agent with the rejection quoted.
+		if (retryFeedback && rejectedIdx >= 0) {
+			const followup = buildRejectedEditFollowup(tabId, rounds[rejectedIdx], retryFeedback);
 			setTimeout(() => void submit(followup), 50);
 		}
 	}
@@ -1248,8 +1149,7 @@
 			// Reject any pending agent edits — fresh start across all tabs.
 			// Must go through the server; see rejectAgentEdit for why.
 			for (const id of getCurrentTabList()) {
-				const rounds = getReviewMapForTab(id).get('pendingRounds');
-				const list = Array.isArray(rounds) ? (rounds as PendingReviewRound[]) : [];
+				const list = getReviewArrayForTab(id).toArray();
 				if (list.length === 0) continue;
 				try {
 					await fetch(`/api/document?tab=${encodeURIComponent(id)}`, {
@@ -1258,9 +1158,8 @@
 						body: JSON.stringify({ action: 'reject_rounds' })
 					});
 				} catch {
-					// best-effort; we'll still clear the local map below
+					// best-effort; local observers + badge map clear below
 				}
-				writeTabRounds(id, []);
 			}
 			pendingReviewTabs = new Map();
 			proposedRules.set([]);
@@ -1653,7 +1552,7 @@
 
 	onDestroy(() => {
 		if (activeReviewObserver) {
-			activeReviewObserver.map.unobserve(activeReviewObserver.handler);
+			activeReviewObserver.arr.unobserve(activeReviewObserver.handler);
 			activeReviewObserver = null;
 		}
 		if (activeReviewTextObserver) {

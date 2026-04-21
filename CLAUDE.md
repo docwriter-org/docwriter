@@ -139,7 +139,6 @@ the mascot card).
 - **Font:** Lora (serif) for editor prose, Inter for UI.
 - **Model selection:** Opus / Sonnet / Haiku, passed as `model` in request
   bodies.
-- **Playwright MCP** configured for browser testing.
 - **Timing:** 3s idle countdown to auto-submit, 1s markdown-flush debounce
   on the server, Cmd/Ctrl+Enter skips the countdown.
 - **Origin constants must match:** `AGENT_ORIGIN = 'agent'` in

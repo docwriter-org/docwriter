@@ -23,7 +23,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import type { Document } from '@hocuspocus/server';
 
-import { serializeYDocToMarkdown } from './ydoc-markdown';
+import { serializeYDoc, getReviewArray, readReviewRounds, AGENT_ORIGIN } from '$lib/shared/ydoc-codec';
 import { isScratchPath, resolveTabFromPath, isOpenTab } from './path-router';
 import { classifyRoundKind } from '$lib/review-diff';
 import {
@@ -31,8 +31,6 @@ import {
 	reviewTextHash
 } from '$lib/review-rounds';
 import type { PendingReviewOperation, PendingReviewRound } from '$lib/types';
-
-const REVIEW_MAP_NAME = 'review';
 
 function toolError(message: string): CallToolResult {
 	return {
@@ -124,14 +122,8 @@ function narrowWriteOperation(
 	};
 }
 
-function getPendingRounds(doc: Y.Doc): PendingReviewRound[] {
-	const reviewMap = doc.getMap(REVIEW_MAP_NAME);
-	const existing = reviewMap.get('pendingRounds');
-	return Array.isArray(existing) ? (existing as PendingReviewRound[]) : [];
-}
-
 function currentProposalText(doc: Y.Doc): string {
-	return materializePendingReviewText(serializeYDocToMarkdown(doc), getPendingRounds(doc));
+	return materializePendingReviewText(serializeYDoc(doc), readReviewRounds(doc));
 }
 
 /** Run a write-transaction against the live Hocuspocus Document for `tabId`.
@@ -169,8 +161,7 @@ export async function runTabWrite(
 					? (narrowWriteOperation(beforeMd, afterMd) ?? operation)
 					: operation;
 			doc.transact(() => {
-				const reviewMap = doc.getMap(REVIEW_MAP_NAME);
-				const existing = getPendingRounds(doc);
+				const reviewArr = getReviewArray(doc);
 				const round: PendingReviewRound = {
 					id: cryptoRandomId(),
 					operation: normalizedOperation,
@@ -183,8 +174,8 @@ export async function runTabWrite(
 					kind: classifyRoundKind(beforeMd, afterMd),
 					stepCount: 1
 				};
-				reviewMap.set('pendingRounds', [...existing, round]);
-			}, 'agent');
+				reviewArr.push([round]);
+			}, AGENT_ORIGIN);
 			result = { beforeMd, afterMd };
 		});
 	} finally {
