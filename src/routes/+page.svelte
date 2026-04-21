@@ -642,6 +642,23 @@
 							text: parsed.text,
 							priority: parsed.priority
 						});
+					} else if (event === 'directive_retry') {
+						agentHistory.update((h) => {
+							const next = [...h];
+							while (next.length > 0) {
+								const last = next[next.length - 1];
+								if (last.type === 'assistant_text' && last.text.trim() === 'No response requested.') {
+									next.pop();
+									continue;
+								}
+								if (last.type === 'assistant_thinking' && !last.text.trim()) {
+									next.pop();
+									continue;
+								}
+								break;
+							}
+							return next;
+						});
 					} else if (event === 'task_event') {
 						pushHistory({
 							type: 'task',
@@ -713,6 +730,19 @@
 								type: 'user_action',
 								timestamp: Date.now(),
 								description: 'Agent ran and made no edits'
+							});
+						} else {
+							agentHistory.update((h) => {
+								const next = [...h];
+								while (next.length > 0) {
+									const last = next[next.length - 1];
+									if (last.type === 'assistant_text' && last.text.trim() === 'No response requested.') {
+										next.pop();
+										continue;
+									}
+									break;
+								}
+								return next;
 							});
 						}
 					} else if (event === 'hook_run') {

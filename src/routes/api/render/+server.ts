@@ -215,6 +215,10 @@ interface TabPromptInfo {
 	lastSeenMd: string | null;
 }
 
+interface QueryRoundOutcome {
+	usedDocMutationTool: boolean;
+}
+
 /** Static instructions that never change between renders in a session. Sent
  * via the SDK's `systemPrompt` option so the Anthropic API caches them and
  * the per-render `prompt` only carries the dynamic file + rules + user
@@ -591,6 +595,11 @@ export const POST: RequestHandler = async ({ request }) => {
 		}));
 
 		const currentSessionId = getSessionId();
+		const isImplicitWakeup = !userMessage && !warmup;
+		const activeTabInfo = tabsForPrompt.find((info) => info.tabId === active) ?? null;
+		const activeInlineDirectives = activeTabInfo
+			? extractInlineDirectives(activeTabInfo.currentMd)
+			: [];
 		const message =
 			userMessage || buildImplicitWakeupMessage(active, tabsForPrompt);
 		const prompt = warmup
@@ -617,124 +626,106 @@ export const POST: RequestHandler = async ({ request }) => {
 
 				const hooks = buildHooks((entry) => send('hook_run', entry));
 
-				let currentToolName = '';
-				let currentToolId = '';
-				let toolInputAccum = '';
-
 				try {
 					// Resolve the model: per-request > CLI default > nothing (SDK picks).
 					const resolvedModel =
 						model || process.env.DOCWRITER_DEFAULT_MODEL || undefined;
 
-					const queryOptions: any = {
-						allowedTools: warmup
-							? ['Read', 'Glob', 'WebSearch', 'WebFetch']
-							: [
-									// Built-in Edit/Write intentionally omitted — tab
-									// edits go through the custom MCP tools
-									// (edit_doc/write_doc/read_doc) so the agent's
-									// tool_result reflects what the user sees. Built-in
-									// Read is kept because the agent may want to look at
-									// files outside the open-tab set.
-									'Read',
-									'Bash',
-									'Glob',
-									'Grep',
-									'WebSearch',
-									'WebFetch',
-									'Agent',
-									PROPOSE_RULE_TOOL_NAME,
-									PROPOSE_HOOK_TOOL_NAME,
-									ASK_USER_TOOL_NAME,
-									EDIT_DOC_TOOL_NAME,
-									READ_DOC_TOOL_NAME,
-									WRITE_DOC_TOOL_NAME
-								],
-						mcpServers: { docwriter: docwriterMcp, 'docwriter-doc': docToolsMcp },
-						// 'user' lets the SDK pick up Claude.ai subscription credentials
-						// stored by `claude login` (in addition to ANTHROPIC_API_KEY).
-						settingSources: ['user', 'project'],
-						permissionMode: 'acceptEdits',
-						includePartialMessages: true,
-						agentProgressSummaries: true,
-						abortController,
-						hooks,
-						// Intercept AskUserQuestion: surface the questions to the
-						// browser, wait for the user's selections, inject them into
-						// the tool call's `updatedInput`. Every other tool passes
-						// through with `allow` + no modification.
-						canUseTool: async (toolName: string, toolInput: any) => {
-							if (!warmup) {
-								if (toolName === 'Read') {
-									const matched = findReferencedOpenTabPath(
-										toolInput?.file_path,
-										openTabPaths
-									);
-									if (matched) {
-										return {
-											behavior: 'deny' as const,
-											message:
-												'Open tab files must be read with `read_doc(path)` so you see the review-aware content instead of reading the file directly.'
-										};
+					function buildQueryOptions(): any {
+						return {
+							allowedTools: warmup
+								? ['Read', 'Glob', 'WebSearch', 'WebFetch']
+								: [
+										'Read',
+										'Bash',
+										'Glob',
+										'Grep',
+										'WebSearch',
+										'WebFetch',
+										'Agent',
+										PROPOSE_RULE_TOOL_NAME,
+										PROPOSE_HOOK_TOOL_NAME,
+										ASK_USER_TOOL_NAME,
+										EDIT_DOC_TOOL_NAME,
+										READ_DOC_TOOL_NAME,
+										WRITE_DOC_TOOL_NAME
+									],
+							mcpServers: { docwriter: docwriterMcp, 'docwriter-doc': docToolsMcp },
+							settingSources: ['user', 'project'],
+							permissionMode: 'acceptEdits',
+							includePartialMessages: true,
+							agentProgressSummaries: true,
+							abortController,
+							hooks,
+							canUseTool: async (toolName: string, toolInput: any) => {
+								if (!warmup) {
+									if (toolName === 'Read') {
+										const matched = findReferencedOpenTabPath(
+											toolInput?.file_path,
+											openTabPaths
+										);
+										if (matched) {
+											return {
+												behavior: 'deny' as const,
+												message:
+													'Open tab files must be read with `read_doc(path)` so you see the review-aware content instead of reading the file directly.'
+											};
+										}
+									}
+									if (toolName === 'Glob' || toolName === 'Grep') {
+										const matched = findReferencedOpenTabPath(
+											toolInput?.path,
+											openTabPaths
+										);
+										if (matched) {
+											return {
+												behavior: 'deny' as const,
+												message:
+													'Open tab files should not be targeted through built-in search tools. Use `read_doc(path)` for the tab itself and use Glob/Grep elsewhere in the workspace.'
+											};
+										}
+									}
+									if (toolName === 'Bash') {
+										const matched = findOpenTabPathInCommand(
+											toolInput?.command,
+											openTabPaths
+										);
+										if (matched) {
+											return {
+												behavior: 'deny' as const,
+												message:
+													'Open tab files must be accessed through `read_doc`, `edit_doc`, or `write_doc`, not through Bash commands.'
+											};
+										}
 									}
 								}
-								if (toolName === 'Glob' || toolName === 'Grep') {
-									const matched = findReferencedOpenTabPath(
-										toolInput?.path,
-										openTabPaths
-									);
-									if (matched) {
-										return {
-											behavior: 'deny' as const,
-											message:
-												'Open tab files should not be targeted through built-in search tools. Use `read_doc(path)` for the tab itself and use Glob/Grep elsewhere in the workspace.'
-										};
-									}
+								if (toolName !== ASK_USER_TOOL_NAME) {
+									return { behavior: 'allow' as const, updatedInput: toolInput };
 								}
-								if (toolName === 'Bash') {
-									const matched = findOpenTabPathInCommand(
-										toolInput?.command,
-										openTabPaths
-									);
-									if (matched) {
-										return {
-											behavior: 'deny' as const,
-											message:
-												'Open tab files must be accessed through `read_doc`, `edit_doc`, or `write_doc`, not through Bash commands.'
-										};
-									}
-								}
-							}
-							if (toolName !== ASK_USER_TOOL_NAME) {
-								return { behavior: 'allow' as const, updatedInput: toolInput };
-							}
-							const id =
-								'q_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-							const questions = toolInput?.questions ?? [];
-							send('user_question', { id, questions });
-							const answers = await new Promise<string[]>((resolve) => {
-								registerPendingAskUser(id, resolve, 15 * 60_000);
-							});
-							return {
-								behavior: 'allow' as const,
-								updatedInput: { ...toolInput, answers }
-							};
-						},
-						...(resolvedModel ? { model: resolvedModel } : {}),
-						...(currentSessionId ? { resume: currentSessionId } : {}),
-						// Static boilerplate lives here (how-to-edit, tool rules,
-						// sandbox, subagents, propose_rule protocol). Anthropic
-						// caches the system prompt, so we're not re-paying for
-						// it every render. Per-turn prompt only carries dynamic
-						// content (files, rules, agency, user message).
-						...(systemPromptBlock ? { systemPrompt: systemPromptBlock } : {})
-					};
+								const id =
+									'q_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+								const questions = toolInput?.questions ?? [];
+								send('user_question', { id, questions });
+								const answers = await new Promise<string[]>((resolve) => {
+									registerPendingAskUser(id, resolve, 15 * 60_000);
+								});
+								return {
+									behavior: 'allow' as const,
+									updatedInput: { ...toolInput, answers }
+								};
+							},
+							...(resolvedModel ? { model: resolvedModel } : {}),
+							...(getSessionId() || currentSessionId ? { resume: getSessionId() || currentSessionId } : {}),
+							...(systemPromptBlock ? { systemPrompt: systemPromptBlock } : {})
+						};
+					}
 
-					// Scratch workspace is created lazily (by `mcp-doc-tools`
-					// on the first scratch write). No render-start mkdir here
-					// — otherwise a `.docwriter/agent/` dir gets created on
-					// every render even when the agent never writes scratch.
-					for await (const msg of query({ prompt, options: queryOptions })) {
+					async function runQueryRound(roundPrompt: string): Promise<QueryRoundOutcome> {
+						let currentToolName = '';
+						let currentToolId = '';
+						let toolInputAccum = '';
+						let usedDocMutationTool = false;
+						for await (const msg of query({ prompt: roundPrompt, options: buildQueryOptions() })) {
 						if (msg.type === 'system' && msg.session_id) {
 							setSessionId(msg.session_id);
 							send('session', { sessionId: msg.session_id });
@@ -846,6 +837,12 @@ export const POST: RequestHandler = async ({ request }) => {
 								currentToolName = event.content_block.name;
 								currentToolId = event.content_block.id;
 								toolInputAccum = '';
+								if (
+									currentToolName === EDIT_DOC_TOOL_NAME ||
+									currentToolName === WRITE_DOC_TOOL_NAME
+								) {
+									usedDocMutationTool = true;
+								}
 								// Skip the generic tool_call_start for propose_* tools —
 								// they emit their own dedicated events at stop time, so
 								// we don't want them cluttering the agent activity log.
@@ -887,6 +884,36 @@ export const POST: RequestHandler = async ({ request }) => {
 								}
 							}
 						}
+					}
+						return { usedDocMutationTool };
+					}
+
+					// Scratch workspace is created lazily (by `mcp-doc-tools`
+					// on the first scratch write). No render-start mkdir here
+					// — otherwise a `.docwriter/agent/` dir gets created on
+					// every render even when the agent never writes scratch.
+					const firstOutcome = await runQueryRound(prompt);
+					if (
+						isImplicitWakeup &&
+						activeInlineDirectives.length > 0 &&
+						!firstOutcome.usedDocMutationTool
+					) {
+						const retryPrompt = buildMultiTabPrompt(
+							active,
+							allTabIds.map((id) => ({
+								tabId: id,
+								currentMd: readLiveTabMarkdown(id),
+								lastSeenMd: kvGet(lastSeenKey(id))
+							})),
+							[
+								'You just ended without proposing an edit, but the active tab still contains inline `[[ ... ]]` directives.',
+								'Handle one active-tab directive now if it is feasible.',
+								'You may still read other files or use other tools first if needed.',
+								'Do not end this retry without either calling `edit_doc` or `write_doc` on a directive-bearing open tab, or sending a brief plain-text explanation of why the directive cannot be completed yet.'
+							].join('\n')
+						);
+						send('directive_retry', {});
+						await runQueryRound(retryPrompt);
 					}
 				} catch (err) {
 					send('error', { error: String(err) });
