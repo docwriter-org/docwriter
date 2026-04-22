@@ -13,7 +13,7 @@
 
 	interface Props {
 		onSubmit: () => void;
-		onSendMessage: (message: string) => void;
+		onSendMessage: (message: string, opts: { planMode: boolean }) => void;
 	}
 	let { onSubmit, onSendMessage }: Props = $props();
 
@@ -75,8 +75,8 @@
 		chatOpen = !chatOpen;
 	}
 
-	function sendMessage(message: string) {
-		onSendMessage(message);
+	function sendMessage(message: string, opts: { planMode: boolean }) {
+		onSendMessage(message, opts);
 		chatOpen = false;
 	}
 

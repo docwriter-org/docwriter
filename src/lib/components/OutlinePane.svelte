@@ -11,16 +11,13 @@
 		X,
 		BookOpen,
 		Terminal,
-		HelpCircle,
 		RotateCcw
 	} from 'lucide-svelte';
 	import {
 		activeTab,
 		proposedRules,
 		proposedHooks,
-		pendingReviewRounds,
-		pendingUserQuestions,
-		type PendingUserQuestion
+		pendingReviewRounds
 	} from '$lib/stores';
 	import { getYDocForTab } from '$lib/yjs-doc';
 	import type { ProposedRule, ProposedHook } from '$lib/types';
@@ -43,7 +40,6 @@
 		onRejectRule?: (id: string) => void;
 		onAcceptHook?: (id: string) => void;
 		onRejectHook?: (id: string) => void;
-		onAnswer?: (id: string, answers: string[]) => void;
 	}
 	let {
 		showOutline = true,
@@ -54,8 +50,7 @@
 		onAcceptRule,
 		onRejectRule,
 		onAcceptHook,
-		onRejectHook,
-		onAnswer
+		onRejectHook
 	}: Props = $props();
 
 	let md = $state('');
@@ -98,49 +93,6 @@
 
 	let pendingHookProposals = $state<ProposedHook[]>([]);
 	proposedHooks.subscribe((v) => (pendingHookProposals = v));
-
-	let pendingQuestions = $state<PendingUserQuestion[]>([]);
-	pendingUserQuestions.subscribe((v) => (pendingQuestions = v));
-
-	/** Selections for each multi-select question, keyed by `${cardId}:${qIdx}`.
-	 * Single-select questions answer immediately on click and don't use this. */
-	let multiSelections = $state<Record<string, Set<string>>>({});
-
-	function toggleMultiSelection(cardId: string, qIdx: number, label: string) {
-		const key = `${cardId}:${qIdx}`;
-		const current = multiSelections[key] ?? new Set<string>();
-		const next = new Set(current);
-		if (next.has(label)) next.delete(label);
-		else next.add(label);
-		multiSelections = { ...multiSelections, [key]: next };
-	}
-
-	function isMultiSelected(cardId: string, qIdx: number, label: string): boolean {
-		return multiSelections[`${cardId}:${qIdx}`]?.has(label) ?? false;
-	}
-
-	/** Submit a multi-select card: gather selections across all questions,
-	 * flatten into a single answers array in question order, and send. */
-	function submitMultiAnswer(card: PendingUserQuestion) {
-		const answers: string[] = [];
-		for (let i = 0; i < card.questions.length; i++) {
-			const sel = multiSelections[`${card.id}:${i}`];
-			if (sel && sel.size > 0) {
-				for (const label of sel) answers.push(label);
-			}
-		}
-		if (answers.length === 0) return;
-		// Cleanup local selection state for this card.
-		const next = { ...multiSelections };
-		for (let i = 0; i < card.questions.length; i++) delete next[`${card.id}:${i}`];
-		multiSelections = next;
-		onAnswer?.(card.id, answers);
-	}
-
-	/** Single-select click — answer with the one label. */
-	function pickSingle(card: PendingUserQuestion, label: string) {
-		onAnswer?.(card.id, [label]);
-	}
 
 	// Auto-extracted TOC from markdown headings
 	interface Heading { level: number; text: string; }
@@ -359,69 +311,7 @@
 		</div>
 	{/if}
 
-	{#if showReview && pendingQuestions.length > 0}
-		<div class="section">
-			<div class="section-header">
-				<HelpCircle size={12} />
-				Question{pendingQuestions.length === 1 ? '' : 's'} from agent
-			</div>
-			{#each pendingQuestions as card (card.id)}
-				<div class="pending-card question-card" in:fly={{ y: -10, duration: 260, easing: cubicOut }}>
-					{#each card.questions as q, qIdx}
-						{#if card.questions.length > 1}
-							<div class="question-header">{q.header}</div>
-						{/if}
-						<div class="question-text">{q.question}</div>
-						<div class="question-options">
-							{#each q.options as opt}
-								{#if q.multiSelect}
-									<!-- svelte-ignore a11y_click_events_have_key_events -->
-									<!-- svelte-ignore a11y_no_static_element_interactions -->
-									<div
-										class="question-option multi"
-										class:selected={isMultiSelected(card.id, qIdx, opt.label)}
-										onclick={() => toggleMultiSelection(card.id, qIdx, opt.label)}
-									>
-										<div class="question-option-label">
-											<span class="question-checkbox">
-												{#if isMultiSelected(card.id, qIdx, opt.label)}
-													<Check size={10} />
-												{/if}
-											</span>
-											{opt.label}
-										</div>
-										{#if opt.description}
-											<div class="question-option-desc">{opt.description}</div>
-										{/if}
-									</div>
-								{:else}
-									<button
-										class="question-option single"
-										onclick={() => pickSingle(card, opt.label)}
-									>
-										<div class="question-option-label">{opt.label}</div>
-										{#if opt.description}
-											<div class="question-option-desc">{opt.description}</div>
-										{/if}
-									</button>
-								{/if}
-							{/each}
-						</div>
-					{/each}
-					{#if card.questions.some((q) => q.multiSelect)}
-						<div class="pending-actions">
-							<button class="btn-accept" onclick={() => submitMultiAnswer(card)}>
-								<Check size={12} />
-								Submit
-							</button>
-						</div>
-					{/if}
-				</div>
-			{/each}
-		</div>
-	{/if}
-
-	{#if showReview && pendingRuleProposals.length > 0}
+{#if showReview && pendingRuleProposals.length > 0}
 		<div class="section">
 			<div class="section-header">
 				<BookOpen size={12} />
@@ -790,82 +680,5 @@
 	.retry-feedback-actions .btn-retry {
 		flex: 0 0 auto;
 		padding-inline: 10px;
-	}
-	.question-card {
-		margin-bottom: 8px;
-		border-color: color-mix(in srgb, var(--accent) 35%, var(--border-light));
-	}
-	.question-card:last-child {
-		margin-bottom: 0;
-	}
-	.question-header {
-		font-size: 10.5px;
-		font-weight: 600;
-		text-transform: uppercase;
-		letter-spacing: 0.04em;
-		color: var(--accent);
-		margin-bottom: 4px;
-	}
-	.question-text {
-		font-size: 13px;
-		color: var(--text);
-		line-height: 1.4;
-		margin-bottom: 8px;
-	}
-	.question-options {
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-		margin-bottom: 8px;
-	}
-	.question-option {
-		display: block;
-		width: 100%;
-		text-align: left;
-		padding: 6px 8px;
-		border: 1px solid var(--border-light);
-		background: var(--bg-elevated);
-		border-radius: 4px;
-		cursor: pointer;
-		font-family: inherit;
-		color: var(--text);
-	}
-	.question-option:hover {
-		background: color-mix(in srgb, var(--accent) 8%, var(--bg-elevated));
-		border-color: color-mix(in srgb, var(--accent) 40%, var(--border-light));
-	}
-	.question-option.selected {
-		background: color-mix(in srgb, var(--accent) 14%, var(--bg-elevated));
-		border-color: var(--accent);
-	}
-	.question-option-label {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		font-size: 12.5px;
-		font-weight: 500;
-		line-height: 1.3;
-	}
-	.question-option-desc {
-		font-size: 11px;
-		color: var(--text-muted);
-		line-height: 1.35;
-		margin-top: 2px;
-		margin-left: 0;
-	}
-	.question-checkbox {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		width: 13px;
-		height: 13px;
-		border: 1px solid var(--border);
-		border-radius: 3px;
-		color: var(--accent);
-		flex-shrink: 0;
-	}
-	.question-option.selected .question-checkbox {
-		border-color: var(--accent);
-		background: color-mix(in srgb, var(--accent) 18%, transparent);
 	}
 </style>

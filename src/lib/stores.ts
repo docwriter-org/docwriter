@@ -54,6 +54,19 @@ export interface PendingUserQuestion {
 }
 export const pendingUserQuestions = writable<PendingUserQuestion[]>([]);
 
+/** A plan the agent produced while running in `permissionMode: 'plan'`.
+ * Surfaces as a blocking modal over the editor — the user either runs
+ * it (which re-submits the original prompt without plan mode) or
+ * dismisses. */
+export interface PendingPlanProposal {
+	id: string;
+	plan: string;
+	/** The original user message that produced this plan — replayed on
+	 * "Run it" so the agent executes the plan for real. */
+	originalMessage: string;
+}
+export const pendingPlanProposals = writable<PendingPlanProposal[]>([]);
+
 // ── UI state ──────────────────────────────────────────────────────────
 
 export const isRendering = writable(false);

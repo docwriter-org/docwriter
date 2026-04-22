@@ -13,6 +13,7 @@
 	import PanelResizer from '$lib/components/PanelResizer.svelte';
 	import HorizontalPanelResizer from '$lib/components/HorizontalPanelResizer.svelte';
 	import AgentDock from '$lib/components/AgentDock.svelte';
+	import AgentModal from '$lib/components/AgentModal.svelte';
 	import AgentSettingsPanel from '$lib/components/AgentSettingsPanel.svelte';
 	import HooksPanel from '$lib/components/HooksPanel.svelte';
 	import { themes, applyTheme } from '$lib/themes';
@@ -71,6 +72,7 @@
 		proposedRules,
 		proposedHooks,
 		pendingUserQuestions,
+		pendingPlanProposals,
 		annotations,
 		isRendering,
 		agentHistory,
@@ -107,7 +109,7 @@
 	// await. Prevents two concurrent calls from the same event loop tick (e.g.
 	// a button click firing just as the idle timer callback is about to run).
 	let submitInFlight = false;
-	let queuedSubmissions: Array<{ trigger?: string }> = [];
+	let queuedSubmissions: Array<{ trigger?: string; planMode?: boolean }> = [];
 
 	let currentAbort: AbortController | null = null;
 	/** Which tabs currently have a pending review (drives the tab dot badges
@@ -419,9 +421,10 @@
 		}
 	}
 
-	async function submit(trigger?: string) {
+	async function submit(trigger?: string, opts?: { planMode?: boolean }) {
+		const planMode = opts?.planMode ?? false;
 		if (rendering || submitInFlight) {
-			queuedSubmissions = [...queuedSubmissions, { trigger }];
+			queuedSubmissions = [...queuedSubmissions, { trigger, planMode }];
 			return;
 		}
 		if (!getCurrentActiveTab()) return;
@@ -494,6 +497,7 @@
 				body: JSON.stringify({
 					userMessage: trigger,
 					model,
+					planMode,
 					tab: tabId
 				}),
 				signal: currentAbort.signal
@@ -784,6 +788,23 @@
 								}
 							]);
 						}
+					} else if (event === 'plan_proposed') {
+						// Agent ran in plan mode and produced a plan. Surface
+						// it as a blocking modal; Run it re-submits the same
+						// prompt without plan mode, Dismiss drops it.
+						if (typeof parsed.id === 'string' && typeof parsed.plan === 'string') {
+							pendingPlanProposals.update((list) => [
+								...list,
+								{
+									id: parsed.id,
+									plan: parsed.plan,
+									originalMessage:
+										typeof parsed.originalMessage === 'string'
+											? parsed.originalMessage
+											: ''
+								}
+							]);
+						}
 					} else if (event === 'user_question') {
 						// Agent invoked AskUserQuestion. Render a card in the
 						// outline pane; the user's answer comes back via
@@ -830,7 +851,7 @@
 			const next = queuedSubmissions[0];
 			if (next) {
 				queuedSubmissions = queuedSubmissions.slice(1);
-				setTimeout(() => void submit(next.trigger), 0);
+				setTimeout(() => void submit(next.trigger, { planMode: next.planMode }), 0);
 			}
 		}
 	}
@@ -1119,6 +1140,63 @@
 		});
 	}
 
+	/** User approved a plan — pop it from the modal and re-submit the
+	 * original prompt without plan mode so the agent executes it. */
+	function runPlanProposal(id: string) {
+		let proposal: { id: string; originalMessage: string } | undefined;
+		pendingPlanProposals.update((list) => {
+			proposal = list.find((p) => p.id === id);
+			return list.filter((p) => p.id !== id);
+		});
+		if (!proposal) return;
+		pushHistory({
+			type: 'user_action',
+			timestamp: Date.now(),
+			description: 'Approved plan — running it'
+		});
+		void submit(proposal.originalMessage || undefined, { planMode: false });
+	}
+
+	function dismissPlanProposal(id: string) {
+		pendingPlanProposals.update((list) => list.filter((p) => p.id !== id));
+		pushHistory({
+			type: 'user_action',
+			timestamp: Date.now(),
+			description: 'Dismissed plan'
+		});
+	}
+
+	/** User rejected the plan with written feedback. Kick off a fresh
+	 * plan-mode round so the agent produces a revised plan that
+	 * addresses the feedback. */
+	function rejectPlanProposal(id: string, feedback: string) {
+		let proposal: { id: string; originalMessage: string; plan: string } | undefined;
+		pendingPlanProposals.update((list) => {
+			proposal = list.find((p) => p.id === id);
+			return list.filter((p) => p.id !== id);
+		});
+		if (!proposal) return;
+		pushHistory({
+			type: 'user_action',
+			timestamp: Date.now(),
+			description: `Rejected plan with feedback: ${feedback}`
+		});
+		const revisedMessage = [
+			proposal.originalMessage || 'Propose a plan.',
+			'',
+			'You previously proposed this plan:',
+			'',
+			proposal.plan,
+			'',
+			'The user rejected it with this feedback:',
+			'',
+			feedback,
+			'',
+			'Produce a revised plan that addresses the feedback.'
+		].join('\n');
+		void submit(revisedMessage, { planMode: true });
+	}
+
 	function rejectProposedHook(id: string) {
 		let proposal: { id: string; command: string } | undefined;
 		proposedHooks.update((list) => {
@@ -1165,6 +1243,7 @@
 			proposedRules.set([]);
 			proposedHooks.set([]);
 			pendingUserQuestions.set([]);
+			pendingPlanProposals.set([]);
 			recentActions.set([]);
 			actionUsageCounts.set({});
 			annotations.set([]);
@@ -1747,7 +1826,16 @@
 				pendingTabs={pendingReviewTabs}
 			/>
 			{#if docLoaded && activeTabFilePath}
-				<AgentDock onSubmit={() => submit()} onSendMessage={(msg) => void submit(msg)} />
+				<AgentDock
+					onSubmit={() => submit()}
+					onSendMessage={(msg, opts) => void submit(msg, opts)}
+				/>
+				<AgentModal
+					onAnswerQuestion={(id, answers) => answerUserQuestion(id, answers)}
+					onRunPlan={(id) => runPlanProposal(id)}
+					onDismissPlan={(id) => dismissPlanProposal(id)}
+					onRejectPlan={(id, feedback) => rejectPlanProposal(id, feedback)}
+				/>
 				<TiptapEditor
 					bind:this={editorRef}
 					onSubmit={(trigger) => submit(trigger)}
@@ -1785,7 +1873,6 @@
 							onRejectRule={rejectProposedRule}
 							onAcceptHook={acceptProposedHook}
 							onRejectHook={rejectProposedHook}
-							onAnswer={answerUserQuestion}
 						/>
 					</div>
 				</div>

@@ -3,17 +3,18 @@
 	import { Send } from 'lucide-svelte';
 
 	interface Props {
-		onSend: (message: string) => void;
+		onSend: (message: string, opts: { planMode: boolean }) => void;
 	}
 	let { onSend }: Props = $props();
 
 	let message = $state('');
+	let planMode = $state(false);
 	let textareaEl: HTMLTextAreaElement | null = $state(null);
 
 	function send() {
 		const trimmed = message.trim();
 		if (!trimmed) return;
-		onSend(trimmed);
+		onSend(trimmed, { planMode });
 		message = '';
 	}
 
@@ -49,11 +50,17 @@
 	></textarea>
 
 	<div class="panel-footer">
-		<span class="hint">⌘↵ to send</span>
-		<button class="send-btn" onclick={send} disabled={!message.trim()}>
-			<Send size={12} />
-			Send
-		</button>
+		<label class="plan-toggle" title="Ask the agent to produce a plan first. Nothing gets edited until you approve the plan.">
+			<input type="checkbox" bind:checked={planMode} />
+			<span>Plan first</span>
+		</label>
+		<div class="footer-right">
+			<span class="hint">⌘↵ to send</span>
+			<button class="send-btn" onclick={send} disabled={!message.trim()}>
+				<Send size={12} />
+				{planMode ? 'Plan' : 'Send'}
+			</button>
+		</div>
 	</div>
 </div>
 
@@ -112,6 +119,25 @@
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
+		gap: 10px;
+	}
+	.footer-right {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+	}
+	.plan-toggle {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		font-size: 11.5px;
+		color: var(--text-faint);
+		cursor: pointer;
+		user-select: none;
+	}
+	.plan-toggle input {
+		margin: 0;
+		cursor: pointer;
 	}
 	.hint {
 		font-size: 11px;

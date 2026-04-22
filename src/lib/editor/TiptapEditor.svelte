@@ -47,7 +47,7 @@
 
 	// Feedback popup: floating toolbar when the user selects text. Shows
 	// pinned actions + LRU recent actions + an open-ended text input.
-	let feedbackPopup = $state<{ text: string; x: number; y: number; flipBelow: boolean } | null>(null);
+	let feedbackPopup = $state<{ text: string; x: number; y: number; flipBelow: boolean; anchorTop: number; anchorBottom: number } | null>(null);
 	let feedbackPopupEl: HTMLDivElement | null = $state(null);
 	let feedbackInputEl: HTMLDivElement | null = $state(null);
 	let feedbackInput = $state('');
@@ -76,12 +76,23 @@
 		}
 		const start = editor.view.coordsAtPos(from);
 		const end = editor.view.coordsAtPos(to);
-		const x = (start.left + end.right) / 2;
-		const POPUP_H_APPROX = 140;
-		const flipBelow = start.top < POPUP_H_APPROX + 20;
-		const y = flipBelow ? end.bottom + 8 : start.top - 8;
+		const POPUP_W_APPROX = 340;
+		const MARGIN = 12;
+		const vw = window.innerWidth;
+		const vh = window.innerHeight;
+		// Anchor the popup to the visible edge of the selection. For giant
+		// selections (Select All) the real top/bottom are off-screen, so
+		// clamp to the viewport. Actual popup height is applied in an effect
+		// after the element mounts (see clamp effect below).
+		const anchorTop = Math.max(MARGIN, Math.min(vh - MARGIN, start.top));
+		const anchorBottom = Math.max(MARGIN, Math.min(vh - MARGIN, end.bottom));
+		const POPUP_H_GUESS = 140;
+		const flipBelow = anchorTop < POPUP_H_GUESS + 20 && vh - anchorBottom > anchorTop;
+		const y = flipBelow ? anchorBottom + 8 : anchorTop - 8;
+		let x = (start.left + end.right) / 2;
+		x = Math.max(POPUP_W_APPROX / 2 + MARGIN, Math.min(vw - POPUP_W_APPROX / 2 - MARGIN, x));
 		shouldFocusFeedbackInput = autoFocus;
-		feedbackPopup = { text: selectedText, x, y, flipBelow };
+		feedbackPopup = { text: selectedText, x, y, flipBelow, anchorTop, anchorBottom };
 		feedbackSelectionRange = { from, to };
 		updateDiff();
 	}
@@ -95,6 +106,50 @@
 		if (!feedbackPopup || !shouldFocusFeedbackInput) return;
 		shouldFocusFeedbackInput = false;
 		requestAnimationFrame(() => feedbackInputEl?.focus());
+	});
+
+	// Re-clamp popup using its actual measured height once it's in the DOM.
+	// The quick-actions row can make the popup meaningfully taller than the
+	// up-front guess, which otherwise lets it spill past the viewport edge.
+	$effect(() => {
+		if (!feedbackPopup || !feedbackPopupEl) return;
+		const rect = feedbackPopupEl.getBoundingClientRect();
+		const h = rect.height;
+		const MARGIN = 12;
+		const vh = window.innerHeight;
+		const popup = feedbackPopup;
+		// With flipBelow, `y` is the top edge; otherwise it's the bottom edge
+		// (translate -100%). Compute what the resulting top/bottom would be
+		// and flip/shift if it escapes the viewport.
+		let flipBelow = popup.flipBelow;
+		let y = popup.y;
+		const topIfAbove = y - h;
+		const bottomIfBelow = y + h;
+		if (!flipBelow && topIfAbove < MARGIN) {
+			// Not enough room above — try flipping below the selection.
+			const candidateY = popup.anchorBottom + 8;
+			if (candidateY + h <= vh - MARGIN) {
+				flipBelow = true;
+				y = candidateY;
+			} else {
+				// Neither side fits; pin to top of viewport.
+				flipBelow = true;
+				y = MARGIN;
+			}
+		} else if (flipBelow && bottomIfBelow > vh - MARGIN) {
+			const candidateY = popup.anchorTop - 8;
+			if (candidateY - h >= MARGIN) {
+				flipBelow = false;
+				y = candidateY;
+			} else {
+				// Pin to bottom of viewport.
+				flipBelow = true;
+				y = Math.max(MARGIN, vh - MARGIN - h);
+			}
+		}
+		if (y !== popup.y || flipBelow !== popup.flipBelow) {
+			feedbackPopup = { ...popup, y, flipBelow };
+		}
 	});
 
 	$effect(() => {
@@ -539,6 +594,20 @@
 							e.preventDefault();
 							deleteSelectedTextFromEditor();
 						}
+						if (
+							(e.key === 'a' || e.key === 'A') &&
+							(e.metaKey || e.ctrlKey) &&
+							!feedbackInput &&
+							editor
+						) {
+							e.preventDefault();
+							editor.chain().focus().selectAll().run();
+						}
+					}}
+					oncopy={(e) => {
+						if (feedbackInput || !feedbackPopup) return;
+						e.preventDefault();
+						e.clipboardData?.setData('text/plain', feedbackPopup.text);
 					}}
 				></div>
 				<button class="feedback-submit" onclick={sendCustomFeedback}>Go</button>

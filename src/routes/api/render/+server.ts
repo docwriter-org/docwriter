@@ -441,6 +441,13 @@ const PROPOSE_HOOK_TOOL_NAME = 'mcp__docwriter__propose_hook';
  * via an SSE event, and resolve the canUseTool promise with the user's
  * selections when they arrive back via /api/ask-user-reply. */
 const ASK_USER_TOOL_NAME = 'AskUserQuestion';
+/** Built-in SDK tool the agent calls to leave plan mode. Its `plan` input
+ * is the final plan text. We intercept it, forward the plan to the browser
+ * as `plan_proposed`, abort the run, and let the user decide whether to
+ * re-run without plan mode via the modal's "Run it" button. If we let it
+ * through, the SDK auto-approves and the agent immediately starts
+ * executing edits — defeating the entire point of plan mode. */
+const EXIT_PLAN_MODE_TOOL_NAME = 'ExitPlanMode';
 
 type HookRunEmitter = (entry: {
 	hookId: string;
@@ -568,11 +575,12 @@ function buildHooks(
 export const POST: RequestHandler = async ({ request }) => {
 	try {
 		const body = await request.json();
-		const { userMessage, model, warmup, tab } = body as {
+		const { userMessage, model, warmup, tab, planMode } = body as {
 			userMessage?: string;
 			model?: string;
 			warmup?: boolean;
 			tab?: string;
+			planMode?: boolean;
 		};
 
 		const active = tab || getTabsState().active;
@@ -603,9 +611,19 @@ export const POST: RequestHandler = async ({ request }) => {
 			: [];
 		const message =
 			userMessage || buildImplicitWakeupMessage(active, tabsForPrompt);
+		const planModeInstruction = planMode
+			? [
+					'',
+					'## Plan-first mode (active)',
+					'',
+					'The user has explicitly asked for a plan BEFORE any edits. Do NOT call `edit_doc`, `write_doc`, or any mutation tool — they are unavailable this round.',
+					'Read what you need with `read_doc` / `Read` / `Glob` / `Grep`, think through the change, then call the `ExitPlanMode` tool with your plan in the `plan` argument.',
+					'The plan should be concise, markdown-formatted, and concrete — list the files you\'d touch and what you\'d change in each. After you call `ExitPlanMode` the run ends; the user will approve or reject the plan.'
+				].join('\n')
+			: '';
 		const prompt = warmup
 			? `You are a writing assistant. The user has a set of files open as tabs. Acknowledge you're ready in 1-2 sentences. Don't edit anything.`
-			: buildMultiTabPrompt(active, tabsForPrompt, message);
+			: buildMultiTabPrompt(active, tabsForPrompt, message) + planModeInstruction;
 		const systemPromptBlock = warmup ? undefined : buildSystemPrompt();
 		const openTabPaths = new Set(allTabIds.map((tabId) => normalizeToolPath(tabFile(tabId))));
 
@@ -633,32 +651,75 @@ export const POST: RequestHandler = async ({ request }) => {
 						model || process.env.DOCWRITER_DEFAULT_MODEL || undefined;
 
 					function buildQueryOptions(): any {
+						// In the SDK's permission evaluation, `allowedTools` acts
+						// as an allowlist that bypasses `permissionMode: 'plan'` —
+						// any tool listed is approved regardless of the mode. So
+						// we have to withhold the mutation tools ourselves while
+						// in plan mode; otherwise the agent skips ExitPlanMode
+						// and edits directly.
+						// https://code.claude.com/docs/en/agent-sdk/permissions
+						const planAllowedTools = [
+							'Read',
+							'Glob',
+							'Grep',
+							'WebSearch',
+							'WebFetch',
+							'Agent',
+							ASK_USER_TOOL_NAME,
+							EXIT_PLAN_MODE_TOOL_NAME,
+							READ_DOC_TOOL_NAME
+						];
+						const fullAllowedTools = [
+							'Read',
+							'Bash',
+							'Glob',
+							'Grep',
+							'WebSearch',
+							'WebFetch',
+							'Agent',
+							PROPOSE_RULE_TOOL_NAME,
+							PROPOSE_HOOK_TOOL_NAME,
+							ASK_USER_TOOL_NAME,
+							EXIT_PLAN_MODE_TOOL_NAME,
+							EDIT_DOC_TOOL_NAME,
+							READ_DOC_TOOL_NAME,
+							WRITE_DOC_TOOL_NAME
+						];
 						return {
 							allowedTools: warmup
 								? ['Read', 'Glob', 'WebSearch', 'WebFetch']
-								: [
-										'Read',
-										'Bash',
-										'Glob',
-										'Grep',
-										'WebSearch',
-										'WebFetch',
-										'Agent',
-										PROPOSE_RULE_TOOL_NAME,
-										PROPOSE_HOOK_TOOL_NAME,
-										ASK_USER_TOOL_NAME,
-										EDIT_DOC_TOOL_NAME,
-										READ_DOC_TOOL_NAME,
-										WRITE_DOC_TOOL_NAME
-									],
+								: planMode
+									? planAllowedTools
+									: fullAllowedTools,
 							mcpServers: { docwriter: docwriterMcp, 'docwriter-doc': docToolsMcp },
 							settingSources: ['user', 'project'],
-							permissionMode: 'acceptEdits',
+							permissionMode: planMode ? 'plan' : 'acceptEdits',
 							includePartialMessages: true,
 							agentProgressSummaries: true,
 							abortController,
 							hooks,
 							canUseTool: async (toolName: string, toolInput: any) => {
+								if (toolName === EXIT_PLAN_MODE_TOOL_NAME) {
+									const plan = typeof toolInput?.plan === 'string' ? toolInput.plan : '';
+									const planId =
+										'plan_' +
+										Date.now().toString(36) +
+										Math.random().toString(36).slice(2, 6);
+									send('plan_proposed', {
+										id: planId,
+										plan: plan.trim(),
+										originalMessage: userMessage ?? ''
+									});
+									// Stop the run here so the agent doesn't proceed to
+									// execute. The user's "Run it" fires a fresh query
+									// with permissionMode back to the default.
+									abortController.abort();
+									return {
+										behavior: 'deny' as const,
+										message:
+											'Plan sent to the user for review. Stop — do not execute. The user will re-run without plan mode if they approve.'
+									};
+								}
 								if (!warmup) {
 									if (toolName === 'Read') {
 										const matched = findReferencedOpenTabPath(
@@ -844,10 +905,15 @@ export const POST: RequestHandler = async ({ request }) => {
 								) {
 									usedDocMutationTool = true;
 								}
-								// Skip the generic tool_call_start for propose_* tools —
-								// they emit their own dedicated events at stop time, so
-								// we don't want them cluttering the agent activity log.
-								if (currentToolName !== PROPOSE_RULE_TOOL_NAME && currentToolName !== PROPOSE_HOOK_TOOL_NAME) {
+								// Skip the generic tool_call_start for propose_* tools
+								// and ExitPlanMode — they emit their own dedicated
+								// events (rule_proposal / hook_proposal / plan_proposed)
+								// so we don't want them cluttering the agent log.
+								if (
+									currentToolName !== PROPOSE_RULE_TOOL_NAME &&
+									currentToolName !== PROPOSE_HOOK_TOOL_NAME &&
+									currentToolName !== EXIT_PLAN_MODE_TOOL_NAME
+								) {
 									send('tool_call_start', { tool_name: currentToolName, tool_use_id: currentToolId });
 								}
 							} else if (event.type === 'content_block_delta') {
@@ -876,6 +942,9 @@ export const POST: RequestHandler = async ({ request }) => {
 											command: typeof parsedInput.command === 'string' ? parsedInput.command : '',
 											reason: typeof parsedInput.reason === 'string' ? parsedInput.reason : undefined
 										});
+									} else if (currentToolName === EXIT_PLAN_MODE_TOOL_NAME) {
+										// plan_proposed already went out from canUseTool
+										// — don't double-log the tool call.
 									} else {
 										send('tool_call', { tool_name: currentToolName, tool_use_id: currentToolId, input: parsedInput });
 									}
@@ -917,7 +986,14 @@ export const POST: RequestHandler = async ({ request }) => {
 						await runQueryRound(retryPrompt);
 					}
 				} catch (err) {
-					send('error', { error: String(err) });
+					// Plan-mode aborts the controller from canUseTool once we've
+					// captured the plan — that surfaces as an AbortError here,
+					// which is expected and should not show up as an error to
+					// the user.
+					const isPlanAbort = planMode && abortController.signal.aborted;
+					if (!isPlanAbort) {
+						send('error', { error: String(err) });
+					}
 				}
 
 				// Update `last_seen:<tabId>` for every tab the agent could
