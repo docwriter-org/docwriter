@@ -1,644 +1,803 @@
 # DocWriter Architecture
 
-DocWriter is a local writing environment built as:
+A local markdown writing editor with an AI side-channel. The user types
+in a Tiptap editor; an agent proposes edits by mutating the same live
+Y.Doc the editor is bound to; every change — human or agent — flows
+through a single origin-tagged CRDT log on the server.
 
-- a CLI launcher (`bin/docwriter.js`, `bin/docwriter-dev.js`)
-- a SvelteKit web app (`src/routes/+page.svelte`)
-- a server-authoritative Yjs runtime: per-tab `Y.Doc`s held in memory on
-  the server, persisted as an append-only log of CRDT updates in SQLite,
-  and synced to browser clients over a Hocuspocus WebSocket
-- a Claude Agent SDK loop that edits tab files through custom MCP tools
-  (`edit_doc` / `read_doc` / `write_doc`) operating directly on the live
-  server Y.Doc, plus plain filesystem I/O for an agent scratch workspace
+This doc is written for a new team member. It starts with the one big
+idea, walks the three main data flows with diagrams, and then gets into
+per-module detail.
 
-The current architecture is organized around one idea:
+---
 
-> The server owns each tab's Y.Doc. Every mutation — user keystroke or
-> agent edit — is a Yjs transaction with an explicit origin, appended to
-> SQLite, broadcast to all connected browsers. Review, undo, and reject
-> fall out of the CRDT's origin-tagged update log.
+## The one big idea
 
-## System At A Glance
+**Hocuspocus owns each tab's Y.Doc on the server. Everything is just a
+Yjs transaction with an origin tag.**
 
-```text
-CLI
-  -> sets DOCWRITER_ROOT, PORT, model/auth defaults
-  -> launches built SvelteKit server or Vite dev server
-  -> SvelteKit + the Hocuspocus WebSocket share one Node process
+- The browser is a synced client, not an owner. It binds Tiptap to a
+  `HocuspocusProvider` over a WebSocket.
+- The agent is another client. Its MCP tools open a
+  `DirectConnection` to the same Hocuspocus document and `transact(...,
+  AGENT_ORIGIN)`.
+- User keystrokes land as `USER_ORIGIN` transactions. Cold-start seeds
+  land as `SYSTEM_ORIGIN`.
+- Every transaction is appended to SQLite's `yjs_updates` table with
+  its origin string, and broadcast to every other connected client.
+- Review, undo, reject, and "what did the agent just do" all fall out
+  of origin tagging on one authoritative doc. There are no shadow
+  files, no 3-way merge, no client-side IndexedDB.
 
-Browser
-  -> Svelte page shell
-  -> Tiptap editor bound to per-tab Y.Doc via HocuspocusProvider
-  -> review UI, file tree, agent history, hooks/rules panels
+```mermaid
+flowchart LR
+  User[Browser<br/>Tiptap + HocuspocusProvider]
+  Agent[Claude Agent SDK<br/>DirectConnection]
+  Hoco[Hocuspocus Server<br/>per-tab Y.Doc<br/>+ Y.UndoManager]
+  DB[(SQLite<br/>yjs_updates)]
+  Disk[document.md<br/>debounced flush]
 
-Server
-  -> /api/document, /api/tabs, /api/files, /api/file-content
-  -> /api/render streaming SSE
-  -> /api/history, /api/session, /api/hooks, /api/references, /api/live,
-     /api/ask-user-reply
-  -> Hocuspocus WebSocket (port 3001 by default) — the Y.Doc sync channel
-
-Persistence
-  -> .docwriter/docwriter.db — SQLite
-        yjs_updates  (append-only Y.Doc ops per tab, origin-tagged)
-        tabs, rules, hooks, recent_actions, action_usage_counts, kv
-  -> document.md — debounced 1s flush from the server Y.Doc (per tab)
-
-Agent runtime
-  -> Claude Agent SDK query() (spawned per /api/render)
-  -> reads any workspace file via Read/Glob/Grep
-  -> edits OPEN TABS via edit_doc / write_doc (custom MCP tools that
-     transact against the live Hocuspocus Document with AGENT_ORIGIN)
-  -> reads live tab content via read_doc (serializes live Y.Doc)
-  -> writes .docwriter/agent/scratch/ via plain filesystem (fall-through
-     in edit_doc / write_doc, or via built-in Edit/Write)
-  -> emits tool/status/progress events back to the UI over SSE
+  User -- WS: USER_ORIGIN updates --> Hoco
+  Agent -- transact AGENT_ORIGIN --> Hoco
+  Hoco -- onChange append row --> DB
+  Hoco -- 500ms flush tick --> Disk
+  Hoco -- broadcast to all clients --> User
 ```
 
-## Runtime Topology
+---
 
-### 1. Launch modes
+## Repo map
 
-DocWriter has two entrypoints:
-
-- `bin/docwriter.js`
-  Starts the built app, picks a port, sets `DOCWRITER_ROOT`, and optionally
-  enables `--watch`, `--new-session`, and model/API-key overrides.
-- `bin/docwriter-dev.js`
-  Starts Vite directly against another workspace for live UI development.
-
-In both modes, the app is pointed at an arbitrary workspace root via
-`DOCWRITER_ROOT`. The editor repo is just the application source; the
-actual writing happens in some other folder.
-
-The Hocuspocus WebSocket server is started from `src/hooks.server.ts` at
-SvelteKit boot, on a separate TCP port (`DOCWRITER_WS_PORT`, default
-`3001`). A `globalThis.__docwriterWsServer` guard keeps Vite HMR from
-double-binding during dev.
-
-### 2. Workspace model
-
-Any workspace-relative text file can be an open tab.
-
-- Markdown-like files (`.md`, `.markdown`, `.mdx`) use the markdown editor
-  mode.
-- Other recognized text extensions (`.txt`, `.json`, `.py`, `.html`, etc.)
-  use plain-text mode.
-
-Tabs are stored in the SQLite `tabs` table as an ordered list plus an
-active-tab pointer.
-
-## Persistence Layers
-
-DocWriter persists state across three layers.
-
-### 1. Workspace files
-
-The user's project folder. Every open tab's content is debounced-written
-back to its real workspace path (`DOCWRITER_ROOT/<tabId>`) ~1 second
-after the last change reaches the server. The file on disk is the
-portable, git-friendly form; it is not the source of truth.
-
-```text
-workspace/
-  ch12.asciidoc
-  drafts/intro.md
-  scripts/cleanup.py
+```
+docwriter/
+├─ bin/
+│  ├─ docwriter.js           ← packaged CLI launcher
+│  └─ docwriter-dev.js       ← Vite dev launcher
+├─ src/
+│  ├─ app.html               ← HTML shell + fonts (Lora, Inter, Geist Mono)
+│  ├─ hooks.server.ts        ← SvelteKit boot: start Hocuspocus, install skills
+│  ├─ routes/
+│  │  ├─ +layout.svelte
+│  │  ├─ +page.svelte        ← the whole app shell
+│  │  └─ api/                ← SvelteKit endpoints (see "API surface")
+│  │     ├─ render/          ← SSE agent loop (≈1000 lines, the core)
+│  │     ├─ tabs/ document/ files/ file-content/
+│  │     ├─ history/ session/ hooks/ references/
+│  │     ├─ live/ ask-user-reply/
+│  └─ lib/
+│     ├─ shared/
+│     │  └─ ydoc-codec.ts    ← single source of truth for Y.Doc shape
+│     ├─ server/             ← anything that touches disk, DB, or Hocuspocus
+│     ├─ components/         ← Svelte 5 components (runes)
+│     ├─ editor/
+│     │  ├─ TiptapEditor.svelte   ← editor surface, feedback UI, idle timer
+│     │  └─ diff-overlay.ts       ← visual diff for pending review rounds
+│     ├─ yjs-doc.ts          ← per-tab client Y.Doc + HocuspocusProvider
+│     ├─ stores.ts           ← Svelte stores (UI projections)
+│     ├─ types.ts            ← shared types
+│     ├─ review-rounds.ts    ← materialize pending rounds, apply operations
+│     ├─ review-diff.ts      ← classify 'tiny' vs 'big'
+│     ├─ diff.ts             ← unified line diff
+│     ├─ editor-extensions.ts
+│     └─ themes.ts
+├─ ARCHITECTURE.md           ← (this file)
+├─ CLAUDE.md                 ← guidance for Claude Code working on DocWriter
+├─ README.md / RELEASE.md
+└─ package.json
 ```
 
-### 2. `.docwriter/`
+`.docwriter/` (created inside the user's workspace, not the repo) holds
+runtime state:
 
-Machine-managed runtime state:
-
-```text
-.docwriter/
-  docwriter.db        ← SQLite (authoritative)
-  agent/
-    scratch/          ← agent's own drafts (lazy-created)
-  references/         ← saved writing-style samples
-  references.json     ← references index
+```
+<workspace>/
+├─ <user's markdown files>
+└─ .docwriter/
+   ├─ docwriter.db           ← SQLite (authoritative for Y.Doc + settings)
+   ├─ hooks.json             ← user-defined shell hooks
+   ├─ references.json        ← writing-style references index
+   ├─ references/            ← stored sample files
+   └─ agent/scratch/         ← agent's private workspace (lazy-created)
 ```
 
-- `docwriter.db`
-  The authoritative store, queried through `src/lib/server/db.ts`
-  (`getDb()`). Schema: `yjs_updates` (per-tab append-only Yjs update log,
-  origin-tagged), `tabs`, `rules`, `hooks`, `recent_actions`,
-  `action_usage_counts`, `kv`. The `kv` table holds singletons like
-  `sessionId` and `last_seen:<tabId>`.
+---
 
-- `.docwriter/agent/scratch/`
-  Session-scoped scratch space for the agent's own drafts and notes.
-  Writable by the agent through `edit_doc` / `write_doc` (fall-through
-  when the path is under this directory) or the built-in `Edit`/`Write`.
-  Not surfaced as user tabs; wiped on "New session". Directory is
-  created lazily on first scratch write — the old `.docwriter/agent/`
-  parent no longer exists by default.
+## Runtime topology
 
-### 3. Server-side Y.Doc registry
+```mermaid
+flowchart TB
+  subgraph CLI
+    A1[bin/docwriter.js<br/>picks port, sets DOCWRITER_ROOT]
+  end
 
-For every open tab, `src/lib/server/ydoc-registry.ts` holds an in-memory
-tuple:
+  subgraph Node["Node process (one)"]
+    SK[SvelteKit server<br/>port = PORT]
+    WS[Hocuspocus WS server<br/>port = DOCWRITER_WS_PORT]
+    SK -. hooks.server.ts starts WS .-> WS
+  end
 
-- `ydoc` — a `Y.Doc` with an `XmlFragment` named `default` (the editor
-  content) and a `Y.Map` named `review` (with `pendingRounds` plus a few
-  legacy-compat fields).
-- `undoManager` — a `Y.UndoManager` scoped to the fragment, tracking only
-  `AGENT_ORIGIN` transactions.
-- `reviewMap` — handle to the same review map for convenience.
+  subgraph Browser
+    PG[/+page.svelte shell/]
+    ED[TiptapEditor<br/>HocuspocusProvider]
+    HIST[HistoryPane<br/>SSE subscriber]
+    PG --> ED
+    PG --> HIST
+  end
 
-On first access for a tab:
+  subgraph Agent["Claude Agent SDK (spawned per render)"]
+    Q[query loop]
+    MCP1[docwriter MCP<br/>propose_rule, propose_hook]
+    MCP2[docwriter-doc MCP<br/>edit_doc, read_doc, write_doc]
+  end
 
-1. Construct a fresh `Y.Doc`.
-2. Attach the UndoManager.
-3. Call `replayUpdatesInto(ydoc, tabId)` — replays every row of
-   `yjs_updates` for that tab through `ydoc.transact(..., row.origin)`.
-   Because the UndoManager is already attached, agent-origin transactions
-   from prior sessions repopulate the undo stack and Reject works after
-   a server restart.
+  A1 --> SK
+  ED <-- WebSocket Yjs sync --> WS
+  HIST <-- SSE /api/render --> SK
+  SK -- spawns --> Q
+  Q --> MCP1
+  Q --> MCP2
+  MCP2 <-- DirectConnection --> WS
+```
 
-When Hocuspocus's `onLoadDocument` fires for that tab, it copies the
-registry Y.Doc's state into its own internal `Document`. From that point
-forward, the live Hocuspocus `Document` is authoritative; the registry
-Y.Doc is stale. Route handlers that want to mutate a tab (the custom MCP
-tools, the `/api/document` GET-flush path) go through
-`server.hocuspocus.openDirectConnection(tabId)`.
+The SvelteKit HTTP server and Hocuspocus WS server live in the same
+Node process but on different ports. `src/hooks.server.ts` boots
+Hocuspocus once, guarded by a `globalThis.__docwriterWsServer`
+singleton so Vite HMR doesn't try to double-bind the port.
 
-## Client Architecture
+---
 
-`src/routes/+page.svelte` is the page shell. It orchestrates:
+## The Y.Doc schema (one per tab)
 
-- theme setup
-- tab lifecycle (open / focus / rename / close / delete)
-- editor mount/remount per tab (gated on the HocuspocusProvider's
-  `synced` event, so Tiptap binds against a fully hydrated Y.Doc)
-- file tree, writing-references panel, rule/hook/session settings panels
-- the streaming render loop and agent history
-- review accept/reject/retry flows (pure Y.Map('review') mutations that
-  propagate via Hocuspocus sync)
+Every tab has one `Y.Doc` with exactly two shared types. Defined once
+in `src/lib/shared/ydoc-codec.ts` and used by both server and client.
 
-### Main UI regions
+```mermaid
+classDiagram
+  class YDoc {
+    XmlFragment 'default'
+    YArray 'rounds'
+  }
+  class XmlFragment {
+    paragraph-per-line plain text
+    hardBreak → \n
+  }
+  class YArray~PendingReviewRound~ {
+    oldest-first
+  }
+  class PendingReviewRound {
+    id: string
+    operation: EditOp | WriteOp
+    baseHash?: string
+    trigger: 'agent_edit_doc' | 'agent_write_doc'
+    timestamp: number
+    kind: 'tiny' | 'big'
+    stepCount: number
+  }
+  YDoc --> XmlFragment
+  YDoc --> YArray~PendingReviewRound~
+  YArray~PendingReviewRound~ --> PendingReviewRound
+```
 
-- left sidebar: outline + files tree
-- center: tab strip, editor
-- right sidebar: agent history, pending review / proposed rules / user
-  questions
-- floating agent dock: wake button, cost pill, send-message popover
+Content and review metadata sit inside the same Y.Doc, so a single
+`transact(..., AGENT_ORIGIN)` can atomically update both and the
+browser sees the change + review card in one frame.
 
-### Important Svelte components
+Constants (all exported from `shared/ydoc-codec.ts`):
 
-- `src/lib/editor/TiptapEditor.svelte` — editor surface, idle-submit
-  timer, feedback popup, diff overlay.
-- `src/lib/components/FileTree.svelte` — workspace explorer with inline
-  create / rename interactions.
-- `src/lib/components/OutlinePane.svelte` — outline + review cards,
-  proposed rules, hooks, user questions.
-- `src/lib/components/HistoryPane.svelte` — agent history, notifications,
-  tool calls, thinking summaries, annotations.
-- `src/lib/components/AgentDock.svelte` — wake button, cost pill, direct
-  message popover.
+| Name | Value |
+| --- | --- |
+| `FRAGMENT_NAME` | `'default'` |
+| `REVIEW_ARRAY_NAME` | `'rounds'` |
+| `AGENT_ORIGIN` | `'agent'` |
+| `USER_ORIGIN` | `'user'` |
+| `SYSTEM_ORIGIN` | `'system'` |
 
-### Stores
+Any drift between server and client on these strings breaks the
+UndoManager (which matches origin by string equality).
 
-`src/lib/stores.ts`:
+---
 
-- document projections: `userMd`, `pendingReviewRounds`
-- agent/review UI: `proposedRules`, `proposedHooks`,
-  `pendingUserQuestions`, `agentHistory`, `annotations`,
-  `isRendering`, `submitCountdown`
-- preferences/session: `selectedModel`, `selectedTheme`,
-  `historyVerbosity`, `showFilesPane`, `agentSettings`, `sessionCost`
-- tab state: `tabs`, `activeTab`, `activeTabKind`
+## Persistence
 
-The editor content itself lives in Yjs, not in stores — the stores are
-projections or UI wrappers.
+Three layers, one source of truth.
 
-## Per-Tab Editor Model
+```mermaid
+flowchart LR
+  LiveDoc[Live Hocuspocus Y.Doc<br/>SOURCE OF TRUTH<br/>in-memory]
+  SQLite[(SQLite<br/>yjs_updates append log)]
+  MD[workspace/*.md<br/>debounced 1s flush]
 
-`src/lib/yjs-doc.ts` manages the per-tab registry on the client. For each
-tab:
+  LiveDoc -- onChange, per update --> SQLite
+  LiveDoc -- 500ms flush tick --> MD
+  SQLite -- replayUpdatesInto on cold start --> LiveDoc
+  MD -- seed on first-ever load --> LiveDoc
+```
 
-- `getYDocForTab(tabId)` creates (or reuses) a `Y.Doc` and a
-  `HocuspocusProvider` connected to `ws://<host>:<WS_PORT>/<tabId>`.
-- `whenYDocReady()` resolves on the provider's first `synced` event.
-- `setCurrentTab(tabId)` switches which doc the live editor uses.
-- `destroyTab(tabId)` tears down the provider and the Y.Doc; server-side
-  state in `yjs_updates` is unaffected.
-- `renameTab(oldId, newId)` snapshots the old Y.Doc, spins up a fresh
-  provider for the new id, and hands the state over. `/api/tabs` renames
-  the file on disk; the next server-side `replayUpdatesInto(newId)`
-  seeds from the renamed file.
+1. **Live Y.Doc** (in-memory, in Hocuspocus) — authoritative while the
+   process is alive.
+2. **`.docwriter/docwriter.db`** — durable. Every Yjs update is one
+   row with its origin tag. Server restart replays this log.
+3. **`<tab>.md`** — plain markdown on disk. Debounced backup for git
+   and portability, not the source of truth. External edits to this
+   file are detected by mtime and fold into the Y.Doc on cold start.
 
-IndexedDB persistence is gone. Refreshes wait on the WebSocket sync
-(sub-20ms on localhost). The Y.Doc on the server is the single source of
-truth for content + review state.
+### SQLite schema
 
-## Editor Update Loop
+Defined in `src/lib/server/db-schema.ts`:
 
-`TiptapEditor.svelte` handles every ProseMirror update.
+```sql
+CREATE TABLE yjs_updates (
+  tab_id   TEXT NOT NULL,
+  seq      INTEGER PRIMARY KEY AUTOINCREMENT,
+  "update" BLOB NOT NULL,           -- reserved word; MUST be quoted
+  origin   TEXT NOT NULL,           -- 'agent' | 'user' | 'system'
+  created  INTEGER NOT NULL
+);
+CREATE INDEX yjs_updates_tab_id ON yjs_updates(tab_id);
 
-1. If the transaction carries the `ySyncPluginKey` meta (Yjs pushing a
-   remote update into the editor), skip — no side effects.
-2. Serialize the editor content to markdown (or plain text) and publish
-   to the `userMd` store (for outline + readers).
-3. If the transaction carries `AGENT_APPLY_KEY` meta (set locally when
-   an agent-origin Y.Doc update is applied), skip the idle-timer
-   restart — an agent edit is not "the user is still writing."
-4. Otherwise restart the 3-second idle-submit countdown.
+CREATE TABLE tabs (tab_id PK, order_index, is_active);
+CREATE TABLE rules (id PK, text, created_at);
+CREATE TABLE hooks (id PK, event, matcher, command, enabled);
+CREATE TABLE recent_actions (label, used_at);
+CREATE TABLE action_usage_counts (action PK, count);
+CREATE TABLE kv (key PK, value);
+```
 
-There's no longer a client-side autosave to `PUT /api/document`; the
-server's Y.Doc-to-disk flush owns that responsibility.
+KV keys in use: `sessionId`, `agentSettings` (JSON), `editorSoftWrap`,
+`last_seen:<tabId>` (markdown snapshot for next-render diff).
 
-## Agent Render Pipeline
+> **Gotcha:** `update` is a SQLite reserved word. Every read/write on
+> that column must quote it as `"update"`. Some builds silently ignore
+> the missing quotes, others corrupt.
 
-The render flow lives in `src/routes/api/render/+server.ts`.
+---
+
+## Flow 1 — User keystroke
+
+```mermaid
+sequenceDiagram
+  actor User
+  participant TT as Tiptap (browser)
+  participant HP as HocuspocusProvider
+  participant H as Hocuspocus server
+  participant P as ydoc-persistence.ts
+  participant DB as SQLite
+  participant FS as disk
+
+  User->>TT: types a character
+  TT->>HP: ySyncPlugin turns it into a Yjs update
+  HP->>H: WebSocket update
+  H->>H: apply to in-memory Y.Doc<br/>(no origin, defaults to USER_ORIGIN)
+  H->>P: onChange(update, origin)
+  P->>DB: INSERT INTO yjs_updates (origin='user')
+  P->>P: markTabDirty(tabId)
+  H-->>HP: broadcast to other clients
+  Note over P,FS: global 500ms flush tick
+  P->>FS: atomic writeFile(tab.md)
+```
+
+Key files: `src/lib/server/ws-server.ts` (onChange plumbing),
+`src/lib/server/ydoc-persistence.ts` (append + flush loop).
+
+The browser's editor update handler serializes the content to the
+`userMd` store for the outline, and restarts the 3-second idle timer
+(`IDLE_MS = 3000`) — typing pauses trigger auto-submit unless the
+update's origin was `AGENT_ORIGIN`.
+
+---
+
+## Flow 2 — Agent edit
+
+The most important flow. An agent tool call must land the content
+change and the review card atomically.
+
+```mermaid
+sequenceDiagram
+  participant SDK as Agent SDK<br/>(query loop)
+  participant MCP as mcp-doc-tools.ts
+  participant PR as path-router.ts
+  participant H as Hocuspocus
+  participant DC as DirectConnection
+  participant DB as SQLite
+  participant Br as Browsers
+
+  SDK->>MCP: edit_doc(path, old, new)
+  MCP->>PR: resolveTabFromPath(path)
+  alt scratch path
+    MCP->>MCP: plain filesystem edit
+  else open tab
+    MCP->>H: openDirectConnection(tabId)
+    H-->>MCP: DirectConnection
+    MCP->>DC: direct.transact(doc => ...)
+    Note over DC: inside one doc.transact(..., AGENT_ORIGIN):<br/>1. serialize current, find unique old_string<br/>2. replaceYDocText(ydoc, newMd)<br/>3. reviewArray.push(PendingReviewRound)
+    DC-->>H: Yjs update(s) with origin=AGENT_ORIGIN
+    H->>DB: append row origin='agent'
+    H-->>Br: broadcast
+    Br->>Br: Tiptap renders diff overlay<br/>+ OutlinePane shows review card
+  else unknown path
+    MCP-->>SDK: isError: true
+  end
+```
+
+Three tools, all in `src/lib/server/mcp-doc-tools.ts`:
+
+| Tool | Purpose | Fails when |
+| --- | --- | --- |
+| `read_doc(path)` | Serialize the **live** Y.Doc (so the agent sees what the user sees now). For open tabs with pending rounds it reads the latest proposed text. | Unknown path. |
+| `edit_doc(path, old_string, new_string)` | Replace exactly one occurrence of `old_string`. | 0 hits or >1 hits (agent must call `read_doc` and retry with more context). |
+| `write_doc(path, content)` | Replace the entire doc. Records a `baseHash` so if the user edits between proposal and accept, the round is marked stale. | Unknown path. Does NOT create new tabs. |
+
+Why custom tools instead of the SDK's built-in `Edit`/`Write`? Because
+the built-ins operate on files on disk, bypassing the live Y.Doc.
+DocWriter's authority is the live doc; tools must edit what the browser
+is currently showing, not the debounced-backup file.
+
+`canUseTool` in `/api/render` explicitly denies built-in `Read`, `Glob`,
+`Grep`, `Bash` on open-tab paths — the agent must use `read_doc` to see
+current live content.
+
+### Path routing
+
+```mermaid
+flowchart TD
+  path[path input]
+  path --> isScratch{under<br/>.docwriter/agent/scratch/ ?}
+  isScratch -- yes --> scratchIO[plain filesystem I/O]
+  isScratch -- no --> matchTab{matches entry in<br/>tabs.order ?}
+  matchTab -- exact id --> liveTab[open tab → live Y.Doc]
+  matchTab -- absolute path suffix --> liveTab
+  matchTab -- no --> reject[isError: true<br/>write_doc never auto-creates tabs]
+```
+
+See `src/lib/server/path-router.ts`.
+
+---
+
+## Flow 3 — Review accept / reject
+
+Review rounds live inside `Y.Array('rounds')` on the Y.Doc, so
+accept/reject is just a Yjs mutation that propagates to every client.
+
+```mermaid
+sequenceDiagram
+  actor User
+  participant UI as OutlinePane
+  participant API as /api/tabs
+  participant WS as ws-server.ts
+  participant H as Hocuspocus Y.Doc
+  participant UM as Y.UndoManager
+
+  User->>UI: clicks Accept on round #k
+  UI->>API: POST accept {tabId, roundId}
+  API->>WS: acceptTabRounds(tabId, roundId?)
+  WS->>H: openDirectConnection → transact:<br/>delete rounds[0..=k] from 'rounds'
+  Note right of H: content stays put.<br/>round entries removed.
+  H-->>UI: broadcast update
+
+  User->>UI: clicks Reject on round #k
+  UI->>API: POST reject {tabId, roundId}
+  API->>WS: rejectTabRounds(tabId, roundId?)
+  WS->>UM: undoManager.undo() × stepCount
+  Note right of UM: UndoManager only tracks<br/>AGENT_ORIGIN, so user keystrokes<br/>between/after agent edits survive.
+  UM->>H: inverse transaction (origin='agent')
+  H-->>UI: broadcast update
+```
+
+The `Y.UndoManager` lives on the server, attached to each Y.Doc in
+`src/lib/server/ws-server.ts` with `trackedOrigins: new Set([AGENT_ORIGIN])`
+and `captureTimeout: 0` (so each tool call is one undo step).
+
+> **Gotcha — construction order.** The UndoManager must be attached
+> **before** `replayUpdatesInto(...)` runs. Otherwise, after a server
+> restart, Reject on a round from a prior session becomes a no-op
+> because the undo stack is empty. See `ws-server.ts` for the guarded
+> order.
+
+### Staleness
+
+A write-round records `baseHash` (`reviewTextHash`). If the user edits
+the doc before accepting that round, the stored hash no longer matches
+the current content, and the round is marked `stale` in
+`materializePendingReviewRounds` (`src/lib/review-rounds.ts`). The UI
+disables Accept on stale rounds and shows why.
+
+For edit-rounds, staleness is simpler: if `old_string` no longer
+appears exactly once in the current text, the round is stale.
+
+---
+
+## Flow 4 — The agent render loop
+
+`/api/render` is an SSE endpoint. One POST = one invocation of the
+Claude Agent SDK's `query()`; the response stream drives the
+HistoryPane.
+
+```mermaid
+sequenceDiagram
+  participant Br as Browser
+  participant R as /api/render
+  participant SDK as Agent SDK
+  participant MCP2 as docwriter-doc MCP
+  participant H as Hocuspocus
+  participant DB as SQLite
+
+  Br->>R: POST {userMessage?, model?, warmup?, planMode?}
+  R->>R: buildSystemPrompt() (cached)
+  R->>R: buildMultiTabPrompt(activeTab, tabs, userMessage)
+  Note right of R: active tab: full content + diff vs last_seen<br/>other tabs: path or path+diff<br/>+ rules + agency + style refs
+  R->>SDK: query({ prompt, mcpServers, hooks, canUseTool })
+  loop streaming events
+    SDK-->>R: system / tool_call_start / tool_use / assistant_text / thinking / result
+    R-->>Br: SSE event
+    alt edit_doc / write_doc / read_doc
+      SDK->>MCP2: tool call
+      MCP2->>H: DirectConnection.transact(AGENT_ORIGIN)
+      H-->>Br: Yjs update via WebSocket<br/>(parallel to SSE)
+    else ExitPlanMode
+      R-->>Br: plan_proposed; abort
+    else AskUserQuestion
+      R->>R: registerPendingAskUser(id, resolve, 15min)
+      R-->>Br: user_question event
+      Br->>R: POST /api/ask-user-reply {id, answers}
+      R-->>SDK: resolve promise → agent continues
+    else propose_rule / propose_hook
+      R-->>Br: rule_proposal / hook_proposal
+    end
+  end
+  R->>DB: kv['last_seen:<tabId>'] = current markdown (per tab)
+  R-->>Br: result + done
+```
+
+The render event stream:
+
+- **Content** arrives over the WebSocket, not the SSE stream. The SSE
+  `result` event no longer carries markdown; the browser already has it.
+- **Agent narration** (tool calls, thinking summaries, status) arrives
+  over SSE and feeds the HistoryPane.
 
 ### Prompt construction
 
-`buildMultiTabPrompt(activeTabId, tabs, userMessage)` assembles:
+`buildMultiTabPrompt()` in `src/routes/api/render/+server.ts` inlines:
 
-- **Active tab:** full current content (read from the live Hocuspocus
-  Document) inlined as a fenced code block, plus a unified-line diff
-  against `kv['last_seen:<tabId>']` if present.
-- **Non-active tab with changes:** path + diff only. The agent is told
-  to call `read_doc(path)` if it needs full content.
-- **Non-active tab unchanged:** path only.
-- **First-render tab (no `last_seen`):** full content.
-- Plus: persistent writing rules (read from SQLite-backed
-  `runtime-state.ts`), style references index, agency guidance
-  (`conservative` / `balanced` / `aggressive`), tool usage rules, and
-  `propose_rule` / `propose_hook` tool definitions.
+- Active tab: full content + unified-line diff vs `kv['last_seen:<tabId>']`.
+- Non-active tab with changes: path + diff (agent calls `read_doc` if
+  it needs more).
+- Non-active tab unchanged: path only.
+- First render for a tab (no `last_seen`): full content.
+- Persistent writing rules.
+- Agency guidance: one of three blocks based on
+  `agentSettings.agency` (`conservative | balanced | aggressive`).
+- Style references block (see `server/references.ts`).
 
-After render completes, the handler writes
-`kv['last_seen:<tabId>'] = currentMd` for every tab the agent saw.
+After render, `last_seen:<tabId>` is refreshed to the current markdown
+for every tab the agent saw, so the next render diffs against what the
+agent knew last time.
 
-### Custom MCP tools
+### Plan mode
 
-DocWriter registers two in-process MCP servers during `/api/render`:
+If `planMode: true`, `canUseTool` blocks all mutation tools (edit_doc,
+write_doc, Edit, Write, Bash, filesystem writes) but allows
+read/search. The SDK's `ExitPlanMode` tool call emits a
+`plan_proposed` SSE event and aborts the stream; the user either
+approves (then we re-run without plan mode) or rejects.
 
-- **`docwriter`** (`src/routes/api/render/+server.ts`)
-  Non-file-writing proposals that the user must explicitly review.
-- **`docwriter-doc`** (`src/lib/server/mcp-doc-tools.ts`)
-  File/document tools that understand DocWriter's live-tab model.
+### Warmup mode
 
-The full custom tool set is:
+`warmup: true` does the same but even narrower — only read/search and
+`WebSearch`/`WebFetch` are allowed. Used to pre-populate context
+without any risk of side effects.
 
-| MCP server | Tool | What it does | Where it writes/reads |
-| --- | --- | --- | --- |
-| `docwriter` | `propose_rule({ text, reason? })` | Suggests a persistent writing rule. The tool itself only ACKs; the real side effect is an SSE `rule_proposal` event that creates an Accept/Reject card in the UI. | No file write. User review only. |
-| `docwriter` | `propose_hook({ event, matcher?, command, reason? })` | Suggests an automation hook. Like `propose_rule`, this only emits a proposal for user review. | No file write. User review only. |
-| `docwriter-doc` | `read_doc({ path })` | Reads the current content of a path that DocWriter understands. For open tabs it serializes the live Hocuspocus Y.Doc, so the result matches what the browser is showing right now. | Open tabs: live Y.Doc. Scratch: plain file read. |
-| `docwriter-doc` | `edit_doc({ path, old_string, new_string })` | Replaces exactly one occurrence of `old_string`. On open tabs it edits the live Y.Doc and appends a pending review round in the same `AGENT_ORIGIN` transaction. | Open tabs: live Y.Doc. Scratch: plain file edit. |
-| `docwriter-doc` | `write_doc({ path, content })` | Replaces the full content at `path`. Same transaction/review flow as `edit_doc` for open tabs. Does not create new tabs. | Open tabs: live Y.Doc. Scratch: plain file write. |
+---
 
-The built-in SDK tools are still available where appropriate:
+## Flow 5 — AskUserQuestion
 
-- `Read` / `Glob` / `Grep` can inspect the wider workspace.
-- `AskUserQuestion` is an SDK tool, not a DocWriter MCP tool; DocWriter
-  intercepts it in `canUseTool` and renders the question in the UI.
-- Built-in `Edit` / `Write` are intentionally not the authority for open
-  tabs because they would bypass the live Y.Doc, review rounds, and
-  origin-tagged undo flow.
+```mermaid
+sequenceDiagram
+  participant SDK
+  participant R as /api/render
+  participant ST as ask-user-state.ts
+  participant Br as Browser
+  participant API as /api/ask-user-reply
 
-#### Path routing (`src/lib/server/path-router.ts`)
-
-The document tools route by `path` before doing any work:
-
-| Path shape | Resolution | Behavior |
-| --- | --- | --- |
-| `.docwriter/agent/scratch/...` | Scratch path | Plain filesystem I/O. Private agent workspace; not surfaced as user tabs. |
-| `drafts/ch1.md` (workspace-relative tab id) | Open tab | Resolve directly from `tabs.order`, then operate on the live Hocuspocus document. |
-| `/abs/path/to/workspace/drafts/ch1.md` | Open tab | Match by suffix against the open-tab ids, then operate on the live Hocuspocus document. |
-| Anything else | Unknown path | Reject with `isError: true`. `write_doc` never creates a new tab implicitly. |
-
-#### Open-tab tool flow
-
-For `edit_doc` / `write_doc` on an open tab:
-
-1. `resolveTabFromPath(path)` maps the tool input to an existing open tab.
-2. `getHocuspocus().openDirectConnection(tabId)` opens a handle to the
-   live Hocuspocus `Document`, not the stale registry copy.
-3. The tool serializes the current live doc (`beforeMd`), computes the
-   requested new content, and validates edit preconditions (`old_string`
-   count for `edit_doc`).
-4. Inside one `document.transact(..., AGENT_ORIGIN)`, a headless Tiptap
-   Collaboration editor calls `setContent(...)` against the live Y.Doc.
-   That is what turns markdown/plain text into the actual CRDT updates.
-5. In the same transaction, the tool appends a `PendingReviewRound` into
-   `Y.Map('review').pendingRounds`.
-6. Hocuspocus broadcasts the combined Yjs update to every browser, and
-   `onChange` persists it into SQLite's `yjs_updates` log.
-
-This "content mutation + review metadata in one Yjs transaction" is the
-core behavior the default file tools cannot provide.
-
-#### Why these tools exist instead of default file tools
-
-DocWriter does not use built-in `Edit` / `Write` for open tabs because
-those tools operate on plain files, while the app's source of truth for
-an open document is the live server-side Y.Doc. The custom tools exist
-so that:
-
-- the agent edits the exact same document instance the browser is
-  rendering
-- `tool_result` reflects what actually landed in the live doc, not what
-  was written to a shadow file
-- content changes and pending review cards arrive atomically
-- Reject works via `AGENT_ORIGIN` + `Y.UndoManager`
-- scratch work can still use cheap plain filesystem I/O without being
-  confused with user-facing tabs
-
-The render prompt therefore disables built-in `Edit` / `Write` for
-open-tab paths and steers explicitly toward `edit_doc` / `write_doc`;
-`Read` / `Glob` / `Grep` remain available for general workspace reads.
-
-### SSE stream
-
-The browser subscribes to `/api/render` and receives:
-
-- `tool_call_start`, `tool_call` — agent tool invocations.
-- `assistant_text`, `assistant_thinking` — model output and thinking
-  summaries.
-- `rule_proposal`, `hook_proposal`, `ask_user` — sidebar UI events.
-- `notification`, `cost` — status updates.
-- `task` / `subagent` lifecycle events.
-- `result` — the render is done. This event no longer carries markdown;
-  the agent's content changes already reached the browser through the
-  WebSocket.
-
-## Review Model
-
-### How a review round is created
-
-When `edit_doc` or `write_doc` mutates a tab, the same
-`document.transact` that rewrites the XmlFragment also appends a
-`PendingReviewRound` to `Y.Map('review').pendingRounds`:
-
-```ts
-interface PendingReviewRound {
-  id: string;
-  beforeMd: string;
-  afterMd: string;
-  trigger: 'agent_edit_doc' | 'agent_write_doc' | ...;
-  timestamp: number;
-  kind: 'tiny' | 'big';   // from classifyRoundKind()
-  stepCount: number;      // always 1 in the new model — each tool call
-                          // is its own agent-origin transaction
-}
+  SDK->>R: canUseTool(AskUserQuestion, { questions })
+  R->>ST: registerPendingAskUser(id, resolve, 15min)
+  R-->>Br: SSE user_question { id, questions }
+  Br->>Br: render question card in OutlinePane
+  actor U as User
+  U->>Br: pick answers, submit
+  Br->>API: POST {id, answers}
+  API->>ST: resolvePendingAskUser(id, answers)
+  ST-->>R: promise resolves
+  R-->>SDK: canUseTool returns { allow: true, input: { answers } }
+  SDK->>SDK: agent sees answers in tool_result, continues
 ```
 
-Both the XmlFragment change and the review-map mutation carry
-`AGENT_ORIGIN` inside the same Yjs transaction, so browsers receive the
-combined update atomically.
+The parking state is in-process memory (`src/lib/server/ask-user-state.ts`).
+If the process dies, pending questions time out and the render aborts.
 
-### Accept
+---
 
-Pure Y.Map('review') mutation. Client-side:
+## Flow 6 — Cold start and server restart
 
-```ts
-const rounds = reviewMap.get('pendingRounds');
-// Accept round(s) in order — accepting round[idx] drops rounds[0..=idx].
-reviewMap.set('pendingRounds', rounds.slice(idx + 1));
+```mermaid
+sequenceDiagram
+  participant SK as SvelteKit boot
+  participant WS as ws-server.ts
+  participant P as ydoc-persistence.ts
+  participant DB as SQLite
+  participant FS as disk
+
+  SK->>WS: createWsServer(port)
+  Note over SK,WS: globalThis.__docwriterWsServer guards HMR
+
+  actor Br as Browser
+  Br->>WS: WS connect /<tabId>
+  WS->>WS: onLoadDocument(tabId): create Y.Doc
+  WS->>WS: attach Y.UndoManager<br/>(trackedOrigins = {AGENT_ORIGIN})<br/>BEFORE replay
+  WS->>P: replayUpdatesInto(ydoc, tabId)
+  P->>DB: SELECT * FROM yjs_updates WHERE tab_id=? ORDER BY seq
+  alt rows exist
+    loop per row
+      P->>P: ydoc.transact(<br/>  () => applyUpdate(ydoc, row.update),<br/>  row.origin<br/>)
+      Note right of P: UndoManager observes each<br/>AGENT_ORIGIN transaction → stack restored
+    end
+    P->>FS: stat tab file
+    alt mtime > last row + 2s skew
+      Note over P,FS: external edit detected.<br/>reset doc from disk, compact log.
+    end
+  else no rows
+    P->>FS: read <tabId> markdown
+    P->>P: seedYDoc(ydoc, content) under SYSTEM_ORIGIN
+    P->>DB: persist one compacted row
+  end
+  WS-->>Br: synced event
+  Br->>Br: Tiptap mounts
 ```
-
-The mutation propagates through Hocuspocus to every connected client.
-The content itself stays in place.
-
-### Reject
-
-Use the per-tab `Y.UndoManager` (`src/lib/yjs-agent.ts`) that tracks only
-`AGENT_ORIGIN`:
-
-```ts
-for (let i = 0; i < round.stepCount; i++) undoManager.undo();
-reviewMap.set('pendingRounds', rounds.slice(idx + 1));
-```
-
-User keystrokes between / after the agent transactions survive, because
-they were never on the UndoManager's tracked-origin set.
-
-Because the UndoManager is per-browser and session-scoped, a browser
-refresh rebuilds it from the Y.Doc's history state on next connect —
-stack items are reconstructed from the replayed `yjs_updates` rows
-through the server-side UndoManager's observer. (See "UndoManager
-construction order" below.)
-
-### Conflict
-
-With the old 3-way merge gone, "conflict" reduces to `old_string not
-found in live document` — the user changed the region after the agent
-read it but before the `edit_doc` transact ran.
-
-`edit_doc` returns `isError: true` with a message steering the agent to
-`read_doc(path)` and retry against fresh content. There's no
-auto-conflict-retry loop at the app level anymore; Yjs handles
-structural convergence, and the agent handles content-level retries in
-its own tool-call loop.
-
-## Server-Side Y.Doc Lifecycle
-
-### Cold start (first access of a tab)
-
-`getTabYDoc(tabId)` in `src/lib/server/ydoc-registry.ts`:
-
-1. Create a fresh `Y.Doc`.
-2. Construct the `Y.UndoManager` on the `default` XmlFragment with
-   `trackedOrigins: new Set([AGENT_ORIGIN])`. **This must happen before
-   replay.**
-3. Call `replayUpdatesInto(ydoc, tabId)`:
-   - If `yjs_updates` has rows for this tab, replay each with
-     `ydoc.transact(() => applyUpdate(ydoc, row.update), row.origin)`.
-     The UndoManager, already attached, captures every AGENT_ORIGIN
-     transaction onto its undo stack.
-   - Otherwise, if a real workspace file exists, seed the Y.Doc from
-     its content (origin `'system'`) and persist a single compacted
-     `yjs_updates` row so the next load skips the disk read.
-
-Swapping steps 2 and 3 leaves the undo stack empty at cold start —
-Reject on a round from a prior session becomes a no-op.
-
-### Write path (user keystroke)
-
-1. Browser keystroke → Tiptap transaction → ySyncPlugin translates it
-   to a Yjs update on the browser Y.Doc → HocuspocusProvider sends it
-   over the WebSocket.
-2. Hocuspocus applies it to the internal `Document`, fires `onChange`.
-3. `ws-server.ts`'s `onChange`:
-   - `appendUpdate(tabId, update, 'user')` — insert one `yjs_updates`
-     row. (`'user'` is the default origin string when the transaction
-     didn't carry one, which is true for browser-originated updates.)
-   - `scheduleMarkdownFlush(tabId, document)` — debounce-1s a markdown
-     serialize + `writeFileSync` of the tab's workspace file.
-
-### Write path (agent edit)
-
-1. Agent calls `edit_doc` via MCP.
-2. `mcp-doc-tools.ts`:
-   - `getHocuspocus().openDirectConnection(tabId)`.
-   - Inside `direct.transact(document => ...)`:
-     - Serialize current markdown, locate the unique `old_string` match.
-     - `document.transact(() => { rebuildFragment(newMd);
-       reviewMap.set('pendingRounds', [...]); }, AGENT_ORIGIN)`.
-3. Hocuspocus fires `onChange`; `transactionOrigin` is the string
-   `AGENT_ORIGIN`. `appendUpdate` writes a row tagged `agent`.
-4. `scheduleMarkdownFlush` debounces a disk write.
-5. Every connected client receives the Yjs update; their
-   HocuspocusProvider applies it; their Tiptap editor renders the
-   change and the new review card.
 
 ### Compaction
 
-`yjs_updates` grows one row per keystroke. `compactTab(tabId)` in
+`yjs_updates` grows one row per update. `compactTab(tabId)` in
 `ydoc-persistence.ts` merges all rows for a tab into a single compacted
-row with `origin = 'system'`. Not run on the hot path; currently called
-from no scheduler, but the helper is in place for a timer / tab-close
-hook.
+row with `origin = 'system'`. The helper is in place but not currently
+on a hot scheduler.
 
-## Feedback & Annotation Model
+---
 
-Text selection in the editor can open a feedback popup:
+## Client architecture
 
-- pinned quick feedback
-- custom feedback text
-- LRU recent-feedback labels
-- persistent submitted highlights
-- hover popovers showing the submitted note
+`src/routes/+page.svelte` is the page shell. Three-pane layout:
 
-Submitted feedback becomes a transient annotation tied to tab id +
-excerpt + comment + ProseMirror range + timestamp. Highlights stay
-visible until an actual agent edit lands for that file, at which point
-they're cleared.
+```
+┌───────────────┬──────────────────────────────────────┬────────────────┐
+│ OutlinePane   │ TabBar                               │ HistoryPane    │
+│ (260px)       ├──────────────────────────────────────┤ (340px,        │
+│               │                                      │  toggleable)   │
+│ • outline     │          TiptapEditor                │                │
+│   from        │     (bound to per-tab Y.Doc          │ • agent events │
+│   headings    │      via HocuspocusProvider)         │ • tool calls   │
+│ • review      │                                      │ • thinking     │
+│   cards       │                          AgentDock ──┤   summaries    │
+│ • proposed    │                         (wake, cost, │ • notifications│
+│   rules/hooks │                          settings)   │                │
+│ • user        │                                      │                │
+│   questions   │                                      │                │
+├───────────────┤                                      │                │
+│ FileTree      │                                      │                │
+└───────────────┴──────────────────────────────────────┴────────────────┘
+```
 
-## Agent History Model
+### Per-tab client Y.Doc (`src/lib/yjs-doc.ts`)
 
-The history pane is a unified event stream:
+A registry of `{ ydoc, wsProvider, readyPromise }` per tab id.
 
-- user submissions
-- assistant text / thinking summaries
-- tool calls / tool progress
-- task/subagent lifecycle
-- hook executions
-- annotations
+- `getYDocForTab(tabId)` — get or create Y.Doc + HocuspocusProvider.
+- `whenYDocReady()` — resolves on the provider's first `synced` event.
+  Tiptap does not mount until this resolves (no flicker from unhydrated doc).
+- `setCurrentTab(tabId)` — swap which doc the live editor binds to.
+- `renameTab(oldId, newId)` — snapshot and hand state over.
+- `reconcileServerInstance(id)` — the server stamps a UUID on boot.
+  If the browser's stored instance id doesn't match, all client Y.Docs
+  are reset and providers reconnect fresh — the server may have lost state.
 
-Two display modes: `verbose` (full loop trace) and `minimal` (mostly
-user actions, actual edits, end-state events). `/api/history` restores
-prior history from the Claude SDK transcript.
+There is **no IndexedDB persistence** on the client. After refresh,
+the editor paints only after the WS `synced` event (sub-20ms locally).
 
-## Server API Surface
+### Stores (`src/lib/stores.ts`)
 
-### `/api/tabs`
+Stores are **projections of the Y.Doc + UI state**, not the source of
+editor content.
 
-Tab lifecycle. `GET` returns ordered/open tabs + active; `POST` opens
-or creates a tab; `PATCH` focuses or renames; `DELETE` closes or
-optionally deletes the file.
+- Doc projections: `userMd`, `pendingReviewRounds`, `reviewBaseline`.
+- Agent output: `proposedRules`, `proposedHooks`, `pendingUserQuestions`,
+  `pendingPlanProposals`, `agentHistory`, `annotations`, `isRendering`,
+  `submitCountdown`, `sessionCost`.
+- Preferences: `selectedModel`, `selectedTheme`, `historyVerbosity`,
+  `showFilesPane`, `agentSettings`, `editorFontScale`, `editorSoftWrap`.
+- Tabs: `tabs`, `activeTab`, `activeTabKind`.
+- Actions toolbar (feedback popup): `pinnedActions`, `recentActions`,
+  `selectedAction`, `actionUsageCounts`.
 
-### `/api/document`
+### Components
 
-Per-tab document endpoint, now a thin shim:
-- `GET` — reads the workspace file + metadata. Before reading, calls
-  `flushTabMarkdownNow(tabId)` so the on-disk content reflects
-  not-yet-flushed Y.Doc changes.
-- `PUT` — accepts only a `meta` body (rules / agent settings). Any
-  `userMd` in the body is ignored; the Y.Doc sync owns editor content.
-- `POST` with `action: 'accept' | 'reject'` is **gone**. Accept and
-  reject are pure Y.Map('review') mutations on the client.
+All in `src/lib/components/`:
 
-### `/api/files`
+| Component | Role |
+| --- | --- |
+| `TabBar` | Tab strip with open / close / rename / context menu. |
+| `OutlinePane` | Left sidebar: auto outline, pending review cards (Accept/Reject), proposed rules, proposed hooks, user questions. |
+| `FileTree` | Workspace file explorer with inline create/rename. |
+| `HistoryPane` | Right sidebar: agent history, tool calls, thinking summaries, cost, notifications. Two modes: `verbose` / `minimal`. |
+| `AgentDock` | Floating top-right: wake button, sleeping-cat mascot, cost pill, gear-icon settings popover. |
+| `AgentModal` | Modal for detailed interaction. |
+| `AgentSettingsPanel` | Agency level + Track Changes toggle. |
+| `ChatPanel` | Direct chat interface. |
+| `RulesPanel` / `HooksPanel` / `ReferencesPanel` | CRUD for persistent settings. |
+| `Highlighter` | Renders feedback annotations over selected ranges. |
+| `MenuBar` | Top menu. |
+| `PanelResizer` / `HorizontalPanelResizer` | Draggable dividers. |
+| `ShineBorder` | Decorative animated border. |
 
-Workspace file tree: listing, create, rename/move, delete. Guarded by
-the workspace-path resolver.
+### Editor update loop (`src/lib/editor/TiptapEditor.svelte`)
 
-### `/api/file-content`
+On every ProseMirror transaction:
 
-Raw read/write for non-editor files.
+1. If it carries `ySyncPluginKey` meta (Yjs pushing a remote update
+   into the editor), skip — no idle timer, no serialization side effects.
+2. Serialize editor content and publish to the `userMd` store (outline).
+3. If it carries `AGENT_APPLY_KEY` meta (set locally when an
+   agent-origin Y.Doc update is applied), skip the idle-timer restart
+   — an agent edit is not "the user is still writing."
+4. Otherwise, restart the 3-second idle-submit countdown.
 
-### `/api/render`
+Cmd/Ctrl+Enter skips the countdown. The client does not `PUT
+/api/document` with markdown; the server's Y.Doc-to-disk flush owns that.
 
-SSE stream; see "Agent Render Pipeline" above.
+---
 
-### `/api/history`
+## API surface
 
-Rehydrate the agent event timeline from the Claude SDK's transcript.
+All under `src/routes/api/`:
 
-### `/api/session`
+| Endpoint | Purpose |
+| --- | --- |
+| `render/` | **SSE stream.** POST kicks off one Agent SDK `query()`. Returns tool events, thinking, proposals, status. The main agent loop. |
+| `tabs/` | GET order/active/tabs. POST opens/creates. PATCH focuses or renames. DELETE closes, optionally deletes file. Also hosts accept/reject review endpoints. |
+| `document/` | GET reads workspace file + metadata (calls `flushTabMarkdownNow` first). PUT accepts only `meta` (rules / agent settings). No accept/reject here anymore — those are Y.Map mutations. |
+| `files/` | Workspace file tree: list / create / rename / move / delete. |
+| `file-content/` | Raw read/write for non-editor files. |
+| `history/` | Rehydrate agent event timeline from SDK transcript. |
+| `session/` | GET session id + recent actions + usage counts. DELETE clears session-scoped state (New session). |
+| `hooks/` | Read / replace persisted hook configuration. |
+| `references/` | GET style references index. POST add workspace-file / URL / stored-sample. `[id]` DELETE. |
+| `live/` | File-watch notifications so external edits (`--watch`) reach the browser. |
+| `ask-user-reply/` | POST `{ id, answers }` resolves a pending `AskUserQuestion` in `/api/render`. |
 
-Session id, recent feedback actions, usage counts. `DELETE` clears
-session-scoped state ("New session").
+---
 
-### `/api/hooks`
+## Agent settings & rules
 
-Read or replace the persisted hook configuration.
+Persisted state lives in SQLite, dual-mirrored to JSON where useful for
+portability.
 
-### `/api/live`
+| Setting | Type | Stored in | Prompt effect |
+| --- | --- | --- | --- |
+| `rules[]` | `{ id, text }[]` | `rules` table | Inlined in system prompt on every render. |
+| `agentSettings.agency` | `'conservative' \| 'balanced' \| 'aggressive'` | `kv['agentSettings']` (JSON) | Picks one of three agency-guidance blocks. |
+| `agentSettings.trackChanges` | boolean | same | When off, edits still flow through `AGENT_ORIGIN` but the review-card UI is skipped. |
+| `hooks[]` | `Hook[]` | `hooks` table + `.docwriter/hooks.json` | Executed as shell commands around agent tool calls — see `hooks-config.ts`. |
+| `editorSoftWrap` | boolean | `kv['editorSoftWrap']` | Editor display. |
+| `sessionId` | string | `kv['sessionId']` | Resume parameter for SDK query(). |
 
-File-watch notifications so external edits (`--watch` mode) reach the
-browser.
+Agent settings are edited via the `AgentDock` gear-icon popover.
 
-### `/api/ask-user-reply`
+---
 
-Feed a user answer back into an agent's blocked `AskUserQuestion` call.
+## Agent scratch workspace
 
-### `/api/references`
+The agent has a private filesystem workspace at
+`.docwriter/agent/scratch/`. `edit_doc` / `write_doc` / `read_doc`
+transparently route to plain filesystem I/O when the path is under
+that directory, so the agent can keep research notes, drafts, and
+outlines without them appearing as user tabs. The directory is
+lazy-created on first scratch write, and cleared on "New session".
 
-Writing-style references index and samples.
+Built-in `Edit` / `Write` / `Read` / `Glob` / `Grep` also still work
+for files outside the open-tab set.
 
-## Workspace Safety Model
+---
 
-`src/lib/server/workspace-path.ts` enforces that file operations stay
-inside `DOCWRITER_ROOT`. It resolves through the nearest existing real
-ancestor, so `..` traversal and symlink escapes are blocked even for
-paths that don't exist yet.
+## Workspace safety
 
-Hook configuration is never agent-writable. The agent can only
-`propose_hook` via MCP; acceptance flows through the user and
-`PUT /api/hooks`.
+`src/lib/server/workspace-path.ts` enforces that all file operations
+stay inside `DOCWRITER_ROOT`. It resolves through the nearest existing
+real ancestor (so `..` traversal and symlink escapes are blocked even
+for not-yet-existing paths). All filesystem routes go through this
+resolver.
 
-## Design Principles
+Hook configuration is never agent-writable. The agent can only call
+`propose_hook` via MCP; acceptance flows through the user and `PUT
+/api/hooks`.
+
+---
+
+## Key constants (for code-search)
+
+| Constant | Value | Where |
+| --- | --- | --- |
+| `AGENT_ORIGIN` | `'agent'` | `shared/ydoc-codec.ts` |
+| `USER_ORIGIN` | `'user'` | `shared/ydoc-codec.ts` |
+| `SYSTEM_ORIGIN` | `'system'` | `shared/ydoc-codec.ts` |
+| `FRAGMENT_NAME` | `'default'` | `shared/ydoc-codec.ts` |
+| `REVIEW_ARRAY_NAME` | `'rounds'` | `shared/ydoc-codec.ts` |
+| `DOCWRITER_WS_PORT` | 3001 (default) | `hooks.server.ts` |
+| `FLUSH_TICK_MS` | 500 | `server/ydoc-persistence.ts` |
+| `EXTERNAL_EDIT_SKEW_MS` | 2000 | `server/ydoc-persistence.ts` |
+| `IDLE_MS` | 3000 | `editor/TiptapEditor.svelte` |
+| `TINY_EDIT_THRESHOLD` | 25 | `types.ts` |
+| `USER_HOOK_TIMEOUT_SEC` | 60 | `routes/api/render/+server.ts` |
+
+---
+
+## Gotchas (from painful debugging sessions)
+
+- **`AGENT_ORIGIN` must agree across boundaries.** The server sets it
+  on `DirectConnection.transact`; it streams to the browser as a Yjs
+  origin string; the client matches by string equality. Renaming one
+  side silently breaks the UndoManager.
+- **UndoManager attach-before-replay.** If the Y.UndoManager is
+  constructed after `replayUpdatesInto`, the undo stack is empty on
+  cold start, and Reject silently does nothing for rounds from prior
+  sessions.
+- **Hocuspocus's internal Document is authoritative.** Once a client
+  has connected and `onLoadDocument` has run, Hocuspocus's own
+  `Document` is the source of truth. Server code that wants to mutate
+  a tab MUST go through `server.hocuspocus.openDirectConnection(tabId)`
+  — not a cached Y.Doc reference.
+- **`"update"` is a SQLite reserved word.** Always quote the column.
+- **Tiptap-markdown escapes brackets.** The serializer turns `[` into
+  `\[`. `read_doc` returns the escaped form, and `edit_doc`'s
+  `old_string` must match. If an edit fails with "not found" in a spot
+  you can see, check bracket escaping.
+- **`undoRedo: false` in StarterKit.** Collaboration ships its own Yjs
+  undo. Registering both corrupts plugin state.
+- **`Link` is bundled via StarterKit.** Don't import
+  `@tiptap/extension-link` separately.
+- **Vite HMR re-executes `hooks.server.ts`.** The
+  `globalThis.__docwriterWsServer` guard keeps us from double-binding
+  the WS port on every save.
+
+---
+
+## Design principles
 
 1. **User edits must not be lost.** Per-tab Y.Docs, `AGENT_ORIGIN`
    isolation for undo, CRDT item-level merge for concurrent writes.
-2. **Agent work must remain reviewable.** Every `edit_doc` / `write_doc`
-   atomically pairs its content change with a `PendingReviewRound`
-   entry in `Y.Map('review')`.
-3. **The app works against a real folder, not a fake sandbox.**
-   Workspace-relative tabs, filesystem-backed APIs, file tree + raw
+2. **Agent work must remain reviewable.** Every `edit_doc` /
+   `write_doc` atomically pairs its content change with a
+   `PendingReviewRound` entry.
+3. **The app works against a real folder, not a sandbox.**
+   Workspace-relative tab ids, filesystem-backed APIs, file tree + raw
    file endpoints, CLI root selection.
-4. **Single source of truth.** The server Y.Doc owns editor content;
-   SQLite owns the Yjs update log; `document.md` is a debounced backup.
-   No IndexedDB, no shadow files, no 3-way merge.
+4. **Single source of truth.** The live Hocuspocus Y.Doc owns editor
+   content; SQLite owns the Yjs update log; markdown on disk is a
+   debounced backup. No IndexedDB, no shadow files, no 3-way merge.
+5. **Origin tagging over explicit reconciliation.** All mutation flows
+   through Yjs with an origin string. Review, undo, history all drop
+   out of that log.
 
-## Key Files
+---
 
-- `bin/docwriter.js` — CLI launcher for packaged mode
-- `bin/docwriter-dev.js` — dev launcher
-- `src/hooks.server.ts` — SvelteKit startup hook; starts Hocuspocus
-- `src/routes/+page.svelte` — app shell + render/review loop
-- `src/lib/editor/TiptapEditor.svelte` — editor, feedback UI, idle timer
-- `src/lib/yjs-doc.ts` — per-tab Y.Doc + HocuspocusProvider registry
-- `src/lib/yjs-agent.ts` — client-side agent UndoManager + apply-key
-- `src/lib/server/ydoc-registry.ts` — server per-tab Y.Doc + UndoManager
-- `src/lib/server/ydoc-persistence.ts` — SQLite ↔ Y.Doc bridge, flush
-- `src/lib/server/ws-server.ts` — Hocuspocus setup, `onChange` plumbing
-- `src/lib/server/mcp-doc-tools.ts` — `edit_doc` / `read_doc` /
-  `write_doc` custom MCP tools
-- `src/lib/server/path-router.ts` — scratch vs. open-tab routing
-- `src/lib/server/ydoc-markdown.ts` — Y.Doc ↔ markdown serializer
-- `src/routes/api/render/+server.ts` — Claude Agent SDK orchestration
-- `src/lib/server/document-io.ts` — rules / agentSettings meta I/O
-- `src/lib/server/runtime-state.ts` — SQLite-backed runtime state
-- `src/lib/server/workspace-path.ts` — sandboxing & symlink-safe resolver
+## Bottom line
 
-## Bottom Line
+DocWriter is a local multi-file writing environment where:
 
-DocWriter is a local multi-file writing environment with:
+- each tab is a server-owned CRDT synced to the browser over WebSocket,
+- every Yjs update is appended to a SQLite log tagged with its origin,
+- a Claude Agent SDK loop edits the live Y.Doc through custom MCP tools
+  (atomic content + review card, no shadows, no merge),
+- review queue entries are just items in a `Y.Array` inside the same doc,
+- markdown on disk is a debounced backup for git and portability.
 
-- per-tab CRDT editor state held authoritatively on the server and
-  synced over WebSocket
-- an append-only SQLite log of every Yjs update, origin-tagged
-- a Claude Agent SDK loop that edits the live Y.Doc through custom MCP
-  tools — no shadows, no 3-way merge, no post-hoc reconciliation
-- a review queue whose entries are just items in a `Y.Map` inside the
-  same Y.Doc
-- `document.md` as a debounced backup for portability
-
-Content convergence is the CRDT's job. Review, undo, and reject all
-fall out of origin-tagged transactions on a single authoritative Y.Doc.
+Content convergence is the CRDT's job. Everything else — review, undo,
+reject, history — is a consequence of origin-tagged transactions on a
+single authoritative doc.
