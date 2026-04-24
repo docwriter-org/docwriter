@@ -29,6 +29,9 @@
 		void saveRules(next);
 		pushHistory({ type: 'user_action', timestamp: Date.now(), description: `Added rule: "${text}"` });
 		newRule = '';
+		// Wake the agent so it can revise the open files against the new rule
+		// without the user having to click "Apply rules" separately.
+		onSubmit?.(`The user added a new writing rule: "${text}". Revise the open files to comply.`);
 	}
 
 	function applyRules() {

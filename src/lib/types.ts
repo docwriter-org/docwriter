@@ -21,6 +21,9 @@ export type PendingReviewOperation =
 			type: 'edit';
 			oldString: string;
 			newString: string;
+			/** When true, replace every occurrence of `oldString`. When false
+			 * or omitted (default), `oldString` must match exactly once. */
+			replaceAll?: boolean;
 	  }
 	| {
 			type: 'write';

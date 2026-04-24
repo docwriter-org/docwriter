@@ -89,7 +89,8 @@ export const editorSoftWrap = writable<boolean>(true);
 
 export const pinnedActions: Action[] = [
 	{ id: 'a_verbose', label: 'Too verbose', icon: 'scissors', pinned: true, color: '#8b5cf6' },
-	{ id: 'a_ai', label: 'AI smell', icon: 'bot', pinned: true, color: '#f43f5e' }
+	{ id: 'a_ai', label: 'AI smell', icon: 'bot', pinned: true, color: '#d97706' },
+	{ id: 'a_incorrect', label: 'Incorrect', icon: 'circle-x', pinned: true, color: '#dc2626' }
 ];
 export const recentActions = writable<Action[]>([]);
 export const selectedAction = writable<Action | null>(null);

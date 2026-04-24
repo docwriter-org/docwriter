@@ -20,6 +20,8 @@ import { existsSync, mkdirSync } from 'fs';
 
 const ROOT = process.env.DOCWRITER_ROOT || process.cwd();
 
+export const WORKSPACE_ROOT = ROOT;
+
 export const DOCWRITER_DIR = join(ROOT, '.docwriter');
 /** Scratch workspace the agent can freely Write/Edit without user review.
  * Meant for its own drafts, outlines, intermediate notes-to-self. Not

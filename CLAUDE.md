@@ -153,10 +153,10 @@ the mascot card).
   double-binding the Hocuspocus port (`ECONNREFUSED`-via-reconnect). The
   live server instance is also how route handlers (`mcp-doc-tools.ts`,
   `/api/document`'s flush path) reach `openDirectConnection`.
-- **SQLite `"update"` column quoting.** `update` is a reserved word in
-  SQLite. Every `SELECT`/`INSERT` on the `yjs_updates` table must quote
-  it as `"update"`. Running unquoted works silently on some builds and
-  corrupts on others.
+- **`yjs_updates.payload` column.** The blob column holding raw Yjs
+  updates is named `payload`. (Historical: it was originally named
+  `update`, a SQLite reserved word; migration v2 renamed it. Don't
+  revive the old name.)
 - **`AGENT_ORIGIN` and `AGENT_APPLY_KEY` must agree across boundaries.**
   Server sets `AGENT_ORIGIN` on `DirectConnection.transact`; the update
   streams to the browser as a Yjs origin string; the client's

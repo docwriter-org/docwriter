@@ -20,6 +20,8 @@ import {
 } from 'fs';
 import { join, dirname } from 'path';
 import { resolveWorkspacePath } from '$lib/server/workspace-path';
+import { getTabsState, setTabsState } from '$lib/server/runtime-state';
+import { destroyTabState } from '$lib/server/ws-server';
 
 /** Names we always hide from the tree — noise that obscures the writing
  * workspace. `.docwriter/` is intentionally NOT here; the user wants to
@@ -121,6 +123,25 @@ export const DELETE: RequestHandler = async ({ url }) => {
 	if (!relPath) throw error(400, 'path required');
 	const abs = resolveWorkspacePath(relPath);
 	if (!existsSync(abs)) return json({ ok: true, path: relPath });
+	const wasDir = statSync(abs).isDirectory();
 	rmSync(abs, { recursive: true, force: true });
+
+	// Any open tab whose id is (or is under) the deleted path must also
+	// have its Hocuspocus Document + CRDT log torn down — otherwise
+	// recreating the same path later resurrects the deleted content from
+	// the stale yjs_updates log.
+	const prefix = wasDir ? `${relPath}/` : null;
+	const state = getTabsState();
+	const doomed = state.order.filter((id) => id === relPath || (prefix && id.startsWith(prefix)));
+	if (doomed.length > 0) {
+		for (const id of doomed) {
+			await destroyTabState(id);
+		}
+		const remaining = state.order.filter((id) => !doomed.includes(id));
+		let active = state.active && doomed.includes(state.active) ? null : state.active;
+		if (!active && remaining.length > 0) active = remaining[0];
+		setTabsState({ order: remaining, active });
+	}
+
 	return json({ ok: true, path: relPath });
 };

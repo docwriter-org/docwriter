@@ -33,6 +33,7 @@ import {
 	markTabDirty,
 	flushMarkdownNow,
 	clearDirty,
+	purgeTabUpdates,
 	setLiveDocResolver
 } from './ydoc-persistence';
 
@@ -69,8 +70,17 @@ export function createWsServer(port: number): Server {
 		port,
 		quiet: true,
 		async onAuthenticate({ token }) {
+			// Require a matching instance id on every connect. The client
+			// fetches /api/session at mount time to populate sessionStorage
+			// with the current id before any WS provider is created, so a
+			// legitimate connect always has the right token. Rejecting empty
+			// tokens closes a race: if a mismatch handler clears sessionStorage
+			// and the provider auto-reconnects before the page reload completes,
+			// the reconnect would send an empty token and (under the previous
+			// `!token || token === expected` check) silently succeed —
+			// letting the stale in-memory Y.Doc sync up into the new workspace.
 			const expected = currentServerInstanceId();
-			if (!token || token === expected) return;
+			if (token && token === expected) return;
 			throw new Error('server-instance-mismatch');
 		},
 		async onLoadDocument({ documentName: tabId, document }) {
@@ -186,8 +196,10 @@ export async function acceptTabRounds(
 					round.staleReason ??
 						applied.staleReason ??
 						'This proposal is stale and needs to be regenerated before it can be accepted.'
-				);
+				) as Error & { staleRoundId?: string; staleRound?: PendingReviewRound };
 				err.name = 'StalePendingReviewError';
+				err.staleRoundId = round.id;
+				err.staleRound = round;
 				throw err;
 			}
 			commitTarget = applied.nextText;
@@ -225,6 +237,33 @@ export async function rejectTabRounds(
 		const remaining = current.slice(0, idx).concat(current.slice(idx + 1));
 		return { rejectedCount: 1, rounds: remaining };
 	});
+}
+
+// ── Tab destruction ──────────────────────────────────────────────────────
+
+/** Fully tear down server-side state for a tab whose file was just deleted:
+ * disconnect any WS clients, unload the Hocuspocus Document, and drop the
+ * persisted CRDT log. Without this, reopening the same path would replay
+ * stale updates from SQLite and silently resurrect the deleted content. */
+export async function destroyTabState(tabId: string): Promise<void> {
+	const server = globalHolder().__docwriterWsServer;
+	if (server?.hocuspocus) {
+		try {
+			server.hocuspocus.closeConnections(tabId);
+		} catch (err) {
+			console.error(`[docwriter] closeConnections failed for "${tabId}":`, err);
+		}
+		const doc = server.hocuspocus.documents.get(tabId);
+		if (doc) {
+			try {
+				await server.hocuspocus.unloadDocument(doc);
+			} catch (err) {
+				console.error(`[docwriter] unloadDocument failed for "${tabId}":`, err);
+			}
+			server.hocuspocus.documents.delete(tabId);
+		}
+	}
+	purgeTabUpdates(tabId);
 }
 
 // Re-export so legacy imports resolve.

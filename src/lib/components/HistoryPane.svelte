@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { fly } from 'svelte/transition';
 	import { cubicOut } from 'svelte/easing';
-	import { FileEdit, User, Bot, Play, CheckCircle, XCircle, Eye, X, Terminal } from 'lucide-svelte';
+	import { FileEdit, User, Bot, Play, CheckCircle, XCircle, Eye, Terminal, Maximize2, X } from 'lucide-svelte';
 	import type { HistoryEntry, Annotation } from '$lib/types';
 	import { agentHistory, annotations, isRendering, historyVerbosity } from '$lib/stores';
 	import type { HistoryVerbosity } from '$lib/stores';
@@ -70,7 +70,7 @@
 			// "agent woke up" signals with no real content.
 			const d = e.description;
 			if (
-				d === 'Review document and improve' ||
+				d === 'Review documents & see if there’s anything to do' ||
 				d === 'Accepted agent\'s edit' ||
 				d === 'Rejected agent\'s edit' ||
 				/^Accepted \d+ agent edit/.test(d) ||
@@ -95,9 +95,40 @@
 			: [...entries].reverse()
 	);
 
-	function removeAnnotation(id: string) {
-		annotations.update((a) => a.filter((x) => x.id !== id));
+	/** While the agent is rendering, the most recent user_action entry is
+	 * "what the agent is currently responding to" — pin it at the top as
+	 * a highlighted card so the user always sees their in-flight prompt. */
+	type ExpandedView =
+		| { kind: 'assistant'; title: string; text: string; timestamp: number }
+		| null;
+	let expanded: ExpandedView = $state(null);
+
+	function expandAssistant(kind: 'text' | 'thinking', text: string, timestamp: number) {
+		expanded = {
+			kind: 'assistant',
+			title: kind === 'thinking' ? 'Agent thinking' : 'Agent message',
+			text,
+			timestamp
+		};
 	}
+	function closeExpanded() {
+		expanded = null;
+	}
+	function onExpandedKeydown(e: KeyboardEvent) {
+		if (expanded && e.key === 'Escape') {
+			e.preventDefault();
+			closeExpanded();
+		}
+	}
+
+	const pinnedTurn = $derived.by(() => {
+		if (!rendering) return null;
+		for (let i = entries.length - 1; i >= 0; i--) {
+			const e = entries[i];
+			if (e.type === 'user_action') return e;
+		}
+		return null;
+	});
 
 	function formatTime(ts: number): string {
 		return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -162,23 +193,16 @@
 	</div>
 
 	<div class="entries">
-		{#if annos.length > 0}
-			<div class="annotation-list">
-				{#each annos as anno (anno.id)}
-					<div class="annotation-card">
-						<div class="annotation-card-head">
-							<span class="annotation-label">{anno.comment}</span>
-							<button class="annotation-dismiss" onclick={() => removeAnnotation(anno.id)}>
-								<X size={12} />
-							</button>
-						</div>
-						<div class="annotation-excerpt">"{anno.excerpt}"</div>
-						<div class="annotation-meta">
-							<span>{anno.tabId}</span>
-							<span>{relativeTime(anno.timestamp)}</span>
-						</div>
-					</div>
-				{/each}
+		{#if pinnedTurn}
+			<div class="pinned-turn-card">
+				<div class="pinned-turn-label">{pinnedTurn.description}</div>
+				{#if pinnedTurn.quote}
+					<div class="pinned-turn-quote" title={pinnedTurn.quote}>"{pinnedTurn.quote}"</div>
+				{/if}
+				<div class="pinned-turn-meta">
+					<span>you · agent is responding</span>
+					<span>{relativeTime(pinnedTurn.timestamp)}</span>
+				</div>
 			</div>
 		{/if}
 		{#if rendering}
@@ -266,6 +290,15 @@
 					<summary class="assistant-summary">
 						<Bot size={11} color="#16a34a" />
 						<span class="assistant-preview">{assistantPreview(entry.text)}</span>
+						<button
+							type="button"
+							class="expand-btn"
+							title="View full message"
+							aria-label="View full message"
+							onclick={(e) => { e.preventDefault(); e.stopPropagation(); expandAssistant('text', entry.text, entry.timestamp); }}
+						>
+							<Maximize2 size={11} />
+						</button>
 						<span class="entry-time">{relativeTime(entry.timestamp)}</span>
 					</summary>
 					<div class="assistant-body">{@html renderMarkdown(entry.text)}</div>
@@ -275,6 +308,15 @@
 					<summary class="assistant-summary">
 						<Bot size={11} color="#6366f1" />
 						<span class="assistant-preview">Thinking: {assistantPreview(entry.text)}</span>
+						<button
+							type="button"
+							class="expand-btn"
+							title="View full thinking"
+							aria-label="View full thinking"
+							onclick={(e) => { e.preventDefault(); e.stopPropagation(); expandAssistant('thinking', entry.text, entry.timestamp); }}
+						>
+							<Maximize2 size={11} />
+						</button>
 						<span class="entry-time">{relativeTime(entry.timestamp)}</span>
 					</summary>
 					<div class="assistant-body thinking-body">{@html renderMarkdown(entry.text)}</div>
@@ -382,6 +424,30 @@
 	</div>
 </div>
 
+<svelte:window onkeydown={onExpandedKeydown} />
+
+{#if expanded}
+	<div class="expand-backdrop" onclick={closeExpanded} role="presentation">
+		<div
+			class="expand-modal"
+			onclick={(e) => e.stopPropagation()}
+			onkeydown={(e) => e.stopPropagation()}
+			role="dialog"
+			aria-modal="true"
+			tabindex="-1"
+		>
+			<div class="expand-header">
+				<span class="expand-title">{expanded.title}</span>
+				<span class="expand-time">{relativeTime(expanded.timestamp)}</span>
+				<button class="expand-close" onclick={closeExpanded} aria-label="Close">
+					<X size={14} />
+				</button>
+			</div>
+			<div class="expand-body">{@html renderMarkdown(expanded.text)}</div>
+		</div>
+	</div>
+{/if}
+
 <style>
 	.history-pane {
 		width: 100%;
@@ -423,48 +489,20 @@
 		overflow-y: auto;
 		padding: 6px 8px;
 	}
-	.annotation-list {
-		display: flex;
-		flex-direction: column;
-		gap: 8px;
-		margin-bottom: 10px;
-	}
-	.annotation-card {
+	.pinned-turn-card {
 		padding: 9px 10px;
 		border-radius: 8px;
 		border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border-light));
 		background: color-mix(in srgb, var(--accent) 4%, var(--bg-surface));
+		margin-bottom: 10px;
 	}
-	.annotation-card-head {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-	}
-	.annotation-label {
+	.pinned-turn-label {
 		font-size: 12.5px;
 		font-weight: 600;
 		color: var(--accent);
-		flex: 1;
-		min-width: 0;
+		line-height: 1.35;
 	}
-	.annotation-dismiss {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		width: 22px;
-		height: 22px;
-		border-radius: 999px;
-		border: none;
-		background: transparent;
-		color: var(--text-faint);
-		cursor: pointer;
-		flex-shrink: 0;
-	}
-	.annotation-dismiss:hover {
-		background: color-mix(in srgb, var(--accent) 10%, transparent);
-		color: var(--accent);
-	}
-	.annotation-excerpt {
+	.pinned-turn-quote {
 		margin-top: 6px;
 		font-size: 12px;
 		line-height: 1.45;
@@ -476,7 +514,7 @@
 		-webkit-box-orient: vertical;
 		overflow: hidden;
 	}
-	.annotation-meta {
+	.pinned-turn-meta {
 		display: flex;
 		justify-content: space-between;
 		gap: 8px;
@@ -484,6 +522,106 @@
 		font-size: 10.5px;
 		color: var(--text-faint);
 		font-variant-numeric: tabular-nums;
+	}
+	.expand-btn {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 18px;
+		height: 18px;
+		border: none;
+		background: transparent;
+		color: var(--text-faint);
+		border-radius: 4px;
+		cursor: pointer;
+		flex-shrink: 0;
+	}
+	.expand-btn:hover {
+		background: color-mix(in srgb, var(--accent) 10%, transparent);
+		color: var(--accent);
+	}
+	.expand-backdrop {
+		position: fixed;
+		inset: 0;
+		background: rgba(15, 15, 20, 0.32);
+		backdrop-filter: blur(3px);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		padding: 32px;
+		z-index: 220;
+	}
+	.expand-modal {
+		background: var(--bg-elevated);
+		border: 1px solid var(--border-light);
+		border-radius: 10px;
+		box-shadow: 0 24px 60px rgba(0, 0, 0, 0.25);
+		width: min(760px, 100%);
+		max-height: 85vh;
+		display: flex;
+		flex-direction: column;
+	}
+	.expand-header {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		padding: 12px 16px;
+		border-bottom: 1px solid var(--border-light);
+		font-size: 12px;
+	}
+	.expand-title {
+		flex: 1;
+		font-weight: 600;
+		font-size: 13px;
+		color: var(--text);
+	}
+	.expand-time {
+		font-size: 11px;
+		color: var(--text-faint);
+		font-variant-numeric: tabular-nums;
+	}
+	.expand-close {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 26px;
+		height: 26px;
+		border-radius: 5px;
+		border: none;
+		background: transparent;
+		color: var(--text-faint);
+		cursor: pointer;
+	}
+	.expand-close:hover {
+		background: var(--bg-surface);
+		color: var(--text);
+	}
+	.expand-body {
+		padding: 18px 22px;
+		overflow-y: auto;
+		font-size: 14px;
+		line-height: 1.65;
+		color: var(--text);
+	}
+	.expand-body :global(p) { margin: 0 0 12px; }
+	.expand-body :global(p:last-child) { margin-bottom: 0; }
+	.expand-body :global(strong) { color: var(--text); }
+	.expand-body :global(code) {
+		font-family: 'SF Mono', Menlo, monospace;
+		font-size: 12.5px;
+		padding: 1px 5px;
+		background: var(--bg-surface);
+		border-radius: 4px;
+	}
+	.expand-body :global(.md-bullet) {
+		display: block;
+		margin: 4px 0 4px 18px;
+		text-indent: -14px;
+		padding-left: 14px;
+	}
+	.expand-body :global(.md-bullet::before) {
+		content: "•  ";
+		color: var(--text-faint);
 	}
 	.empty {
 		font-size: 13px;

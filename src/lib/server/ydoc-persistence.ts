@@ -12,9 +12,6 @@
  * Single global flush loop (500ms tick) drains a `dirtyTabs` set. Callers
  * MUST re-resolve the live Hocuspocus Document at flush time to avoid writing
  * stale content from a doc that has since been unloaded.
- *
- * The `yjs_updates` column is literally named `update` (a SQLite reserved
- * word), so every SELECT/INSERT must quote it as `"update"`.
  */
 import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
@@ -34,8 +31,8 @@ const EXTERNAL_EDIT_SKEW_MS = 2_000;
 export function replayUpdatesInto(ydoc: Y.Doc, tabId: string): void {
 	const db = getDb();
 	let rows = db
-		.prepare(`SELECT "update", origin, created FROM yjs_updates WHERE tab_id = ? ORDER BY seq`)
-		.all(tabId) as Array<{ update: Buffer; origin: string; created: number }>;
+		.prepare(`SELECT payload, origin, created FROM yjs_updates WHERE tab_id = ? ORDER BY seq`)
+		.all(tabId) as Array<{ payload: Buffer; origin: string; created: number }>;
 
 	if (rows.length > 0 && diskNewerThanLog(tabId, rows)) {
 		console.log(
@@ -47,7 +44,7 @@ export function replayUpdatesInto(ydoc: Y.Doc, tabId: string): void {
 
 	if (rows.length > 0) {
 		for (const row of rows) {
-			ydoc.transact(() => Y.applyUpdate(ydoc, new Uint8Array(row.update)), row.origin);
+			ydoc.transact(() => Y.applyUpdate(ydoc, new Uint8Array(row.payload)), row.origin);
 		}
 		return;
 	}
@@ -60,7 +57,7 @@ export function replayUpdatesInto(ydoc: Y.Doc, tabId: string): void {
 		ydoc.transact(() => seedYDoc(ydoc, content), SYSTEM_ORIGIN);
 		const update = Y.encodeStateAsUpdate(ydoc);
 		db.prepare(
-			`INSERT INTO yjs_updates (tab_id, "update", origin, created) VALUES (?, ?, ?, ?)`
+			`INSERT INTO yjs_updates (tab_id, payload, origin, created) VALUES (?, ?, ?, ?)`
 		).run(tabId, Buffer.from(update), SYSTEM_ORIGIN, Date.now());
 	} catch (err) {
 		console.error(`[docwriter] seed from disk failed for tab "${tabId}":`, err);
@@ -69,7 +66,7 @@ export function replayUpdatesInto(ydoc: Y.Doc, tabId: string): void {
 
 function diskNewerThanLog(
 	tabId: string,
-	rows: Array<{ update: Buffer; origin: string; created: number }>
+	rows: Array<{ payload: Buffer; origin: string; created: number }>
 ): boolean {
 	const workspacePath = tabFile(tabId);
 	if (!existsSync(workspacePath)) return false;
@@ -91,7 +88,7 @@ function diskNewerThanLog(
 	const scratch = new Y.Doc();
 	try {
 		for (const row of rows) {
-			scratch.transact(() => Y.applyUpdate(scratch, new Uint8Array(row.update)), row.origin);
+			scratch.transact(() => Y.applyUpdate(scratch, new Uint8Array(row.payload)), row.origin);
 		}
 		const logContent = serializeYDoc(scratch);
 		return logContent.replace(/\n$/, '') !== diskContent.replace(/\n$/, '');
@@ -102,7 +99,7 @@ function diskNewerThanLog(
 
 export function appendUpdate(tabId: string, update: Uint8Array, origin: string) {
 	getDb()
-		.prepare(`INSERT INTO yjs_updates (tab_id, "update", origin, created) VALUES (?, ?, ?, ?)`)
+		.prepare(`INSERT INTO yjs_updates (tab_id, payload, origin, created) VALUES (?, ?, ?, ?)`)
 		.run(tabId, Buffer.from(update), origin, Date.now());
 }
 
@@ -110,13 +107,13 @@ export function compactTab(tabId: string) {
 	const db = getDb();
 	db.transaction(() => {
 		const rows = db
-			.prepare(`SELECT "update" FROM yjs_updates WHERE tab_id = ? ORDER BY seq`)
-			.all(tabId) as Array<{ update: Buffer }>;
+			.prepare(`SELECT payload FROM yjs_updates WHERE tab_id = ? ORDER BY seq`)
+			.all(tabId) as Array<{ payload: Buffer }>;
 		if (rows.length < 2) return;
-		const merged = Y.mergeUpdates(rows.map((r) => new Uint8Array(r.update)));
+		const merged = Y.mergeUpdates(rows.map((r) => new Uint8Array(r.payload)));
 		db.prepare(`DELETE FROM yjs_updates WHERE tab_id = ?`).run(tabId);
 		db.prepare(
-			`INSERT INTO yjs_updates (tab_id, "update", origin, created) VALUES (?, ?, ?, ?)`
+			`INSERT INTO yjs_updates (tab_id, payload, origin, created) VALUES (?, ?, ?, ?)`
 		).run(tabId, Buffer.from(merged), SYSTEM_ORIGIN, Date.now());
 	})();
 }
@@ -177,4 +174,12 @@ export function flushMarkdownNow(tabId: string, ydoc: Y.Doc) {
 
 export function clearDirty(tabId: string) {
 	dirtyTabs.delete(tabId);
+}
+
+/** Drop all persisted Yjs state for a tab. Called when the user deletes the
+ * underlying file — otherwise the stale updates would replay on reopen and
+ * resurrect the old content. */
+export function purgeTabUpdates(tabId: string) {
+	dirtyTabs.delete(tabId);
+	getDb().prepare(`DELETE FROM yjs_updates WHERE tab_id = ?`).run(tabId);
 }

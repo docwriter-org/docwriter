@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
 	import { Editor } from '@tiptap/core';
-	import type { Transaction } from '@tiptap/pm/state';
+	import { TextSelection, type Transaction } from '@tiptap/pm/state';
 	import { ySyncPluginKey } from 'y-prosemirror';
 	import { DiffOverlay, setDiffState } from './diff-overlay';
 	import { collaborativeExtensions } from '$lib/editor-extensions';
@@ -56,8 +56,13 @@
 
 	function updateFeedbackPopup(autoFocus = false) {
 		if (!editor || !editor.isFocused) return;
-		const { from, to, empty } = editor.state.selection;
-		if (empty || to - from < 2) {
+		const selection = editor.state.selection;
+		const { from, to, empty } = selection;
+		// Clicking a contenteditable=false diff widget (agent-added block) creates
+		// a NodeSelection spanning the whole widget — to the user this looks like
+		// the paragraph auto-selected on a bare click. Only treat genuine text
+		// selections as feedback selections.
+		if (!(selection instanceof TextSelection) || empty || to - from < 2) {
 			feedbackPopup = null;
 			feedbackInput = '';
 			feedbackSelectionRange = null;
@@ -334,13 +339,6 @@
 		allRoundsTiny = v.length > 0 && v.every((r) => r.kind === 'tiny');
 		currentProposalText = v.length > 0 ? v[v.length - 1].afterMd ?? null : null;
 		hasPendingProposal = v.length > 0;
-		if (hasPendingProposal) {
-			if (idleTimer) {
-				clearTimeout(idleTimer);
-				idleTimer = null;
-			}
-			clearCountdown();
-		}
 		schedulePlainLineSync();
 		updateDiff();
 	});
@@ -385,14 +383,6 @@
 	}
 
 	function restartIdleCountdown() {
-		if (hasPendingProposal) {
-			if (idleTimer) {
-				clearTimeout(idleTimer);
-				idleTimer = null;
-			}
-			clearCountdown();
-			return;
-		}
 		if (idleTimer) clearTimeout(idleTimer);
 		startCountdown();
 		idleTimer = setTimeout(() => {
@@ -585,7 +575,17 @@
 					}}
 					onkeydown={(e) => {
 						if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendCustomFeedback(); }
-						if (e.key === 'Escape') { closeFeedbackPopup(); }
+						if (e.key === 'Escape') {
+							// Collapse the editor selection so a subsequent click
+							// inside the previously-highlighted range doesn't cause
+							// the browser to restore that selection on refocus
+							// (which would re-open the feedback popup).
+							if (editor) {
+								const pos = editor.state.selection.to;
+								editor.chain().focus().setTextSelection(pos).run();
+							}
+							closeFeedbackPopup();
+						}
 						if (
 							(e.key === 'Backspace' || e.key === 'Delete') &&
 							!feedbackInput.trim() &&
@@ -825,6 +825,8 @@
 		color: var(--diff-added-color);
 		background: var(--diff-added-bg);
 		white-space: pre-wrap;
+		pointer-events: none;
+		user-select: none;
 	}
 	.tiptap-editor :global(.diff-removed) {
 		color: var(--diff-removed-color);

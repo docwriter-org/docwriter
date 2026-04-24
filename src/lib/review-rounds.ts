@@ -47,7 +47,7 @@ function applyOperation(currentText: string, operation: PendingReviewOperation):
 				'The original text is no longer present in the current document, so this edit needs to be regenerated.'
 		};
 	}
-	if (hits > 1) {
+	if (hits > 1 && !operation.replaceAll) {
 		return {
 			nextText: currentText,
 			stale: true,
@@ -55,10 +55,10 @@ function applyOperation(currentText: string, operation: PendingReviewOperation):
 				'The original text now matches multiple locations, so this edit is ambiguous and needs to be regenerated.'
 		};
 	}
-	return {
-		nextText: currentText.replace(operation.oldString, operation.newString),
-		stale: false
-	};
+	const nextText = operation.replaceAll
+		? currentText.split(operation.oldString).join(operation.newString)
+		: currentText.replace(operation.oldString, operation.newString);
+	return { nextText, stale: false };
 }
 
 export function applyPendingReviewRound(

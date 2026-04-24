@@ -90,7 +90,19 @@ export const POST: RequestHandler = async ({ request, url }) => {
 				result = await acceptTabRounds(tabId, roundId);
 			} catch (e) {
 				if ((e as Error).name === 'StalePendingReviewError') {
-					return json({ error: (e as Error).message }, { status: 409 });
+					const stale = e as Error & {
+						staleRoundId?: string;
+						staleRound?: { operation?: { type?: string } };
+					};
+					return json(
+						{
+							error: stale.message,
+							stale: true,
+							staleRoundId: stale.staleRoundId ?? null,
+							staleRoundKind: stale.staleRound?.operation?.type ?? null
+						},
+						{ status: 409 }
+					);
 				}
 				throw e;
 			}

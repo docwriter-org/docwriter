@@ -62,6 +62,14 @@ const MIGRATIONS: Array<{ version: number; sql: string }> = [
 				value TEXT NOT NULL
 			);
 		`
+	},
+	{
+		version: 2,
+		// Rename the `yjs_updates."update"` column to `payload`. `update` is a
+		// SQLite reserved word, so the original required quoting at every call
+		// site — renaming removes the footgun entirely. Brand-new DBs still
+		// run v1 first (creating the old column), then immediately v2 (rename).
+		sql: `ALTER TABLE yjs_updates RENAME COLUMN "update" TO payload;`
 	}
 ];
 

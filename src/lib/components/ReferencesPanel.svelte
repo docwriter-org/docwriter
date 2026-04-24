@@ -14,8 +14,9 @@
 
 	interface Props {
 		activeTabId?: string | null;
+		onSubmit?: (trigger: string) => void;
 	}
-	let { activeTabId = null }: Props = $props();
+	let { activeTabId = null, onSubmit }: Props = $props();
 
 	let references = $state<StyleReference[]>([]);
 	let loading = $state(true);
@@ -58,6 +59,7 @@
 				description: `Added style reference: ${activeTabId}`
 			});
 			await loadReferences();
+			onSubmit?.(`The user added "${activeTabId}" as a style reference. Revise the open files so their voice and cadence match it.`);
 		} catch (e) {
 			console.error('Failed to add current file reference:', e);
 		} finally {
@@ -85,10 +87,12 @@
 				timestamp: Date.now(),
 				description: `Added stored style sample: ${name}`
 			});
+			const addedName = name;
 			sampleName = '';
 			sampleContent = '';
 			sampleExpanded = false;
 			await loadReferences();
+			onSubmit?.(`The user added a new style sample "${addedName}". Revise the open files so their voice and cadence match it.`);
 		} catch (e) {
 			console.error('Failed to add stored sample:', e);
 		} finally {
@@ -115,9 +119,12 @@
 				timestamp: Date.now(),
 				description: `Added style reference URL: ${url}`
 			});
+			const addedUrl = url;
+			const addedLabel = urlLabel.trim();
 			urlValue = '';
 			urlLabel = '';
 			await loadReferences();
+			onSubmit?.(`The user added a new style reference URL (${addedLabel || addedUrl}). Revise the open files so their voice and cadence match it.`);
 		} catch (e) {
 			console.error('Failed to add URL reference:', e);
 		} finally {

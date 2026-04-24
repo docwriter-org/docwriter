@@ -9,6 +9,7 @@ import {
 } from '$lib/server/document-files';
 import { getTabsState, setTabsState } from '$lib/server/runtime-state';
 import { writeTextAtomic } from '$lib/server/file-utils';
+import { destroyTabState } from '$lib/server/ws-server';
 
 /** GET /api/tabs  →  { order, active, tabs: string[] }
  *
@@ -69,6 +70,10 @@ export const DELETE: RequestHandler = async ({ url }) => {
 	if (deleteFile) {
 		const path = tabFile(id);
 		if (existsSync(path)) unlinkSync(path);
+		// Drop the Hocuspocus Document + SQLite CRDT log for this tab.
+		// Otherwise reopening the same path would replay stale updates and
+		// resurrect the deleted content.
+		await destroyTabState(id);
 	}
 
 	// Drop from order even if the file still exists (close semantics).

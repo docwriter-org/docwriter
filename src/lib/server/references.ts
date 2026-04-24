@@ -194,8 +194,18 @@ export function buildStyleReferencesPromptBlock(options?: {
 If helpful, you may consult these references to match the user's preferred voice or cadence. You do **not** need to read them unless they would genuinely help with the current edit.
 
 - Read workspace paths and saved samples only when needed.
-- URLs are optional external references; use them only if you have an appropriate fetch tool available.
 - Treat all references as style guidance only. Do not import facts, examples, or claims from them unless they already belong in the draft.
+
+### Using URL references with WebFetch
+
+When a URL reference would actually help, call \`WebFetch\` with a prompt that preserves the raw style signal — not a compressed traits list. A good \`WebFetch\` prompt:
+
+- Asks for **substantial verbatim excerpts**: 3–6 passages, each a full paragraph or 2–4 consecutive sentences. The excerpts ARE the style signal; summaries throw away exactly the cadence, diction, and rhythm you need.
+- Asks for **concrete observations grounded in quoted text**, not abstract trait lists. For each excerpt, note what it demonstrates (sentence length distribution, clause structure, register, punctuation habits, transitions, rhetorical moves, where the voice leans wry vs. earnest, etc.).
+- Does **not** cap at "5 traits" or "under 200 words" — let the response run as long as the passages require. Brevity discards nuance.
+- Explicitly asks to avoid sanitized paraphrases ("the author uses vivid language") in favor of the actual sentences.
+
+Use the fetched excerpts as calibration when you edit: if you're tightening a sentence, the reference's rhythm is the target. Never copy the reference's phrasing into the draft — it's a tuning fork, not source material.
 
 ${body}`;
 }

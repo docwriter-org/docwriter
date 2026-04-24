@@ -21,6 +21,7 @@
 		FilePlus2,
 		FolderPlus
 	} from 'lucide-svelte';
+	import { showAlert, showConfirm } from '$lib/dialogs';
 
 	interface Props {
 		/** Fires when the user clicks a file (not a folder). */
@@ -170,16 +171,17 @@
 			await refreshFolder(parent);
 			onRenamed?.(entry.path, toPath);
 		} catch (e) {
-			window.alert(`Rename failed: ${e instanceof Error ? e.message : String(e)}`);
+			await showAlert(e instanceof Error ? e.message : String(e), { title: 'Rename failed' });
 		}
 	}
 
 	async function doDelete(entry: FileEntry) {
 		closeMenu();
-		const ok = window.confirm(
+		const ok = await showConfirm(
 			`Delete "${entry.path}"?\n\nThis permanently removes ${
 				entry.kind === 'folder' ? 'the folder and all its contents' : 'the file'
-			} from disk. You won't be able to recover it.`
+			} from disk. You won't be able to recover it.`,
+			{ title: 'Delete', confirmLabel: 'Delete', danger: true }
 		);
 		if (!ok) return;
 		try {
@@ -191,7 +193,7 @@
 			await refreshFolder(parentOf(entry.path));
 			onDeleted?.(entry.path);
 		} catch (e) {
-			window.alert(`Delete failed: ${e instanceof Error ? e.message : String(e)}`);
+			await showAlert(e instanceof Error ? e.message : String(e), { title: 'Delete failed' });
 		}
 	}
 
@@ -270,7 +272,7 @@
 				});
 			}
 		} catch (e) {
-			window.alert(`Create failed: ${e instanceof Error ? e.message : String(e)}`);
+			await showAlert(e instanceof Error ? e.message : String(e), { title: 'Create failed' });
 		}
 	}
 </script>

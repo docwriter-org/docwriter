@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { X, FileCode } from 'lucide-svelte';
 	import { tabs, activeTab } from '$lib/stores';
+	import { showConfirm } from '$lib/dialogs';
 
 	interface Props {
 		onSwitch: (id: string) => void | Promise<void>;
@@ -75,8 +76,9 @@
 	 * behind a native confirm. */
 	async function requestDelete(id: string) {
 		closeMenu();
-		const ok = window.confirm(
-			`Delete "${id}"?\n\nThis permanently removes the file from disk. You won't be able to recover it.`
+		const ok = await showConfirm(
+			`Delete "${id}"?\n\nThis permanently removes the file from disk. You won't be able to recover it.`,
+			{ title: 'Delete', confirmLabel: 'Delete', danger: true }
 		);
 		if (ok) void onDelete(id);
 	}
@@ -312,8 +314,8 @@
 		padding: 0 4px;
 		border-radius: 7px;
 	}
-	.tab.pending:not(.active) .pending-dot {
-		/* Slow pulse on inactive tabs so the user notices */
+	.tab.pending .pending-dot {
+		/* Slow pulse on every pending tab so the user notices */
 		animation: pending-pulse 1.8s ease-in-out infinite;
 	}
 	@keyframes pending-pulse {

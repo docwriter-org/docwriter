@@ -232,16 +232,16 @@ Every file is treated as raw text — including \`.md\` / \`.markdown\`. The edi
 
 ## How to edit
 
-- For the **open tab files** shown in each user turn, use \`edit_doc\` / \`write_doc\` / \`read_doc\` (NOT the built-in Edit / Write / Read). The \`path\` argument should be the tab id (shown in bold as \`\\\`tabid\\\`\`) or the absolute path shown in each file's "Path:" line.
-- \`edit_doc({ path, old_string, new_string })\` replaces exactly one occurrence. Fails if \`old_string\` is not found or matches more than once — in that case call \`read_doc(path)\` to see the current content and retry.
-- \`write_doc({ path, content })\` replaces the file's entire content. Only works for already-open tabs; does NOT create new ones.
+- For **any workspace file** — whether it's currently an open tab or not — use \`edit_doc\` / \`write_doc\` / \`read_doc\` (NOT the built-in Edit / Write). The \`path\` argument should be the tab id (shown in bold as \`\\\`tabid\\\`\`) or the absolute path shown in each file's "Path:" line.
+- \`edit_doc({ path, old_string, new_string, replace_all? })\` replaces \`old_string\` with \`new_string\`. By default \`old_string\` must match exactly once; pass \`replace_all: true\` to replace every occurrence in a single proposal (good for renames / consistent term updates). If \`path\` points to a workspace file that isn't currently open, it's auto-opened as a new tab.
+- \`write_doc({ path, content })\` replaces the full content. If the file doesn't exist, write_doc creates it and opens it as a new tab (no review round for brand-new files). If the file exists, the write lands as a pending review proposal.
 - \`read_doc(path)\` returns the current review-aware content of an open tab: the newest pending proposal if one exists, otherwise the committed content.
-- Each \`edit_doc\` / \`write_doc\` call creates or updates a reviewable proposal round in the outline. The live document changes only when the user accepts that proposal.
-- For files outside the open-tab list, read with the built-in \`Read\` / \`Glob\` / \`Grep\`, and for your scratch workspace under \`${AGENT_SCRATCH_DIR}/\` you may use either \`edit_doc\` / \`write_doc\` / \`read_doc\` (they fall through to plain filesystem I/O on scratch paths) or the built-in \`Edit\` / \`Write\` tools.
+- Each \`edit_doc\` / \`write_doc\` call on an existing file creates or updates a reviewable proposal round in the outline. The live document changes only when the user accepts that proposal.
+- The built-in \`Edit\` / \`Write\` tools are restricted to your scratch workspace under \`${AGENT_SCRATCH_DIR}/\`. Use built-in \`Read\` / \`Glob\` / \`Grep\` freely anywhere in the workspace.
 - Preserve the user's voice — don't rewrite sentences that aren't broken.
 - Do NOT create new tab files. Only edit the files listed above.
 - If the user's message is about the active file, prefer editing that one. Edit other files when the request genuinely spans them.
-- Do NOT write a summary. Edit silently and stop.
+- If the user asked a question or requested something you can't address by editing (e.g. "what do you think?", "can you explain?", "is there a better approach?"), write a short reply as assistant text — the user can read it in the agent history. Otherwise, prefer editing silently: review cards speak for themselves, so there's no need to narrate what you just did.
 
 ## When to ask instead of edit
 
@@ -251,8 +251,8 @@ If the request is genuinely ambiguous and has multiple reasonable directions (to
 
 - **Read**: anywhere in the workspace. Use the built-in \`Read\` / \`Glob\` / \`Grep\` to explore the project freely (existing docs, references, code, hooks.json, whatever helps). For the open tabs shown in each user turn, prefer \`read_doc(path)\` — it returns the current review-aware content instead of whatever is on disk.
 - **Write / Edit** has two channels:
-  1. **Open tabs** — use \`edit_doc\` / \`write_doc\` exclusively, with the tab id as \`path\`. These create pending review rounds; the user's committed document only changes on Accept. The built-in \`Edit\` / \`Write\` tools are intentionally disabled for this render.
-  2. **Your scratch space** at \`${AGENT_SCRATCH_DIR}/\` — any path under here. Use it for drafts, outlines, notes-to-self, intermediate passes. Either \`edit_doc\` / \`write_doc\` (they fall through to plain file I/O on scratch paths) or a subagent's shell tools work. Not surfaced to the user; persists across rounds in the same session; wiped on "New session". Think of it as your working memory.
+  1. **Workspace files** — use \`edit_doc\` / \`write_doc\` with the path as \`path\`. These auto-open the file as a tab if needed and create pending review rounds on existing content; brand-new files created via \`write_doc\` land as a new tab directly. The built-in \`Edit\` / \`Write\` tools are blocked outside scratch for this reason.
+  2. **Your scratch space** at \`${AGENT_SCRATCH_DIR}/\` — any path under here. Use it for drafts, outlines, notes-to-self, intermediate passes. Either \`edit_doc\` / \`write_doc\` (they fall through to plain file I/O on scratch paths) or the built-in \`Edit\` / \`Write\` tools work. Not surfaced to the user; persists across rounds in the same session; wiped on "New session". Think of it as your working memory.
 - For adding **hooks** → call \`propose_hook\`. For **rules** → \`propose_rule\`. Don't try to edit \`.docwriter/hooks.json\` directly.
 
 ## When to use subagents (Agent tool)
@@ -696,6 +696,7 @@ export const POST: RequestHandler = async ({ request }) => {
 							permissionMode: planMode ? 'plan' : 'acceptEdits',
 							includePartialMessages: true,
 							agentProgressSummaries: true,
+							effort: 'low',
 							abortController,
 							hooks,
 							canUseTool: async (toolName: string, toolInput: any) => {
@@ -757,6 +758,23 @@ export const POST: RequestHandler = async ({ request }) => {
 												behavior: 'deny' as const,
 												message:
 													'Open tab files must be accessed through `read_doc`, `edit_doc`, or `write_doc`, not through Bash commands.'
+											};
+										}
+									}
+									if (toolName === 'Edit' || toolName === 'Write') {
+										const target =
+											typeof toolInput?.file_path === 'string' ? toolInput.file_path : '';
+										const underScratch =
+											target === AGENT_SCRATCH_DIR ||
+											target.startsWith(AGENT_SCRATCH_DIR + '/') ||
+											target.includes('.docwriter/agent/scratch/');
+										if (!underScratch) {
+											return {
+												behavior: 'deny' as const,
+												message:
+													'Built-in Edit / Write are restricted to your scratch directory (`' +
+													AGENT_SCRATCH_DIR +
+													'/`). For any workspace file, use `edit_doc` or `write_doc` instead — they route through the review system and auto-open the file as a tab if needed.'
 											};
 										}
 									}

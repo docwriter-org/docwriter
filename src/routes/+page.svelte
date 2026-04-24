@@ -14,6 +14,7 @@
 	import HorizontalPanelResizer from '$lib/components/HorizontalPanelResizer.svelte';
 	import AgentDock from '$lib/components/AgentDock.svelte';
 	import AgentModal from '$lib/components/AgentModal.svelte';
+	import Dialog from '$lib/components/Dialog.svelte';
 	import AgentSettingsPanel from '$lib/components/AgentSettingsPanel.svelte';
 	import HooksPanel from '$lib/components/HooksPanel.svelte';
 	import { themes, applyTheme } from '$lib/themes';
@@ -27,7 +28,7 @@
 	 * When no trigger is given, describe the default "review and improve"
 	 * prompt the agent actually receives, not a vague "Submitted". */
 	function shortDescription(trigger: string | undefined): string {
-		if (!trigger) return 'Review document and improve';
+		if (!trigger) return 'Review documents & see if there’s anything to do';
 		// `The user flagged this passage as|with feedback "Too verbose"…` → `Feedback: Too verbose`
 		const feedbackMatch = trigger.match(
 			/^The user flagged this passage (?:as|with feedback) "([^"]+)"/
@@ -117,6 +118,21 @@
 	/** Map tabId → pending round count. Drives the numbered badge on
 	 * each tab. 0 / absent means no pending review on that tab. */
 	let pendingReviewTabs: Map<string, number> = $state(new Map());
+	/** Tabs the agent just created (write_doc on a non-existent path). No
+	 * review round exists — there's nothing to compare against — but we
+	 * still want the pulsing "new content" dot so the user notices the
+	 * new file appeared. Cleared when the user switches to that tab. */
+	let freshAgentTabs: Set<string> = $state(new Set());
+	/** Combined map for the TabBar dot: real pending-review counts plus a
+	 * sentinel count of 1 for brand-new agent tabs (which have no review
+	 * round). Real counts win when both are present. */
+	let mergedPendingTabs: Map<string, number> = $derived.by(() => {
+		const map = new Map(pendingReviewTabs);
+		for (const id of freshAgentTabs) {
+			if (!map.has(id)) map.set(id, 1);
+		}
+		return map;
+	});
 
 	function getCurrentTabList(): string[] {
 		let v: string[] = [];
@@ -158,6 +174,15 @@
 
 	/** Load the tab list from the server. Existing repos should start with no
 	 * open tab rather than creating a synthetic default file. */
+	function refreshPendingReviewTabs(tabIds: string[]) {
+		const pending = new Map<string, number>();
+		for (const id of tabIds) {
+			const arr = getReviewArrayForTab(id);
+			if (arr.length > 0) pending.set(id, arr.length);
+		}
+		pendingReviewTabs = pending;
+	}
+
 	async function loadTabs(): Promise<string | null> {
 		try {
 			const res = await fetch('/api/tabs');
@@ -170,12 +195,7 @@
 			let active: string | null = data.active ?? null;
 			tabs.set(tabIds);
 			activeTab.set(active);
-			const pending = new Map<string, number>();
-			for (const id of tabIds) {
-				const arr = getReviewArrayForTab(id);
-				if (arr.length > 0) pending.set(id, arr.length);
-			}
-			pendingReviewTabs = pending;
+			refreshPendingReviewTabs(tabIds);
 			return active;
 		} catch (e) {
 			console.error('Failed to load tabs:', e);
@@ -270,6 +290,10 @@
 	async function switchTab(tabId: string) {
 		const current = getCurrentActiveTab();
 		if (tabId === current) return;
+		if (freshAgentTabs.has(tabId)) {
+			freshAgentTabs.delete(tabId);
+			freshAgentTabs = new Set(freshAgentTabs);
+		}
 		docLoaded = false; // unmounts TiptapEditor
 		setCurrentTab(tabId);
 		activeTab.set(tabId);
@@ -312,6 +336,9 @@
 	async function deleteTab(id: string) {
 		// Destructive: close the tab AND unlink the file.
 		await removeTab(id, /* deleteFile */ true);
+		// Wake the agent so it can react — e.g. drop references to the
+		// deleted file from whatever's still open.
+		void submit(`The user deleted the file "${id}". Update any open files that referenced it.`);
 	}
 
 	async function removeTab(id: string, deleteFile: boolean) {
@@ -552,6 +579,7 @@
 						// the matching tool_call entry by tool_use_id and
 						// attach the text + isError so HistoryPane can render
 						// the reason a failed edit_doc / write_doc didn't land.
+						let matchedToolName: string | null = null;
 						agentHistory.update((h) => {
 							const targetId = parsed.tool_use_id;
 							if (!targetId) return h;
@@ -560,6 +588,7 @@
 							for (let i = h.length - 1; i >= 0; i--) {
 								const entry = h[i];
 								if (entry.type === 'tool_call' && entry.tool_use_id === targetId) {
+									matchedToolName = entry.tool_name || null;
 									const updated = {
 										...entry,
 										result: typeof parsed.text === 'string' ? parsed.text : '',
@@ -570,6 +599,29 @@
 							}
 							return h;
 						});
+						// edit_doc / write_doc can auto-open a new tab (or create
+						// a brand-new file and open it). Re-sync tab list on any
+						// successful call so the new tab appears without a page
+						// refresh. Match MCP-prefixed names too.
+						if (
+							!parsed.is_error &&
+							matchedToolName &&
+							/(?:^|__)(edit_doc|write_doc)$/.test(matchedToolName)
+						) {
+							const before = new Set(getCurrentTabList());
+							loadTabs()
+								.then(() => {
+									const after = getCurrentTabList();
+									for (const id of after) {
+										if (!before.has(id) && id !== currentActiveTabId) {
+											freshAgentTabs.add(id);
+										}
+									}
+									freshAgentTabs = new Set(freshAgentTabs);
+									refreshPendingReviewTabs(after);
+								})
+								.catch(() => {});
+						}
 					} else if (event === 'assistant_text') {
 						agentHistory.update((h) => {
 							const last = h[h.length - 1];
@@ -875,6 +927,27 @@
 	 * The server replays the accepted operations against the current live
 	 * doc, then drops the accepted cards.
 	 */
+	function buildStaleAcceptFollowup(
+		tabId: string,
+		stale: MaterializedPendingReviewRound,
+		reason: string
+	): string {
+		const staleDiff = unifiedLineDiff(stale.beforeMd, stale.afterMd, 1);
+		return [
+			`The user clicked Accept on your previous edit to \`${tabId}\`, but it could not be applied because it became stale:`,
+			'',
+			`> ${reason}`,
+			'',
+			'Your previous proposal (for reference) was:',
+			'',
+			'```diff',
+			staleDiff,
+			'```',
+			'',
+			'The user still wants this change applied. Re-read the current state of the file with `read_doc` and propose a fresh edit that reflects whatever the document looks like now.'
+		].join('\n');
+	}
+
 	async function acceptAgentEdit(roundId?: string) {
 		const tabId = getCurrentActiveTab();
 		if (!tabId) return;
@@ -897,6 +970,32 @@
 				body: JSON.stringify({ action: 'accept_rounds', roundId })
 			});
 			const data = await res.json().catch(() => ({}));
+			if (res.status === 409 && data?.stale) {
+				// Stale: drop the conflicting round and re-queue the agent
+				// with context about what went wrong, so the user doesn't
+				// have to manually reject + retype their intent.
+				await remountActiveTabFromServer(tabId);
+				const staleRoundId: string | null = data.staleRoundId ?? roundId ?? null;
+				const reason: string = typeof data.error === 'string' && data.error
+					? data.error
+					: 'The proposal no longer fits the current text.';
+				const staleRound =
+					staleRoundId != null ? rounds.find((r) => r.id === staleRoundId) : rounds[0];
+				if (staleRoundId) {
+					await rejectAgentEdit(staleRoundId);
+				}
+				pushHistory({
+					type: 'notification',
+					timestamp: Date.now(),
+					text: `Proposal was stale (${reason}) — re-queuing the agent with the current text.`,
+					priority: 'medium'
+				});
+				if (staleRound) {
+					const followup = buildStaleAcceptFollowup(tabId, staleRound, reason);
+					setTimeout(() => void submit(followup), 50);
+				}
+				return;
+			}
 			if (!res.ok || !data?.ok || !Array.isArray(data.rounds)) {
 				throw new Error(data?.error || `HTTP ${res.status}`);
 			}
@@ -1784,7 +1883,10 @@
 	{/snippet}
 
 	{#snippet referencesPanelSnippet()}
-		<ReferencesPanel activeTabId={currentActiveTabId} />
+		<ReferencesPanel
+			activeTabId={currentActiveTabId}
+			onSubmit={(trigger) => void submit(trigger)}
+		/>
 	{/snippet}
 
 	{#snippet agentSettingsSnippet()}
@@ -1823,7 +1925,7 @@
 				onClose={closeTab}
 				onDelete={deleteTab}
 				onRename={renameTabAction}
-				pendingTabs={pendingReviewTabs}
+				pendingTabs={mergedPendingTabs}
 			/>
 			{#if docLoaded && activeTabFilePath}
 				<AgentDock
@@ -1880,6 +1982,8 @@
 		</aside>
 	</div>
 </div>
+
+<Dialog />
 
 <style>
 	/* ── Typography ──

@@ -16,7 +16,7 @@
  * the chosen `afterMd` into the live Y.Doc.
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
-import { dirname } from 'path';
+import { dirname, isAbsolute, relative } from 'path';
 import * as Y from 'yjs';
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -31,6 +31,10 @@ import {
 	reviewTextHash
 } from '$lib/review-rounds';
 import type { PendingReviewOperation, PendingReviewRound } from '$lib/types';
+import { isValidTabId, tabFile, WORKSPACE_ROOT } from './document-files';
+import { resolveWorkspacePath } from './workspace-path';
+import { getTabsState, setTabsState } from './runtime-state';
+import { writeTextAtomic } from './file-utils';
 
 function toolError(message: string): CallToolResult {
 	return {
@@ -191,6 +195,105 @@ function cryptoRandomId(): string {
 	return 'round-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
 }
 
+// ---- Auto-open-as-tab -----------------------------------------------------
+
+/** Convert a user-supplied `path` (absolute or relative) into a workspace-
+ * relative tabId, validating it and ensuring it doesn't escape the workspace
+ * root. Returns null if the path can't be made into a valid tabId. */
+function pathToTabId(path: string): string | null {
+	let candidate: string;
+	if (isAbsolute(path)) {
+		const rel = relative(WORKSPACE_ROOT, path);
+		if (!rel || rel.startsWith('..') || isAbsolute(rel)) return null;
+		candidate = rel;
+	} else {
+		candidate = path;
+	}
+	if (!isValidTabId(candidate)) return null;
+	return candidate;
+}
+
+type EnsureTabResult =
+	| { ok: true; tabId: string; existedOnDisk: boolean }
+	| { ok: false; error: CallToolResult };
+
+/** Resolve `path` to a tab and ensure it's open. Three outcomes:
+ *
+ *  - Already an open tab → return it.
+ *  - Not open, valid workspace path → open as a new tab. If the file
+ *    doesn't exist and `createIfMissing` is true, create an empty file
+ *    first. If `createIfMissing` is false and the file is absent, return
+ *    an error.
+ *  - Invalid path / escapes sandbox / unsupported shape → error.
+ */
+function ensureWorkspaceTabOpen(
+	path: string,
+	opts: { createIfMissing: boolean }
+): EnsureTabResult {
+	const existingTabId = resolveTabFromPath(path);
+	if (existingTabId && isOpenTab(existingTabId)) {
+		return {
+			ok: true,
+			tabId: existingTabId,
+			existedOnDisk: existsSync(tabFile(existingTabId))
+		};
+	}
+
+	const tabId = pathToTabId(path);
+	if (!tabId) {
+		return {
+			ok: false,
+			error: toolError(
+				`${path} is not a valid workspace-relative path. Use a path inside the workspace (e.g. "drafts/chapter-1.md") or under .docwriter/agent/scratch/.`
+			)
+		};
+	}
+
+	let absPath: string;
+	try {
+		absPath = resolveWorkspacePath(tabId);
+	} catch (err) {
+		return {
+			ok: false,
+			error: toolError(`${path} cannot be opened: ${(err as Error).message}`)
+		};
+	}
+
+	const fileExists = existsSync(absPath);
+	if (!fileExists && !opts.createIfMissing) {
+		return {
+			ok: false,
+			error: toolError(
+				`${path} does not exist. Use write_doc to create new files, or pick an existing file.`
+			)
+		};
+	}
+	if (!fileExists) {
+		try {
+			mkdirSync(dirname(absPath), { recursive: true });
+			writeTextAtomic(absPath, '');
+		} catch (err) {
+			return {
+				ok: false,
+				error: toolError(`Failed to create ${path}: ${(err as Error).message}`)
+			};
+		}
+	}
+
+	const state = getTabsState();
+	if (!state.order.includes(tabId)) {
+		state.order.push(tabId);
+		// Deliberately do NOT set `state.active = tabId`. The user may be
+		// mid-sentence on another tab; silently yanking focus to a tab the
+		// agent just created is disorienting. The new tab shows up in the
+		// bar with a pulsing dot (driven by `freshAgentTabs` on the client)
+		// and the user opens it when they're ready.
+		setTabsState(state);
+	}
+
+	return { ok: true, tabId, existedOnDisk: fileExists };
+}
+
 // ---- Scratch-path helpers -------------------------------------------------
 
 function readScratch(path: string): CallToolResult {
@@ -212,7 +315,12 @@ function writeScratch(path: string, content: string): CallToolResult {
 	}
 }
 
-function editScratch(path: string, oldString: string, newString: string): CallToolResult {
+function editScratch(
+	path: string,
+	oldString: string,
+	newString: string,
+	replaceAll: boolean
+): CallToolResult {
 	if (!existsSync(path)) return toolError(`File not found: ${path}.`);
 	let current: string;
 	try {
@@ -226,62 +334,82 @@ function editScratch(path: string, oldString: string, newString: string): CallTo
 			`old_string not found in ${path}. The file may have been edited since your last read — re-read it and retry.`
 		);
 	}
-	if (hits > 1) {
+	if (hits > 1 && !replaceAll) {
 		return toolError(
-			`old_string matches ${hits} locations in ${path}. Make it more specific (add surrounding context) so it matches exactly one place.`
+			`old_string matches ${hits} locations in ${path}. Make it more specific (add surrounding context), or pass replace_all: true to replace every occurrence.`
 		);
 	}
-	const next = current.replace(oldString, newString);
+	const next = replaceAll
+		? current.split(oldString).join(newString)
+		: current.replace(oldString, newString);
 	try {
 		writeFileSync(path, next, 'utf8');
 	} catch (err) {
 		return toolError(`Failed to write ${path}: ${(err as Error).message}`);
 	}
-	return toolText(`Edit applied to ${path}.`);
+	return toolText(
+		replaceAll
+			? `Edit applied to ${path} (replaced ${hits} occurrence${hits === 1 ? '' : 's'}).`
+			: `Edit applied to ${path}.`
+	);
 }
 
 // ---- Tool definitions -----------------------------------------------------
 
 const editDocTool = tool(
 	'edit_doc',
-	'Replace `old_string` with `new_string` in the given file. For an open tab, this creates or updates a pending review proposal; the live document changes only after the user accepts it. For a file under `.docwriter/agent/scratch/` it writes plain text. Fails if `old_string` is not found or matches more than once.',
+	'Replace `old_string` with `new_string` in the given file. For an open tab, this creates or updates a pending review proposal; the live document changes only after the user accepts it. For a file under `.docwriter/agent/scratch/` it writes plain text. By default `old_string` must match exactly once; pass `replace_all: true` to replace every occurrence as a single proposal.',
 	{
 		path: z
 			.string()
 			.describe(
 				'Either the workspace-relative tab id (e.g. "drafts/chapter-1.md"), the absolute path to the tab file, or an absolute path inside .docwriter/agent/scratch/.'
 			),
-		old_string: z.string().describe('Exact substring to replace. Must appear exactly once.'),
-		new_string: z.string().describe('The replacement string. Can be empty to delete.')
+		old_string: z
+			.string()
+			.describe(
+				'Exact substring to replace. Must appear exactly once unless replace_all is true.'
+			),
+		new_string: z.string().describe('The replacement string. Can be empty to delete.'),
+		replace_all: z
+			.boolean()
+			.optional()
+			.describe(
+				'When true, replace every occurrence of old_string in a single proposal (useful for renames or consistent term updates). Default false.'
+			)
 	},
-	async ({ path, old_string, new_string }) => {
-		if (isScratchPath(path)) return editScratch(path, old_string, new_string);
+	async ({ path, old_string, new_string, replace_all }) => {
+		const replaceAll = replace_all === true;
+		if (isScratchPath(path)) return editScratch(path, old_string, new_string, replaceAll);
 
-		const tabId = resolveTabFromPath(path);
-		if (!tabId || !isOpenTab(tabId)) {
-			return toolError(
-				`${path} is not an open tab or a scratch path. Ask the user to open the file, or write to a path under .docwriter/agent/scratch/.`
-			);
-		}
+		const opened = ensureWorkspaceTabOpen(path, { createIfMissing: false });
+		if (!opened.ok) return opened.error;
+		const tabId = opened.tabId;
 
 		let failure: string | null = null;
+		let appliedHits = 0;
 		const result = await runTabWrite(tabId, 'agent_edit_doc', (currentMd) => {
 			const hits = countOccurrences(currentMd, old_string);
 			if (hits === 0) {
 				failure = `old_string not found in ${path}. The user may have edited this area — read_doc to see the current state and retry.`;
 				return null;
 			}
-			if (hits > 1) {
-				failure = `old_string matches ${hits} locations in ${path}. Make it more specific (add surrounding context).`;
+			if (hits > 1 && !replaceAll) {
+				failure = `old_string matches ${hits} locations in ${path}. Make it more specific (add surrounding context), or pass replace_all: true to replace every occurrence.`;
 				return null;
 			}
+			appliedHits = hits;
+			const afterMd = replaceAll
+				? currentMd.split(old_string).join(new_string)
+				: currentMd.replace(old_string, new_string);
 			return {
 				operation: {
 					type: 'edit',
 					oldString: old_string,
-					newString: new_string
+					newString: new_string,
+					...(replaceAll ? { replaceAll: true } : {})
 				},
-				afterMd: currentMd.replace(old_string, new_string)
+				afterMd
 			};
 		});
 		if (failure) return toolError(failure);
@@ -292,7 +420,11 @@ const editDocTool = tool(
 			}
 			return toolError(`edit_doc failed for ${path}: ${result.error}`);
 		}
-		return toolText(`Edit applied to ${path}.`);
+		return toolText(
+			replaceAll
+				? `Edit applied to ${path} (replaced ${appliedHits} occurrence${appliedHits === 1 ? '' : 's'}).`
+				: `Edit applied to ${path}.`
+		);
 	}
 );
 
@@ -337,33 +469,34 @@ const readDocTool = tool(
 
 const writeDocTool = tool(
 	'write_doc',
-	'Replace the entire content of an open tab or a scratch file. For tabs, this creates a pending review proposal without mutating the committed live document until Accept. write_doc does NOT create new tabs — the target must already be open.',
+	'Replace the full content of a workspace file or scratch file. For a path that already exists on disk (whether the tab is open or not), this creates a pending review proposal; the committed document only changes on Accept. For a path that does NOT exist, write_doc creates the file with the given content and opens it as a new tab — no review round is needed because there is nothing to compare against. For scratch paths (under .docwriter/agent/scratch/), it just writes the file directly.',
 	{
 		path: z
 			.string()
 			.describe(
-				'Workspace-relative tab id, absolute path to an open tab file, or absolute path inside .docwriter/agent/scratch/.'
+				'Workspace-relative path (e.g. "drafts/chapter-2.md"), an absolute path inside the workspace, or an absolute path under .docwriter/agent/scratch/. If the file does not exist, write_doc creates it and opens it as a new tab.'
 			),
 		content: z.string().describe('The new full content of the file.')
 	},
 	async ({ path, content }) => {
 		if (isScratchPath(path)) return writeScratch(path, content);
 
-		const tabId = resolveTabFromPath(path);
-		if (!tabId || !isOpenTab(tabId)) {
-			return toolError(
-				`${path} is not an open tab or a scratch path. write_doc does not create new tabs — ask the user to open the file first.`
-			);
-		}
+		const opened = ensureWorkspaceTabOpen(path, { createIfMissing: true });
+		if (!opened.ok) return opened.error;
 
-		const result = await runTabWrite(tabId, 'agent_write_doc', () => ({
+		// Route every write — including brand-new files — through the review
+		// flow so the user sees a pending proposal they can accept or reject.
+		// For a new file the baseline is empty and `afterMd` is the full content,
+		// which renders as an "everything added" diff.
+		const result = await runTabWrite(opened.tabId, 'agent_write_doc', () => ({
 			operation: { type: 'write', content },
 			afterMd: content
 		}));
 		if ('error' in result) {
 			return toolError(`write_doc failed for ${path}: ${result.error}`);
 		}
-		return toolText(`Wrote ${content.length} chars to ${path}.`);
+		const verb = opened.existedOnDisk ? 'Wrote' : 'Created';
+		return toolText(`${verb} ${content.length} chars to ${path}.`);
 	}
 );
 

@@ -85,6 +85,21 @@ function handleInstanceMismatch(): void {
 	if (typeof window === 'undefined') return;
 	if (instanceMismatchHandled) return;
 	instanceMismatchHandled = true;
+	// Destroy every provider FIRST so none of them can auto-reconnect
+	// with a now-empty token in the microsecond window before reload
+	// navigates away. Without this, Hocuspocus will accept the empty
+	// token on reconnect (first-load exemption) and the browser's
+	// stale in-memory Y.Doc syncs up into the new server's workspace —
+	// producing orphan files like a previous session's tab materializing
+	// in a brand-new workspace directory.
+	for (const [id, entry] of Array.from(registry)) {
+		if (entry.wsProvider) {
+			try { entry.wsProvider.destroy(); } catch {}
+		}
+		try { entry.ydoc.destroy(); } catch {}
+		registry.delete(id);
+	}
+	currentTabId = null;
 	sessionStorage.removeItem(SERVER_INSTANCE_STORAGE_KEY);
 	window.location.reload();
 }
