@@ -23,14 +23,25 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import type { Document } from '@hocuspocus/server';
 
-import { serializeYDoc, getReviewArray, readReviewRounds, AGENT_ORIGIN } from '$lib/shared/ydoc-codec';
+import {
+	serializeYDoc,
+	getReviewArray,
+	readReviewRounds,
+	getCommentsMap,
+	AGENT_ORIGIN
+} from '$lib/shared/ydoc-codec';
 import { isScratchPath, resolveTabFromPath, isOpenTab } from './path-router';
 import { classifyRoundKind } from '$lib/review-diff';
 import {
 	materializePendingReviewText,
 	reviewTextHash
 } from '$lib/review-rounds';
-import type { PendingReviewOperation, PendingReviewRound } from '$lib/types';
+import type {
+	CommentMessage,
+	CommentThread,
+	PendingReviewOperation,
+	PendingReviewRound
+} from '$lib/types';
 import { isValidTabId, tabFile, WORKSPACE_ROOT } from './document-files';
 import { resolveWorkspacePath } from './workspace-path';
 import { getTabsState, setTabsState } from './runtime-state';
@@ -500,13 +511,163 @@ const writeDocTool = tool(
 	}
 );
 
+// ---- post_comment -------------------------------------------------------
+
+/** Write a comment thread (new or reply) onto a tab's Y.Map('comments').
+ * Runs inside a DirectConnection transaction so the update streams to all
+ * connected browsers via Hocuspocus and persists through `yjs_updates`. */
+async function runCommentWrite(
+	tabId: string,
+	mutator: (doc: Y.Doc) => { ok: true } | { ok: false; error: string }
+): Promise<{ ok: true } | { ok: false; error: string }> {
+	const ws = getHocuspocus();
+	if (!ws) return { ok: false, error: 'WebSocket server not initialized — Y.Doc sync is offline.' };
+	const direct = await ws.openDirectConnection(tabId);
+	let result: { ok: true } | { ok: false; error: string } = {
+		ok: false,
+		error: 'DirectConnection.transact returned with no result'
+	};
+	try {
+		await direct.transact((document) => {
+			const doc = document as unknown as Y.Doc;
+			const outcome = mutator(doc);
+			result = outcome;
+		});
+	} finally {
+		await direct.disconnect();
+	}
+	return result;
+}
+
+const postCommentTool = tool(
+	'post_comment',
+	'Post a comment on a tab file — either opening a NEW thread anchored to a passage, or REPLYING to an existing thread. Use this instead of `edit_doc` when the user\'s feedback is open-ended, exploratory, or unsure ("what do you think", "idk", "is this right?", "maybe X?"), or when they ask a question that doesn\'t demand an immediate edit. Say what you think, optionally sketch an edit in `proposed_edit` (the user can approve it to apply later). For new threads, `anchor_text` must match exactly once in the current live markdown; reply with `thread_id` when continuing a conversation.',
+	{
+		path: z
+			.string()
+			.describe(
+				'Workspace-relative path (e.g. "drafts/chapter-1.md") or absolute path inside the workspace. Must be an existing file — comments can only be attached to a tab the user can open.'
+			),
+		thread_id: z
+			.string()
+			.optional()
+			.describe(
+				'When replying to an existing thread, pass its id (from the "Open comment threads" prompt block). Omit when opening a new thread.'
+			),
+		anchor_text: z
+			.string()
+			.optional()
+			.describe(
+				'Required when opening a new thread: the exact substring of the current live markdown the thread should anchor to. Must match once; pick a substring that identifies the passage uniquely. Ignored when `thread_id` is set.'
+			),
+		message: z
+			.string()
+			.describe(
+				'Your comment. Speak in first person ("I\'d cut …", "I think …"), not as a narrator. Keep it shorter than an essay — a few sentences.'
+			),
+		proposed_edit: z
+			.object({
+				old_string: z.string(),
+				new_string: z.string()
+			})
+			.optional()
+			.describe(
+				'Optional concrete edit you would propose if the user approves. `old_string` must match once in the current live markdown at the time of writing. The edit is NOT applied until the user clicks "Approve & propose edit" on your comment.'
+			)
+	},
+	async ({ path, thread_id, anchor_text, message, proposed_edit }) => {
+		if (isScratchPath(path)) {
+			return toolError(
+				'post_comment cannot be used on scratch paths — only on workspace tab files.'
+			);
+		}
+		const opened = ensureWorkspaceTabOpen(path, { createIfMissing: false });
+		if (!opened.ok) return opened.error;
+
+		const trimmedMessage = message.trim();
+		if (!trimmedMessage) return toolError('post_comment requires a non-empty message.');
+
+		const outcome = await runCommentWrite(opened.tabId, (doc) => {
+			const commentsMap = getCommentsMap(doc);
+			const now = Date.now();
+			const newMessage: CommentMessage = {
+				id: 'msg_' + cryptoRandomId(),
+				author: 'agent',
+				text: trimmedMessage,
+				timestamp: now,
+				...(proposed_edit
+					? {
+							proposedEdit: {
+								oldString: proposed_edit.old_string,
+								newString: proposed_edit.new_string
+							}
+						}
+					: {})
+			};
+
+			if (thread_id) {
+				const existing = commentsMap.get(thread_id);
+				if (!existing) {
+					return { ok: false, error: `Thread "${thread_id}" does not exist on ${path}.` };
+				}
+				const updated: CommentThread = {
+					...existing,
+					// Re-opening via a new reply un-resolves the thread so
+					// the user sees the new message.
+					resolved: false,
+					messages: [...existing.messages, newMessage]
+				};
+				doc.transact(() => commentsMap.set(thread_id, updated), AGENT_ORIGIN);
+				return { ok: true };
+			}
+
+			if (!anchor_text) {
+				return {
+					ok: false,
+					error: 'Opening a new thread requires `anchor_text` — the passage to anchor to.'
+				};
+			}
+			const liveText = serializeYDoc(doc);
+			const matches = countOccurrences(liveText, anchor_text);
+			if (matches === 0) {
+				return {
+					ok: false,
+					error: `anchor_text was not found in ${path}. It must be a verbatim substring of the current live content.`
+				};
+			}
+			const occurrenceIndex = 0; // anchor to first match; matches > 1 is fine — stable index.
+			const threadId = 'thread_' + cryptoRandomId();
+			const thread: CommentThread = {
+				id: threadId,
+				anchor: {
+					quote: anchor_text,
+					occurrenceIndex
+				},
+				messages: [newMessage],
+				resolved: false,
+				createdAt: now
+			};
+			doc.transact(() => commentsMap.set(threadId, thread), AGENT_ORIGIN);
+			return { ok: true };
+		});
+
+		if (!outcome.ok) return toolError(outcome.error);
+		return toolText(
+			thread_id
+				? `Replied on thread ${thread_id} (${path}).`
+				: `Opened a new thread on ${path}.`
+		);
+	}
+);
+
 export const docToolsMcp = createSdkMcpServer({
 	name: 'docwriter-doc',
 	version: '0.0.1',
-	tools: [editDocTool, readDocTool, writeDocTool]
+	tools: [editDocTool, readDocTool, writeDocTool, postCommentTool]
 });
 
 /** SDK-namespaced tool names (what appears in stream events). */
 export const EDIT_DOC_TOOL_NAME = 'mcp__docwriter-doc__edit_doc';
 export const READ_DOC_TOOL_NAME = 'mcp__docwriter-doc__read_doc';
 export const WRITE_DOC_TOOL_NAME = 'mcp__docwriter-doc__write_doc';
+export const POST_COMMENT_TOOL_NAME = 'mcp__docwriter-doc__post_comment';

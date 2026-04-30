@@ -6,7 +6,8 @@ import type {
 	HistoryEntry,
 	AgentSettings,
 	ProposedRule,
-	ProposedHook
+	ProposedHook,
+	CommentThread
 } from './types';
 import type { MaterializedPendingReviewRound } from './review-rounds';
 
@@ -25,6 +26,16 @@ export const reviewBaseline = writable<string | null>(null);
  * removes just that round; rejecting a round rewinds to its beforeMd
  * (also dropping all later rounds). */
 export const pendingReviewRounds = writable<MaterializedPendingReviewRound[]>([]);
+
+/** Comment threads for the ACTIVE tab, sorted by createdAt. Threaded
+ * Google-Docs-style comments. Each thread is anchored to a passage via
+ * a stored `quote`; the editor's comment-overlay plugin renders an
+ * inline underline + a gutter comment button per unresolved thread. */
+export const commentThreads = writable<CommentThread[]>([]);
+
+/** Which thread id (if any) is currently open in the popover. Null when
+ * the popover is closed. */
+export const openCommentThreadId = writable<string | null>(null);
 
 /** Writing rules (mirror of document.meta.json rules). */
 export const rules = writable<Rule[]>([]);

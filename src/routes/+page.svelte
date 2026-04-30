@@ -29,11 +29,19 @@
 	 * prompt the agent actually receives, not a vague "Submitted". */
 	function shortDescription(trigger: string | undefined): string {
 		if (!trigger) return 'Review documents & see if there’s anything to do';
-		// `The user flagged this passage as|with feedback "Too verbose"…` → `Feedback: Too verbose`
+		// `The user flagged this passage as|with feedback "…"` — show the
+		// feedback text itself, quoted (U+201C/U+201D), and ellipsized when
+		// long. The HistoryPane italicizes descriptions that start with the
+		// curly-open-quote so user-voiced turns read as the user's words,
+		// not a framework label.
 		const feedbackMatch = trigger.match(
 			/^The user flagged this passage (?:as|with feedback) "([^"]+)"/
 		);
-		if (feedbackMatch) return `Feedback: ${feedbackMatch[1]}`;
+		if (feedbackMatch) {
+			const text = feedbackMatch[1];
+			const truncated = text.length > 80 ? text.slice(0, 77) + '…' : text;
+			return `“${truncated}”`;
+		}
 		// Apply-rules trigger: "Review the open files against the following rules…"
 		if (/^Review the open files? against the following rules/.test(trigger)) {
 			return 'Apply rules';
@@ -59,6 +67,7 @@
 		getYDocForTab,
 		getReviewArray,
 		getReviewArrayForTab,
+		getCommentsMapForTab,
 		whenYDocReady,
 		setCurrentTab,
 		destroyTab,
@@ -92,10 +101,12 @@
 		recentActions,
 		addRoundCost,
 		resetSessionCost,
-		actionUsageCounts
+		actionUsageCounts,
+		commentThreads,
+		openCommentThreadId
 	} from '$lib/stores';
 	import TabBar from '$lib/components/TabBar.svelte';
-	import type { AgentSettings, HistoryEntry, PendingReviewRound } from '$lib/types';
+	import type { AgentSettings, CommentThread, HistoryEntry, PendingReviewRound } from '$lib/types';
 	import type { MaterializedPendingReviewRound } from '$lib/review-rounds';
 
 	type EditorRef = {
@@ -233,6 +244,19 @@
 		fragment: Y.XmlFragment;
 		handler: () => void;
 	} | null = null;
+	let activeCommentsObserver: {
+		tabId: string;
+		map: Y.Map<CommentThread>;
+		handler: () => void;
+	} | null = null;
+
+	function syncActiveCommentThreads(tabId: string) {
+		if (tabId !== getCurrentActiveTab()) return;
+		const list: CommentThread[] = [];
+		getCommentsMapForTab(tabId).forEach((thread) => list.push(thread));
+		list.sort((a, b) => a.createdAt - b.createdAt);
+		commentThreads.set(list);
+	}
 
 	async function remountActiveTabFromServer(tabId: string) {
 		if (tabId !== getCurrentActiveTab()) return;
@@ -247,6 +271,12 @@
 		if (activeReviewObserver?.tabId === tabId) {
 			activeReviewObserver.arr.unobserve(activeReviewObserver.handler);
 			activeReviewObserver = null;
+		}
+		if (activeCommentsObserver?.tabId === tabId) {
+			activeCommentsObserver.map.unobserve(activeCommentsObserver.handler);
+			activeCommentsObserver = null;
+			commentThreads.set([]);
+			openCommentThreadId.set(null);
 		}
 		if (activeReviewTextObserver?.tabId === tabId) {
 			activeReviewTextObserver.fragment.unobserve(activeReviewTextObserver.handler);
@@ -282,6 +312,12 @@
 		};
 		fragment.observe(textHandler);
 		activeReviewTextObserver = { tabId, fragment, handler: textHandler };
+
+		const commentsMap = getCommentsMapForTab(tabId);
+		const commentsHandler = () => syncActiveCommentThreads(tabId);
+		commentsMap.observe(commentsHandler);
+		activeCommentsObserver = { tabId, map: commentsMap, handler: commentsHandler };
+		syncActiveCommentThreads(tabId);
 	}
 
 	/** Switch the editor to a different tab. Tears down the editor, sets

@@ -1,0 +1,175 @@
+import { error, json } from '@sveltejs/kit';
+import type { RequestHandler } from './$types';
+import * as Y from 'yjs';
+import type { Document } from '@hocuspocus/server';
+import {
+	getCommentsMap,
+	serializeYDoc,
+	USER_ORIGIN
+} from '$lib/shared/ydoc-codec';
+import { isValidTabId } from '$lib/server/document-files';
+import type { CommentMessage, CommentThread } from '$lib/types';
+
+/** Resolve the live Hocuspocus server (stashed on globalThis by
+ * ws-server.ts) so we can mutate a tab's Y.Doc via DirectConnection. */
+function getHocuspocus(): {
+	openDirectConnection: (name: string) => Promise<{
+		transact: (cb: (doc: Document) => void | Promise<void>) => Promise<void>;
+		disconnect: () => Promise<void>;
+	}>;
+} | null {
+	const holder = globalThis as unknown as { __docwriterWsServer?: unknown };
+	const server = holder.__docwriterWsServer as
+		| { hocuspocus?: unknown }
+		| undefined;
+	return (server?.hocuspocus as ReturnType<typeof getHocuspocus>) ?? null;
+}
+
+async function mutateTabYDoc(
+	tabId: string,
+	mutator: (doc: Y.Doc) => { ok: true } | { ok: false; error: string; status?: number }
+): Promise<{ ok: true } | { ok: false; error: string; status: number }> {
+	const ws = getHocuspocus();
+	if (!ws) return { ok: false, error: 'WebSocket server not initialized', status: 503 };
+	const direct = await ws.openDirectConnection(tabId);
+	let out: { ok: true } | { ok: false; error: string; status: number } = {
+		ok: false,
+		error: 'DirectConnection transact did not run',
+		status: 500
+	};
+	try {
+		await direct.transact((document) => {
+			const doc = document as unknown as Y.Doc;
+			const outcome = mutator(doc);
+			out = outcome.ok ? { ok: true } : { ok: false, error: outcome.error, status: outcome.status ?? 400 };
+		});
+	} finally {
+		await direct.disconnect();
+	}
+	return out;
+}
+
+function cryptoRandomId(): string {
+	const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+	if (c?.randomUUID) return c.randomUUID();
+	return 'id-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+}
+
+function countOccurrences(haystack: string, needle: string): number {
+	if (!needle) return 0;
+	let count = 0;
+	let idx = 0;
+	while ((idx = haystack.indexOf(needle, idx)) !== -1) {
+		count += 1;
+		idx += needle.length;
+	}
+	return count;
+}
+
+export const POST: RequestHandler = async ({ request }) => {
+	const body = await request.json();
+	const tabId = typeof body?.tabId === 'string' ? body.tabId : '';
+	if (!isValidTabId(tabId)) throw error(400, 'Invalid tab id');
+
+	if (body?.mode === 'new-thread') {
+		const anchorText = typeof body.anchorText === 'string' ? body.anchorText : '';
+		const messageText = typeof body.message === 'string' ? body.message.trim() : '';
+		if (!anchorText) throw error(400, 'anchorText is required for a new thread');
+		if (!messageText) throw error(400, 'message is required');
+		const outcomeBox: { threadId?: string } = {};
+		const outcome = await mutateTabYDoc(tabId, (doc) => {
+			const liveText = serializeYDoc(doc);
+			if (countOccurrences(liveText, anchorText) === 0) {
+				return { ok: false, error: 'anchorText was not found in the document', status: 409 };
+			}
+			const threadId = 'thread_' + cryptoRandomId();
+			const now = Date.now();
+			const thread: CommentThread = {
+				id: threadId,
+				anchor: { quote: anchorText, occurrenceIndex: 0 },
+				messages: [
+					{
+						id: 'msg_' + cryptoRandomId(),
+						author: 'user',
+						text: messageText,
+						timestamp: now
+					}
+				],
+				resolved: false,
+				createdAt: now
+			};
+			const commentsMap = getCommentsMap(doc);
+			doc.transact(() => commentsMap.set(threadId, thread), USER_ORIGIN);
+			outcomeBox.threadId = threadId;
+			return { ok: true };
+		});
+		if (!outcome.ok) throw error(outcome.status, outcome.error);
+		return json({ threadId: outcomeBox.threadId });
+	}
+
+	if (body?.mode === 'reply') {
+		const threadId = typeof body.threadId === 'string' ? body.threadId : '';
+		const messageText = typeof body.message === 'string' ? body.message.trim() : '';
+		if (!threadId) throw error(400, 'threadId is required');
+		if (!messageText) throw error(400, 'message is required');
+		const outcome = await mutateTabYDoc(tabId, (doc) => {
+			const commentsMap = getCommentsMap(doc);
+			const existing = commentsMap.get(threadId);
+			if (!existing) return { ok: false, error: 'Thread not found', status: 404 };
+			const reply: CommentMessage = {
+				id: 'msg_' + cryptoRandomId(),
+				author: 'user',
+				text: messageText,
+				timestamp: Date.now()
+			};
+			const updated: CommentThread = {
+				...existing,
+				// User replying to a resolved thread re-opens it.
+				resolved: false,
+				messages: [...existing.messages, reply]
+			};
+			doc.transact(() => commentsMap.set(threadId, updated), USER_ORIGIN);
+			return { ok: true };
+		});
+		if (!outcome.ok) throw error(outcome.status, outcome.error);
+		return json({ ok: true });
+	}
+
+	throw error(400, 'Unknown comments mode');
+};
+
+export const PATCH: RequestHandler = async ({ request }) => {
+	const body = await request.json();
+	const tabId = typeof body?.tabId === 'string' ? body.tabId : '';
+	const threadId = typeof body?.threadId === 'string' ? body.threadId : '';
+	if (!isValidTabId(tabId)) throw error(400, 'Invalid tab id');
+	if (!threadId) throw error(400, 'threadId is required');
+	const resolved = body?.resolved === true;
+
+	const outcome = await mutateTabYDoc(tabId, (doc) => {
+		const commentsMap = getCommentsMap(doc);
+		const existing = commentsMap.get(threadId);
+		if (!existing) return { ok: false, error: 'Thread not found', status: 404 };
+		const updated: CommentThread = { ...existing, resolved };
+		doc.transact(() => commentsMap.set(threadId, updated), USER_ORIGIN);
+		return { ok: true };
+	});
+	if (!outcome.ok) throw error(outcome.status, outcome.error);
+	return json({ ok: true });
+};
+
+export const DELETE: RequestHandler = async ({ url }) => {
+	const tabId = url.searchParams.get('tabId') ?? '';
+	const threadId = url.searchParams.get('threadId') ?? '';
+	if (!isValidTabId(tabId)) throw error(400, 'Invalid tab id');
+	if (!threadId) throw error(400, 'threadId is required');
+
+	const outcome = await mutateTabYDoc(tabId, (doc) => {
+		const commentsMap = getCommentsMap(doc);
+		if (!commentsMap.has(threadId)) return { ok: false, error: 'Thread not found', status: 404 };
+		doc.transact(() => commentsMap.delete(threadId), USER_ORIGIN);
+		return { ok: true };
+	});
+	if (!outcome.ok) throw error(outcome.status, outcome.error);
+	return json({ ok: true });
+};

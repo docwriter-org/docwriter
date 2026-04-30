@@ -1,7 +1,7 @@
 import * as Y from 'yjs';
 import { HocuspocusProvider } from '@hocuspocus/provider';
-import { FRAGMENT_NAME, REVIEW_ARRAY_NAME } from '$lib/shared/ydoc-codec';
-import type { PendingReviewRound } from './types';
+import { COMMENTS_MAP_NAME, FRAGMENT_NAME, REVIEW_ARRAY_NAME } from '$lib/shared/ydoc-codec';
+import type { CommentThread, PendingReviewRound } from './types';
 
 /**
  * Per-tab Y.Doc registry. Each tab has its own Y.Doc bound to a
@@ -167,6 +167,11 @@ export function getReviewArray(): Y.Array<PendingReviewRound> {
 /** Review array for a specific tab without changing the current pointer. */
 export function getReviewArrayForTab(tabId: string): Y.Array<PendingReviewRound> {
 	return getYDocForTab(tabId).getArray<PendingReviewRound>(REVIEW_ARRAY_NAME);
+}
+
+/** Comment-thread map for a specific tab. Keyed by thread id. */
+export function getCommentsMapForTab(tabId: string): Y.Map<CommentThread> {
+	return getYDocForTab(tabId).getMap<CommentThread>(COMMENTS_MAP_NAME);
 }
 
 export function whenYDocReady(): Promise<void> {

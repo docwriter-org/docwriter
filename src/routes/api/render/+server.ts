@@ -21,7 +21,8 @@ import {
 import { getSessionId, setSessionId, getTabsState } from '$lib/server/runtime-state';
 import { readMeta } from '$lib/server/document-io';
 import { kvGet, kvSet } from '$lib/server/db-writes';
-import { serializeYDoc, readReviewRounds } from '$lib/shared/ydoc-codec';
+import { serializeYDoc, readReviewRounds, readCommentThreads } from '$lib/shared/ydoc-codec';
+import type { CommentThread } from '$lib/types';
 import { replayUpdatesInto } from '$lib/server/ydoc-persistence';
 import { registerPendingAskUser } from '$lib/server/ask-user-state';
 import { unifiedLineDiff } from '$lib/diff';
@@ -31,7 +32,8 @@ import {
 	docToolsMcp,
 	EDIT_DOC_TOOL_NAME,
 	READ_DOC_TOOL_NAME,
-	WRITE_DOC_TOOL_NAME
+	WRITE_DOC_TOOL_NAME,
+	POST_COMMENT_TOOL_NAME
 } from '$lib/server/mcp-doc-tools';
 
 /** Read the live authoritative markdown for a tab, including any pending
@@ -53,6 +55,26 @@ function readLiveTabMarkdown(tabId: string): string {
 	try {
 		replayUpdatesInto(ydoc, tabId);
 		return materializePendingReviewText(serializeYDoc(ydoc), readReviewRounds(ydoc));
+	} finally {
+		ydoc.destroy();
+	}
+}
+
+/** Snapshot of a tab's comment threads. Prefer the Hocuspocus in-memory
+ * Document; fall back to a throwaway doc hydrated from SQLite. */
+function readLiveTabCommentThreads(tabId: string): CommentThread[] {
+	const holder = globalThis as unknown as {
+		__docwriterWsServer?: {
+			hocuspocus?: { documents?: { get(name: string): unknown } };
+		};
+	};
+	const hp = holder.__docwriterWsServer?.hocuspocus;
+	const liveDoc = hp?.documents?.get(tabId) as Y.Doc | undefined;
+	if (liveDoc) return readCommentThreads(liveDoc);
+	const ydoc = new Y.Doc();
+	try {
+		replayUpdatesInto(ydoc, tabId);
+		return readCommentThreads(ydoc);
 	} finally {
 		ydoc.destroy();
 	}
@@ -214,6 +236,7 @@ interface TabPromptInfo {
 	tabId: string;
 	currentMd: string;
 	lastSeenMd: string | null;
+	commentThreads: CommentThread[];
 }
 
 interface QueryRoundOutcome {
@@ -246,6 +269,32 @@ Every file is treated as raw text — including \`.md\` / \`.markdown\`. The edi
 ## When to ask instead of edit
 
 If the request is genuinely ambiguous and has multiple reasonable directions (tone, structure, which of several things to fix first), call \`AskUserQuestion\` with 2–4 concrete options BEFORE editing. Use it sparingly — only when a judgment call would otherwise be a guess. Never use it for questions the user can already see the answer to in their own text.
+
+## When to comment instead of edit
+
+You have \`post_comment\` (\`mcp__docwriter-doc__post_comment\`). It opens a threaded comment on a passage of a tab file — similar to Google Docs comments. The user can reply, resolve the thread, or click "Approve & propose edit" on your comment to have you apply the change in a later turn.
+
+Use it WHEN:
+
+- The user's message is open-ended, questioning, or unsure — e.g. "idk what do you think about this opener?", "is this too long?", "does this land?", "any thoughts?", "maybe X?".
+- The right next step is *a discussion*, not a change. You want to share a perspective, ask the user a follow-up, or propose a direction before committing to an edit.
+- The user flagged a passage but didn't say what to do with it.
+
+Do NOT use it WHEN:
+
+- The user asked for a concrete change ("too verbose", "fix this typo", "rewrite for clarity"). Call \`edit_doc\` directly.
+- You're just narrating what you already edited. Review cards speak for themselves.
+
+Mode override: the user can attach an explicit routing hint to a feedback message — **[mode: auto|edit|discuss]**. When you see \`[mode: edit]\`, do NOT call \`post_comment\`; call \`edit_doc\`. When you see \`[mode: discuss]\`, do NOT call \`edit_doc\`; call \`post_comment\`. When you see \`[mode: auto]\` or no mode tag, use your judgment per the rules above.
+
+When commenting:
+
+- Speak in first person ("I'd cut the second clause …", "I think this works — the only snag is …"). Don't narrate as a third party.
+- Keep replies to a few sentences. The thread is for conversation, not essays.
+- If you want to sketch a concrete edit for the user to approve, pass \`proposed_edit\` — the UI turns it into an "Approve & propose edit" button.
+- When replying to an existing thread, always pass that thread's \`thread_id\`. Open thread transcripts are listed under each tab; don't open a new thread for a reply.
+
+When the same user message carries both a clear directive AND ambient uncertainty ("rewrite this — actually, idk, what do you think?"), lean toward commenting first and offering the edit in \`proposed_edit\`. Cheap to apply later, costly to rewrite past prose the user isn't sure they want rewritten.
 
 ## What you can read vs. what you can write
 
@@ -300,6 +349,30 @@ Do NOT propose a rule from a one-off message unless it is clearly phrased as a s
  * For tabs the agent needs the full content of but didn't inline, it can
  * call `read_doc(path)` — free in-process fetch against the live Y.Doc.
  */
+/** Render a tab's open comment threads as a prompt sub-block. Skips entirely
+ * when there are no unresolved threads, so tabs without any comments don't
+ * carry boilerplate. Resolved threads are omitted — they're out of the
+ * active conversation and including them would just bloat context. */
+function renderCommentThreadsBlock(threads: CommentThread[]): string {
+	const open = threads.filter((t) => !t.resolved);
+	if (open.length === 0) return '';
+	const lines: string[] = ['', '**Open comment threads:**'];
+	for (const thread of open) {
+		const quote = thread.anchor.quote.replace(/\n+/g, ' ').slice(0, 140);
+		lines.push(`- Thread \`${thread.id}\` on "${quote}${thread.anchor.quote.length > 140 ? '…' : ''}":`);
+		for (const m of thread.messages) {
+			const author = m.author === 'user' ? 'user' : 'you';
+			const body = m.text.replace(/\n+/g, ' ');
+			lines.push(`  - [${author}] ${body}`);
+		}
+	}
+	lines.push(
+		'',
+		'When a reply belongs on one of these threads, call `post_comment` with the matching `thread_id` (do not create a new thread for a reply).'
+	);
+	return '\n' + lines.join('\n');
+}
+
 function buildMultiTabPrompt(
 	activeTabId: string,
 	tabs: TabPromptInfo[],
@@ -311,7 +384,7 @@ function buildMultiTabPrompt(
 	const styleReferencesBlock = buildStyleReferencesPromptBlock();
 
 	const tabSections = tabs
-		.map(({ tabId, currentMd, lastSeenMd }) => {
+		.map(({ tabId, currentMd, lastSeenMd, commentThreads }) => {
 			const isActive = tabId === activeTabId;
 			const hasLastSeen = lastSeenMd !== null;
 			const hasDiff = hasLastSeen && lastSeenMd !== currentMd;
@@ -324,22 +397,23 @@ function buildMultiTabPrompt(
 			const star = isActive ? '⭐ ' : '';
 			const activeNote = isActive ? ' (active — the user is currently looking at this one)' : '';
 			const header = `### ${star}\`${tabId}\`${kindNote}${activeNote}\n\nPath (use as \`path\` argument to edit_doc / write_doc / read_doc): \`${tabId}\``;
+			const threadBlock = renderCommentThreadsBlock(commentThreads);
 
 			// Active tab or first-render tab: inline full content.
 			if (isActive || !hasLastSeen) {
 				const diffBlock = hasDiff
 					? `\n\n**User changes since your last edit:**\n\`\`\`diff\n${unifiedLineDiff(lastSeenMd as string, currentMd)}\n\`\`\``
 					: '';
-				return `${header}\n\n\`\`\`${fence}\n${currentMd}\n\`\`\`${diffBlock}`;
+				return `${header}\n\n\`\`\`${fence}\n${currentMd}\n\`\`\`${diffBlock}${threadBlock}`;
 			}
 
 			// Non-active tab WITH changes: path + diff only.
 			if (hasDiff) {
-				return `${header}\n\n**User changes since your last edit:**\n\`\`\`diff\n${unifiedLineDiff(lastSeenMd as string, currentMd)}\n\`\`\`\n\nFull content not inlined — call \`read_doc("${tabId}")\` if you need it.`;
+				return `${header}\n\n**User changes since your last edit:**\n\`\`\`diff\n${unifiedLineDiff(lastSeenMd as string, currentMd)}\n\`\`\`\n\nFull content not inlined — call \`read_doc("${tabId}")\` if you need it.${threadBlock}`;
 			}
 
 			// Non-active tab with no changes: path only.
-			return `${header}\n\nUnchanged since your last edit. Full content not inlined — call \`read_doc("${tabId}")\` if you need it.`;
+			return `${header}\n\nUnchanged since your last edit. Full content not inlined — call \`read_doc("${tabId}")\` if you need it.${threadBlock}`;
 		})
 		.join('\n\n');
 
@@ -600,7 +674,8 @@ export const POST: RequestHandler = async ({ request }) => {
 		const tabsForPrompt: TabPromptInfo[] = allTabIds.map((id) => ({
 			tabId: id,
 			currentMd: readLiveTabMarkdown(id),
-			lastSeenMd: kvGet(lastSeenKey(id))
+			lastSeenMd: kvGet(lastSeenKey(id)),
+			commentThreads: readLiveTabCommentThreads(id)
 		}));
 
 		const currentSessionId = getSessionId();
@@ -667,7 +742,8 @@ export const POST: RequestHandler = async ({ request }) => {
 							'Agent',
 							ASK_USER_TOOL_NAME,
 							EXIT_PLAN_MODE_TOOL_NAME,
-							READ_DOC_TOOL_NAME
+							READ_DOC_TOOL_NAME,
+							POST_COMMENT_TOOL_NAME
 						];
 						const fullAllowedTools = [
 							'Read',
@@ -683,7 +759,8 @@ export const POST: RequestHandler = async ({ request }) => {
 							EXIT_PLAN_MODE_TOOL_NAME,
 							EDIT_DOC_TOOL_NAME,
 							READ_DOC_TOOL_NAME,
-							WRITE_DOC_TOOL_NAME
+							WRITE_DOC_TOOL_NAME,
+							POST_COMMENT_TOOL_NAME
 						];
 						return {
 							allowedTools: warmup
@@ -991,7 +1068,8 @@ export const POST: RequestHandler = async ({ request }) => {
 							allTabIds.map((id) => ({
 								tabId: id,
 								currentMd: readLiveTabMarkdown(id),
-								lastSeenMd: kvGet(lastSeenKey(id))
+								lastSeenMd: kvGet(lastSeenKey(id)),
+								commentThreads: readLiveTabCommentThreads(id)
 							})),
 							[
 								'You just ended without proposing an edit, but the active tab still contains inline `[[ ... ]]` directives.',

@@ -4,6 +4,8 @@
 	import { TextSelection, type Transaction } from '@tiptap/pm/state';
 	import { ySyncPluginKey } from 'y-prosemirror';
 	import { DiffOverlay, setDiffState } from './diff-overlay';
+	import { CommentOverlay, setCommentOverlayState } from './comment-overlay';
+	import CommentGutter from '$lib/components/CommentGutter.svelte';
 	import { collaborativeExtensions } from '$lib/editor-extensions';
 	import { getYDoc, whenYDocReady, getCurrentTab, waitForCurrentTabSync } from '$lib/yjs-doc';
 	import {
@@ -16,9 +18,11 @@
 		pinnedActions,
 		recentActions,
 		trackActionUsage,
-		pendingReviewRounds
+		pendingReviewRounds,
+		commentThreads,
+		openCommentThreadId
 	} from '$lib/stores';
-	import type { Action, Annotation } from '$lib/types';
+	import type { Action, Annotation, CommentThread, FeedbackMode } from '$lib/types';
 
 	const IDLE_MS = 3_000;
 
@@ -51,6 +55,24 @@
 	let feedbackPopupEl: HTMLDivElement | null = $state(null);
 	let feedbackInputEl: HTMLDivElement | null = $state(null);
 	let feedbackInput = $state('');
+	/** Routing mode for the current feedback submission. `auto` lets the
+	 * agent decide comment vs. edit; `edit` forces an edit_doc call;
+	 * `discuss` forces a post_comment call. Resets to `auto` whenever the
+	 * popup closes so each feedback session starts fresh. */
+	let feedbackMode = $state<FeedbackMode>('auto');
+
+	// Comment thread state — mirrors the commentThreads store for local
+	// use in the overlay and the gutter component.
+	let threadsForTab: CommentThread[] = $state([]);
+	let openThreadId = $state<string | null>(null);
+	commentThreads.subscribe((v) => {
+		threadsForTab = v;
+		syncCommentOverlay();
+	});
+	openCommentThreadId.subscribe((v) => {
+		openThreadId = v;
+		syncCommentOverlay();
+	});
 	let recent: Action[] = $state([]);
 	recentActions.subscribe((v) => (recent = v));
 
@@ -170,6 +192,7 @@
 		feedbackInput = '';
 		feedbackSelectionRange = null;
 		shouldFocusFeedbackInput = false;
+		feedbackMode = 'auto';
 		updateDiff();
 	}
 
@@ -180,22 +203,86 @@
 		closeFeedbackPopup();
 	}
 
-	function sendFeedback(action: Action) {
+	/** Format the trigger string for a feedback submission. The `[mode: …]`
+	 * tag is parsed by the agent prompt to force commenting vs. editing
+	 * (or leave it to auto-routing). The verb ("Rewrite", "Discuss",
+	 * "Consider") also nudges the agent even if it missed the tag.
+	 * When a thread was pre-opened for the feedback (Auto/Discuss modes),
+	 * include its id so the agent replies on that thread rather than
+	 * opening a duplicate one. */
+	function buildFeedbackTrigger(
+		label: string,
+		passage: string,
+		isCustom: boolean,
+		threadId: string | null
+	): string {
+		const mode = feedbackMode;
+		const verb = mode === 'discuss' ? 'Discuss' : mode === 'edit' ? 'Rewrite' : 'Address';
+		const tag = `[mode: ${mode}]`;
+		const prefix = isCustom
+			? `The user flagged this passage with feedback "${label}"`
+			: `The user flagged this passage as "${label}"`;
+		const threadHint = threadId
+			? ` A thread is already open for this feedback (thread_id="${threadId}"). If you comment, use post_comment with that thread_id — do not open a new thread.`
+			: '';
+		return `${prefix}. ${tag} ${verb} it: "${passage}"${threadHint}`;
+	}
+
+	/** Pre-open a comment thread with the user's feedback as the first
+	 * message, so the transcript in the agent prompt starts from the
+	 * user's voice. Returns the new thread id, or null on failure or when
+	 * the mode is `edit` (no thread wanted in that case). */
+	async function maybeOpenThreadForFeedback(
+		feedback: string,
+		passage: string
+	): Promise<string | null> {
+		if (feedbackMode === 'edit') return null;
+		const tabId = getCurrentTab();
+		if (!tabId) return null;
+		try {
+			const res = await fetch('/api/comments', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					mode: 'new-thread',
+					tabId,
+					anchorText: passage,
+					message: feedback
+				})
+			});
+			if (!res.ok) return null;
+			const data = await res.json();
+			return typeof data?.threadId === 'string' ? data.threadId : null;
+		} catch (e) {
+			console.error('Failed to pre-open thread for feedback:', e);
+			return null;
+		}
+	}
+
+	async function sendFeedback(action: Action) {
 		if (!feedbackPopup) return;
 		const text = feedbackPopup.text;
+		const modeSnapshot = feedbackMode;
 		addFeedbackAnnotation(action.label, text);
 		trackActionUsage(action.label);
 		if (!action.pinned) {
 			recentActions.update((prev) => [action, ...prev.filter((x) => x.id !== action.id)].slice(0, 6));
 		}
 		closeFeedbackPopup();
-		if (onSubmit) onSubmit(`The user flagged this passage as "${action.label}". Rewrite it to address that: "${text}"`);
+		// Restore the mode for the pre-open call — closeFeedbackPopup reset
+		// it to `auto`, but we want to honor what the user picked.
+		feedbackMode = modeSnapshot;
+		const threadId = await maybeOpenThreadForFeedback(action.label, text);
+		const trigger = buildFeedbackTrigger(action.label, text, false, threadId);
+		feedbackMode = 'auto';
+		if (onSubmit) onSubmit(trigger);
 	}
 
-	function sendCustomFeedback() {
+	async function sendCustomFeedback() {
 		if (!feedbackPopup || !feedbackInput.trim()) return;
 		const text = feedbackPopup.text;
 		const fb = feedbackInput.trim();
+		const modeSnapshot = feedbackMode;
 		addFeedbackAnnotation(fb, text);
 		// Preserve the full label — CSS truncates long text with an ellipsis
 		// inside the button, and `title={label}` lets the user see the whole
@@ -210,7 +297,11 @@
 		trackActionUsage(customAction.label);
 		recentActions.update((prev) => [customAction, ...prev.filter((x) => x.label !== customAction.label)].slice(0, 6));
 		closeFeedbackPopup();
-		if (onSubmit) onSubmit(`The user flagged this passage with feedback "${fb}". Rewrite it to address that: "${text}"`);
+		feedbackMode = modeSnapshot;
+		const threadId = await maybeOpenThreadForFeedback(fb, text);
+		const trigger = buildFeedbackTrigger(fb, text, true, threadId);
+		feedbackMode = 'auto';
+		if (onSubmit) onSubmit(trigger);
 	}
 
 	function addFeedbackAnnotation(comment: string, excerpt: string) {
@@ -348,6 +439,14 @@
 	 * `$state` so the `.feedback-active` class on the wrapper reacts. */
 	let feedbackSelectionRange: { from: number; to: number } | null = $state(null);
 
+	function syncCommentOverlay() {
+		if (!editor) return;
+		setCommentOverlayState(editor, {
+			threads: threadsForTab,
+			openThreadId
+		});
+	}
+
 	function updateDiff() {
 		if (!editor) return;
 		setDiffState(editor, {
@@ -417,7 +516,13 @@
 		schedulePlainLineSync();
 		const kind = classifyUpdate(transaction);
 		if (kind === 'yjs-remote') return;
-		if (kind === 'user-edit') restartIdleCountdown();
+		if (kind === 'user-edit') {
+			restartIdleCountdown();
+			// A user edit means they're writing, not reading comments. Collapse
+			// any expanded thread so the margin card doesn't stay in their
+			// peripheral vision. They can re-open via the pill or gutter card.
+			if (openThreadId) openCommentThreadId.set(null);
+		}
 	}
 
 	onMount(async () => {
@@ -432,7 +537,8 @@
 			element,
 			extensions: [
 				...collaborativeExtensions(ydoc, { placeholder: 'Start writing...' }),
-				DiffOverlay
+				DiffOverlay,
+				CommentOverlay
 			],
 			// Collaboration provides initial content from the Y.Doc; do NOT
 			// pass a string `content` here (doing so would wipe the Y.Doc).
@@ -473,6 +579,36 @@
 		editorRoot.addEventListener('pointerdown', handlePointerDown);
 		window.addEventListener('pointerup', handlePointerUp);
 
+		// Comment thread decorations dispatch this event when the user
+		// clicks an inline highlight or the gutter pill. With cards in
+		// the right-side comment gutter we just set the store — the
+		// CommentGutter component expands the matching card in place.
+		const handleOpenThread = (ev: Event) => {
+			const { threadId } = (ev as CustomEvent).detail as { threadId: string };
+			openCommentThreadId.set(threadId);
+		};
+		editorRoot.addEventListener('docwriter:open-thread', handleOpenThread as EventListener);
+
+		// Mousedown anywhere outside a gutter card collapses the open
+		// thread. Pill clicks stop propagation on mousedown, so window
+		// won't see those; inline-highlight clicks fire handleClick
+		// after this mousedown, so they re-open the matching thread.
+		const handleOutsideMousedown = (e: MouseEvent) => {
+			const target = e.target as HTMLElement | null;
+			if (!target) return;
+			if (target.closest?.('.gutter-card')) return;
+			if (target.closest?.('.comment-thread-pill')) return;
+			openCommentThreadId.set(null);
+		};
+		window.addEventListener('mousedown', handleOutsideMousedown);
+
+		const detachOpenThread = () => {
+			editorRoot.removeEventListener('docwriter:open-thread', handleOpenThread as EventListener);
+			window.removeEventListener('mousedown', handleOutsideMousedown);
+		};
+
+		syncCommentOverlay();
+
 		schedulePlainLineSync();
 		updateDiff();
 		editor.on('update', ({ transaction }) => onEditorUpdate({ transaction }));
@@ -492,6 +628,7 @@
 		detachFeedbackPointerHandlers = () => {
 			editorRoot.removeEventListener('pointerdown', handlePointerDown);
 			window.removeEventListener('pointerup', handlePointerUp);
+			detachOpenThread();
 		};
 	});
 
@@ -540,13 +677,39 @@
 	class:soft-wrap-enabled={softWrap}
 	style:--font-scale={fontScale}
 >
-	<div class="plain-editor-shell" class:soft-wrap-enabled={softWrap}>
+	<div
+		class="plain-editor-shell"
+		class:soft-wrap-enabled={softWrap}
+		class:has-comment-gutter={threadsForTab.some((t) => !t.resolved)}
+	>
 		<div class="plain-line-gutter" aria-hidden="true">
 			{#each plainLineRows as line}
 				<div class="plain-line-number">{line}</div>
 			{/each}
 		</div>
 		<div class="tiptap-editor plain-mode" class:soft-wrap-enabled={softWrap} bind:this={element}></div>
+		{#if threadsForTab.some((t) => !t.resolved)}
+			<CommentGutter
+				threads={threadsForTab}
+				editor={editor}
+				tabId={getCurrentTab() ?? ''}
+				openThreadId={openThreadId}
+				onOpen={(id) => openCommentThreadId.set(id)}
+				onClose={() => openCommentThreadId.set(null)}
+				onApprove={(t, msgId) => {
+					const msg = t.messages.find((m) => m.id === msgId);
+					const suggestion = msg?.proposedEdit;
+					const transcript = t.messages
+						.map((m) => `- [${m.author === 'agent' ? 'agent' : 'user'}] ${m.text}`)
+						.join('\n');
+					const trigger = suggestion
+						? `The user approved the suggestion in comment thread "${t.id}" on this tab. Apply this edit via edit_doc:\n\nold_string: "${suggestion.oldString}"\nnew_string: "${suggestion.newString}"\n\nAnchor passage: "${t.anchor.quote}"\nFull thread:\n${transcript}`
+						: `The user approved comment thread "${t.id}" on this tab. Apply the edit you described via edit_doc.\n\nAnchor passage: "${t.anchor.quote}"\nFull thread:\n${transcript}`;
+					onSubmit?.(trigger);
+					openCommentThreadId.set(null);
+				}}
+			/>
+		{/if}
 	</div>
 	{#if feedbackPopup}
 		<div
@@ -612,6 +775,29 @@
 				></div>
 				<button class="feedback-submit" onclick={sendCustomFeedback}>Go</button>
 			</div>
+			<div class="feedback-mode-row" role="group" aria-label="How the agent should respond">
+				<button
+					class="mode-chip"
+					class:mode-chip-active={feedbackMode === 'auto'}
+					onclick={() => (feedbackMode = 'auto')}
+					title="Let the agent choose between editing and commenting based on tone"
+					type="button"
+				>Auto</button>
+				<button
+					class="mode-chip"
+					class:mode-chip-active={feedbackMode === 'edit'}
+					onclick={() => (feedbackMode = 'edit')}
+					title="Force the agent to edit the passage"
+					type="button"
+				>Edit</button>
+				<button
+					class="mode-chip"
+					class:mode-chip-active={feedbackMode === 'discuss'}
+					onclick={() => (feedbackMode = 'discuss')}
+					title="Force the agent to open a comment thread instead of editing"
+					type="button"
+				>Discuss</button>
+			</div>
 			<div class="quick-actions">
 				{#each pinnedActions as action}
 					<button
@@ -659,6 +845,13 @@
 		max-width: none;
 		margin: 0 auto;
 		align-items: start;
+	}
+	.plain-editor-shell.has-comment-gutter {
+		/* Third column reserved for the right-side comment gutter so
+		 * thread cards sit in a stable column beside the editor rather
+		 * than floating over the prose. Width matches CommentGutter's
+		 * fixed inner width. */
+		grid-template-columns: 52px minmax(0, 1fr) 280px;
 	}
 	.plain-editor-shell.soft-wrap-enabled {
 		width: 100%;
@@ -1000,6 +1193,77 @@
 		font-family: inherit;
 	}
 	.feedback-submit:hover { filter: brightness(0.92); }
+	.feedback-mode-row {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		margin-top: 6px;
+		padding: 2px;
+		background: var(--bg-surface);
+		border-radius: 6px;
+		width: fit-content;
+	}
+	.mode-chip {
+		font: inherit;
+		font-size: 11px;
+		font-weight: 500;
+		padding: 3px 8px;
+		color: var(--text-secondary);
+		background: transparent;
+		border: none;
+		border-radius: 4px;
+		cursor: pointer;
+	}
+	.mode-chip:hover:not(.mode-chip-active) {
+		color: var(--text);
+		background: var(--bg-hover);
+	}
+	.mode-chip-active {
+		color: var(--text);
+		background: var(--bg);
+		box-shadow: 0 0 0 1px var(--border-light);
+	}
+	/* Comment thread overlay: unresolved threads get a subtle amber
+	 * highlight, and a small gutter pill shows the message count. */
+	.tiptap-editor :global(.comment-thread-highlight) {
+		background: color-mix(in srgb, #f59e0b 10%, transparent);
+		border-bottom: 2px solid color-mix(in srgb, #f59e0b 45%, transparent);
+		border-radius: 2px;
+		cursor: pointer;
+	}
+	.tiptap-editor :global(.comment-thread-highlight:hover) {
+		background: color-mix(in srgb, #f59e0b 18%, transparent);
+	}
+	.tiptap-editor :global(.comment-thread-open) {
+		background: color-mix(in srgb, #f59e0b 22%, transparent);
+		border-bottom-color: color-mix(in srgb, #f59e0b 65%, transparent);
+	}
+	.tiptap-editor :global(.comment-thread-pill) {
+		display: inline-flex;
+		align-items: center;
+		gap: 3px;
+		margin: 0 2px;
+		padding: 1px 5px;
+		background: #fef3c7;
+		color: #92400e;
+		border: 1px solid color-mix(in srgb, #f59e0b 40%, transparent);
+		border-radius: 10px;
+		font-family: 'Inter', -apple-system, sans-serif;
+		font-size: 10px;
+		font-weight: 600;
+		line-height: 1.2;
+		cursor: pointer;
+		vertical-align: middle;
+		user-select: none;
+	}
+	.tiptap-editor :global(.comment-thread-pill:hover),
+	.tiptap-editor :global(.comment-thread-pill-open) {
+		background: #fde68a;
+		border-color: #f59e0b;
+	}
+	.tiptap-editor :global(.comment-thread-pill-count) {
+		margin-left: 1px;
+	}
 	.quick-actions {
 		display: flex;
 		gap: 4px;

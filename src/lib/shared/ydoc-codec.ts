@@ -10,10 +10,11 @@
  * `REVIEW_ARRAY_NAME`, `AGENT_ORIGIN`) so the client and server never drift.
  */
 import * as Y from 'yjs';
-import type { PendingReviewRound } from '$lib/types';
+import type { CommentThread, PendingReviewRound } from '$lib/types';
 
 export const FRAGMENT_NAME = 'default';
 export const REVIEW_ARRAY_NAME = 'rounds';
+export const COMMENTS_MAP_NAME = 'comments';
 export const AGENT_ORIGIN = 'agent';
 export const USER_ORIGIN = 'user';
 export const SYSTEM_ORIGIN = 'system';
@@ -24,6 +25,16 @@ export function getFragment(ydoc: Y.Doc): Y.XmlFragment {
 
 export function getReviewArray(ydoc: Y.Doc): Y.Array<PendingReviewRound> {
 	return ydoc.getArray<PendingReviewRound>(REVIEW_ARRAY_NAME);
+}
+
+export function getCommentsMap(ydoc: Y.Doc): Y.Map<CommentThread> {
+	return ydoc.getMap<CommentThread>(COMMENTS_MAP_NAME);
+}
+
+export function readCommentThreads(ydoc: Y.Doc): CommentThread[] {
+	const out: CommentThread[] = [];
+	getCommentsMap(ydoc).forEach((thread) => out.push(thread));
+	return out.sort((a, b) => a.createdAt - b.createdAt);
 }
 
 export function readReviewRounds(ydoc: Y.Doc): PendingReviewRound[] {

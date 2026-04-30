@@ -102,6 +102,54 @@ export interface Action {
 	color: string;
 }
 
+/** Threaded comment anchored to a passage in a tab.
+ *
+ * Anchoring is quote-based: `anchor.quote` stores a snapshot of the
+ * selected text at creation. On every render the client searches the
+ * current live markdown for the quote; a unique match becomes the
+ * decoration range, multiple matches prefer the `occurrenceIndex`-th
+ * match (0-based), and zero matches flag the thread as "detached" in
+ * the UI (rendered at the top of the Outline without an anchor).
+ *
+ * Threads live in a Y.Map keyed by thread id on each tab's Y.Doc, so
+ * they sync through Hocuspocus exactly like pending review rounds and
+ * merge cleanly with concurrent edits.
+ */
+export interface CommentThreadAnchor {
+	quote: string;
+	/** Which occurrence of `quote` to prefer when it appears multiple
+	 * times in the document. Snapshot at thread creation; stays fixed
+	 * across edits so the anchor doesn't drift between matches. */
+	occurrenceIndex: number;
+}
+
+export type CommentAuthor = 'user' | 'agent';
+
+export interface CommentMessage {
+	id: string;
+	author: CommentAuthor;
+	text: string;
+	timestamp: number;
+	/** Optional edit the agent sketched in this reply. When present, the
+	 * thread popover shows an "Approve & propose edit" button that asks
+	 * the agent to apply it via `edit_doc` in the next render. */
+	proposedEdit?: { oldString: string; newString: string };
+}
+
+export interface CommentThread {
+	id: string;
+	anchor: CommentThreadAnchor;
+	messages: CommentMessage[];
+	resolved: boolean;
+	createdAt: number;
+}
+
+/** Routing hint carried from the feedback popup to the agent prompt.
+ *  - `auto`: agent decides comment vs. edit based on tone.
+ *  - `edit`: force an `edit_doc` call (no `post_comment`).
+ *  - `discuss`: force a `post_comment` call (no `edit_doc`). */
+export type FeedbackMode = 'auto' | 'edit' | 'discuss';
+
 export interface Annotation {
 	id: string;
 	tabId: string;

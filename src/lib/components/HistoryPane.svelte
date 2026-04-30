@@ -195,7 +195,10 @@
 	<div class="entries">
 		{#if pinnedTurn}
 			<div class="pinned-turn-card">
-				<div class="pinned-turn-label">{pinnedTurn.description}</div>
+				<div
+					class="pinned-turn-label"
+					class:quoted-desc={pinnedTurn.description.startsWith('“')}
+				>{pinnedTurn.description}</div>
 				{#if pinnedTurn.quote}
 					<div class="pinned-turn-quote" title={pinnedTurn.quote}>"{pinnedTurn.quote}"</div>
 				{/if}
@@ -228,7 +231,7 @@
 					<details class="entry user-action expandable">
 						<summary class="user-summary">
 							<User size={11} color="#9ca3af" />
-							<span class="user-text">{entry.description}</span>
+							<span class="user-text" class:quoted-desc={entry.description.startsWith('“')}>{entry.description}</span>
 							<span class="user-hint">
 								{changedCount === 1
 									? `1 file changed`
@@ -252,7 +255,7 @@
 					<div class="entry user-action" class:has-quote={!!entry.quote}>
 						<div class="user-row">
 							<User size={11} color="#9ca3af" />
-							<span class="user-text">{entry.description}</span>
+							<span class="user-text" class:quoted-desc={entry.description.startsWith('“')}>{entry.description}</span>
 							<span class="entry-time">{relativeTime(entry.timestamp)}</span>
 						</div>
 						{#if entry.quote}
@@ -501,6 +504,13 @@
 		font-weight: 600;
 		color: var(--accent);
 		line-height: 1.35;
+	}
+	/* When the description is a quoted user turn (curly-quoted text,
+	 * emitted by shortDescription for feedback/discuss triggers), render
+	 * it in italics so it reads as the user's own words rather than a
+	 * framework label. */
+	.quoted-desc {
+		font-style: italic;
 	}
 	.pinned-turn-quote {
 		margin-top: 6px;
