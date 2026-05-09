@@ -121,6 +121,19 @@ export interface CommentThreadAnchor {
 	 * times in the document. Snapshot at thread creation; stays fixed
 	 * across edits so the anchor doesn't drift between matches. */
 	occurrenceIndex: number;
+	/** Base64-encoded Y.RelativePosition for the start/end of the anchored
+	 * passage. Yjs CRDT-tracks these through every concurrent edit (user
+	 * typing, agent edits, syncs across clients), so the highlight stays
+	 * glued to the text instead of teleporting when the quote no longer
+	 * matches. Optional because:
+	 *   - Server-side `post_comment` can't compute them (it has no PM
+	 *     binding), so it omits them — the client backfills on first
+	 *     render via the comment-overlay's view hook.
+	 *   - Legacy threads (created before this field existed) lack them
+	 *     and also get backfilled on first render.
+	 * When absent, the overlay falls back to indexOf-based anchoring. */
+	relStart?: string;
+	relEnd?: string;
 }
 
 export type CommentAuthor = 'user' | 'agent';

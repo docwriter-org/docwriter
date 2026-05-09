@@ -410,9 +410,16 @@ const editDocTool = tool(
 				return null;
 			}
 			appliedHits = hits;
+			// Use a function replacement so JavaScript does NOT interpret `$`
+			// patterns in new_string ($&, $`, $', $n). Without this, an
+			// edit_doc whose new_string contains a literal $' (very common in
+			// LaTeX math like x'$ or derivatives) substitutes the entire
+			// post-match text of the doc in place of $', silently duplicating
+			// large chunks. split/join (replaceAll path) is already safe — it
+			// doesn't go through the regex replacement engine.
 			const afterMd = replaceAll
 				? currentMd.split(old_string).join(new_string)
-				: currentMd.replace(old_string, new_string);
+				: currentMd.replace(old_string, () => new_string);
 			return {
 				operation: {
 					type: 'edit',
@@ -452,29 +459,59 @@ const readDocTool = tool(
 	async ({ path }) => {
 		if (isScratchPath(path)) return readScratch(path);
 
+		// Open tab → return review-aware live content (newest pending proposal
+		// if any, else the committed Y.Doc text). This is the path that lets
+		// the agent see its own queued edits before they land.
 		const tabId = resolveTabFromPath(path);
-		if (!tabId || !isOpenTab(tabId)) {
-			return toolError(
-				`${path} is not an open tab or a scratch path. Use the built-in Read tool for other files in the project.`
-			);
+		if (tabId && isOpenTab(tabId)) {
+			const ws = getHocuspocus();
+			if (!ws) {
+				return toolError('WebSocket server not initialized — Y.Doc sync is offline.');
+			}
+			const direct = await ws.openDirectConnection(tabId);
+			try {
+				let content = '';
+				await direct.transact((document) => {
+					content = currentProposalText(document as unknown as Y.Doc);
+				});
+				return { content: [{ type: 'text', text: content }] };
+			} catch (err) {
+				return toolError(`Failed to read ${path}: ${(err as Error).message}`);
+			} finally {
+				await direct.disconnect();
+			}
 		}
 
-		const ws = getHocuspocus();
-		if (!ws) {
-			return toolError('WebSocket server not initialized — Y.Doc sync is offline.');
+		// Workspace file that isn't an open tab → just read it from disk.
+		// The system prompt tells the agent to use read_doc for any workspace
+		// file regardless of tab state; bouncing it back here would force a
+		// pointless fallback to the built-in Read tool. Reading is non-
+		// mutating, so we don't open a tab on the user's behalf — that's an
+		// edit_doc / write_doc side effect, not a read one.
+		const candidateTabId = tabId ?? pathToTabId(path);
+		if (candidateTabId) {
+			let absPath: string;
+			try {
+				absPath = resolveWorkspacePath(candidateTabId);
+			} catch (err) {
+				return toolError(`${path} cannot be read: ${(err as Error).message}`);
+			}
+			if (!existsSync(absPath)) {
+				return toolError(
+					`${path} does not exist in the workspace. Use Glob to find files or write_doc to create one.`
+				);
+			}
+			try {
+				const content = readFileSync(absPath, 'utf8');
+				return { content: [{ type: 'text', text: content }] };
+			} catch (err) {
+				return toolError(`Failed to read ${path}: ${(err as Error).message}`);
+			}
 		}
-		const direct = await ws.openDirectConnection(tabId);
-		try {
-			let content = '';
-			await direct.transact((document) => {
-				content = currentProposalText(document as unknown as Y.Doc);
-			});
-			return { content: [{ type: 'text', text: content }] };
-		} catch (err) {
-			return toolError(`Failed to read ${path}: ${(err as Error).message}`);
-		} finally {
-			await direct.disconnect();
-		}
+
+		return toolError(
+			`${path} is not a valid workspace path or scratch path. Workspace paths look like "drafts/chapter-1.md"; scratch paths live under .docwriter/agent/scratch/.`
+		);
 	}
 );
 

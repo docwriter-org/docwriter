@@ -7,6 +7,7 @@
 		agentSettings,
 		pendingReviewRounds,
 		sessionCost,
+		queuedSubmissionCount,
 		type SessionCost
 	} from '$lib/stores';
 	import ShineBorder from './ShineBorder.svelte';
@@ -33,6 +34,9 @@
 	// notices without having to watch the outline pane.
 	let pendingCount = $state(0);
 	pendingReviewRounds.subscribe((v) => (pendingCount = v.length));
+
+	let queuedCount = $state(0);
+	queuedSubmissionCount.subscribe((v) => (queuedCount = v));
 
 	let cost = $state<SessionCost>({
 		totalCostUsd: 0,
@@ -77,7 +81,10 @@
 
 	function sendMessage(message: string, opts: { planMode: boolean }) {
 		onSendMessage(message, opts);
-		chatOpen = false;
+		// While the agent is working, the message gets queued — keep the
+		// popover open so the user can see the queued count tick up and
+		// fire off another follow-up without re-clicking the dock button.
+		if (!rendering) chatOpen = false;
 	}
 
 	$effect(() => {
@@ -158,17 +165,25 @@
 		{/if}
 		<button
 			class="dock-message-btn"
+			class:has-queue={queuedCount > 0}
 			type="button"
 			aria-pressed={chatOpen}
-			title="Send message"
+			title={queuedCount > 0
+				? `${queuedCount} message${queuedCount === 1 ? '' : 's'} queued — will run after the current render`
+				: rendering
+					? 'Queue a follow-up message'
+					: 'Send message'}
 			onclick={toggleChat}
 		>
 			<Send size={12} />
+			{#if queuedCount > 0}
+				<span class="queue-badge">{queuedCount}</span>
+			{/if}
 		</button>
 	</div>
 	{#if chatOpen}
 		<div class="dock-chat-popover" bind:this={chatPopoverEl}>
-			<ChatPanel onSend={sendMessage} />
+			<ChatPanel onSend={sendMessage} rendering={rendering} queuedCount={queuedCount} />
 		</div>
 	{/if}
 </div>
@@ -206,6 +221,7 @@
 		user-select: none;
 	}
 	.dock-message-btn {
+		position: relative;
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
@@ -222,6 +238,29 @@
 	.dock-message-btn[aria-pressed='true'] {
 		background: var(--accent-bg);
 		border-color: var(--accent-light);
+	}
+	.dock-message-btn.has-queue {
+		background: var(--accent-bg);
+		border-color: var(--accent-light);
+	}
+	/* Tiny number floating off the top-right corner of the send button —
+	 * shows how many messages are queued behind the active render. */
+	.queue-badge {
+		position: absolute;
+		top: -5px;
+		right: -5px;
+		min-width: 14px;
+		height: 14px;
+		padding: 0 3px;
+		border-radius: 999px;
+		background: var(--accent);
+		color: white;
+		font-size: 9px;
+		font-weight: 700;
+		line-height: 14px;
+		text-align: center;
+		font-variant-numeric: tabular-nums;
+		box-shadow: 0 0 0 1.5px var(--bg-surface);
 	}
 	.dock-chat-popover {
 		position: absolute;

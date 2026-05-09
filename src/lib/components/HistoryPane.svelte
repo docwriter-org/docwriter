@@ -85,6 +85,17 @@
 			return /^(Edit|Write)$/.test(e.tool_name);
 		}
 		if (e.type === 'task') return e.phase === 'completed' || e.phase === 'failed' || e.phase === 'stopped';
+		// Surface compaction events even in minimal — they signal context
+		// pressure (the user may want to close tabs / resolve threads) and
+		// are rare enough not to be noise.
+		if (e.type === 'status') {
+			return e.status === 'compacting' || !!e.compactResult || !!e.error;
+		}
+		// Surface SDK notifications in minimal when they're high priority —
+		// "context approaching limit" warnings and similar come through here.
+		if (e.type === 'notification') {
+			return e.priority === 'high' || e.priority === 'immediate';
+		}
 		// Skip render_end / render_start / assistant_text in minimal.
 		return false;
 	}
@@ -387,12 +398,20 @@
 							<span class="hook-running-tag">running…</span>
 						{:else if entry.exitCode !== undefined && entry.exitCode !== 0}
 							<span class="hook-exit-bad">exit {entry.exitCode}</span>
+						{:else if entry.status === 'done'}
+							<span class="hook-exit-ok">exit 0</span>
 						{/if}
 						<span class="entry-time">{relativeTime(entry.timestamp)}</span>
 						{#if entry.durationMs}<span class="duration">{formatDuration(entry.durationMs)}</span>{/if}
 					</summary>
-					{#if entry.stdout || entry.stderr}
-						<pre class="tool-detail">{entry.stdout || ''}{entry.stderr ? '\n[stderr]\n' + entry.stderr : ''}</pre>
+					{#if entry.status !== 'running'}
+						<pre class="tool-detail">{
+							entry.stdout
+								? entry.stdout
+								: ''
+						}{entry.stdout && entry.stderr ? '\n' : ''}{entry.stderr ? '[stderr]\n' + entry.stderr : ''}{!entry.stdout && !entry.stderr
+							? '(no output captured — command produced nothing on stdout/stderr)'
+							: ''}</pre>
 					{/if}
 				</details>
 			{:else if entry.type === 'render_start'}
@@ -1039,6 +1058,15 @@
 		font-family: 'SF Mono', 'Menlo', monospace;
 		padding: 1px 6px;
 		border: 1px solid color-mix(in srgb, #ef4444 40%, transparent);
+		border-radius: 3px;
+		flex-shrink: 0;
+	}
+	.hook-exit-ok {
+		font-size: 10px;
+		color: #10b981;
+		font-family: 'SF Mono', 'Menlo', monospace;
+		padding: 1px 6px;
+		border: 1px solid color-mix(in srgb, #10b981 40%, transparent);
 		border-radius: 3px;
 		flex-shrink: 0;
 	}

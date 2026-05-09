@@ -103,7 +103,8 @@
 		resetSessionCost,
 		actionUsageCounts,
 		commentThreads,
-		openCommentThreadId
+		openCommentThreadId,
+		queuedSubmissionCount
 	} from '$lib/stores';
 	import TabBar from '$lib/components/TabBar.svelte';
 	import type { AgentSettings, CommentThread, HistoryEntry, PendingReviewRound } from '$lib/types';
@@ -112,6 +113,7 @@
 	type EditorRef = {
 		getEditor: () => Editor | undefined;
 		flushAutosave: () => Promise<boolean>;
+		getScrollTop: () => number;
 	};
 
 	let rendering = $state(false);
@@ -182,6 +184,11 @@
 	});
 
 	let editorRef: EditorRef | undefined = $state();
+	// One-shot scroll restore for the next TiptapEditor mount. Captured
+	// before disconnect/remount so Accept / Reject / file reload preserves
+	// the user's scroll position. Cleared on tab switch (the new tab's
+	// scroll is independent).
+	let pendingScrollRestore = $state(0);
 
 	/** Load the tab list from the server. Existing repos should start with no
 	 * open tab rather than creating a synthetic default file. */
@@ -260,6 +267,13 @@
 
 	async function remountActiveTabFromServer(tabId: string) {
 		if (tabId !== getCurrentActiveTab()) return;
+		// Reload-from-disk path skips disconnect, so capture scroll here too
+		// while the editor is still alive. Accept/Reject paths will have
+		// already populated pendingScrollRestore via disconnect; in that
+		// case editorRef is already undefined and this no-ops.
+		if (editorRef) {
+			pendingScrollRestore = editorRef.getScrollTop();
+		}
 		docLoaded = false;
 		await destroyTab(tabId);
 		setCurrentTab(tabId);
@@ -286,6 +300,7 @@
 
 	async function disconnectActiveTabForServerMutation(tabId: string) {
 		if (tabId !== getCurrentActiveTab()) return;
+		pendingScrollRestore = editorRef?.getScrollTop() ?? 0;
 		docLoaded = false;
 		detachActiveReviewObservers(tabId);
 		await destroyTab(tabId);
@@ -330,6 +345,9 @@
 			freshAgentTabs.delete(tabId);
 			freshAgentTabs = new Set(freshAgentTabs);
 		}
+		// New tab gets its own scroll position (top); don't carry the
+		// previous tab's pendingScrollRestore over.
+		pendingScrollRestore = 0;
 		docLoaded = false; // unmounts TiptapEditor
 		setCurrentTab(tabId);
 		activeTab.set(tabId);
@@ -488,6 +506,7 @@
 		const planMode = opts?.planMode ?? false;
 		if (rendering || submitInFlight) {
 			queuedSubmissions = [...queuedSubmissions, { trigger, planMode }];
+			queuedSubmissionCount.set(queuedSubmissions.length);
 			return;
 		}
 		if (!getCurrentActiveTab()) return;
@@ -939,7 +958,10 @@
 			const next = queuedSubmissions[0];
 			if (next) {
 				queuedSubmissions = queuedSubmissions.slice(1);
+				queuedSubmissionCount.set(queuedSubmissions.length);
 				setTimeout(() => void submit(next.trigger, { planMode: next.planMode }), 0);
+			} else {
+				queuedSubmissionCount.set(0);
 			}
 		}
 	}
@@ -1041,6 +1063,15 @@
 					? data.acceptedCount
 					: rounds.length - (data.rounds as PendingReviewRound[]).length;
 			if (acceptedCount <= 0) return;
+			// Drop any feedback annotations (the lavender highlight badges)
+			// for this tab now that the agent edit landed. These are
+			// "feedback in flight" markers — once the user accepts an edit
+			// on the tab the feedback has been acted on and the badge is
+			// just leftover visual noise. The render-end path already
+			// clears these when an edit round is added, but Accept arriving
+			// via a different turn (e.g. user approved a comment-thread
+			// suggestion later) skips that clear, so do it here too.
+			clearFeedbackAnnotationsForTab(tabId);
 			pushHistory({
 				type: 'user_action',
 				timestamp: Date.now(),
@@ -1356,6 +1387,13 @@
 
 	async function newSession() {
 		if (rendering) cancelRender();
+		// Drop any queued submissions before they can fire from
+		// submitDocument's finally block and re-populate cost after reset.
+		queuedSubmissions = [];
+		queuedSubmissionCount.set(0);
+		// Zero the dock immediately so a buffered SSE cost event from the
+		// aborted render can't land between awaits and the final reset.
+		resetSessionCost();
 		try {
 			await fetch('/api/session', { method: 'DELETE' });
 			agentHistory.set([]);
@@ -1382,7 +1420,6 @@
 			recentActions.set([]);
 			actionUsageCounts.set({});
 			annotations.set([]);
-			resetSessionCost();
 			pushHistory({ type: 'user_action', timestamp: Date.now(), description: 'Started new session' });
 		} catch (e) {
 			console.error('New session failed:', e);
@@ -1977,6 +2014,7 @@
 				<TiptapEditor
 					bind:this={editorRef}
 					onSubmit={(trigger) => submit(trigger)}
+					initialScrollTop={pendingScrollRestore}
 				/>
 			{:else if docLoaded}
 				<div class="empty-editor-state">

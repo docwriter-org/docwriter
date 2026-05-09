@@ -30,6 +30,10 @@
 		onOpen: (threadId: string) => void;
 		onClose: () => void;
 		onApprove: (thread: CommentThread, messageId: string) => void;
+		/** Fires after a user reply is successfully posted to a thread. Used
+		 * by TiptapEditor to wake the agent so it can respond on the same
+		 * thread. The thread argument is the *post-reply* state. */
+		onReply?: (thread: CommentThread, replyText: string) => void;
 	}
 	let {
 		threads,
@@ -38,7 +42,8 @@
 		openThreadId,
 		onOpen,
 		onClose,
-		onApprove
+		onApprove,
+		onReply
 	}: Props = $props();
 
 	let gutterEl: HTMLDivElement | null = $state(null);
@@ -146,6 +151,10 @@
 			});
 			if (!res.ok) throw new Error(await res.text());
 			replyDrafts = { ...replyDrafts, [thread.id]: '' };
+			// Wake the agent so it can respond on this thread. Pass the
+			// post-reply thread state so the parent has the full transcript
+			// (including the just-posted user message) for the trigger.
+			onReply?.(thread, text);
 		} catch (e) {
 			console.error('Failed to post reply:', e);
 		} finally {
@@ -253,11 +262,13 @@
 						class="resolve-link"
 						onclick={() => toggleResolved(thread)}
 						disabled={resolving[thread.id]}
+						title={thread.resolved
+							? 'Re-open this thread (it will appear in the agent prompt again)'
+							: 'Mark this thread done. It stops being inlined into the agent prompt.'}
 					>
 						{thread.resolved ? 'Reopen' : 'Resolve'}
 					</button>
 					<div class="card-actions-right">
-						<button class="secondary-link" onclick={onClose}>Close</button>
 						<button
 							class="send-btn"
 							onclick={() => sendReply(thread)}
@@ -486,8 +497,7 @@
 	/* Text-style buttons for secondary actions (Resolve, Close) — no
 	 * border, just a link-y color. Keeps the card from stacking more
 	 * boxed UI. */
-	.resolve-link,
-	.secondary-link {
+	.resolve-link {
 		font: inherit;
 		font-size: 11.5px;
 		background: none;
@@ -497,8 +507,7 @@
 		padding: 2px 4px;
 		border-radius: 3px;
 	}
-	.resolve-link:hover:not(:disabled),
-	.secondary-link:hover {
+	.resolve-link:hover:not(:disabled) {
 		color: var(--text);
 		background: var(--bg-hover);
 	}

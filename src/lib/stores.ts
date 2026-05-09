@@ -118,6 +118,11 @@ export function trackActionUsage(actionLabel: string) {
 
 export const agentHistory = writable<HistoryEntry[]>([]);
 
+/** Submissions waiting for the current render to finish. Updated by
+ * `submit()` in +page.svelte; read by AgentDock so the dock can show a
+ * queued-message badge during a render. */
+export const queuedSubmissionCount = writable<number>(0);
+
 /** Session-wide cost + usage accumulator. The SDK reports per-round via a
  * `result` message; we sum into this store. Reset when the user starts a
  * new session. See https://code.claude.com/docs/en/agent-sdk/cost-tracking

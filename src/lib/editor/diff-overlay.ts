@@ -4,6 +4,42 @@ import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { diffLines, diffWords } from 'diff';
 import type { Annotation } from '$lib/types';
 import { buildReviewDiffPreview, normalizeReviewText } from '$lib/review-diff';
+import { buildCharIndex } from './char-index';
+
+/** Memoize diffWords / diffLines by their string inputs. The diff inputs
+ * (baseline + proposedText) only change when the review state changes,
+ * not when the user types — but `decorations(state)` runs on every
+ * keystroke. Without memoization the diff library re-tokenizes a multi-KB
+ * doc on every key press, which dominates the typing-lag profile. WeakMap
+ * is unfit (string keys); a tiny LRU on string-pair identity is enough. */
+type DiffPart = ReturnType<typeof diffWords>;
+const diffWordsCache = new Map<string, DiffPart>();
+const diffLinesCache = new Map<string, DiffPart>();
+const DIFF_CACHE_MAX = 8;
+function cachedDiff(
+	cache: Map<string, DiffPart>,
+	a: string,
+	b: string,
+	fn: (a: string, b: string) => DiffPart
+): DiffPart {
+	// Length-prefix to disambiguate `a$b` from a possible `a$$b` collision.
+	const key = `${a.length}|${a}\x00${b}`;
+	const hit = cache.get(key);
+	if (hit) {
+		// LRU touch — reinsert to mark recently used.
+		cache.delete(key);
+		cache.set(key, hit);
+		return hit;
+	}
+	const out = fn(a, b);
+	cache.set(key, out);
+	if (cache.size > DIFF_CACHE_MAX) {
+		// Evict the oldest entry (Map iteration order is insertion order).
+		const oldest = cache.keys().next().value;
+		if (oldest !== undefined) cache.delete(oldest);
+	}
+	return out;
+}
 
 /**
  * Renders decorations over the editor while a review is pending:
@@ -89,20 +125,8 @@ export const DiffOverlay = Extension.create({
 							return DecorationSet.create(state.doc, decorations);
 						}
 
-						// Build a flat map from plain-text-character-index → PM position
-						// so we can translate plain-text offsets into PM ranges.
-						const charPositions: number[] = [];
-						let plainText = '';
-						state.doc.descendants((node, pos) => {
-							if (node.isText) {
-								const text = node.text || '';
-								for (let i = 0; i < text.length; i++) {
-									charPositions.push(pos + i);
-									plainText += text[i];
-								}
-							}
-							return true;
-						});
+						// Cached char index: same doc reference returns instantly.
+						const { charPositions, plainText } = buildCharIndex(state.doc);
 
 						// ── Agent diff overlay ──────────────────────────────────
 						if (baseline !== null) {
@@ -117,11 +141,16 @@ export const DiffOverlay = Extension.create({
 									: plainText;
 
 							if (baselinePlain !== targetPlain) {
-								const parts = diffWords(baselinePlain, targetPlain);
+								const parts = cachedDiff(diffWordsCache, baselinePlain, targetPlain, diffWords);
 
 								if (proposedText !== null && proposedText !== undefined && isPlainText) {
 									const paragraphs = paragraphRanges(state.doc);
-									const lineParts = diffLines(normalizeReviewText(baseline), normalizeReviewText(proposedText));
+									const lineParts = cachedDiff(
+										diffLinesCache,
+										normalizeReviewText(baseline),
+										normalizeReviewText(proposedText),
+										diffLines
+									);
 									let baselineLineIdx = 0;
 									for (const part of lineParts) {
 										const lines = splitLogicalLines(part.value);

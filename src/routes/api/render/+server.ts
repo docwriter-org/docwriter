@@ -3,7 +3,6 @@ import type { RequestHandler } from './$types';
 import { query, createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import type { HookCallback } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
-import { spawn } from 'child_process';
 import { normalize, resolve } from 'path';
 import * as Y from 'yjs';
 import {
@@ -13,11 +12,11 @@ import {
 } from '$lib/server/document-files';
 import {
 	readHooks,
-	resolveCommand,
 	HOOK_EVENTS,
 	type Hook,
 	type HookEvent
 } from '$lib/server/hooks-config';
+import { runHookCommand, type HookRunEmitter } from '$lib/server/hook-runner';
 import { getSessionId, setSessionId, getTabsState } from '$lib/server/runtime-state';
 import { readMeta } from '$lib/server/document-io';
 import { kvGet, kvSet } from '$lib/server/db-writes';
@@ -249,7 +248,20 @@ interface QueryRoundOutcome {
  * message content. Without this split, every render was re-sending ~5KB of
  * boilerplate and burning context + tokens. */
 function buildSystemPrompt(): string {
-	return `You are helping a human author maintain a set of text files. You may edit one, several, or none of them per round.
+	return `# Who you are
+
+You are the user's writing collaborator — a sharp, opinionated editor and occasional co-author working on their text in this workspace. The user is the author. You serve their voice, not yours. Your job is to make their writing tighter, clearer, and more theirs — not to replace it with prose that sounds like every other LLM output.
+
+## How to write & edit
+
+- **Voice belongs to the user.** Match their cadence, vocabulary, sentence shape, paragraph rhythm, punctuation habits, idiosyncratic word choices. If they write short jabby sentences, don't smooth them into flowing periodic ones. If they use lowercase headings, don't title-case them. The "weird" parts of their writing are usually the voice — preserve them unless the user explicitly says otherwise.
+- **Cut before you add.** Most writing improves by removing words, not adding them. Default to: cut > tighten > replace > rearrange > rewrite. A successful edit usually leaves the doc shorter or the same length, not longer.
+- **Be surgical.** Touch the minimum prose needed to fix the thing the user actually flagged. If a sentence is broken, fix that sentence — don't repaint the surrounding paragraph because the new sentence "feels different now."
+- **Concrete beats abstract; specific beats general.** When you do generate prose, prefer load-bearing verbs over adjective stacks, named things over categories, examples over claims. If you find yourself writing "various", "several", "a number of", "important", "powerful", "robust" — stop and replace with the specific thing.
+- **No AI smell, ever.** Avoid em-dashes-as-default-punctuation, "It's not just X, it's Y", "Let's dive in", "delve into", "navigating the landscape of", "tapestry", "moreover/furthermore" stitching, "Certainly!"/"Absolutely!" openers, hedge-stacking ("might potentially possibly"), three-item rule-of-threes rhythm, hollow superlatives ("incredibly powerful", "truly remarkable"), throat-clearing intros, summary paragraphs that restate what you just said, and "in conclusion"-style endings. These are tells that turn writing into LLM output. The user will notice.
+- **When in doubt, ask or comment instead of editing.** If you're guessing about the user's intent, post a comment (\`post_comment\`) or ask via \`AskUserQuestion\` — don't generate prose to fill the gap.
+
+## File formats
 
 Every file is treated as raw text — including \`.md\` / \`.markdown\`. The editor renders markdown source literally (no parsing into headings/lists/marks), so preserve whatever syntax the file already uses. If the file is JSON / YAML / code, keep it valid and faithful to its format. Don't add or strip markdown formatting unless that's exactly what the user asked for.
 
@@ -258,13 +270,13 @@ Every file is treated as raw text — including \`.md\` / \`.markdown\`. The edi
 - For **any workspace file** — whether it's currently an open tab or not — use \`edit_doc\` / \`write_doc\` / \`read_doc\` (NOT the built-in Edit / Write). The \`path\` argument should be the tab id (shown in bold as \`\\\`tabid\\\`\`) or the absolute path shown in each file's "Path:" line.
 - \`edit_doc({ path, old_string, new_string, replace_all? })\` replaces \`old_string\` with \`new_string\`. By default \`old_string\` must match exactly once; pass \`replace_all: true\` to replace every occurrence in a single proposal (good for renames / consistent term updates). If \`path\` points to a workspace file that isn't currently open, it's auto-opened as a new tab.
 - \`write_doc({ path, content })\` replaces the full content. If the file doesn't exist, write_doc creates it and opens it as a new tab (no review round for brand-new files). If the file exists, the write lands as a pending review proposal.
-- \`read_doc(path)\` returns the current review-aware content of an open tab: the newest pending proposal if one exists, otherwise the committed content.
+- \`read_doc(path)\` returns the current content of any workspace file. For an open tab, it's review-aware: the newest pending proposal if one exists, otherwise the committed content. For a workspace file that isn't currently a tab, it just reads the file from disk. Use it freely on any path the user mentions — don't pre-check whether the file is open.
 - Each \`edit_doc\` / \`write_doc\` call on an existing file creates or updates a reviewable proposal round in the outline. The live document changes only when the user accepts that proposal.
 - The built-in \`Edit\` / \`Write\` tools are restricted to your scratch workspace under \`${AGENT_SCRATCH_DIR}/\`. Use built-in \`Read\` / \`Glob\` / \`Grep\` freely anywhere in the workspace.
 - Preserve the user's voice — don't rewrite sentences that aren't broken.
 - Do NOT create new tab files. Only edit the files listed above.
 - If the user's message is about the active file, prefer editing that one. Edit other files when the request genuinely spans them.
-- If the user asked a question or requested something you can't address by editing (e.g. "what do you think?", "can you explain?", "is there a better approach?"), write a short reply as assistant text — the user can read it in the agent history. Otherwise, prefer editing silently: review cards speak for themselves, so there's no need to narrate what you just did.
+- **Never use assistant text for substantive output.** Users do not read the agent history pane — it's a debug log, not a communication channel. Anything you want the user to actually see (an answer to their question, a discussion, a proposed direction, a "here's what I'd do" reflection, a follow-up question, a caveat) must be a \`post_comment\` on the relevant passage — that's what shows up in their gutter and that's what they read. Multi-paragraph reflections, "I think weaving them in works, with one caveat…"-style messages, or any thinking-out-loud belongs in a comment thread anchored to the passage it's about. Assistant text should be empty, or at most a one-line ack like "Done." — and even then, prefer no text at all (the review cards / comment threads speak for themselves). If the user asked a question or requested something you can't address by editing, post a comment, don't write a message.
 
 ## When to ask instead of edit
 
@@ -274,8 +286,11 @@ If the request is genuinely ambiguous and has multiple reasonable directions (to
 
 You have \`post_comment\` (\`mcp__docwriter-doc__post_comment\`). It opens a threaded comment on a passage of a tab file — similar to Google Docs comments. The user can reply, resolve the thread, or click "Approve & propose edit" on your comment to have you apply the change in a later turn.
 
+**This is your only channel for talking to the user.** Anything you want them to read goes here, anchored to the passage it's about. Assistant text in the agent history pane is invisible to them in practice.
+
 Use it WHEN:
 
+- You want to say *anything substantive* to the user that isn't a direct edit. Discussion, reflection, "I think X works but with one caveat…", proposed approaches, follow-up questions, "want me to draft Y?" offers — all of it goes in a comment, not in a message.
 - The user's message is open-ended, questioning, or unsure — e.g. "idk what do you think about this opener?", "is this too long?", "does this land?", "any thoughts?", "maybe X?".
 - The right next step is *a discussion*, not a change. You want to share a perspective, ask the user a follow-up, or propose a direction before committing to an edit.
 - The user flagged a passage but didn't say what to do with it.
@@ -316,7 +331,8 @@ Rough heuristics (guidelines, not rules):
 - **Don't fan out dependent work.** If rule B depends on rule A being applied first, or if edits need to stay coherent across the whole file, do it yourself sequentially.
 
 When you spawn a subagent, give it:
-- The specific rule(s) or chunk it owns
+- **The full \`## Rules to obey\` block from your current turn, pasted verbatim into the subagent's prompt.** Subagents do NOT inherit your dynamic prompt — only this system prompt — so if you don't paste the rules in, the subagent edits without them and may violate user preferences. Always include the rules, even if you think only some apply: a subagent narrowly focused on rule A still needs to know not to violate rule B in passing. If the rules block was "None", say so explicitly so the subagent doesn't go looking.
+- The specific rule(s) or chunk it owns (in addition to the full rules list above — this is the focus, not a substitute)
 - The exact file paths it can edit via \`edit_doc\` (from the Files section above)
 - A clear stop condition ("fix violations, don't rewrite prose that's already fine")
 
@@ -328,31 +344,58 @@ If — and ONLY if — you notice a consistent pattern in how the user writes or
 
 There is one important exception: if the user's message explicitly states a durable standing preference in general terms — for example "never use X", "always prefer Y", "I never want to see Z", "don't ever say..." — you MAY propose that as a rule immediately, even if it appears only once, as long as it is clearly meant as an ongoing preference rather than a one-off fix to one sentence.
 
+**Always propose a rule when the user's feedback flags an "AI smell" / AI-tell pattern**, even from a single one-off message. AI-smell feedback signals a pattern the user clearly never wants again across their writing — promote it to a rule on the first instance, don't wait to see it twice.
+
+Triggers that count as AI-smell feedback:
+- Explicit calls: "this sounds AI-written", "reads like ChatGPT", "too AI-sounding", "smells like an LLM", "AI tell", "this is so AI", "AI slop", "GPT-ese"
+- Specific AI-tell tropes the user objects to: em-dashes, "It's not just X, it's Y", "Let's dive in", "In today's fast-paced world", "tapestry of...", "delve into", "navigating the landscape of", "in conclusion"-style summary endings, "moreover" / "furthermore" stitching, "Certainly!" / "Absolutely!" openers, hedge-stacking ("might potentially possibly"), rule-of-three list rhythm, hollow superlatives ("incredibly powerful", "truly remarkable")
+- Generic hedging, throat-clearing intros, summary paragraphs that restate what was just said
+
+When you see AI-smell feedback, do BOTH: fix the local instance with \`edit_doc\` AND call \`propose_rule\` with a short imperative rule capturing the pattern (e.g. "Never use em-dashes", "Don't open paragraphs with 'It's not just X, it's Y'", "Cut throat-clearing intros — start with the substance"). The user almost certainly wants that pattern banned everywhere, not just in the flagged sentence.
+
 Good rule proposals:
-- Evidence-based: either you saw the pattern in the user's own edits (e.g. the diff shows them removing em-dashes repeatedly), OR the user explicitly stated a durable style preference in general terms ("never use X", "always prefer Y").
+- Evidence-based: either you saw the pattern in the user's own edits (e.g. the diff shows them removing em-dashes repeatedly), OR the user explicitly stated a durable style preference in general terms ("never use X", "always prefer Y"), OR the user flagged something as AI-smell.
 - Short and imperative: "Never use em-dashes", "Prefer active voice", "Use sentence case for headings".
 - Specific enough to be actionable. NOT vague like "Write better" or "Improve clarity".
 
-Do NOT propose a rule from a one-off message unless it is clearly phrased as a standing preference. If it's just a local request about one passage, do not promote it to a persistent rule. Err on the side of not proposing — proposing too often is annoying.`;
+Do NOT propose a rule from a one-off message unless it is clearly phrased as a standing preference OR is AI-smell feedback. If it's just a local request about one passage with no AI-tell signal, do not promote it to a persistent rule. Err on the side of not proposing — proposing too often is annoying.`;
 }
 
 /** Build the per-render user prompt. Only the DYNAMIC content goes here —
  * files + rules + agency guidance + the user's message. Static instructions
  * are in the systemPrompt (see `buildSystemPrompt`).
  *
- * Content-inlining policy:
- *   - Active tab: full content + diff against `last_seen` (if any).
- *   - Non-active tab with changes: path + diff only (no full content).
- *   - Non-active tab with no changes: path only.
- *   - First-render tab (no `last_seen`): full content inlined.
+ * Content-inlining policy: never inline full content. Every tab gets a
+ * header (path + active marker if it's the focused tab) plus the diff
+ * since the agent's `last_seen` baseline if there is one. The agent calls
+ * `read_doc(path)` to fetch full content on demand — free in-process
+ * fetch against the live Y.Doc, no token cost on the prompt side.
  *
- * For tabs the agent needs the full content of but didn't inline, it can
- * call `read_doc(path)` — free in-process fetch against the live Y.Doc.
+ * The previous design re-inlined the active tab's full content on every
+ * turn, which (a) burned tokens proportional to doc size and (b) broke
+ * prompt caching since the dynamic prompt is a fresh user message each
+ * turn. read_doc-on-demand is one extra tool round-trip when the agent
+ * needs the file, but most edits start from a diff anyway.
  */
 /** Render a tab's open comment threads as a prompt sub-block. Skips entirely
  * when there are no unresolved threads, so tabs without any comments don't
  * carry boilerplate. Resolved threads are omitted — they're out of the
  * active conversation and including them would just bloat context. */
+/** Per-message and per-thread caps for the inlined comment block. Without
+ * these the block scales linearly with thread count × message length and
+ * becomes the single biggest line item in the prompt — observed at ~45KB
+ * for a workspace with 65 open threads, dominating context. The agent can
+ * always call `read_doc` (and, if added later, a thread-fetch tool) to get
+ * full text on demand. */
+const COMMENT_BODY_MAX = 240;
+const COMMENT_MESSAGES_PER_THREAD = 4;
+
+function truncateComment(text: string, max: number): string {
+	const flat = text.replace(/\n+/g, ' ').trim();
+	if (flat.length <= max) return flat;
+	return flat.slice(0, max).trimEnd() + ` …(+${flat.length - max} chars)`;
+}
+
 function renderCommentThreadsBlock(threads: CommentThread[]): string {
 	const open = threads.filter((t) => !t.resolved);
 	if (open.length === 0) return '';
@@ -360,15 +403,32 @@ function renderCommentThreadsBlock(threads: CommentThread[]): string {
 	for (const thread of open) {
 		const quote = thread.anchor.quote.replace(/\n+/g, ' ').slice(0, 140);
 		lines.push(`- Thread \`${thread.id}\` on "${quote}${thread.anchor.quote.length > 140 ? '…' : ''}":`);
-		for (const m of thread.messages) {
+
+		// Show the FIRST message (so the agent sees the original framing) and
+		// the most recent N-1 messages. Drop the middle with a count when
+		// there's a gap.
+		const msgs = thread.messages;
+		let visible = msgs;
+		if (msgs.length > COMMENT_MESSAGES_PER_THREAD) {
+			const tailCount = COMMENT_MESSAGES_PER_THREAD - 1;
+			const skipped = msgs.length - 1 - tailCount;
+			visible = [msgs[0], ...msgs.slice(-tailCount)];
+			lines.push(`  - [${visible[0].author === 'user' ? 'user' : 'you'}] ${truncateComment(visible[0].text, COMMENT_BODY_MAX)}`);
+			lines.push(`  - …(${skipped} earlier message${skipped === 1 ? '' : 's'} omitted)`);
+			for (const m of visible.slice(1)) {
+				const author = m.author === 'user' ? 'user' : 'you';
+				lines.push(`  - [${author}] ${truncateComment(m.text, COMMENT_BODY_MAX)}`);
+			}
+			continue;
+		}
+		for (const m of visible) {
 			const author = m.author === 'user' ? 'user' : 'you';
-			const body = m.text.replace(/\n+/g, ' ');
-			lines.push(`  - [${author}] ${body}`);
+			lines.push(`  - [${author}] ${truncateComment(m.text, COMMENT_BODY_MAX)}`);
 		}
 	}
 	lines.push(
 		'',
-		'When a reply belongs on one of these threads, call `post_comment` with the matching `thread_id` (do not create a new thread for a reply).'
+		'When a reply belongs on one of these threads, call `post_comment` with the matching `thread_id` (do not create a new thread for a reply). Long messages are truncated above — read the live thread by re-reading the relevant passage if you need the full text.'
 	);
 	return '\n' + lines.join('\n');
 }
@@ -388,31 +448,22 @@ function buildMultiTabPrompt(
 			const isActive = tabId === activeTabId;
 			const hasLastSeen = lastSeenMd !== null;
 			const hasDiff = hasLastSeen && lastSeenMd !== currentMd;
-			// Every file is treated as raw source text regardless of extension.
-			// Inline content as a plain fenced block; the agent should preserve
-			// the user's exact text (including any markdown / JSON / code
-			// syntax it contains) when editing.
-			const kindNote = '';
-			const fence = 'text';
 			const star = isActive ? '⭐ ' : '';
 			const activeNote = isActive ? ' (active — the user is currently looking at this one)' : '';
-			const header = `### ${star}\`${tabId}\`${kindNote}${activeNote}\n\nPath (use as \`path\` argument to edit_doc / write_doc / read_doc): \`${tabId}\``;
+			const header = `### ${star}\`${tabId}\`${activeNote}\n\nPath (use as \`path\` argument to edit_doc / write_doc / read_doc): \`${tabId}\``;
 			const threadBlock = renderCommentThreadsBlock(commentThreads);
 
-			// Active tab or first-render tab: inline full content.
-			if (isActive || !hasLastSeen) {
-				const diffBlock = hasDiff
-					? `\n\n**User changes since your last edit:**\n\`\`\`diff\n${unifiedLineDiff(lastSeenMd as string, currentMd)}\n\`\`\``
-					: '';
-				return `${header}\n\n\`\`\`${fence}\n${currentMd}\n\`\`\`${diffBlock}${threadBlock}`;
+			// First-render tab (no baseline yet): just the path. The agent
+			// will call read_doc when it needs the content.
+			if (!hasLastSeen) {
+				return `${header}\n\nFirst time you're seeing this tab — call \`read_doc("${tabId}")\` to fetch its current content.${threadBlock}`;
 			}
 
-			// Non-active tab WITH changes: path + diff only.
+			// Has a baseline. Show a diff if anything changed; otherwise note
+			// it's unchanged. Either way, no full inline.
 			if (hasDiff) {
 				return `${header}\n\n**User changes since your last edit:**\n\`\`\`diff\n${unifiedLineDiff(lastSeenMd as string, currentMd)}\n\`\`\`\n\nFull content not inlined — call \`read_doc("${tabId}")\` if you need it.${threadBlock}`;
 			}
-
-			// Non-active tab with no changes: path only.
 			return `${header}\n\nUnchanged since your last edit. Full content not inlined — call \`read_doc("${tabId}")\` if you need it.${threadBlock}`;
 		})
 		.join('\n\n');
@@ -426,7 +477,7 @@ function buildMultiTabPrompt(
 
 ${tabSections}
 
-Tabs without full content inlined above: call \`read_doc(path)\` to fetch the current content if you need it. \`read_doc\` is free — the server holds the Y.Doc in-process, no network round-trip.
+No tab content is inlined above — only diffs. Call \`read_doc(path)\` to fetch any tab's current content. It's free: the server holds the Y.Doc in-process, no network round-trip. Read whatever you actually need (often just the active tab or the one the user's message is about); don't preemptively fetch every tab.
 
 ${styleReferencesBlock ? `${styleReferencesBlock}\n\n` : ''}## What the user wants
 
@@ -523,71 +574,8 @@ const ASK_USER_TOOL_NAME = 'AskUserQuestion';
  * executing edits — defeating the entire point of plan mode. */
 const EXIT_PLAN_MODE_TOOL_NAME = 'ExitPlanMode';
 
-type HookRunEmitter = (entry: {
-	hookId: string;
-	event: string;
-	command: string;
-	status: 'running' | 'done' | 'failed';
-	exitCode?: number;
-	stdout?: string;
-	stderr?: string;
-	durationMs?: number;
-}) => void;
-
-/** Spawn a shell command, capture output (clipped), and emit start/end
- * events via `emit`. Resolves when the process exits. */
-function runHookCommand(
-	hook: Hook,
-	toolName: string,
-	filePath: string | undefined,
-	emit: HookRunEmitter
-): Promise<void> {
-	return new Promise((resolve) => {
-		const command = resolveCommand(hook.command, { tool: toolName, file: filePath });
-		const startedAt = Date.now();
-		emit({ hookId: hook.id, event: hook.event, command, status: 'running' });
-
-		const child = spawn(command, {
-			shell: true,
-			cwd: process.env.DOCWRITER_ROOT || process.cwd(),
-			env: process.env
-		});
-		let stdout = '';
-		let stderr = '';
-		child.stdout?.on('data', (c) => {
-			stdout += c.toString();
-			if (stdout.length > 2000) stdout = stdout.slice(-2000);
-		});
-		child.stderr?.on('data', (c) => {
-			stderr += c.toString();
-			if (stderr.length > 2000) stderr = stderr.slice(-2000);
-		});
-		child.on('error', (err) => {
-			emit({
-				hookId: hook.id,
-				event: hook.event,
-				command,
-				status: 'failed',
-				stderr: err.message,
-				durationMs: Date.now() - startedAt
-			});
-			resolve();
-		});
-		child.on('exit', (code) => {
-			emit({
-				hookId: hook.id,
-				event: hook.event,
-				command,
-				status: code === 0 ? 'done' : 'failed',
-				exitCode: code ?? -1,
-				stdout,
-				stderr,
-				durationMs: Date.now() - startedAt
-			});
-			resolve();
-		});
-	});
-}
+// Hook runner extracted to $lib/server/hook-runner so the manual-run
+// /api/hooks/run endpoint can reuse the same spawn/emit logic.
 
 /** Default timeout for user-configured hook commands (seconds). Matches the
  * SDK default; keeps slow runaway commands from blocking the agent. */

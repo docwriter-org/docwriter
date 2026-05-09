@@ -3,7 +3,8 @@
 	import type { Unsubscriber } from 'svelte/store';
 	import * as Y from 'yjs';
 	import { fly } from 'svelte/transition';
-	import { cubicOut } from 'svelte/easing';
+	import { flip } from 'svelte/animate';
+	import { cubicOut, cubicInOut } from 'svelte/easing';
 	import {
 		FileText,
 		Sparkles,
@@ -145,6 +146,74 @@
 		}
 	}
 
+	/** Scroll the editor to the location of a pending round. Plain-text mode
+	 * means each line is a `<p>` and the editor's text is paragraph text
+	 * joined by `\n`. We find `oldString`'s offset in that joined text, then
+	 * walk paragraphs to scroll the one containing the start of the match.
+	 * Falls back to a substring match (first ~80 chars of the needle) when
+	 * the exact match fails — common when the doc has drifted slightly from
+	 * the round was captured but the anchor still recognizable. As a last
+	 * resort, scroll to the editor top so the click never silently no-ops. */
+	function scrollToRound(round: MaterializedPendingReviewRound) {
+		const editor = document.querySelector('.tiptap-content') as HTMLElement | null;
+		if (!editor) return;
+		const op = round.operation;
+		const fullNeedle = op?.type === 'edit' ? op.oldString : null;
+
+		// Plain-mode: direct <p> children of .tiptap-content. Tiptap can wrap
+		// in extra ProseMirror containers in some configurations, so also
+		// search descendants as a fallback. Filter to just the editor's own
+		// paragraphs (skip diff-overlay widget <div>s which use other tags).
+		let paragraphs = Array.from(editor.querySelectorAll(':scope > p')) as HTMLElement[];
+		if (paragraphs.length === 0) {
+			paragraphs = Array.from(editor.querySelectorAll('p')) as HTMLElement[];
+		}
+		if (paragraphs.length === 0) {
+			editor.scrollIntoView({ behavior: 'smooth', block: 'start' });
+			return;
+		}
+
+		const scrollToParagraphAt = (charOffset: number) => {
+			const lines = paragraphs.map((p) => p.textContent ?? '');
+			let cursor = 0;
+			for (let i = 0; i < lines.length; i += 1) {
+				const lineEnd = cursor + lines[i].length;
+				if (charOffset <= lineEnd) {
+					paragraphs[i].scrollIntoView({ behavior: 'smooth', block: 'center' });
+					return true;
+				}
+				cursor = lineEnd + 1;
+			}
+			return false;
+		};
+
+		// No needle (e.g. write-op, full-doc rewrite): scroll to top.
+		if (!fullNeedle) {
+			editor.scrollIntoView({ behavior: 'smooth', block: 'start' });
+			return;
+		}
+
+		const docText = paragraphs.map((p) => p.textContent ?? '').join('\n');
+		// Try exact match.
+		let offset = docText.indexOf(fullNeedle);
+		// Fallback: first 80 chars of the needle, in case the doc drifted.
+		if (offset < 0 && fullNeedle.length > 80) {
+			offset = docText.indexOf(fullNeedle.slice(0, 80));
+		}
+		// Fallback: first non-empty line of the needle (handles needles that
+		// start with whitespace/newlines from multi-line edits).
+		if (offset < 0) {
+			const firstLine = fullNeedle.split('\n').find((l) => l.trim().length > 4);
+			if (firstLine) offset = docText.indexOf(firstLine.trim());
+		}
+		if (offset < 0) {
+			// Last resort: scroll to top so the user gets *some* feedback.
+			editor.scrollIntoView({ behavior: 'smooth', block: 'start' });
+			return;
+		}
+		scrollToParagraphAt(offset);
+	}
+
 	function diffPreview(round: MaterializedPendingReviewRound): ReviewPreviewLine[] {
 		return buildReviewDiffPreview(round.beforeMd, round.afterMd, 1);
 	}
@@ -224,6 +293,17 @@
 					class:later-round={!isEarliest}
 					class:tiny-card={round.kind === 'tiny'}
 					in:fly={{ y: -10, duration: 260, easing: cubicOut }}
+					out:fly={{ y: 40, duration: 280, easing: cubicInOut }}
+					animate:flip={{ duration: 280, easing: cubicInOut }}
+					onclick={() => scrollToRound(round)}
+					role="button"
+					tabindex="0"
+					onkeydown={(e) => {
+						if (e.key === 'Enter' || e.key === ' ') {
+							e.preventDefault();
+							scrollToRound(round);
+						}
+					}}
 				>
 					<div class="pending-summary">
 						<span>{summarizeRound(round)}</span>
@@ -263,7 +343,12 @@
 							{/each}
 						</div>
 					{/if}
-					<div class="pending-actions">
+					<div
+						class="pending-actions"
+						onclick={(e) => e.stopPropagation()}
+						onkeydown={(e) => e.stopPropagation()}
+						role="presentation"
+					>
 						{#if isEarliest}
 							<button class="btn-accept" onclick={() => onAccept?.(round.id)}>
 								<Check size={12} />
@@ -284,7 +369,12 @@
 						</button>
 					</div>
 					{#if retryFeedbackRoundId === round.id}
-						<div class="retry-feedback-popover">
+						<div
+							class="retry-feedback-popover"
+							onclick={(e) => e.stopPropagation()}
+							onkeydown={(e) => e.stopPropagation()}
+							role="presentation"
+						>
 							<div class="retry-feedback-label">Why should the agent try again?</div>
 							<textarea
 								bind:this={retryTextareaEl}
@@ -418,6 +508,18 @@
 		border-radius: 6px;
 		padding: 10px;
 	}
+	/* Clickable round cards scroll the editor to the edit's location.
+	 * Use the default arrow (not a pointer hand — this is navigation
+	 * within the doc, not a button) and signal interactivity through a
+	 * subtle border + background lift on hover. */
+	.round-card {
+		cursor: default;
+		transition: border-color 120ms ease, background-color 120ms ease;
+	}
+	.round-card:hover {
+		border-color: var(--border);
+		background: color-mix(in srgb, var(--bg-surface) 88%, var(--accent) 12%);
+	}
 	.pending-summary {
 		font-size: 12px;
 		color: var(--text-muted);
@@ -442,16 +544,14 @@
 	.round-card.later-round:hover {
 		opacity: 1;
 	}
-	/* Tiny-kind rounds render in a compact single-line style — no border,
-	 * no background, buttons flush to the right. Reads as a suggestion
-	 * rather than a reviewable diff. */
+	/* Tiny-kind rounds render in a compact card — same chrome as a normal
+	 * round (border + surface background) so the list stays visually
+	 * uniform, just with tighter padding and slightly smaller text. */
 	.round-card.tiny-card {
-		border: none;
-		background: transparent;
-		padding: 4px 6px;
+		padding: 6px 8px;
 	}
 	.tiny-card .pending-summary {
-		margin-bottom: 0;
+		margin-bottom: 4px;
 		font-size: 11.5px;
 	}
 	.tiny-card .pending-actions {

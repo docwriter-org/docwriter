@@ -28,10 +28,16 @@
 
 	interface Props {
 		onSubmit?: (trigger?: string) => void;
+		/** One-shot scroll restore. Read once in onMount after the editor's
+		 * content has laid out, then ignored. The parent captures this from
+		 * `getScrollTop()` before tearing the editor down (Accept / Reject /
+		 * file reload) so the user keeps their place across the remount. */
+		initialScrollTop?: number;
 	}
-	let { onSubmit }: Props = $props();
+	let { onSubmit, initialScrollTop = 0 }: Props = $props();
 
 	let element: HTMLDivElement;
+	let wrapperEl: HTMLDivElement | null = null;
 	let editor: Editor | undefined = $state();
 	let idleTimer: ReturnType<typeof setTimeout> | null = null;
 	let countdownInterval: ReturnType<typeof setInterval> | null = null;
@@ -188,6 +194,18 @@
 	});
 
 	function closeFeedbackPopup() {
+		// Collapse the editor's text selection so the blue highlight on the
+		// passage goes away. Without this, after sending feedback (or any
+		// other path that closes the popup) the underlying selection stays
+		// selected and the user sees a highlighted span sitting there with
+		// no popup attached. We collapse to the END of the selection (`to`)
+		// so the cursor lands just past where they were looking. No focus
+		// call — paths like onBlur close the popup specifically because the
+		// editor lost focus, and we don't want to steal it back.
+		if (editor) {
+			const { to } = editor.state.selection;
+			editor.commands.setTextSelection({ from: to, to });
+		}
 		feedbackPopup = null;
 		feedbackInput = '';
 		feedbackSelectionRange = null;
@@ -566,6 +584,18 @@
 			}
 		});
 
+		// Restore scroll after the editor has rendered its initial content.
+		// Two RAFs: one to let ProseMirror commit the doc, one to let layout
+		// settle so scrollTop isn't clamped by a not-yet-tall scroll height.
+		if (initialScrollTop > 0 && wrapperEl) {
+			const target = initialScrollTop;
+			requestAnimationFrame(() => {
+				requestAnimationFrame(() => {
+					if (wrapperEl) wrapperEl.scrollTop = target;
+				});
+			});
+		}
+
 		const editorRoot = editor.view.dom;
 		const handlePointerDown = () => {
 			pointerSelecting = true;
@@ -602,9 +632,26 @@
 		};
 		window.addEventListener('mousedown', handleOutsideMousedown);
 
+		// Same pattern for the feedback popup. Editor `onBlur` already
+		// closes it for clicks that move focus, but clicking on non-
+		// focusable chrome (line gutter, AgentDock card, OutlinePane
+		// header) doesn't blur the editor — the popup got stuck open.
+		// closeFeedbackPopup also collapses the editor's text selection
+		// so the blue highlight clears.
+		const handleFeedbackOutsideMousedown = (e: MouseEvent) => {
+			if (!feedbackPopup) return;
+			const target = e.target as HTMLElement | null;
+			if (!target) return;
+			if (target.closest?.('.feedback-popup')) return;
+			if (editorRoot.contains(target)) return;
+			closeFeedbackPopup();
+		};
+		window.addEventListener('mousedown', handleFeedbackOutsideMousedown);
+
 		const detachOpenThread = () => {
 			editorRoot.removeEventListener('docwriter:open-thread', handleOpenThread as EventListener);
 			window.removeEventListener('mousedown', handleOutsideMousedown);
+			window.removeEventListener('mousedown', handleFeedbackOutsideMousedown);
 		};
 
 		syncCommentOverlay();
@@ -669,13 +716,21 @@
 	export function getEditor(): Editor | undefined {
 		return editor;
 	}
+
+	// Parent reads this before tearing the editor down (Accept / Reject /
+	// reload) and feeds it back via `initialScrollTop` on the next mount.
+	export function getScrollTop(): number {
+		return wrapperEl?.scrollTop ?? 0;
+	}
 </script>
 
 <div
 	class="tiptap-wrapper"
 	class:plain-mode-wrapper={true}
 	class:soft-wrap-enabled={softWrap}
+	class:has-comment-gutter={threadsForTab.some((t) => !t.resolved)}
 	style:--font-scale={fontScale}
+	bind:this={wrapperEl}
 >
 	<div
 		class="plain-editor-shell"
@@ -707,6 +762,28 @@
 						: `The user approved comment thread "${t.id}" on this tab. Apply the edit you described via edit_doc.\n\nAnchor passage: "${t.anchor.quote}"\nFull thread:\n${transcript}`;
 					onSubmit?.(trigger);
 					openCommentThreadId.set(null);
+				}}
+				onReply={(t, replyText) => {
+					// User replied on a thread — wake the agent to respond.
+					// The post-reply thread `t` doesn't yet include the just-
+					// posted message (the prop snapshot is from before the
+					// network call resolved), so we append it manually below
+					// when building the transcript.
+					const transcript = [
+						...t.messages.map(
+							(m) => `- [${m.author === 'agent' ? 'agent' : 'user'}] ${m.text}`
+						),
+						`- [user] ${replyText}`
+					].join('\n');
+					const trigger =
+						`The user replied on comment thread "${t.id}" on this tab. ` +
+						`Decide whether to reply on the same thread (call post_comment with thread_id "${t.id}") or, ` +
+						`if the user's reply is now a clear edit request, call edit_doc instead. ` +
+						`Do NOT open a new thread for this reply.\n\n` +
+						`Anchor passage: "${t.anchor.quote}"\n` +
+						`User's latest reply: "${replyText}"\n` +
+						`Full thread (latest reply included):\n${transcript}`;
+					onSubmit?.(trigger);
 				}}
 			/>
 		{/if}
@@ -830,8 +907,15 @@
 		flex: 1;
 		min-width: 0;
 		overflow-y: auto;
-		padding: 48px 32px;
+		/* Tighter right padding when there's no comment gutter — the gutter
+		 * column adds ~280px of breathing room on the right when comments
+		 * exist, so the wrapper itself doesn't need much. Without comments
+		 * we still want a small gap so prose doesn't kiss the right edge. */
+		padding: 48px 12px 48px 32px;
 		background: var(--bg);
+	}
+	.tiptap-wrapper.has-comment-gutter {
+		padding-right: 32px;
 	}
 	.tiptap-wrapper.plain-mode-wrapper {
 		overflow: auto;

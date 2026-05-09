@@ -55,9 +55,16 @@ function applyOperation(currentText: string, operation: PendingReviewOperation):
 				'The original text now matches multiple locations, so this edit is ambiguous and needs to be regenerated.'
 		};
 	}
+	// Function replacement so JS doesn't interpret `$` patterns ($&, $`, $',
+	// $n) in newString. Without the function form, a $' anywhere in newString
+	// substitutes the entire post-match text of the doc, silently duplicating
+	// large chunks — catastrophic for LaTeX (math `$x'$`, derivatives) and
+	// any other content with literal $-with-trailing-quote sequences. The
+	// replaceAll path uses split/join which goes through a different code
+	// path and isn't affected.
 	const nextText = operation.replaceAll
 		? currentText.split(operation.oldString).join(operation.newString)
-		: currentText.replace(operation.oldString, operation.newString);
+		: currentText.replace(operation.oldString, () => operation.newString);
 	return { nextText, stale: false };
 }
 

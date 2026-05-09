@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { X, Plus } from 'lucide-svelte';
+	import { X, Plus, Play } from 'lucide-svelte';
+	import { agentHistory, activeTab } from '$lib/stores';
 
 	type HookEvent =
 		| 'PreToolUse'
@@ -88,6 +89,131 @@
 		);
 	}
 
+	let running = $state<Record<string, boolean>>({});
+
+	let currentTabPath: string | null = null;
+	activeTab.subscribe((v) => (currentTabPath = v));
+
+	/** Manually run a hook from the UI (outside any agent turn). The active
+	 * tab's path is passed as `file` so commands using `{{file}}` (e.g.
+	 * `pdflatex {{file}}`) resolve to the file the user is looking at right
+	 * now. The captured stdout/stderr/exit-code is surfaced in the history
+	 * pane via `pushHistory`, matching what auto-fired hooks emit. */
+	/** Upsert a hook_run entry: terminal events (done/failed) replace the
+	 * matching `running` entry in place by hookId+command, mirroring the
+	 * auto-fired-hook path in +page.svelte so manual runs render as one
+	 * card that transitions running → done/failed (not two stacked cards). */
+	function upsertHookRun(parsed: {
+		hookId: string;
+		event: string;
+		command: string;
+		status: 'running' | 'done' | 'failed';
+		exitCode?: number;
+		stdout?: string;
+		stderr?: string;
+		durationMs?: number;
+	}) {
+		agentHistory.update((h) => {
+			if (parsed.status === 'running') {
+				return [
+					...h,
+					{
+						type: 'hook_run',
+						timestamp: Date.now(),
+						hookId: parsed.hookId,
+						event: parsed.event,
+						command: parsed.command,
+						status: 'running'
+					}
+				];
+			}
+			for (let i = h.length - 1; i >= 0; i--) {
+				const e = h[i];
+				if (
+					e.type === 'hook_run' &&
+					e.hookId === parsed.hookId &&
+					e.command === parsed.command &&
+					e.status === 'running'
+				) {
+					const next = [...h];
+					next[i] = {
+						...e,
+						status: parsed.status,
+						exitCode: parsed.exitCode,
+						stdout: parsed.stdout,
+						stderr: parsed.stderr,
+						durationMs: parsed.durationMs
+					};
+					return next;
+				}
+			}
+			return [
+				...h,
+				{
+					type: 'hook_run',
+					timestamp: Date.now(),
+					hookId: parsed.hookId,
+					event: parsed.event,
+					command: parsed.command,
+					status: parsed.status,
+					exitCode: parsed.exitCode,
+					stdout: parsed.stdout,
+					stderr: parsed.stderr,
+					durationMs: parsed.durationMs
+				}
+			];
+		});
+	}
+
+	async function runNow(hook: Hook) {
+		if (running[hook.id]) return;
+		running = { ...running, [hook.id]: true };
+		const startedAt = Date.now();
+		// Optimistic running card so the user sees immediate feedback. The
+		// terminal upsert below replaces this in place.
+		upsertHookRun({
+			hookId: hook.id,
+			event: hook.event,
+			command: hook.command,
+			status: 'running'
+		});
+		try {
+			const res = await fetch('/api/hooks/run', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ id: hook.id, file: currentTabPath ?? undefined })
+			});
+			const data = await res.json().catch(() => null);
+			if (!res.ok || !data?.ok || !data.entry) {
+				throw new Error(data?.error || `HTTP ${res.status}`);
+			}
+			// The server-resolved command (after {{file}}/{{tool}} substitution)
+			// may differ from hook.command, so match the upsert against the
+			// running entry's original command (which is what we just pushed).
+			upsertHookRun({
+				hookId: hook.id,
+				event: hook.event,
+				command: hook.command,
+				status: data.entry.status,
+				exitCode: data.entry.exitCode,
+				stdout: data.entry.stdout,
+				stderr: data.entry.stderr,
+				durationMs: data.entry.durationMs
+			});
+		} catch (e) {
+			upsertHookRun({
+				hookId: hook.id,
+				event: hook.event,
+				command: hook.command,
+				status: 'failed',
+				stderr: (e as Error).message,
+				durationMs: Date.now() - startedAt
+			});
+		} finally {
+			running = { ...running, [hook.id]: false };
+		}
+	}
+
 	onMount(() => {
 		void load();
 	});
@@ -115,6 +241,18 @@
 					</div>
 					<div class="hook-command">{hook.command}</div>
 					<div class="hook-actions">
+						<button
+							class="run-btn"
+							onclick={() => runNow(hook)}
+							disabled={running[hook.id] || hook.enabled === false}
+							title={hook.enabled === false
+								? 'Hook is disabled — enable it first'
+								: running[hook.id]
+									? 'Running…'
+									: 'Run this hook now (uses the active tab as {{file}})'}
+						>
+							<Play size={11} />
+						</button>
 						<label class="toggle">
 							<input
 								type="checkbox"
@@ -268,6 +406,25 @@
 	.remove-btn:hover {
 		color: var(--diff-removed-color);
 		background: var(--bg-hover);
+	}
+	.run-btn {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		background: none;
+		border: none;
+		padding: 3px;
+		border-radius: 3px;
+		color: var(--text-faint);
+		cursor: pointer;
+	}
+	.run-btn:hover:not(:disabled) {
+		color: var(--accent);
+		background: var(--accent-bg);
+	}
+	.run-btn:disabled {
+		cursor: default;
+		opacity: 0.4;
 	}
 	.add-form {
 		border-top: 1px solid var(--border-light);

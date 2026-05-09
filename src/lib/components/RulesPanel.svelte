@@ -37,7 +37,18 @@
 	function applyRules() {
 		if (rulesList.length === 0) return;
 		const ruleList = rulesList.map((r) => `- ${r.text}`).join('\n');
-		onSubmit?.(`Review the open files against the following rules and fix violations:\n${ruleList}`);
+		// Scope confirmation: the user clicked "Apply rules" from the rules
+		// panel without specifying which files. Before editing, ask which
+		// tabs to scope the pass to (active only / all open / a chosen
+		// subset). Skipping the confirmation is fine ONLY when there's
+		// just one tab open — then the answer is unambiguous.
+		onSubmit?.(
+			`Review files against the following rules and fix violations:\n${ruleList}\n\n` +
+				`Scope: I clicked "Apply rules" without specifying which tabs. ` +
+				`If more than one tab is open, call AskUserQuestion FIRST to confirm scope ` +
+				`(e.g. "Just the active tab", "All open tabs", or let me pick a subset) ` +
+				`before making any edits. If only one tab is open, skip the question and proceed.`
+		);
 		pushHistory({ type: 'user_action', timestamp: Date.now(), description: `Applying ${rulesList.length} rule${rulesList.length === 1 ? '' : 's'}` });
 	}
 

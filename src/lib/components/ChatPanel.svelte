@@ -4,8 +4,14 @@
 
 	interface Props {
 		onSend: (message: string, opts: { planMode: boolean }) => void;
+		/** True while a render is in flight. Sends still work — they get
+		 * appended to the queue and run when the current render finishes. */
+		rendering?: boolean;
+		/** How many messages are already queued (excluding the in-flight
+		 * render). Used for the "Queue (3)" send-button label. */
+		queuedCount?: number;
 	}
-	let { onSend }: Props = $props();
+	let { onSend, rendering = false, queuedCount = 0 }: Props = $props();
 
 	let message = $state('');
 	let planMode = $state(false);
@@ -37,8 +43,14 @@
 
 <div class="chat-panel">
 	<div class="panel-header">
-		<span class="panel-title">Send message</span>
-		<span class="panel-subtitle">free-form request to the agent</span>
+		<span class="panel-title">{rendering ? 'Queue message' : 'Send message'}</span>
+		<span class="panel-subtitle">
+			{#if rendering}
+				will run after the current render finishes
+			{:else}
+				free-form request to the agent
+			{/if}
+		</span>
 	</div>
 
 	<textarea
@@ -58,7 +70,11 @@
 			<span class="hint">⌘↵ to send</span>
 			<button class="send-btn" onclick={send} disabled={!message.trim()}>
 				<Send size={12} />
-				{planMode ? 'Plan' : 'Send'}
+				{#if rendering}
+					Queue{queuedCount > 0 ? ` (${queuedCount})` : ''}
+				{:else}
+					{planMode ? 'Plan' : 'Send'}
+				{/if}
 			</button>
 		</div>
 	</div>
