@@ -92,6 +92,25 @@
 
 	onMount(() => void loadRoot());
 
+	/** Re-fetch the root list and every currently-expanded folder. Called
+	 * from the parent when something outside the FileTree (typically the
+	 * agent creating a file) might have changed the workspace contents.
+	 * Cheap because we only re-fetch what's visible. */
+	export async function refresh(): Promise<void> {
+		const expandedPaths = Object.keys(nodeState).filter(
+			(p) => p !== '' && nodeState[p]?.expanded
+		);
+		rootEntries = await fetchEntries('');
+		await Promise.all(
+			expandedPaths.map(async (p) => {
+				const cur = nodeState[p];
+				if (!cur) return;
+				const kids = await fetchEntries(p);
+				nodeState[p] = { ...cur, children: kids, loading: false };
+			})
+		);
+	}
+
 	$effect(() => {
 		if (!createDraft) return;
 		setTimeout(() => {

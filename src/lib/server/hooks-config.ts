@@ -54,6 +54,12 @@ export interface Hook {
 	command: string;
 	/** Disabled hooks are still listed in the UI but don't execute. */
 	enabled?: boolean;
+	/** Optional output file the hook produces. Same `{{file}}` / `{{tool}}`
+	 * templating as `command`. When set, the preview window watches for
+	 * this hook's completion and reloads the rendered file (PDF, HTML,
+	 * image, etc.). Typical use: `command: "pdflatex {{file}}"` paired
+	 * with `output: "{{file}}.pdf"`. */
+	output?: string;
 }
 
 export interface HooksConfig {
@@ -80,12 +86,35 @@ export function writeHooks(cfg: HooksConfig) {
 	dbReplaceHooks(cfg.hooks);
 }
 
-/** Substitute template placeholders in a hook command. */
+// Templates moved to $lib/shared/hook-templates so the client can
+// import them directly. Re-export for any server-side consumers.
+export {
+	HOOK_TEMPLATES,
+	type HookTemplate
+} from '$lib/shared/hook-templates';
+
+/** Substitute template placeholders in a hook command or output path.
+ * Supported placeholders:
+ *   {{file}} — the active file's path (as the agent / tool reported it)
+ *   {{stem}} — the file's name without its extension (e.g. main.tex →
+ *              main); useful for preview output paths like
+ *              `{{stem}}.pdf`
+ *   {{tool}} — the triggering tool name (PreToolUse / PostToolUse only)
+ *
+ * `{{stem}}` strips just the LAST extension; multi-dot names like
+ * `main.draft.tex` become `main.draft`. Files with no extension stay
+ * as-is.
+ */
 export function resolveCommand(
 	command: string,
 	vars: { tool?: string; file?: string }
 ): string {
+	const file = vars.file ?? '';
+	const dot = file.lastIndexOf('.');
+	const slash = Math.max(file.lastIndexOf('/'), file.lastIndexOf('\\'));
+	const stem = dot > slash ? file.slice(0, dot) : file;
 	return command
 		.replaceAll('{{tool}}', vars.tool ?? '')
-		.replaceAll('{{file}}', vars.file ?? '');
+		.replaceAll('{{file}}', file)
+		.replaceAll('{{stem}}', stem);
 }

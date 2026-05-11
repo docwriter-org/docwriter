@@ -72,7 +72,8 @@
 		setCurrentTab,
 		destroyTab,
 		renameTab,
-		reconcileServerInstance
+		reconcileServerInstance,
+		applyUpdateToTab
 	} from '$lib/yjs-doc';
 	import type { Editor } from '@tiptap/core';
 	import {
@@ -114,6 +115,7 @@
 		getEditor: () => Editor | undefined;
 		flushAutosave: () => Promise<boolean>;
 		getScrollTop: () => number;
+		flashAcceptedRange: (text: string) => void;
 	};
 
 	let rendering = $state(false);
@@ -184,6 +186,24 @@
 	});
 
 	let editorRef: EditorRef | undefined = $state();
+	// FileTree instance handle. Used to nudge the sidebar to re-fetch when
+	// the agent creates a workspace file via write_doc — the new file ends
+	// up in `tabs.order` (which we observe below) but FileTree caches its
+	// own listing per folder and would otherwise stay stale.
+	let fileTreeRef: { refresh: () => Promise<void> } | undefined = $state();
+
+	// When the tab list grows (agent created a file via write_doc, or any
+	// other path that opens a new tab), refresh the file tree so the new
+	// file appears in the sidebar. Compare lengths rather than diffing —
+	// shrinks (close/delete) flow through the FileTree's own onDeleted /
+	// onRenamed callbacks, which already refresh.
+	let lastKnownTabCount = -1;
+	tabs.subscribe((list) => {
+		if (lastKnownTabCount >= 0 && list.length > lastKnownTabCount) {
+			void fileTreeRef?.refresh();
+		}
+		lastKnownTabCount = list.length;
+	});
 	// One-shot scroll restore for the next TiptapEditor mount. Captured
 	// before disconnect/remount so Accept / Reject / file reload preserves
 	// the user's scroll position. Cleared on tab switch (the new tab's
@@ -296,14 +316,6 @@
 			activeReviewTextObserver.fragment.unobserve(activeReviewTextObserver.handler);
 			activeReviewTextObserver = null;
 		}
-	}
-
-	async function disconnectActiveTabForServerMutation(tabId: string) {
-		if (tabId !== getCurrentActiveTab()) return;
-		pendingScrollRestore = editorRef?.getScrollTop() ?? 0;
-		docLoaded = false;
-		detachActiveReviewObservers(tabId);
-		await destroyTab(tabId);
 	}
 
 	function attachActiveReviewObserver(tabId: string) {
@@ -1017,11 +1029,6 @@
 			if (synced === false) {
 				throw new Error('Latest local edits are still syncing to the server. Try again in a moment.');
 			}
-			// Tear down the local Y.Doc before the server mutates its copy.
-			// Otherwise the still-connected client's stale state syncs up and
-			// clobbers the server's accept (the observed "accept didn't hit
-			// the doc" bug). Remount from server after the POST resolves.
-			await disconnectActiveTabForServerMutation(tabId);
 			const res = await fetch(`/api/document?tab=${encodeURIComponent(tabId)}`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -1029,10 +1036,6 @@
 			});
 			const data = await res.json().catch(() => ({}));
 			if (res.status === 409 && data?.stale) {
-				// Stale: drop the conflicting round and re-queue the agent
-				// with context about what went wrong, so the user doesn't
-				// have to manually reject + retype their intent.
-				await remountActiveTabFromServer(tabId);
 				const staleRoundId: string | null = data.staleRoundId ?? roundId ?? null;
 				const reason: string = typeof data.error === 'string' && data.error
 					? data.error
@@ -1057,20 +1060,30 @@
 			if (!res.ok || !data?.ok || !Array.isArray(data.rounds)) {
 				throw new Error(data?.error || `HTTP ${res.status}`);
 			}
-			await remountActiveTabFromServer(tabId);
+			// Apply the server's Yjs delta directly to the local Y.Doc.
+			// This updates the editor in-place without any disconnect/remount:
+			// the same update Hocuspocus broadcasts over WebSocket, but
+			// delivered via the HTTP response so it arrives synchronously.
+			// Using the tab's own provider as origin prevents the provider
+			// from echoing it back; when the WebSocket broadcast arrives
+			// shortly after it will be a CRDT no-op.
+			if (typeof data.yjsUpdate === 'string') {
+				applyUpdateToTab(tabId, data.yjsUpdate);
+			}
 			const acceptedCount =
 				typeof data.acceptedCount === 'number'
 					? data.acceptedCount
 					: rounds.length - (data.rounds as PendingReviewRound[]).length;
 			if (acceptedCount <= 0) return;
-			// Drop any feedback annotations (the lavender highlight badges)
-			// for this tab now that the agent edit landed. These are
-			// "feedback in flight" markers — once the user accepts an edit
-			// on the tab the feedback has been acted on and the badge is
-			// just leftover visual noise. The render-end path already
-			// clears these when an edit round is added, but Accept arriving
-			// via a different turn (e.g. user approved a comment-thread
-			// suggestion later) skips that clear, so do it here too.
+			// Small-win celebration: flash a sage halo on the accepted range.
+			// Skip 'write' ops — a full-doc rewrite would paint everything green.
+			const justAccepted = rounds.slice(0, acceptedCount);
+			for (const r of justAccepted) {
+				const op = r.operation;
+				if (op?.type !== 'edit') continue;
+				if (!op.newString) continue;
+				editorRef?.flashAcceptedRange(op.newString);
+			}
 			clearFeedbackAnnotationsForTab(tabId);
 			pushHistory({
 				type: 'user_action',
@@ -1082,7 +1095,6 @@
 			});
 		} catch (e) {
 			console.error('Failed to accept agent edit:', e);
-			await remountActiveTabFromServer(tabId);
 			pushHistory({
 				type: 'notification',
 				timestamp: Date.now(),
@@ -1148,7 +1160,12 @@
 			if (synced === false) {
 				throw new Error('Latest local edits are still syncing to the server. Try again in a moment.');
 			}
-			await disconnectActiveTabForServerMutation(tabId);
+			// No more disconnect/remount: reject only deletes from the review
+			// Y.Array on the server, never touches the doc fragment. The Yjs
+			// sync delivers the array-mutation update to the editor, the
+			// review observer fires, and the pending-edits panel updates in
+			// place. The teardown was a leftover from the wholesale-replace
+			// accept path; it never had a reason to apply to reject.
 			const res = await fetch(`/api/document?tab=${encodeURIComponent(tabId)}`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -1158,7 +1175,6 @@
 			if (!res.ok || !data?.ok || !Array.isArray(data.rounds)) {
 				throw new Error(data?.error || `HTTP ${res.status}`);
 			}
-			await remountActiveTabFromServer(tabId);
 			const rejectedCount =
 				typeof data.rejectedCount === 'number'
 					? data.rejectedCount
@@ -1173,7 +1189,6 @@
 			});
 		} catch (e) {
 			console.error('reject failed:', e);
-			await remountActiveTabFromServer(tabId);
 			pushHistory({
 				type: 'notification',
 				timestamp: Date.now(),
@@ -1755,6 +1770,10 @@
 		// which streams a `reload` event here and we refresh the active tab.
 		void connectLive();
 
+		// Listen for SyncTeX jump messages from the preview popup so a
+		// double-click in the rendered PDF opens the source location here.
+		attachSynctexJumpListener();
+
 		// Dev-only test seam: lets Playwright simulate an agent edit without
 		// hitting the Claude SDK. Route it through the server so tests
 		// exercise the same write/review/undo path as production.
@@ -1832,6 +1851,14 @@
 				if (!tabId) return;
 				await remountActiveTabFromServer(tabId);
 			});
+			// When a hook produces an output file (e.g. pdflatex → main.pdf),
+			// the file may be NEW on disk — refresh the file tree so it
+			// appears in the sidebar without the user having to expand /
+			// collapse the folder. The preview window also listens for this
+			// event to reload its iframe.
+			es.addEventListener('preview_ready', () => {
+				void fileTreeRef?.refresh();
+			});
 			es.onerror = () => {
 				es.close();
 				// Reconnect after 5 s.
@@ -1839,6 +1866,59 @@
 			};
 		};
 		connect();
+	}
+
+	/** Scroll the editor to a specific 1-based line number. Plain-text mode
+	 * means each line is one direct `<p>` child of .tiptap-content, so the
+	 * line number IS the paragraph index (1-based). Flashes the target so
+	 * the user sees where they landed. */
+	function scrollEditorToLine(line: number) {
+		if (line < 1) return;
+		const editor = document.querySelector('.tiptap-content') as HTMLElement | null;
+		if (!editor) return;
+		const paragraphs = Array.from(editor.querySelectorAll(':scope > p')) as HTMLElement[];
+		const target = paragraphs[line - 1];
+		if (!target) return;
+		target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+		const text = (target.textContent ?? '').trim();
+		if (text) {
+			// Best-effort celebration so the eye lands on the target after
+			// the smooth scroll completes. Uses the same overlay as Accept.
+			setTimeout(() => editorRef?.flashAcceptedRange(text.slice(0, 80)), 300);
+		}
+	}
+
+	/** Listen for synctex jump messages from the preview popup. Origin is
+	 * checked because postMessage is wildcard-broadcastable; we only honor
+	 * messages from our own origin (the preview window runs at the same
+	 * SvelteKit origin). After verifying, open the file as a tab (or
+	 * switch to it) and scroll to the line. */
+	function attachSynctexJumpListener() {
+		if (typeof window === 'undefined') return;
+		const handler = async (ev: MessageEvent) => {
+			if (ev.origin !== window.location.origin) return;
+			const data = ev.data as { kind?: string; file?: string; line?: number } | null;
+			if (!data || data.kind !== 'docwriter-synctex-jump') return;
+			if (typeof data.file !== 'string' || typeof data.line !== 'number') return;
+			const tabId = data.file;
+			const line = data.line;
+			try {
+				const existing = getCurrentTabList();
+				if (existing.includes(tabId)) {
+					await switchTab(tabId);
+				} else {
+					await createTab(tabId);
+				}
+				// Wait for the editor to render the tab's content before
+				// scrolling. Two RAFs to be safe across slow paints.
+				requestAnimationFrame(() =>
+					requestAnimationFrame(() => scrollEditorToLine(line))
+				);
+			} catch (e) {
+				console.error('synctex jump failed:', e);
+			}
+		};
+		window.addEventListener('message', handler);
 	}
 
 	/** Pull the last session's messages from the SDK and convert them into
@@ -1981,6 +2061,7 @@
 					<div class="file-tree-panel" style:height="{fileTreeHeight}px">
 						<div class="file-tree-wrap">
 							<FileTree
+								bind:this={fileTreeRef}
 								activePath={activeTabFilePath}
 								onOpenFile={onFileOpened}
 								onRenamed={onFileTreeRenamed}
@@ -2001,10 +2082,6 @@
 				pendingTabs={mergedPendingTabs}
 			/>
 			{#if docLoaded && activeTabFilePath}
-				<AgentDock
-					onSubmit={() => submit()}
-					onSendMessage={(msg, opts) => void submit(msg, opts)}
-				/>
 				<AgentModal
 					onAnswerQuestion={(id, answers) => answerUserQuestion(id, answers)}
 					onRunPlan={(id) => runPlanProposal(id)}
@@ -2030,7 +2107,15 @@
 			<div class="right-pane-inner" bind:this={rightPaneInnerEl}>
 				{#if historyVisible}
 					<div class="history-wrap" style:height="{historyPaneHeight}px">
-						<HistoryPane onNewSession={newSession} />
+						<HistoryPane onNewSession={newSession} onWakeUp={docLoaded && activeTabFilePath ? () => submit() : undefined}>
+							{#snippet dock()}
+								{#if docLoaded && activeTabFilePath}
+									<AgentDock
+										onSendMessage={(msg, opts) => void submit(msg, opts)}
+									/>
+								{/if}
+							{/snippet}
+						</HistoryPane>
 					</div>
 					<HorizontalPanelResizer onResize={resizeHistoryPane} />
 				{/if}

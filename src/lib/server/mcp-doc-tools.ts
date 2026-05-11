@@ -697,10 +697,66 @@ const postCommentTool = tool(
 	}
 );
 
+/** Read all open (unresolved) comment threads for a tab. Threads are stored
+ * in the Y.Doc and persisted to SQLite — not in the JSONL transcript — so the
+ * prompt only carries stubs; call this tool to get the full conversations. */
+const listThreadsTool = tool(
+	'list_threads',
+	'Return all open (unresolved) comment threads for a workspace tab, including every message in each thread. Use this when you need to read a thread\'s conversation before replying or to understand the full context of user feedback. The prompt only shows thread IDs and anchor quotes to keep context short; the full messages live here.',
+	{
+		path: z
+			.string()
+			.describe('Workspace-relative tab id or absolute path to the tab file.')
+	},
+	async ({ path }) => {
+		if (isScratchPath(path)) {
+			return toolError('list_threads cannot be used on scratch paths — only on workspace tab files.');
+		}
+		const tabId = resolveTabFromPath(path);
+		if (!tabId || !isOpenTab(tabId)) {
+			return toolError(`${path} is not an open tab. Open it first via the file tree.`);
+		}
+		const ws = getHocuspocus();
+		if (!ws) {
+			return toolError('WebSocket server not initialized — Y.Doc sync is offline.');
+		}
+		const direct = await ws.openDirectConnection(tabId);
+		let result = '';
+		try {
+			await direct.transact((document) => {
+				const commentsMap = getCommentsMap(document as unknown as Y.Doc);
+				const threads: CommentThread[] = [];
+				commentsMap.forEach((t) => { if (!t.resolved) threads.push(t); });
+				threads.sort((a, b) => a.createdAt - b.createdAt);
+				if (threads.length === 0) {
+					result = `No open threads on ${path}.`;
+					return;
+				}
+				const lines: string[] = [`${threads.length} open thread${threads.length === 1 ? '' : 's'} on ${path}:\n`];
+				for (const thread of threads) {
+					lines.push(`Thread \`${thread.id}\` — anchor: "${thread.anchor.quote.slice(0, 120)}${thread.anchor.quote.length > 120 ? '…' : ''}"`);
+					for (const msg of thread.messages) {
+						const role = msg.author === 'agent' ? 'you' : 'user';
+						lines.push(`  [${role}] ${msg.text}`);
+						if (msg.proposedEdit) {
+							lines.push(`    proposed_edit: "${msg.proposedEdit.oldString}" → "${msg.proposedEdit.newString}"`);
+						}
+					}
+					lines.push('');
+				}
+				result = lines.join('\n');
+			});
+		} finally {
+			await direct.disconnect();
+		}
+		return { content: [{ type: 'text', text: result }] };
+	}
+);
+
 export const docToolsMcp = createSdkMcpServer({
 	name: 'docwriter-doc',
 	version: '0.0.1',
-	tools: [editDocTool, readDocTool, writeDocTool, postCommentTool]
+	tools: [editDocTool, readDocTool, writeDocTool, postCommentTool, listThreadsTool]
 });
 
 /** SDK-namespaced tool names (what appears in stream events). */
@@ -708,3 +764,4 @@ export const EDIT_DOC_TOOL_NAME = 'mcp__docwriter-doc__edit_doc';
 export const READ_DOC_TOOL_NAME = 'mcp__docwriter-doc__read_doc';
 export const WRITE_DOC_TOOL_NAME = 'mcp__docwriter-doc__write_doc';
 export const POST_COMMENT_TOOL_NAME = 'mcp__docwriter-doc__post_comment';
+export const LIST_THREADS_TOOL_NAME = 'mcp__docwriter-doc__list_threads';

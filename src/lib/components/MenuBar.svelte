@@ -340,5 +340,6 @@
 		padding: 0;
 		min-width: 0;
 		white-space: normal;
+		cursor: default;
 	}
 </style>

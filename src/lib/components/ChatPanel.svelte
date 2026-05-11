@@ -82,7 +82,11 @@
 
 <style>
 	.chat-panel {
-		width: 380px;
+		/* Fills the popover, which itself spans the floating toolbar
+		 * (left:0 / right:0 anchored to .pane-header). So the panel
+		 * always fits whatever pane width the user has set. */
+		width: 100%;
+		box-sizing: border-box;
 		padding: 12px 14px;
 		font-family: 'Inter', -apple-system, sans-serif;
 		font-size: 13px;

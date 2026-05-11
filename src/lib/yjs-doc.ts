@@ -221,6 +221,18 @@ export async function renameTab(oldId: string, newId: string): Promise<void> {
 	if (currentTabId === oldId) currentTabId = newId;
 }
 
+/** Apply a base64-encoded Yjs update directly to a tab's local Y.Doc,
+ * using the tab's own WebSocket provider as the Yjs origin. This prevents
+ * the HocuspocusProvider from echoing the update back to the server (the
+ * provider skips forwarding updates whose origin equals itself). When the
+ * server later delivers the same update via WebSocket it will be a no-op. */
+export function applyUpdateToTab(tabId: string, updateBase64: string): void {
+	const doc = registry.get(tabId);
+	if (!doc) return;
+	const bytes = Uint8Array.from(atob(updateBase64), (c) => c.charCodeAt(0));
+	Y.applyUpdate(doc.ydoc, bytes, doc.wsProvider ?? 'server-accept');
+}
+
 export async function resetAllYDocs(): Promise<void> {
 	for (const [id] of Array.from(registry)) {
 		await destroyTab(id);

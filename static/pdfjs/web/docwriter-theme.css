@@ -1,0 +1,50 @@
+/*
+ * docwriter-theme.css — overrides for the bundled PDF.js viewer to make
+ * its chrome match the active docwriter theme. Loaded AFTER viewer.css
+ * from viewer.html, so these declarations take precedence.
+ *
+ * The preview route sets `data-docwriter-theme="<name>"` on the iframe's
+ * <html> after the viewer loads, and copies the active docwriter CSS
+ * vars (--bg, --bg-elevated, --text, etc.) into the iframe's :root via
+ * inline styles. This file maps those docwriter tokens onto the PDF.js
+ * variables the viewer already uses for its toolbar / sidebar / page
+ * area colors.
+ *
+ * Page CONTENT (the rendered PDF page itself) stays its natural color
+ * — we only theme the chrome around it.
+ */
+
+:root[data-docwriter-theme] {
+	--body-bg-color: var(--bg, #1a1a1a);
+	--toolbar-bg-color: var(--bg-elevated, #1e1e1e);
+	--sidebar-toolbar-bg-color: var(--bg-elevated, #1e1e1e);
+	--sidebar-narrow-bg-color: color-mix(in srgb, var(--bg-elevated, #1e1e1e) 92%, transparent);
+	--main-color: var(--text, #e8e8e8);
+	--toolbar-icon-color: var(--text-faint, #909090);
+	--toolbar-icon-hover-color: var(--text, #e8e8e8);
+	--toolbar-icon-color-active: var(--accent, #4f46e5);
+	--button-hover-color: var(--bg-hover, #2a2a2a);
+	--field-color: var(--text, #e8e8e8);
+	--field-bg-color: var(--bg-surface, #141414);
+	--field-border-color: var(--border-light, #2e2e2e);
+	--treeitem-color: var(--text-secondary, #d4d4d4);
+	--treeitem-hover-color: var(--text, #e8e8e8);
+	--treeitem-bg-color: color-mix(in srgb, var(--text, #e8e8e8) 10%, transparent);
+	--treeitem-hover-bg-color: var(--bg-hover, #2a2a2a);
+	--separator-color: var(--border-light, #2e2e2e);
+	--scrollbar-color: color-mix(in srgb, var(--text, #e8e8e8) 20%, transparent);
+	--scrollbar-bg-color: transparent;
+	--doorhanger-bg-color: var(--bg-elevated, #1e1e1e);
+	--doorhanger-hover-color: var(--text, #e8e8e8);
+	--doorhanger-hover-bg-color: var(--bg-hover, #2a2a2a);
+	--doorhanger-border-color: var(--border-light, #2e2e2e);
+	--doorhanger-separator-color: var(--border-light, #2e2e2e);
+	--editor-toolbar-bg-color: var(--bg-elevated, #1e1e1e);
+}
+
+/* Make sure the page-area background also picks up the theme so dark
+ * docwriter themes don't show a bright stripe between the toolbar and
+ * the rendered page. */
+:root[data-docwriter-theme] body {
+	background: var(--bg, #1a1a1a);
+}

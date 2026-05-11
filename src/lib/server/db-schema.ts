@@ -1,14 +1,15 @@
 /**
  * SQLite schema + migrations for DocWriter's server-side persistence.
  *
- * Phase 1 scaffolding: the tables below exist but are only written to (via
- * the dual-write in `runtime-state.ts` / `hooks-config.ts`) — no read paths
- * consume them yet. The JSON files under `.docwriter/` remain the source of
- * truth. Later phases will cut reads over to this DB and add Y.Doc update
- * persistence (see `yjs_updates`).
+ * The `yjs_updates` table is the authoritative store for every tab's
+ * Y.Doc update log; replay against `yjs_updates` rebuilds a tab's full
+ * CRDT state. Other tables (tabs, rules, hooks, kv, recent_actions,
+ * action_usage_counts) hold session and config state. JSON files under
+ * `.docwriter/` (`state.json`, `hooks.json`) are dual-written for
+ * portability and human inspection but the DB is the source of truth.
  *
- * Migration tracking uses `PRAGMA user_version`. Add new migrations to the
- * `MIGRATIONS` array in order; each bumps the version by one.
+ * Migration tracking uses `PRAGMA user_version`. Add new migrations to
+ * the `MIGRATIONS` array in order; each bumps the version by one.
  */
 import type { Database } from 'better-sqlite3';
 

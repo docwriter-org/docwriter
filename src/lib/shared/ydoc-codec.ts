@@ -81,6 +81,84 @@ function buildParagraphElements(content: string): Y.XmlElement[] {
 	});
 }
 
+/** Apply an edit-op (replace one occurrence of `oldString` with `newString`)
+ * to the fragment by replacing only the paragraphs the edit actually touches.
+ * Returns true on success, false if `oldString` is not found.
+ *
+ * The point: a wholesale `replaceYDocText` eats any concurrent user typing
+ * because every character lives in the about-to-be-deleted old content. By
+ * only deleting + reinserting the paragraphs the edit covers, concurrent
+ * typing in any other paragraph merges through Yjs CRDT untouched.
+ *
+ * Caller must be inside a `ydoc.transact(..., origin)`. */
+export function applyEditToFragment(
+	fragment: Y.XmlFragment,
+	oldString: string,
+	newString: string,
+	replaceAll: boolean
+): boolean {
+	if (!oldString) return false;
+
+	// Snapshot paragraph texts so we can compute affected range. Mirrors
+	// serializeFragment's per-child textOf walk.
+	const paraTexts: string[] = [];
+	fragment.forEach((child) => paraTexts.push(textOf(child)));
+
+	if (replaceAll) {
+		// Sweeping rename: replace every occurrence in one pass. Concurrent
+		// typing protection is weaker here (we touch the whole fragment),
+		// but replace_all is a sweeping rename by intent — the caller is
+		// asking for it.
+		const fullText = paraTexts.join('\n');
+		if (fullText.indexOf(oldString) < 0) return false;
+		const replaced = fullText.split(oldString).join(newString);
+		if (replaced === fullText) return false;
+		const newParas = buildParagraphElements(replaced);
+		fragment.delete(0, fragment.length);
+		fragment.insert(0, newParas);
+		return true;
+	}
+
+	const fullText = paraTexts.join('\n');
+	const startOffset = fullText.indexOf(oldString);
+	if (startOffset < 0) return false;
+	const endOffset = startOffset + oldString.length;
+
+	// Walk paragraphs to find which ones are affected. Range boundaries are
+	// inclusive on the start, exclusive on the end — but a match landing
+	// exactly at a paragraph boundary (a '\n') belongs to the paragraph
+	// preceding the boundary for the start and the one after for the end.
+	let cursor = 0;
+	let firstAffected = -1;
+	let lastAffected = -1;
+	let startInFirst = 0;
+	let endInLast = 0;
+	for (let i = 0; i < paraTexts.length; i += 1) {
+		const paraStart = cursor;
+		const paraEnd = cursor + paraTexts[i].length;
+		if (firstAffected < 0 && startOffset >= paraStart && startOffset <= paraEnd) {
+			firstAffected = i;
+			startInFirst = startOffset - paraStart;
+		}
+		if (firstAffected >= 0 && endOffset >= paraStart && endOffset <= paraEnd) {
+			lastAffected = i;
+			endInLast = endOffset - paraStart;
+			break;
+		}
+		cursor = paraEnd + 1; // +1 for the '\n' separator between paragraphs
+	}
+	if (firstAffected < 0 || lastAffected < 0) return false;
+
+	const before = paraTexts[firstAffected].slice(0, startInFirst);
+	const after = paraTexts[lastAffected].slice(endInLast);
+	const splicedText = before + newString + after;
+	const newParas = buildParagraphElements(splicedText);
+	const count = lastAffected - firstAffected + 1;
+	fragment.delete(firstAffected, count);
+	fragment.insert(firstAffected, newParas);
+	return true;
+}
+
 /** Seed an EMPTY Y.Doc's fragment from a content string. No-op if non-empty
  * (seeding a populated fragment produces merge garbage). Does NOT wrap in a
  * transact — callers pick their own origin. */

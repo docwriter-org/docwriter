@@ -1,0 +1,82 @@
+/** Shared (client + server) library of common build-and-preview hooks
+ * the user can add with one click from the Hooks panel. Each entry
+ * seeds the add-form fields so the user can tweak before saving. The
+ * `description` is shown in the chip's tooltip; the `id` is used as
+ * the chip key.
+ *
+ * Curated to cover the most common writing-tool toolchains: LaTeX
+ * (latexmk recommended; pdflatex as a fallback), pandoc → HTML / PDF,
+ * and Mermaid diagrams. Add more here when users ask. */
+
+export type HookEvent =
+	| 'PreToolUse'
+	| 'PostToolUse'
+	| 'PostToolUseFailure'
+	| 'UserPromptSubmit'
+	| 'Stop'
+	| 'SubagentStop'
+	| 'SessionStart'
+	| 'SessionEnd'
+	| 'Notification';
+
+export interface HookTemplate {
+	id: string;
+	label: string;
+	description: string;
+	event: HookEvent;
+	matcher?: string;
+	command: string;
+	output?: string;
+}
+
+export const HOOK_TEMPLATES: readonly HookTemplate[] = [
+	{
+		id: 'pdflatex',
+		label: 'LaTeX → PDF (pdflatex)',
+		description:
+			'Build the project root (main.tex) on every Edit/Write. Runs pdflatex → bibtex → pdflatex → pdflatex so cross-references and citations resolve correctly. Each pass passes -synctex=1 so the preview window\'s "double-click PDF → jump to source" feature works. Edit `main` / `main.pdf` below if your entry file is named differently.',
+		event: 'PostToolUse',
+		matcher: 'Edit|Write',
+		command:
+			'pdflatex -interaction=nonstopmode -halt-on-error -synctex=1 main.tex && (bibtex main || true) && pdflatex -interaction=nonstopmode -halt-on-error -synctex=1 main.tex && pdflatex -interaction=nonstopmode -halt-on-error -synctex=1 main.tex',
+		output: 'main.pdf'
+	},
+	{
+		id: 'git-push-on-stop',
+		label: 'Git: auto-commit & push on Stop',
+		description:
+			'When the agent finishes a turn (Stop), commit any pending changes and push to the current branch\'s upstream. Requires the workspace to be a git repo with a configured remote.',
+		event: 'Stop',
+		command:
+			'git add -A && (git diff --cached --quiet || (git commit -m "docwriter: auto-commit" && git push))'
+	},
+	{
+		id: 'pandoc-html',
+		label: 'Markdown → HTML (pandoc)',
+		description:
+			'Render the active .md as HTML on every Edit/Write. Preview reloads with scroll preserved.',
+		event: 'PostToolUse',
+		matcher: 'Edit|Write',
+		command: 'pandoc {{file}} -o {{stem}}.html --standalone',
+		output: '{{stem}}.html'
+	},
+	{
+		id: 'pandoc-pdf',
+		label: 'Markdown → PDF (pandoc)',
+		description:
+			'Render the active .md as PDF (requires a TeX engine for pandoc).',
+		event: 'PostToolUse',
+		matcher: 'Edit|Write',
+		command: 'pandoc {{file}} -o {{stem}}.pdf',
+		output: '{{stem}}.pdf'
+	},
+	{
+		id: 'mermaid',
+		label: 'Mermaid → SVG (mmdc)',
+		description: 'Render a Mermaid .mmd file as SVG. Requires @mermaid-js/mermaid-cli.',
+		event: 'PostToolUse',
+		matcher: 'Edit|Write',
+		command: 'mmdc -i {{file}} -o {{stem}}.svg',
+		output: '{{stem}}.svg'
+	}
+] as const;

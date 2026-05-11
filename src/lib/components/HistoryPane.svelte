@@ -1,16 +1,27 @@
 <script lang="ts">
 	import { fly } from 'svelte/transition';
 	import { cubicOut } from 'svelte/easing';
-	import { FileEdit, User, Bot, Play, CheckCircle, XCircle, Eye, Terminal, Maximize2, X } from 'lucide-svelte';
+	import { FileEdit, User, Bot, Play, CheckCircle, XCircle, Eye, Terminal, Maximize2, X, RotateCcw, ScrollText, Cat } from 'lucide-svelte';
 	import type { HistoryEntry, Annotation } from '$lib/types';
-	import { agentHistory, annotations, isRendering, historyVerbosity } from '$lib/stores';
+	import { agentHistory, annotations, isRendering, historyVerbosity, sessionCost, agentSettings, pendingReviewRounds, type SessionCost } from '$lib/stores';
 	import type { HistoryVerbosity } from '$lib/stores';
-	import { onMount, onDestroy } from 'svelte';
+	import { onMount, onDestroy, type Snippet } from 'svelte';
+	import SessionViewer from './SessionViewer.svelte';
+	import ShineBorder from './ShineBorder.svelte';
+	import { tooltip } from '$lib/actions/tooltip';
+
+	let transcriptOpen = $state(false);
 
 	interface Props {
 		onNewSession?: () => void | Promise<void>;
+		onWakeUp?: () => void;
+		/** Optional slot for the remaining action buttons (Send, etc.). */
+		dock?: Snippet;
 	}
-	let { onNewSession }: Props = $props();
+	let { onNewSession, onWakeUp, dock }: Props = $props();
+
+	let pendingCount = $state(0);
+	pendingReviewRounds.subscribe((v) => (pendingCount = v.length));
 
 	let entries: HistoryEntry[] = $state([]);
 	agentHistory.subscribe((v) => (entries = v));
@@ -18,12 +29,46 @@
 	let annos: Annotation[] = $state([]);
 	annotations.subscribe((v) => (annos = v));
 
-	let pendingOpCount = $state(0);
+	let cost = $state<SessionCost>({
+		totalCostUsd: 0,
+		inputTokens: 0,
+		outputTokens: 0,
+		cacheCreationTokens: 0,
+		cacheReadTokens: 0,
+		rounds: 0
+	});
+	sessionCost.subscribe((v) => (cost = v));
 
 	let rendering = $state(false);
-	isRendering.subscribe((v) => {
-		rendering = v;
+	isRendering.subscribe((v) => (rendering = v));
+	let silent = $state(false);
+	agentSettings.subscribe((v) => (silent = !v.trackChanges));
+
+	/** Tooltip for the Agent pill. Always describes what the button does;
+	 * folds in cost / token breakdown when the session has run at least
+	 * one round, so the cost stays accessible without cluttering the pill. */
+	let agentTooltip = $derived.by(() => {
+		const action = rendering
+			? 'Agent is working. Currently running a render against the open files.'
+			: 'Wake up the agent. It reviews the open files, reacts to any pending changes, and proposes edits or comments based on the current agency setting.';
+		if (cost.rounds === 0) return action;
+		const costLine = `Session so far: ${formatCost(cost.totalCostUsd)} across ${cost.rounds} round${cost.rounds === 1 ? '' : 's'}. ${formatTokens(cost.inputTokens)} in, ${formatTokens(cost.outputTokens)} out, ${formatTokens(cost.cacheReadTokens)} cache read.`;
+		return `${action}\n\n${costLine}`;
 	});
+
+	function formatCost(usd: number): string {
+		if (usd === 0) return '$0';
+		if (usd < 0.01) return `${(usd * 100).toFixed(2)}¢`;
+		if (usd < 1) return `${(usd * 100).toFixed(1)}¢`;
+		return `$${usd.toFixed(2)}`;
+	}
+	function formatTokens(n: number): string {
+		if (n < 1000) return `${n}`;
+		if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
+		return `${(n / 1_000_000).toFixed(2)}M`;
+	}
+
+	let pendingOpCount = $state(0);
 
 	/** Tick 30s to recompute relative "Xs ago" labels. Driven by a reactive
 	 * state var so `relativeTime()` recomputes when it bumps. */
@@ -194,13 +239,70 @@
 </script>
 
 <div class="history-pane">
+	<!-- Floating dock bar: "Agent" label + live cost stat on the left,
+	     all action buttons grouped on the right. The bar floats with a
+	     soft shadow + rounded corners so it reads as a toolbar, not a
+	     structural header. The dock snippet provides everything in
+	     `.header-actions`; this component just adds the leading label
+	     and the trailing "new session" reset. -->
+	{#if transcriptOpen}
+		<SessionViewer onClose={() => (transcriptOpen = false)} />
+	{/if}
 	<div class="pane-header">
-		<span class="pane-title">Agent History</span>
-		<button
-			class="clear-btn"
-			onclick={() => (onNewSession ? onNewSession() : agentHistory.set([]))}
-			title="Start a fresh agent session — clears history and the SDK session id"
-		>New agent session</button>
+		<ShineBorder
+			active={rendering || pendingCount > 0}
+			radius={999}
+			duration={rendering ? 2.5 : 5}
+			borderWidth={1.5}
+			size={45}
+			thickness={10}
+			color={rendering ? ['var(--accent)', 'var(--accent-subject)'] : ['var(--accent-subject)', 'var(--accent)']}
+		>
+			{#snippet children()}
+				<button
+					class="header-agent-btn header-pill-btn"
+					class:awake={rendering}
+					class:silent
+					class:pending={!rendering && pendingCount > 0}
+					onclick={onWakeUp}
+					disabled={rendering || !onWakeUp}
+					use:tooltip={agentTooltip}
+				>
+					<span class="mascot-face" aria-hidden="true">
+						<Cat size={13} strokeWidth={1.8} />
+					</span>
+					<span class="header-label" class:silent>Agent</span>
+					<span class="header-status" aria-hidden="true">
+						{#if rendering}
+							<span class="bounce-dots"><span>.</span><span>.</span><span>.</span></span>
+						{:else}
+							<span class="sleep-dots"><span>z</span><span>z</span><span>z</span></span>
+						{/if}
+					</span>
+				</button>
+			{/snippet}
+		</ShineBorder>
+		{#if dock}
+			<div class="header-actions">
+				<button
+					class="header-pill-btn"
+					onclick={() => (transcriptOpen = true)}
+					use:tooltip={'Open the session transcript. Shows every user message, Claude response, tool call, and result in this session, with filters and search.'}
+				>
+					<ScrollText size={12} />
+					<span>Transcript</span>
+				</button>
+				{@render dock()}
+				<button
+					class="header-pill-btn"
+					onclick={() => (onNewSession ? onNewSession() : agentHistory.set([]))}
+					use:tooltip={"New agent session. Starts a fresh conversation with the agent. Workspace files, comment threads, rules, hooks, and settings all stay the same. Only the agent's conversation history resets."}
+				>
+					<RotateCcw size={12} />
+					<span>Restart</span>
+				</button>
+			</div>
+		{/if}
 	</div>
 
 	<div class="entries">
@@ -482,28 +584,159 @@
 		font-family: 'Inter', -apple-system, sans-serif;
 		font-size: 13px;
 	}
+	/* Floating dock bar — inset from the pane edges with a soft shadow
+	 * so it reads as a toolbar, not a structural divider. Label on the
+	 * left, button group flush right via margin-left:auto on the
+	 * actions container. `position: relative` so descendants like the
+	 * AgentDock's chat popover can anchor to the full toolbar width
+	 * (spanning the pane) instead of the narrower button area. */
 	.pane-header {
-		padding: 12px 14px 10px;
+		position: relative;
 		display: flex;
-		justify-content: space-between;
 		align-items: center;
+		gap: 8px;
+		margin: 8px;
+		padding: 5px 6px 5px 12px;
+		background: var(--bg-elevated);
+		border: 1px solid var(--border-light);
+		border-radius: 10px;
+		box-shadow: 0 4px 14px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.03);
 	}
-	.pane-title {
-		font-size: 12px;
+	.header-label {
+		font-size: 11px;
 		font-weight: 600;
-		letter-spacing: 0.05em;
+		letter-spacing: 0.06em;
 		text-transform: uppercase;
 		color: var(--text-faint);
+		flex: 0 0 auto;
 	}
-	.clear-btn {
-		font-size: 12px;
+	.header-label.silent {
+		color: #b45309;
+	}
+	/* Status indicator — `zzz` while idle, bouncing dots while rendering.
+	 * Sits adjacent to the "Agent" label since it describes the agent's
+	 * state, not any one button. */
+	.header-status {
+		display: inline-flex;
+		align-items: center;
+		flex: 0 0 auto;
+		min-width: 16px;
+	}
+	.sleep-dots,
+	.bounce-dots {
+		display: inline-flex;
+		gap: 1px;
+		font-family: 'SF Mono', 'Fira Code', 'Menlo', monospace;
+		font-size: 11px;
+		font-weight: 600;
 		color: var(--text-faint);
-		background: none;
-		border: none;
-		cursor: pointer;
-		font-family: inherit;
 	}
-	.clear-btn:hover { color: var(--text-secondary); }
+	.bounce-dots {
+		color: var(--accent);
+		font-weight: 700;
+	}
+	.sleep-dots span {
+		opacity: 0;
+		animation: header-sleep-z 2.4s ease-in-out infinite;
+	}
+	.sleep-dots span:nth-child(1) { animation-delay: 0s; }
+	.sleep-dots span:nth-child(2) { animation-delay: 0.5s; }
+	.sleep-dots span:nth-child(3) { animation-delay: 1.0s; }
+	.bounce-dots span {
+		display: inline-block;
+		animation: header-dot-bounce 1.2s ease-in-out infinite;
+	}
+	.bounce-dots span:nth-child(1) { animation-delay: 0s; }
+	.bounce-dots span:nth-child(2) { animation-delay: 0.2s; }
+	.bounce-dots span:nth-child(3) { animation-delay: 0.4s; }
+	@keyframes header-sleep-z {
+		0% { opacity: 0; transform: translateY(2px) scale(0.8); }
+		20% { opacity: 0.8; transform: translateY(-1px) scale(1); }
+		60% { opacity: 0.8; transform: translateY(-3px) scale(1); }
+		100% { opacity: 0; transform: translateY(-5px) scale(0.9); }
+	}
+	@keyframes header-dot-bounce {
+		0%, 60%, 100% { transform: translateY(0); opacity: 0.6; }
+		30% { transform: translateY(-2px); opacity: 1; }
+	}
+	.header-actions {
+		margin-left: auto;
+		display: flex;
+		align-items: center;
+		gap: 2px;
+		flex: 0 0 auto;
+	}
+	/* Shared pill-button chrome — applied to all 3 action buttons in
+	 * the trailing group (Wake from AgentDock, Send from AgentDock,
+	 * Restart from this component). Icon + text label, ghost until
+	 * hovered. :global() so the AgentDock's buttons inherit it. */
+	/* ShineBorder (BorderBeam) inline so it sits flush in the flex row. */
+	.pane-header :global(.bb-host) {
+		display: inline-flex;
+		align-items: center;
+		flex: 0 0 auto;
+	}
+	/* Agent pill button — contains the cat, label, zzz/dots, and cost. */
+	.header-agent-btn {
+		gap: 4px !important;
+	}
+	.header-agent-btn.awake,
+	.header-agent-btn.pending {
+		border-color: transparent !important;
+	}
+	.header-agent-btn:not(:disabled):hover .header-label {
+		color: var(--text);
+	}
+	.mascot-face {
+		display: inline-flex;
+		align-items: center;
+		color: var(--text-secondary);
+		transform-origin: center bottom;
+		animation: mascot-sleep-bob 3.2s ease-in-out infinite;
+		transition: color 0.3s;
+		flex-shrink: 0;
+	}
+	.header-agent-btn.awake .mascot-face {
+		color: var(--accent);
+		animation: mascot-run 0.6s ease-in-out infinite;
+	}
+	@keyframes mascot-sleep-bob {
+		0%, 100% { transform: scaleY(1) translateY(0); }
+		50% { transform: scaleY(1.04) translateY(-1px); }
+	}
+	@keyframes mascot-run {
+		0% { transform: translateY(0) rotate(-4deg) scaleY(1); }
+		25% { transform: translateY(-5px) rotate(3deg) scaleY(1.05); }
+		50% { transform: translateY(0) rotate(4deg) scaleY(1); }
+		75% { transform: translateY(-3px) rotate(-3deg) scaleY(1.05); }
+		100% { transform: translateY(0) rotate(-4deg) scaleY(1); }
+	}
+	.pane-header :global(.header-pill-btn) {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		height: 26px;
+		padding: 0 10px 0 8px;
+		font-size: 12px;
+		font-family: inherit;
+		font-weight: 500;
+		color: var(--text-faint);
+		background: transparent;
+		border: 1px solid transparent;
+		border-radius: 999px;
+		cursor: pointer;
+		white-space: nowrap;
+		transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+	}
+	.pane-header :global(.header-pill-btn:hover:not(:disabled)) {
+		color: var(--text);
+		background: var(--bg-hover);
+		border-color: var(--border-light);
+	}
+	.pane-header :global(.header-pill-btn:disabled) {
+		cursor: default;
+		opacity: 0.6;
+	}
 
 	/* Entries */
 	.entries {

@@ -106,10 +106,21 @@ other remote update. No client-side 3-way merge, no clone-and-diff, no
 rolling baselines. User keystrokes typed during a render converge with
 agent ops via Yjs's item-level CRDT merge.
 
-On the server, `src/lib/server/ydoc-registry.ts` holds the per-tab
-Y.Doc + `Y.UndoManager` (tracking `AGENT_ORIGIN` only). Reject calls
-`undoManager.undo()` `stepCount` times and removes the round from
-`Y.Map('review')`. Accept is a pure review-map mutation.
+On the server, the per-tab Y.Doc + `Y.UndoManager` (tracking
+`AGENT_ORIGIN` only) lives on the Hocuspocus Document (see
+`ws-server.ts`). Reject removes the round from the review `Y.Array`;
+the doc fragment isn't touched. Accept walks each accepted round and
+applies its `edit` op via `applyEditToFragment` (in `ydoc-codec.ts`),
+which deletes + reinserts only the paragraphs the edit covers. `write`
+ops fall back to wholesale `replaceYDocText`. Both paths run in a single
+`ydoc.transact(..., USER_ORIGIN)` along with the `reviewArr.delete`.
+
+Because Accept's blast radius is bounded to the affected paragraphs,
+the client doesn't need to disconnect + remount the editor to avoid
+clobbering concurrent typing — the Yjs sync delivers the surgical
+update over the existing WebSocket and ProseMirror re-renders only the
+touched range. `acceptAgentEdit` / `rejectAgentEdit` in `+page.svelte`
+just POST to `/api/document` and let the sync handle the UI update.
 
 `src/lib/yjs-agent.ts` on the client keeps a minimal mirror: a per-tab
 UndoManager (same tracked-origin set) so Reject can be local-first

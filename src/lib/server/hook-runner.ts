@@ -9,7 +9,25 @@
  * render them uniformly regardless of trigger.
  */
 import { spawn } from 'node:child_process';
+import { resolve as resolvePath } from 'node:path';
 import { resolveCommand, type Hook } from './hooks-config';
+
+/** Best-effort POST to the /api/live SSE bus on the local Vite/Hocuspocus
+ * server so any open preview windows reload. Fire-and-forget; we don't
+ * await or surface failures (preview is a nice-to-have, not load-bearing
+ * on hook correctness). */
+async function broadcastPreviewReady(outputPath: string): Promise<void> {
+	const port = process.env.PORT || process.env.VITE_PORT || '5173';
+	try {
+		await fetch(`http://127.0.0.1:${port}/api/live`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ event: 'preview_ready', path: outputPath })
+		});
+	} catch {
+		/* preview window may not be open; ignore */
+	}
+}
 
 export type HookRunEmitter = (entry: {
 	hookId: string;
@@ -75,6 +93,23 @@ export function runHookCommand(
 				stderr,
 				durationMs: Date.now() - startedAt
 			});
+			// If the hook produced an output file (e.g. pdflatex → .pdf),
+			// nudge any open preview windows to reload with scroll
+			// preserved. Only fire on success — failed runs leave the old
+			// output in place.
+			if (code === 0 && hook.output) {
+				const resolvedOutput = resolveCommand(hook.output, {
+					tool: toolName,
+					file: filePath
+				});
+				if (resolvedOutput) {
+					const abs = resolvePath(
+						process.env.DOCWRITER_ROOT || process.cwd(),
+						resolvedOutput
+					);
+					void broadcastPreviewReady(abs);
+				}
+			}
 			resolve();
 		});
 	});

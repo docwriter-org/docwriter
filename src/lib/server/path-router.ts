@@ -14,13 +14,12 @@
  *     entry in `tabs.order` directly.
  *   - An absolute path under DOCWRITER_ROOT pointing at the user-facing file
  *     (e.g. `/Users/.../root/drafts/chapter-1.md`) — matches by suffix.
- *   - A path under the shadow dir (`.docwriter/agent/<tabId>`) — scratch-only
- *     in Phase 4; agents are prompted to use `edit_doc` with the real tab id
- *     instead.
+ *   - A scratch path under `.docwriter/agent/scratch/` — handled by the
+ *     scratch branch in the MCP tools; not a tab path.
  *
- * We don't try to resolve shadow paths to tab ids here — the prompt steers
- * the agent to use the workspace path or the tab id directly for tab edits,
- * and the scratch branch covers everything under `.docwriter/agent/scratch/`.
+ * Scratch paths are routed to plain filesystem I/O (the `isScratchPath`
+ * branch in the MCP tools); workspace paths are resolved to tab ids by
+ * `resolveTabFromPath` and routed through the live Y.Doc.
  */
 import { AGENT_SCRATCH_DIR, isAgentScratchPath } from './document-files';
 import { getTabsState } from './runtime-state';
@@ -43,8 +42,8 @@ export function isScratchPath(path: string): boolean {
  *      suffix-form the agent may use).
  *   3. Path ending in `<tabId>` on its own (unlikely but harmless).
  *
- * Does NOT resolve shadow paths — callers should check `isScratchPath` first
- * if they want scratch-vs-tab disambiguation. */
+ * Does NOT distinguish scratch paths — callers must check `isScratchPath`
+ * first if they care about scratch-vs-tab routing. */
 export function resolveTabFromPath(path: string): string | null {
 	const open = getTabsState().order;
 	// Longest-first so nested ids (e.g. `drafts/one.md` vs. `one.md`) match

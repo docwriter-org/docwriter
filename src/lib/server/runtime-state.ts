@@ -10,6 +10,7 @@ import {
 	kvGet
 } from './db-writes';
 import { getDb } from './db';
+import { syncRulesToClaudeMemory } from './claude-memory';
 
 /**
  * Server-side runtime state lives in SQLite (`.docwriter/docwriter.db`).
@@ -120,6 +121,11 @@ export function getRules(): Rule[] {
 
 export function setRules(rules: Rule[]) {
 	dbReplaceRules(rules);
+	// Mirror rules into .claude/CLAUDE.md so they survive Agent SDK
+	// context compaction (the SDK auto-reloads CLAUDE.md on compact
+	// but summarizes away user messages, where rules currently get
+	// injected per render). Best-effort — see claude-memory.ts.
+	syncRulesToClaudeMemory(rules);
 }
 
 export function getAgentSettings(): AgentSettings {

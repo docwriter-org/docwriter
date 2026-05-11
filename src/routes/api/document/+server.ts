@@ -21,16 +21,14 @@ function countOccurrences(haystack: string, needle: string): number {
 /**
  * Per-tab document endpoint.
  *
- * Post Phase 5+6: this endpoint is only used for:
  *   - `GET` — read the current on-disk text + JSON meta (rules /
  *     agentSettings). Used by the client's initial `loadTab`.
- *   - `PUT` — persist `meta` (rules / agentSettings). Content writes are ignored
- *     since Y.Doc sync owns editor content; the PUT is kept for meta-only
- *     writes from the AgentSettings / Rules panels.
- *
- * `POST` handles review-state mutations that need a server ack before the
- * UI clears, so a hard refresh cannot race ahead of the browser's
- * WebSocket send and resurrect already-accepted rounds.
+ *   - `PUT` — persist `meta` (rules / agentSettings). Editor content
+ *     writes are ignored here; Y.Doc sync over WebSocket owns content.
+ *   - `POST` — review-state mutations (accept_rounds / reject_rounds)
+ *     that need a server ack before the UI clears, so a hard refresh
+ *     can't race ahead of the WebSocket send and resurrect already-
+ *     accepted rounds.
  */
 
 function resolveTabId(url: URL): string {

@@ -5,7 +5,20 @@
 	import { ySyncPluginKey } from 'y-prosemirror';
 	import { DiffOverlay, setDiffState } from './diff-overlay';
 	import { CommentOverlay, setCommentOverlayState } from './comment-overlay';
+	import { CelebrationOverlay, flashCelebration } from './celebration-overlay';
+	import {
+		FindOverlay,
+		findKey,
+		openFind,
+		closeFind,
+		setFindQuery,
+		findStep,
+		type FindState
+	} from './find-overlay';
+	import FindBar from '$lib/components/FindBar.svelte';
+	import PreviewButton from '$lib/components/PreviewButton.svelte';
 	import CommentGutter from '$lib/components/CommentGutter.svelte';
+	import { Crosshair } from 'lucide-svelte';
 	import { collaborativeExtensions } from '$lib/editor-extensions';
 	import { getYDoc, whenYDocReady, getCurrentTab, waitForCurrentTabSync } from '$lib/yjs-doc';
 	import {
@@ -20,7 +33,8 @@
 		trackActionUsage,
 		pendingReviewRounds,
 		commentThreads,
-		openCommentThreadId
+		openCommentThreadId,
+		activeTab
 	} from '$lib/stores';
 	import type { Action, Annotation, CommentThread, FeedbackMode } from '$lib/types';
 
@@ -59,6 +73,17 @@
 	// pinned actions + LRU recent actions + an open-ended text input.
 	let feedbackPopup = $state<{ text: string; x: number; y: number; flipBelow: boolean; anchorTop: number; anchorBottom: number } | null>(null);
 	let feedbackPopupEl: HTMLDivElement | null = $state(null);
+
+	// Mirror of the FindOverlay plugin state, kept in sync via the editor's
+	// `update` event below. Drives the FindBar's input, counter, and
+	// match-stepping buttons.
+	let findState = $state<FindState>({
+		open: false,
+		query: '',
+		caseSensitive: false,
+		matches: [],
+		currentIdx: -1
+	});
 	let feedbackInputEl: HTMLDivElement | null = $state(null);
 	let feedbackInput = $state('');
 	/** Routing mode for the current feedback submission. `auto` lets the
@@ -457,6 +482,102 @@
 	 * `$state` so the `.feedback-active` class on the wrapper reacts. */
 	let feedbackSelectionRange: { from: number; to: number } | null = $state(null);
 
+	// Cached preview-hook output path for the active tab. Used to gate
+	// the "Show in PDF" button in the feedback popover — only useful
+	// when there's a build hook producing a PDF (or other previewable
+	// file) for the current tab. Refreshed on every active-tab change.
+	let previewOutputPath = $state<string | null>(null);
+	activeTab.subscribe(() => void refreshPreviewOutputPath());
+	async function refreshPreviewOutputPath() {
+		const tabId = getCurrentTab();
+		if (!tabId) {
+			previewOutputPath = null;
+			return;
+		}
+		try {
+			const res = await fetch(
+				`/api/hooks/preview-match?file=${encodeURIComponent(tabId)}`
+			);
+			if (!res.ok) {
+				previewOutputPath = null;
+				return;
+			}
+			const data = await res.json();
+			previewOutputPath = typeof data?.outputPath === 'string' ? data.outputPath : null;
+		} catch {
+			previewOutputPath = null;
+		}
+	}
+
+	/** Compute the 1-based line number of the current feedback selection
+	 * in the editor's plain text. In docwriter's plain-text mode each
+	 * paragraph is one source line, so we count paragraph boundaries
+	 * before the selection's `from` position. */
+	function selectionLineNumber(): number | null {
+		if (!editor || !feedbackSelectionRange) return null;
+		const { from } = feedbackSelectionRange;
+		let line = 1;
+		let pos = 0;
+		const doc = editor.state.doc;
+		for (let i = 0; i < doc.childCount; i += 1) {
+			const child = doc.child(i);
+			const childEnd = pos + child.nodeSize;
+			if (from < childEnd) return line;
+			pos = childEnd;
+			line += 1;
+		}
+		return line;
+	}
+
+	let pdfJumpChannel: BroadcastChannel | null = null;
+	function getPdfJumpChannel(): BroadcastChannel | null {
+		if (typeof window === 'undefined') return null;
+		if (pdfJumpChannel) return pdfJumpChannel;
+		try {
+			pdfJumpChannel = new BroadcastChannel('docwriter-preview');
+		} catch {
+			pdfJumpChannel = null;
+		}
+		return pdfJumpChannel;
+	}
+
+	async function showInPdf() {
+		if (!previewOutputPath) return;
+		const tabId = getCurrentTab();
+		if (!tabId) return;
+		const line = selectionLineNumber();
+		if (line == null) return;
+		try {
+			const res = await fetch('/api/synctex', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					mode: 'forward',
+					file: tabId,
+					line,
+					column: 0,
+					pdf: previewOutputPath
+				})
+			});
+			const data = await res.json();
+			if (!data?.ok) return;
+			const ch = getPdfJumpChannel();
+			if (!ch) return;
+			ch.postMessage({
+				kind: 'pdf-jump',
+				page: data.page,
+				x: data.x,
+				y: data.y,
+				h: data.h,
+				v: data.v,
+				w: data.w,
+				height: data.height
+			});
+		} catch {
+			/* synctex CLI missing or build not yet produced .synctex.gz — silent */
+		}
+	}
+
 	function syncCommentOverlay() {
 		if (!editor) return;
 		setCommentOverlayState(editor, {
@@ -465,15 +586,37 @@
 		});
 	}
 
+	// Whether a diff-state update is already queued for this microtask checkpoint.
+	let diffUpdateQueued = false;
+
+	/** Schedule a deferred setDiffState call.
+	 *
+	 * Yjs observer callbacks (fragment.observe, reviewArr.observe) fire in this
+	 * order within a single transaction cleanup:
+	 *   1. Direct type observers  ← textHandler / reviewArr handler call updateDiff
+	 *   2. Deep observers         ← y-prosemirror's _typeChanged updates ProseMirror
+	 *
+	 * If we dispatch a PM transaction synchronously in step 1, y-prosemirror sees
+	 * a non-isChangeOrigin transaction and calls _prosemirrorChanged with the OLD
+	 * PM doc, writing the old text BACK into the Yjs fragment (clobbering the
+	 * accepted edit). Deferring to a queueMicrotask ensures setDiffState fires
+	 * AFTER step 2, by which time PM already has the new content. At that point
+	 * _prosemirrorChanged is a no-op (PM == Yjs). */
 	function updateDiff() {
 		if (!editor) return;
-		setDiffState(editor, {
-			baseline: currentBaseline,
-			proposedText: currentProposalText,
-			annotations: currentAnnotations.filter((annotation) => annotation.tabId === getCurrentTab()),
-			activeFeedbackRange: feedbackSelectionRange,
-			isPlainText: true,
-			allRoundsTiny
+		if (diffUpdateQueued) return;
+		diffUpdateQueued = true;
+		queueMicrotask(() => {
+			diffUpdateQueued = false;
+			if (!editor) return;
+			setDiffState(editor, {
+				baseline: currentBaseline,
+				proposedText: currentProposalText,
+				annotations: currentAnnotations.filter((annotation) => annotation.tabId === getCurrentTab()),
+				activeFeedbackRange: feedbackSelectionRange,
+				isPlainText: true,
+				allRoundsTiny
+			});
 		});
 	}
 
@@ -517,7 +660,10 @@
 	}
 
 	/**
-	 * Update policy (Phase 3+: server is authoritative, autosave is gone)
+	 * Update policy: the server is authoritative for persistence (Hocuspocus
+	 * persists every WebSocket update), so this component doesn't HTTP-
+	 * autosave. It only decides whether each PM transaction should restart
+	 * the auto-submit idle timer:
 	 * ┌─────────────┬────────────┐
 	 * │    Kind     │ Idle timer │
 	 * ├─────────────┼────────────┤
@@ -525,9 +671,6 @@
 	 * ├─────────────┼────────────┤
 	 * │ user-edit   │ restart    │
 	 * └─────────────┴────────────┘
-	 *
-	 * The server persists WebSocket updates; this component only restarts the
-	 * idle submit countdown for user-origin edits.
 	 */
 	function onEditorUpdate({ transaction }: { transaction: Transaction }) {
 		if (!editor) return;
@@ -556,15 +699,28 @@
 			extensions: [
 				...collaborativeExtensions(ydoc, { placeholder: 'Start writing...' }),
 				DiffOverlay,
-				CommentOverlay
+				CommentOverlay,
+				CelebrationOverlay,
+				FindOverlay
 			],
 			// Collaboration provides initial content from the Y.Doc; do NOT
 			// pass a string `content` here (doing so would wipe the Y.Doc).
 			editorProps: {
 				attributes: { class: 'tiptap-content tiptap-plain' },
-				// Cmd/Ctrl+Enter wakes the agent immediately, skipping the
-				// idle countdown. Plain Enter still inserts a new line.
 				handleKeyDown: (_view, event) => {
+					// Cmd/Ctrl+F opens the find bar. Block the browser's
+					// native find dialog so we own the in-doc search UX.
+					if (
+						(event.key === 'f' || event.key === 'F') &&
+						(event.metaKey || event.ctrlKey) &&
+						!event.altKey
+					) {
+						event.preventDefault();
+						if (editor) openFind(editor);
+						return true;
+					}
+					// Cmd/Ctrl+Enter wakes the agent immediately, skipping the
+					// idle countdown. Plain Enter still inserts a new line.
 					if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
 						event.preventDefault();
 						if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
@@ -659,6 +815,14 @@
 		schedulePlainLineSync();
 		updateDiff();
 		editor.on('update', ({ transaction }) => onEditorUpdate({ transaction }));
+		// Keep our reactive `findState` in sync with the FindOverlay plugin
+		// state so the FindBar re-renders match counts, current index, etc.
+		// after every transaction (typing, query change, step, close).
+		editor.on('transaction', () => {
+			if (!editor) return;
+			const next = findKey.getState(editor.view.state);
+			if (next) findState = next;
+		});
 
 		if (typeof ResizeObserver !== 'undefined') {
 			plainResizeObserver = new ResizeObserver(() => schedulePlainLineSync());
@@ -722,8 +886,40 @@
 	export function getScrollTop(): number {
 		return wrapperEl?.scrollTop ?? 0;
 	}
+
+	// Flash a sage-green halo on the freshly-accepted text range. Called
+	// by the parent right after a successful Accept; locates the new
+	// text in the live PM doc and dispatches the celebration decoration
+	// for ~800ms. No-op if `text` isn't found (race or fall-through).
+	export function flashAcceptedRange(text: string): void {
+		if (!editor) return;
+		flashCelebration(editor, text);
+	}
 </script>
 
+<div class="tiptap-host" class:find-open={findState.open}>
+	<!-- Top-right floating chrome: preview button + find bar. Both live
+	     outside the scroll container so they pin regardless of scroll.
+	     When find is open, the preview button shifts down so the two
+	     don't overlap (FindBar wins the corner). -->
+	<PreviewButton activeTabPath={getCurrentTab() ?? null} />
+	{#if findState.open}
+		<FindBar
+			findState={findState}
+			onQueryChange={(query, caseSensitive) => {
+				if (editor) setFindQuery(editor, { query, caseSensitive });
+			}}
+			onStep={(dir) => {
+				if (editor) findStep(editor, dir);
+			}}
+			onClose={() => {
+				if (editor) {
+					closeFind(editor);
+					editor.commands.focus();
+				}
+			}}
+		/>
+	{/if}
 <div
 	class="tiptap-wrapper"
 	class:plain-mode-wrapper={true}
@@ -800,6 +996,17 @@
 			<div class="feedback-quote">
 				"{feedbackPopup.text.slice(0, 200)}{feedbackPopup.text.length > 200 ? '…' : ''}"
 			</div>
+			{#if previewOutputPath}
+				<button
+					class="feedback-show-in-pdf"
+					type="button"
+					onclick={showInPdf}
+					title="Locate this passage in the preview window (forward SyncTeX). Preview window must be open."
+				>
+					<Crosshair size={11} />
+					<span>Locate in PDF</span>
+				</button>
+			{/if}
 				<div class="feedback-input-row">
 				<div
 					class="feedback-input"
@@ -900,8 +1107,25 @@
 		</div>
 	{/if}
 </div>
+</div>
 
 <style>
+	/* Host wraps the scrolling .tiptap-wrapper plus any chrome (FindBar,
+	 * PreviewButton) that needs to stay pinned regardless of scroll. The
+	 * host itself is the positioning context for those overlays. */
+	.tiptap-host {
+		position: relative;
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		min-width: 0;
+		min-height: 0;
+	}
+	/* When the FindBar is open, drop the PreviewButton below it so the
+	 * two don't collide in the corner. */
+	.tiptap-host.find-open :global(.preview-btn) {
+		top: 50px;
+	}
 	.tiptap-wrapper {
 		position: relative;
 		flex: 1;
@@ -1185,6 +1409,40 @@
 		box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--accent) 42%, transparent);
 		border-radius: 2px;
 	}
+	/* Find-in-doc match highlights. Soft amber on every match; the
+	 * "current" match (where prev/next focus is) gets a stronger ring +
+	 * background so the user can see where they are at a glance. */
+	.tiptap-editor :global(.search-match) {
+		background: color-mix(in srgb, #f59e0b 22%, transparent);
+		border-radius: 2px;
+	}
+	.tiptap-editor :global(.search-match-current) {
+		background: color-mix(in srgb, #f59e0b 42%, transparent);
+		box-shadow: inset 0 0 0 1.5px #d97706;
+	}
+	/* "Small win" celebration: brief sage-green halo on text the user just
+	 * accepted. The plugin adds this class for ~800ms; the keyframe fades
+	 * background + box-shadow to transparent over the same window so the
+	 * decoration lands and clears in one breath. ease-out-quart settles
+	 * the way real things settle (fast start, soft stop). */
+	.tiptap-editor :global(.accept-celebrate) {
+		border-radius: 3px;
+		animation: docwriter-accept-flash 800ms cubic-bezier(0.16, 1, 0.3, 1) both;
+	}
+	@keyframes docwriter-accept-flash {
+		0% {
+			background: var(--win-bg, #d1fae5);
+			box-shadow: inset 0 0 0 1px var(--win-border, #10b981);
+		}
+		60% {
+			background: var(--win-bg, #d1fae5);
+			box-shadow: inset 0 0 0 1px var(--win-border, #10b981);
+		}
+		100% {
+			background: transparent;
+			box-shadow: inset 0 0 0 1px transparent;
+		}
+	}
 	.tiptap-editor :global(.diff-removed-widget.diff-removed-tiny) {
 		background: transparent;
 		color: color-mix(in srgb, var(--diff-removed-color) 70%, var(--text-faint));
@@ -1229,6 +1487,30 @@
 		overflow-wrap: anywhere;
 		max-width: 100%;
 		min-width: 0;
+	}
+	/* "Locate in PDF" — forward SyncTeX. Only renders when a preview
+	 * hook exists for the active tab. Ghost styling so it sits quietly
+	 * with the popover's other secondary affordances (mode toggles,
+	 * recent-feedback chips) instead of competing for attention. */
+	.feedback-show-in-pdf {
+		font: inherit;
+		font-size: 11px;
+		color: var(--text-faint);
+		background: transparent;
+		border: 1px solid var(--border-light);
+		border-radius: 999px;
+		padding: 3px 9px 3px 7px;
+		margin-bottom: 8px;
+		cursor: pointer;
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+	}
+	.feedback-show-in-pdf:hover {
+		color: var(--text);
+		background: var(--bg-hover);
+		border-color: var(--border);
 	}
 	.feedback-input-row {
 		display: flex;

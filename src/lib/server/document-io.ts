@@ -12,13 +12,10 @@ import {
 } from './runtime-state';
 
 /**
- * Server-side document layer.
- *
- * Post Phase 5+6: the agent edits flow through custom MCP tools that mutate
- * the live Hocuspocus Y.Doc directly (see `mcp-doc-tools.ts`). The old
- * `.docwriter/agent/<tabId>` shadow files and the 3-way merge machinery are
- * gone. This module now only handles the user-facing file on disk plus the
- * rules / agent-settings metadata backed by SQLite runtime state.
+ * Server-side document layer. Handles the user-facing file on disk plus
+ * the rules / agent-settings metadata backed by SQLite runtime state.
+ * Agent edits go through `mcp-doc-tools.ts`, which mutates the live
+ * Hocuspocus Y.Doc directly — they don't pass through this module.
  */
 
 export interface DocMeta {

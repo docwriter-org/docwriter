@@ -7,7 +7,8 @@
  */
 import type { Handle } from '@sveltejs/kit';
 import { randomUUID } from 'node:crypto';
-import { getSessionId, setSessionId } from '$lib/server/runtime-state';
+import { getRules, getSessionId, setSessionId } from '$lib/server/runtime-state';
+import { syncRulesToClaudeMemory } from '$lib/server/claude-memory';
 import { installBundledSkills } from '$lib/server/skills-install';
 import { createWsServer } from '$lib/server/ws-server';
 
@@ -29,9 +30,9 @@ if (!globalAny[SERVER_INSTANCE_ID_KEY]) {
 // settingSource. Idempotent — only overwrites the built-in skill files.
 installBundledSkills();
 
-// Phase 2: start the Hocuspocus WebSocket Y.Doc sync server on a separate
-// port alongside Vite's HTTP server. Module-scope singleton guard keeps
-// Vite HMR (which re-executes this file on save) from double-binding.
+// Start the Hocuspocus WebSocket Y.Doc sync server on a separate port
+// alongside Vite's HTTP server. Module-scope singleton guard keeps Vite
+// HMR (which re-executes this file on save) from double-binding.
 const WS_PORT = parseInt(process.env.DOCWRITER_WS_PORT ?? '', 10) || 3001;
 let wsServer: ReturnType<typeof createWsServer> | null = (globalThis as unknown as { __docwriterWsServer?: ReturnType<typeof createWsServer> }).__docwriterWsServer ?? null;
 if (!wsServer) {
@@ -43,6 +44,17 @@ if (!wsServer) {
 	} catch (err) {
 		console.error('[docwriter] failed to start Y.Doc WebSocket server:', err);
 	}
+}
+
+// Safety-net re-sync of rules → .claude/CLAUDE.md on every server boot.
+// Catches the rare case where a previous mutation landed the DB write
+// but crashed before the file write — without this, the drift would
+// persist until the next rule edit. Cheap: hash-checked, no-ops when
+// the file already matches.
+try {
+	syncRulesToClaudeMemory(getRules());
+} catch {
+	/* fresh workspace or DB not yet initialized — ignore */
 }
 
 // Run at module load (= server startup), not per-request.

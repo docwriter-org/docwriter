@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { X, Plus, Play } from 'lucide-svelte';
+	import { X, Plus, Play, Sparkles } from 'lucide-svelte';
 	import { agentHistory, activeTab } from '$lib/stores';
+	import { HOOK_TEMPLATES, type HookTemplate } from '$lib/shared/hook-templates';
 
 	type HookEvent =
 		| 'PreToolUse'
@@ -31,12 +32,17 @@
 		matcher?: string;
 		command: string;
 		enabled?: boolean;
+		/** Optional output file the hook produces (PDF, HTML, etc.). When
+		 * set, the preview window watches for hook completion and reloads
+		 * this file. Supports `{{file}}` / `{{tool}}` templating. */
+		output?: string;
 	}
 
 	let hooks = $state<Hook[]>([]);
 	let newEvent = $state<HookEvent>('PostToolUse');
 	let newMatcher = $state('');
 	let newCommand = $state('');
+	let newOutput = $state('');
 	let loading = $state(true);
 
 	async function load() {
@@ -67,16 +73,29 @@
 	function addHook() {
 		const command = newCommand.trim();
 		if (!command) return;
+		const output = newOutput.trim();
 		const hook: Hook = {
 			id: 'h_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
 			event: newEvent,
 			matcher: newMatcher.trim() || undefined,
 			command,
-			enabled: true
+			enabled: true,
+			...(output ? { output } : {})
 		};
 		void persist([...hooks, hook]);
 		newCommand = '';
 		newMatcher = '';
+		newOutput = '';
+	}
+
+	/** Populate the add-form fields from a HOOK_TEMPLATES entry. The user
+	 * can tweak before clicking the + button. Doesn't auto-add the hook —
+	 * gives the user a beat to confirm matcher / output / command. */
+	function applyTemplate(t: HookTemplate) {
+		newEvent = t.event;
+		newMatcher = t.matcher ?? '';
+		newCommand = t.command;
+		newOutput = t.output ?? '';
 	}
 
 	function removeHook(id: string) {
@@ -86,6 +105,21 @@
 	function toggleHook(id: string) {
 		void persist(
 			hooks.map((h) => (h.id === id ? { ...h, enabled: h.enabled === false } : h))
+		);
+	}
+
+	function updateCommand(id: string, command: string) {
+		const trimmed = command.trim();
+		if (!trimmed) return;
+		void persist(hooks.map((h) => (h.id === id ? { ...h, command: trimmed } : h)));
+	}
+
+	function updateOutput(id: string, output: string) {
+		const trimmed = output.trim();
+		void persist(
+			hooks.map((h) =>
+				h.id === id ? { ...h, ...(trimmed ? { output: trimmed } : { output: undefined }) } : h
+			)
 		);
 	}
 
@@ -239,7 +273,30 @@
 							<span class="hook-matcher">/{hook.matcher}/</span>
 						{/if}
 					</div>
-					<div class="hook-command">{hook.command}</div>
+					<div class="hook-fields">
+						<input
+							class="hook-command-input"
+							type="text"
+							value={hook.command}
+							title={hook.command}
+							disabled={hook.enabled === false}
+							onblur={(e) => updateCommand(hook.id, (e.currentTarget as HTMLInputElement).value)}
+							onkeydown={(e) => { if (e.key === 'Enter') (e.currentTarget as HTMLInputElement).blur(); }}
+						/>
+						<input
+							class="hook-output-input"
+							class:set={!!hook.output}
+							type="text"
+							value={hook.output ?? ''}
+							placeholder="output file (optional) → reveals the Preview button"
+							title={hook.output
+								? `Output: ${hook.output} — Preview button is enabled for any matching tab`
+								: 'Add an output path (e.g. main.pdf) to enable the Preview button for matching tabs'}
+							disabled={hook.enabled === false}
+							onblur={(e) => updateOutput(hook.id, (e.currentTarget as HTMLInputElement).value)}
+							onkeydown={(e) => { if (e.key === 'Enter') (e.currentTarget as HTMLInputElement).blur(); }}
+						/>
+					</div>
 					<div class="hook-actions">
 						<button
 							class="run-btn"
@@ -270,6 +327,22 @@
 	{/if}
 
 	<div class="add-form">
+		<div class="templates-row" role="group" aria-label="Add from template">
+			<span class="templates-label">
+				<Sparkles size={11} />
+				Templates
+			</span>
+			<div class="templates-chips">
+				{#each HOOK_TEMPLATES as t (t.id)}
+					<button
+						type="button"
+						class="template-chip"
+						onclick={() => applyTemplate(t)}
+						title={t.description}
+					>{t.label}</button>
+				{/each}
+			</div>
+		</div>
 		<div class="form-row">
 			<select class="event-select" bind:value={newEvent}>
 				{#each EVENT_OPTIONS as ev}
@@ -298,15 +371,23 @@
 				<Plus size={13} />
 			</button>
 		</div>
+		<div class="form-row">
+			<input
+				class="command-input"
+				bind:value={newOutput}
+				placeholder="output file (optional) — fill this to reveal the Preview button"
+				onkeydown={(e) => e.key === 'Enter' && addHook()}
+			/>
+		</div>
 		<div class="form-hint">
-			Use <code>{'{{file}}'}</code> for the edited file path, <code>{'{{tool}}'}</code> for the tool name.
+			Templating: <code>{'{{file}}'}</code> = edited file path, <code>{'{{stem}}'}</code> = file without extension, <code>{'{{tool}}'}</code> = tool name. <strong>Filling the output field</strong> (PDF / HTML / image) reveals a Preview button in the editor that opens a popup window — it auto-reloads with scroll preserved each time the hook finishes.
 		</div>
 	</div>
 </div>
 
 <style>
 	.hooks-panel {
-		width: 400px;
+		width: 480px;
 		padding: 14px 14px 12px;
 		font-family: 'Inter', -apple-system, sans-serif;
 		font-size: 13px;
@@ -350,10 +431,6 @@
 		border-radius: 6px;
 		min-width: 0;
 	}
-	.hook-row.disabled .hook-command {
-		opacity: 0.5;
-		text-decoration: line-through;
-	}
 	.hook-meta {
 		display: flex;
 		flex-direction: column;
@@ -373,15 +450,63 @@
 		font-size: 10px;
 		color: var(--text-faint);
 	}
-	.hook-command {
+	/* Two stacked inputs per hook row: command on top, output below.
+	 * Sharing the same chrome (transparent border until hover/focus)
+	 * so they read as a tight pair, not two unrelated fields. */
+	.hook-fields {
 		flex: 1;
+		min-width: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+	}
+	.hook-command-input,
+	.hook-output-input {
+		width: 100%;
 		min-width: 0;
 		font-family: 'SF Mono', 'Menlo', monospace;
 		font-size: 11.5px;
 		color: var(--text-secondary);
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
+		background: transparent;
+		border: 1px solid transparent;
+		border-radius: 4px;
+		padding: 2px 5px;
+		outline: none;
+		cursor: text;
+		box-sizing: border-box;
+		transition: border-color 0.12s, background 0.12s;
+	}
+	.hook-output-input {
+		font-size: 11px;
+		color: var(--text-faint);
+	}
+	/* Subtle accent when the output is set — signals "preview button is
+	 * available for matching tabs" at a glance, without being loud. */
+	.hook-output-input.set {
+		color: var(--accent);
+	}
+	.hook-output-input::placeholder {
+		color: var(--text-faint);
+		font-style: italic;
+		opacity: 0.7;
+	}
+	.hook-command-input:hover:not(:disabled),
+	.hook-output-input:hover:not(:disabled) {
+		border-color: var(--border-light);
+		background: var(--bg);
+	}
+	.hook-command-input:focus,
+	.hook-output-input:focus {
+		border-color: var(--accent);
+		background: var(--bg);
+		box-shadow: 0 0 0 3px var(--accent-bg);
+		color: var(--text);
+	}
+	.hook-command-input:disabled,
+	.hook-output-input:disabled {
+		opacity: 0.5;
+		text-decoration: line-through;
+		cursor: default;
 	}
 	.hook-actions {
 		display: flex;
@@ -429,6 +554,50 @@
 	.add-form {
 		border-top: 1px solid var(--border-light);
 		padding-top: 10px;
+	}
+	/* Templates row: click a chip to populate the form fields from a
+	 * curated preset (latexmk, pandoc, etc.). User can tweak before
+	 * saving. Keeps build-and-preview hooks discoverable without
+	 * forcing memorization of the exact CLI flags. */
+	.templates-row {
+		display: flex;
+		align-items: flex-start;
+		gap: 8px;
+		margin-bottom: 8px;
+	}
+	.templates-label {
+		display: inline-flex;
+		align-items: center;
+		gap: 3px;
+		font-size: 10px;
+		font-weight: 600;
+		color: var(--text-faint);
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		padding-top: 4px;
+		flex-shrink: 0;
+	}
+	.templates-chips {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 4px;
+	}
+	.template-chip {
+		font: inherit;
+		font-size: 11px;
+		color: var(--text-secondary);
+		background: var(--bg-surface);
+		border: 1px solid var(--border-light);
+		border-radius: 999px;
+		padding: 3px 9px;
+		cursor: pointer;
+		white-space: nowrap;
+		transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+	}
+	.template-chip:hover {
+		color: var(--text);
+		background: var(--bg-hover);
+		border-color: var(--border);
 	}
 	.form-row {
 		display: flex;
@@ -492,6 +661,8 @@
 		font-size: 11px;
 		color: var(--text-faint);
 		line-height: 1.4;
+		cursor: default;
+		user-select: text;
 	}
 	.form-hint code {
 		font-family: 'SF Mono', 'Menlo', monospace;

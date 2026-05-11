@@ -1,7 +1,7 @@
 import { join } from 'path';
 import { existsSync, mkdirSync } from 'fs';
 
-// DocWriter persistence layout (post Phase 5+6):
+// DocWriter persistence layout:
 //
 //   <file-the-user-wanted>.md         ← ANY file in the workspace can be
 //   drafts/chapter-1.md                 an open tab. Tab ID = the file's
@@ -14,9 +14,8 @@ import { existsSync, mkdirSync } from 'fs';
 //     agent/scratch/                  ← agent scratch workspace — created
 //                                       lazily on first scratch write.
 //
-// The old per-tab shadow directory (.docwriter/agent/<tabId>) is gone:
-// agent edits now mutate the live Hocuspocus Y.Doc via the custom MCP
-// tools in `mcp-doc-tools.ts`, which syncs directly to the browser.
+// Agent edits to tab files go through `mcp-doc-tools.ts`, which mutates
+// the live Hocuspocus Y.Doc and syncs to the browser via WebSocket.
 
 const ROOT = process.env.DOCWRITER_ROOT || process.cwd();
 

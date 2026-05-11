@@ -22,9 +22,11 @@ import {
 	USER_ORIGIN,
 	FRAGMENT_NAME,
 	getReviewArray,
+	getFragment,
 	readReviewRounds,
 	serializeYDoc,
-	replaceYDocText
+	replaceYDocText,
+	applyEditToFragment
 } from '$lib/shared/ydoc-codec';
 import { applyPendingReviewRound } from '$lib/review-rounds';
 import {
@@ -172,25 +174,31 @@ async function withLiveDoc<T>(
 export async function acceptTabRounds(
 	tabId: string,
 	roundId?: string
-): Promise<{ acceptedCount: number; rounds: PendingReviewRound[] }> {
+): Promise<{ acceptedCount: number; rounds: PendingReviewRound[]; yjsUpdate: string | null }> {
 	return withLiveDoc(tabId, (ydoc) => {
 		const reviewArr = getReviewArray(ydoc);
 		const current = reviewArr.toArray();
 		let cutIdx: number;
 		if (!roundId) {
-			if (current.length === 0) return { acceptedCount: 0, rounds: [] };
+			if (current.length === 0) return { acceptedCount: 0, rounds: [], yjsUpdate: null };
 			cutIdx = current.length;
 		} else {
 			const idx = current.findIndex((r) => r.id === roundId);
-			if (idx < 0) return { acceptedCount: 0, rounds: current };
+			if (idx < 0) return { acceptedCount: 0, rounds: current, yjsUpdate: null };
 			cutIdx = idx + 1;
 		}
 		const accepted = current.slice(0, cutIdx);
 		const remaining = current.slice(cutIdx);
 
-		let commitTarget = serializeYDoc(ydoc);
+		// Stale check first: walk the ops as a string transform to verify each
+		// round can still apply. Only after every round passes do we commit
+		// to mutating the live fragment — otherwise a stale round mid-batch
+		// would leave the doc in a half-applied state. (We intentionally
+		// re-do this work inside the transact below; this pre-pass exists
+		// solely to throw before any mutation lands.)
+		let staleCheck = serializeYDoc(ydoc);
 		for (const round of accepted) {
-			const applied = applyPendingReviewRound(commitTarget, round);
+			const applied = applyPendingReviewRound(staleCheck, round);
 			if (applied.stale) {
 				const err = new Error(
 					round.staleReason ??
@@ -202,17 +210,69 @@ export async function acceptTabRounds(
 				err.staleRound = round;
 				throw err;
 			}
-			commitTarget = applied.nextText;
+			staleCheck = applied.nextText;
 		}
 
+		// Capture state vector before mutation so we can compute the exact
+		// delta to send back to the client in the HTTP response. The client
+		// applies this delta directly — no WebSocket round-trip, no remount.
+		const beforeStateVector = Y.encodeStateVector(ydoc);
+
+		// Mutate the live fragment one op at a time, touching only the
+		// paragraphs each op covers. Concurrent user typing in any other
+		// paragraph merges through Yjs CRDT untouched. `write` ops are
+		// wholesale by contract; they keep using replaceYDocText.
 		ydoc.transact(() => {
-			if (serializeYDoc(ydoc) !== commitTarget) {
-				replaceYDocText(ydoc, commitTarget);
+			const fragment = getFragment(ydoc);
+			for (const round of accepted) {
+				const op = round.operation;
+				if (!op) {
+					// Legacy round without an operation; carry over the stored
+					// afterMd by replacing the fragment wholesale. Rare; only
+					// hit by rounds persisted before the operation field
+					// existed.
+					if (typeof round.afterMd === 'string') {
+						replaceYDocText(ydoc, round.afterMd);
+					}
+					continue;
+				}
+				if (op.type === 'write') {
+					replaceYDocText(ydoc, op.content);
+					continue;
+				}
+				// op.type === 'edit'
+				const ok = applyEditToFragment(
+					fragment,
+					op.oldString,
+					op.newString,
+					op.replaceAll === true
+				);
+				if (!ok) {
+					// Stale check passed but the surgical apply couldn't find
+					// the string. Concurrent user edit between the check and
+					// the apply (rare; same transact, but still possible if
+					// the fragment shape diverges from the serialized text we
+					// stale-checked against). Throw so the client can re-queue
+					// the round; the partially-applied prior rounds in this
+					// batch land — better than reverting them and losing them.
+					const err = new Error(
+						`Edit could not be applied surgically: oldString not found in the live fragment. The text may have changed concurrently. Re-queue the round.`
+					) as Error & { staleRoundId?: string; staleRound?: PendingReviewRound };
+					err.name = 'StalePendingReviewError';
+					err.staleRoundId = round.id;
+					err.staleRound = round;
+					throw err;
+				}
 			}
 			reviewArr.delete(0, cutIdx);
 		}, USER_ORIGIN);
 
-		return { acceptedCount: accepted.length, rounds: remaining };
+		// Encode the exact Yjs delta so the client can apply it immediately
+		// via the HTTP response, without waiting for the WebSocket broadcast.
+		const deltaBytes = Y.encodeStateAsUpdate(ydoc, beforeStateVector);
+		const yjsUpdate = Buffer.from(deltaBytes).toString('base64');
+
+		return { acceptedCount: accepted.length, rounds: remaining, yjsUpdate };
 	});
 }
 

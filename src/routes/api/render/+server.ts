@@ -25,7 +25,7 @@ import type { CommentThread } from '$lib/types';
 import { replayUpdatesInto } from '$lib/server/ydoc-persistence';
 import { registerPendingAskUser } from '$lib/server/ask-user-state';
 import { unifiedLineDiff } from '$lib/diff';
-import { buildStyleReferencesPromptBlock } from '$lib/server/references';
+import { listStyleReferences } from '$lib/server/references';
 import { materializePendingReviewText } from '$lib/review-rounds';
 import {
 	docToolsMcp,
@@ -83,6 +83,13 @@ const LAST_SEEN_PREFIX = 'last_seen:';
 const GENERIC_WAKEUP_MESSAGE =
 	'The user clicked Wake-up without a specific request. Decide what (if anything) to do per the agency guidance above.';
 const WORKSPACE_ROOT = resolve(process.env.DOCWRITER_ROOT || process.cwd());
+
+// Keys for the rule / refs / agency snapshots used to diff per-turn updates.
+// Storing JSON strings under these kv keys lets us emit only what CHANGED
+// since the last render, keeping the recurring prompt lean.
+const KV_LAST_RULES = 'last_render:rules';
+const KV_LAST_REFS = 'last_render:refs';
+const KV_LAST_AGENCY = 'last_render:agency';
 
 function lastSeenKey(tabId: string): string {
 	return LAST_SEEN_PREFIX + tabId;
@@ -188,48 +195,6 @@ function findOpenTabPathInCommand(
 	return null;
 }
 
-function agencyGuidance(
-	agency: 'conservative' | 'balanced' | 'aggressive',
-	anyDiff: boolean
-): string {
-	const diffClause = anyDiff
-		? 'A diff above shows the user added something that needs a specific fix (typo, broken sentence, missing content they explicitly asked for).'
-		: 'A file has an obvious problem (typo, broken sentence, missing content) that the user explicitly asked you to fix.';
-
-	if (agency === 'aggressive') {
-		return `**Be proactive.** Look for meaningful improvements — tighten wordy passages, clarify ambiguous sentences, strengthen weak verbs, improve flow between paragraphs. Default to MAKING an edit each round; only skip if every file is already clearly good and no directive asks for work.
-
-Good reasons to edit:
-1. A \`[[ note ]]\` directive in any file. Follow it, then delete the directive text.
-2. ${diffClause}
-3. The user's explicit message asks for an edit.
-4. You can see a clear stylistic or clarity improvement you'd make if this were your own draft.
-
-Still respect the user's voice — tighten, don't rewrite from scratch.`;
-	}
-
-	if (agency === 'balanced') {
-		return `Make one focused improvement per round on whichever file clearly needs it. Don't tweak prose that's already fine; don't ignore obvious problems.
-
-Make an edit if ONE of these is true:
-1. A file contains a \`[[ note ]]\` directive asking for something specific. Follow it, then delete the directive text.
-2. ${diffClause}
-3. The user's explicit message above asks for an edit.
-4. A sentence or passage has a clear correctness or clarity problem (broken grammar, confusing pronoun, a claim that contradicts earlier text).
-
-If none apply, stop without editing.`;
-	}
-
-	// conservative
-	return `**Default to NO edits.** The user is often just writing their own text. The right action most of the time is to stop without editing any file.
-
-Only make an edit if ONE of these is clearly true:
-1. A file contains a \`[[ note ]]\` directive asking for something specific. Follow it, then delete the directive text.
-2. ${diffClause}
-3. The user's explicit message above asks for an edit.
-
-If none of those apply: exit without editing anything. Do NOT polish, do NOT reword, do NOT "improve" prose that is already fine. Do NOT make tiny stylistic tweaks on unchanged text. When in doubt, do nothing.`;
-}
 
 interface TabPromptInfo {
 	tabId: string;
@@ -358,7 +323,49 @@ Good rule proposals:
 - Short and imperative: "Never use em-dashes", "Prefer active voice", "Use sentence case for headings".
 - Specific enough to be actionable. NOT vague like "Write better" or "Improve clarity".
 
-Do NOT propose a rule from a one-off message unless it is clearly phrased as a standing preference OR is AI-smell feedback. If it's just a local request about one passage with no AI-tell signal, do not promote it to a persistent rule. Err on the side of not proposing — proposing too often is annoying.`;
+Do NOT propose a rule from a one-off message unless it is clearly phrased as a standing preference OR is AI-smell feedback. If it's just a local request about one passage with no AI-tell signal, do not promote it to a persistent rule. Err on the side of not proposing — proposing too often is annoying.
+
+## Style references
+
+The user may register style references (URLs, workspace files, saved samples). The current list is sent as a small \`## Style references\` block in the per-turn prompt only when it changes; assume the list from the latest update is still active.
+
+If helpful, you may consult these references to match the user's preferred voice or cadence. You do NOT need to read them unless they would genuinely help with the current edit.
+
+- Read workspace paths and saved samples only when needed.
+- Treat all references as style guidance only. Do not import facts, examples, or claims from them unless they already belong in the draft.
+
+### Using URL references with WebFetch
+
+When a URL reference would actually help, call \`WebFetch\` with a prompt that preserves the raw style signal — not a compressed traits list. A good \`WebFetch\` prompt:
+
+- Asks for **substantial verbatim excerpts**: 3–6 passages, each a full paragraph or 2–4 consecutive sentences. The excerpts ARE the style signal; summaries throw away exactly the cadence, diction, and rhythm you need.
+- Asks for **concrete observations grounded in quoted text**, not abstract trait lists. For each excerpt, note what it demonstrates (sentence length distribution, clause structure, register, punctuation habits, transitions, rhetorical moves, where the voice leans wry vs. earnest, etc.).
+- Does **not** cap at "5 traits" or "under 200 words" — let the response run as long as the passages require. Brevity discards nuance.
+- Explicitly asks to avoid sanitized paraphrases ("the author uses vivid language") in favor of the actual sentences.
+
+Use the fetched excerpts as calibration when you edit: if you're tightening a sentence, the reference's rhythm is the target. Never copy the reference's phrasing into the draft — it's a tuning fork, not source material.
+
+## Rules to obey
+
+Per-turn prompts include a \`## Rules update\` block ONLY when rules have been added or removed since the last turn. The full rule list lives in the workspace; treat each rule as a standing constraint that remains in force across every render until you see it removed.
+
+- A new rule appears as \`+ <rule text>\` — treat it as active from this turn forward.
+- A removed rule appears as \`- <rule text>\` — drop it from your active constraints.
+- If no \`## Rules update\` block appears, the active rule set is unchanged from the prior turn.
+
+When applying rules to an edit, treat them as hard constraints. If a rule conflicts with the user's explicit request in the current turn, the request wins for that turn but do not generalize the override.
+
+## How to decide whether to edit
+
+Your agency level governs how proactive you are. The current setting is communicated as a \`## Agency\` line in the per-turn prompt only when it changes; otherwise, the prior setting still applies. The three levels:
+
+- **conservative** — Default to NO edits. The user is often just writing their own text. The right action most of the time is to stop without editing any file. Only make an edit if ONE of these is clearly true: (1) a file contains a \`[[ note ]]\` directive — follow it and delete the directive text, (2) a diff on a tab shows the user added something that needs a specific fix (typo, broken sentence, missing content they explicitly asked for), or (3) the user's explicit message asks for an edit. If none apply, exit without editing. Do NOT polish, do NOT reword, do NOT "improve" prose that is already fine. Do NOT make tiny stylistic tweaks on unchanged text. When in doubt, do nothing.
+- **balanced** — Make one focused improvement per round on whichever file clearly needs it. Don't tweak prose that's already fine; don't ignore obvious problems. Make an edit if ONE of these is true: (1) a file contains a \`[[ note ]]\` directive — follow it and delete the directive text, (2) a diff on a tab shows the user added something that needs a specific fix, (3) the user's explicit message asks for an edit, or (4) a sentence or passage has a clear correctness or clarity problem (broken grammar, confusing pronoun, a claim that contradicts earlier text). If none apply, stop without editing.
+- **aggressive** — Be proactive. Look for meaningful improvements — tighten wordy passages, clarify ambiguous sentences, strengthen weak verbs, improve flow between paragraphs. Default to MAKING an edit each round; only skip if every file is already clearly good and no directive asks for work. Good reasons to edit: (1) a \`[[ note ]]\` directive, (2) a user diff that needs a fix, (3) the user's explicit message asks for an edit, or (4) a clear stylistic or clarity improvement you'd make if this were your own draft. Still respect the user's voice — tighten, don't rewrite from scratch.
+
+## Reading file content
+
+No tab content is inlined in the per-turn prompt — only diffs since your last edit. Call \`read_doc(path)\` to fetch any tab's current content. It's free: the server holds the Y.Doc in-process, no network round-trip. Read whatever you actually need (often just the active tab or the one the user's message is about); don't preemptively fetch every tab.`;
 }
 
 /** Build the per-render user prompt. Only the DYNAMIC content goes here —
@@ -377,60 +384,85 @@ Do NOT propose a rule from a one-off message unless it is clearly phrased as a s
  * turn. read_doc-on-demand is one extra tool round-trip when the agent
  * needs the file, but most edits start from a diff anyway.
  */
-/** Render a tab's open comment threads as a prompt sub-block. Skips entirely
- * when there are no unresolved threads, so tabs without any comments don't
- * carry boilerplate. Resolved threads are omitted — they're out of the
- * active conversation and including them would just bloat context. */
-/** Per-message and per-thread caps for the inlined comment block. Without
- * these the block scales linearly with thread count × message length and
- * becomes the single biggest line item in the prompt — observed at ~45KB
- * for a workspace with 65 open threads, dominating context. The agent can
- * always call `read_doc` (and, if added later, a thread-fetch tool) to get
- * full text on demand. */
-const COMMENT_BODY_MAX = 240;
-const COMMENT_MESSAGES_PER_THREAD = 4;
-
-function truncateComment(text: string, max: number): string {
-	const flat = text.replace(/\n+/g, ' ').trim();
-	if (flat.length <= max) return flat;
-	return flat.slice(0, max).trimEnd() + ` …(+${flat.length - max} chars)`;
-}
-
+/** Render a tab's open comment threads as a lightweight stub block.
+ * Only thread IDs and anchor quotes are inlined — no message content.
+ * The agent calls `list_threads(path)` to read the actual conversations
+ * on demand, keeping the recurring prompt lean regardless of thread count. */
 function renderCommentThreadsBlock(threads: CommentThread[]): string {
 	const open = threads.filter((t) => !t.resolved);
 	if (open.length === 0) return '';
-	const lines: string[] = ['', '**Open comment threads:**'];
+	const lines: string[] = ['', `**Open comment threads (${open.length}) — call \`list_threads("…path…")\` to read full conversations:**`];
 	for (const thread of open) {
-		const quote = thread.anchor.quote.replace(/\n+/g, ' ').slice(0, 140);
-		lines.push(`- Thread \`${thread.id}\` on "${quote}${thread.anchor.quote.length > 140 ? '…' : ''}":`);
-
-		// Show the FIRST message (so the agent sees the original framing) and
-		// the most recent N-1 messages. Drop the middle with a count when
-		// there's a gap.
-		const msgs = thread.messages;
-		let visible = msgs;
-		if (msgs.length > COMMENT_MESSAGES_PER_THREAD) {
-			const tailCount = COMMENT_MESSAGES_PER_THREAD - 1;
-			const skipped = msgs.length - 1 - tailCount;
-			visible = [msgs[0], ...msgs.slice(-tailCount)];
-			lines.push(`  - [${visible[0].author === 'user' ? 'user' : 'you'}] ${truncateComment(visible[0].text, COMMENT_BODY_MAX)}`);
-			lines.push(`  - …(${skipped} earlier message${skipped === 1 ? '' : 's'} omitted)`);
-			for (const m of visible.slice(1)) {
-				const author = m.author === 'user' ? 'user' : 'you';
-				lines.push(`  - [${author}] ${truncateComment(m.text, COMMENT_BODY_MAX)}`);
-			}
-			continue;
-		}
-		for (const m of visible) {
-			const author = m.author === 'user' ? 'user' : 'you';
-			lines.push(`  - [${author}] ${truncateComment(m.text, COMMENT_BODY_MAX)}`);
-		}
+		const quote = thread.anchor.quote.replace(/\n+/g, ' ').slice(0, 100);
+		const ellipsis = thread.anchor.quote.length > 100 ? '…' : '';
+		lines.push(`- \`${thread.id}\` on "${quote}${ellipsis}"`);
 	}
 	lines.push(
 		'',
-		'When a reply belongs on one of these threads, call `post_comment` with the matching `thread_id` (do not create a new thread for a reply). Long messages are truncated above — read the live thread by re-reading the relevant passage if you need the full text.'
+		'When replying on a thread, call `post_comment` with the matching `thread_id`. Call `list_threads(path)` first to read the thread before replying.'
 	);
 	return '\n' + lines.join('\n');
+}
+
+/** Compute a deterministic snapshot string for the active rule set. Used to
+ * detect when rules have been added / removed between renders. */
+function snapshotRules(rules: { text: string }[]): string {
+	return JSON.stringify(rules.map((r) => r.text).sort());
+}
+
+/** Snapshot of the active style references (URL list, workspace paths, saved
+ * sample paths). Sorted so cosmetic re-ordering doesn't trip the change detector. */
+function snapshotRefs(): string {
+	const refs = listStyleReferences().map((r) => `${r.type}::${r.target}`);
+	return JSON.stringify(refs.sort());
+}
+
+/** Build the diff line block for rules vs. the prior snapshot. Returns null
+ * when nothing changed (so the section is omitted entirely). */
+function buildRulesDelta(
+	currentRuleTexts: string[],
+	priorJson: string | null
+): string | null {
+	let prior: string[] = [];
+	if (priorJson) {
+		try { prior = JSON.parse(priorJson) as string[]; } catch { prior = []; }
+	}
+	const priorSet = new Set(prior);
+	const currentSet = new Set(currentRuleTexts);
+	const added = currentRuleTexts.filter((t) => !priorSet.has(t));
+	const removed = prior.filter((t) => !currentSet.has(t));
+	if (added.length === 0 && removed.length === 0) return null;
+
+	const lines: string[] = ['## Rules update', ''];
+	if (priorJson === null) {
+		// First render of the session — show full current list as "added".
+		if (currentRuleTexts.length === 0) {
+			lines.push('No active rules.');
+		} else {
+			for (const t of currentRuleTexts) lines.push(`+ ${t}`);
+		}
+	} else {
+		for (const t of added) lines.push(`+ ${t}`);
+		for (const t of removed) lines.push(`- ${t}`);
+	}
+	return lines.join('\n');
+}
+
+/** Build the active style-reference list as a small bullet block. Returned
+ * only when the list has changed since the prior render. */
+function buildRefsBlock(): string | null {
+	const refs = listStyleReferences().slice(0, 6);
+	if (refs.length === 0) return null;
+	const lines = ['## Style references', ''];
+	for (const ref of refs) {
+		if (ref.type === 'url') {
+			lines.push(`- URL: \`${ref.target}\`${ref.label !== ref.target ? ` (${ref.label})` : ''}`);
+		} else {
+			const kind = ref.type === 'stored-sample' ? 'Saved sample' : 'Workspace path';
+			lines.push(`- ${kind}: \`${ref.target}\``);
+		}
+	}
+	return lines.join('\n');
 }
 
 function buildMultiTabPrompt(
@@ -439,9 +471,17 @@ function buildMultiTabPrompt(
 	userMessage: string
 ): string {
 	const meta = readMeta();
-	const rules = meta.rules.map((r) => `- ${r.text}`).join('\n') || 'None';
-	const agency = meta.agentSettings.agency;
-	const styleReferencesBlock = buildStyleReferencesPromptBlock();
+	const currentRuleTexts = meta.rules.map((r) => r.text);
+	const currentAgency = meta.agentSettings.agency;
+
+	// Read prior snapshots so we can emit only the deltas. First render of a
+	// session (snapshot absent) shows the full state — agent needs it once.
+	const priorRulesJson = kvGet(KV_LAST_RULES);
+	const priorRefsJson = kvGet(KV_LAST_REFS);
+	const priorAgency = kvGet(KV_LAST_AGENCY);
+
+	const currentRulesJson = snapshotRules(meta.rules);
+	const currentRefsJson = snapshotRefs();
 
 	const tabSections = tabs
 		.map(({ tabId, currentMd, lastSeenMd, commentThreads }) => {
@@ -453,43 +493,48 @@ function buildMultiTabPrompt(
 			const header = `### ${star}\`${tabId}\`${activeNote}\n\nPath (use as \`path\` argument to edit_doc / write_doc / read_doc): \`${tabId}\``;
 			const threadBlock = renderCommentThreadsBlock(commentThreads);
 
-			// First-render tab (no baseline yet): just the path. The agent
-			// will call read_doc when it needs the content.
 			if (!hasLastSeen) {
 				return `${header}\n\nFirst time you're seeing this tab — call \`read_doc("${tabId}")\` to fetch its current content.${threadBlock}`;
 			}
-
-			// Has a baseline. Show a diff if anything changed; otherwise note
-			// it's unchanged. Either way, no full inline.
 			if (hasDiff) {
-				return `${header}\n\n**User changes since your last edit:**\n\`\`\`diff\n${unifiedLineDiff(lastSeenMd as string, currentMd)}\n\`\`\`\n\nFull content not inlined — call \`read_doc("${tabId}")\` if you need it.${threadBlock}`;
+				return `${header}\n\n**User changes since your last edit:**\n\`\`\`diff\n${unifiedLineDiff(lastSeenMd as string, currentMd)}\n\`\`\`${threadBlock}`;
 			}
-			return `${header}\n\nUnchanged since your last edit. Full content not inlined — call \`read_doc("${tabId}")\` if you need it.${threadBlock}`;
+			return `${header}\n\nUnchanged since your last edit.${threadBlock}`;
 		})
 		.join('\n\n');
 
-	const anyDiff = tabs.some(
-		({ currentMd, lastSeenMd }) => lastSeenMd !== null && lastSeenMd !== currentMd
-	);
-	const agencyBlock = agencyGuidance(agency, anyDiff);
+	// Assemble the dynamic prompt: only the delta blocks + the user's message.
+	// Static guidance (refs usage, rules meta, agency definitions, read_doc
+	// reminder) lives in the system prompt and isn't re-sent here.
+	const sections: string[] = [`## Files (${tabs.length})\n\n${tabSections}`];
 
-	return `## Files (${tabs.length})
+	if (currentRefsJson !== priorRefsJson) {
+		const refsBlock = buildRefsBlock();
+		if (refsBlock) sections.push(refsBlock);
+		else sections.push('## Style references\n\nNo style references currently registered.');
+	}
 
-${tabSections}
+	const rulesDelta = buildRulesDelta(currentRuleTexts, priorRulesJson);
+	if (rulesDelta) sections.push(rulesDelta);
 
-No tab content is inlined above — only diffs. Call \`read_doc(path)\` to fetch any tab's current content. It's free: the server holds the Y.Doc in-process, no network round-trip. Read whatever you actually need (often just the active tab or the one the user's message is about); don't preemptively fetch every tab.
+	if (currentAgency !== priorAgency) {
+		sections.push(`## Agency\n\nCurrent setting: **${currentAgency}**.`);
+	}
 
-${styleReferencesBlock ? `${styleReferencesBlock}\n\n` : ''}## What the user wants
+	// User message goes LAST so the model's attention lands on the actual ask.
+	sections.push(`## What the user wants\n\n${userMessage}`);
 
-${userMessage}
+	// Persist the new snapshots for next turn's diff. Failures are swallowed —
+	// at worst the next turn sends a redundant full block.
+	try {
+		kvSet(KV_LAST_RULES, currentRulesJson);
+		kvSet(KV_LAST_REFS, currentRefsJson);
+		kvSet(KV_LAST_AGENCY, currentAgency);
+	} catch (err) {
+		console.error('[render] failed to persist prompt-state snapshot:', err);
+	}
 
-## Rules to obey
-
-${rules}
-
-## How to decide whether to edit
-
-${agencyBlock}`;
+	return sections.join('\n\n');
 }
 
 /**
@@ -583,11 +628,11 @@ const USER_HOOK_TIMEOUT_SEC = 60;
 
 type HookEntry = { matcher: string; hooks: HookCallback[]; timeout?: number };
 
-/** Build the hook map for this render. Only user-defined shell hooks are
- * wired in — the legacy PreToolUse / PostToolUse internal hooks that
- * synced shadow files and streamed partial applies are gone (Phase 5+6).
- * Agent writes to open tabs go through `edit_doc` / `write_doc`, which
- * mutate the live Y.Doc atomically and stream to the browser directly. */
+/** Build the hook map for this render. Only user-defined shell hooks
+ * (from `.docwriter/hooks.json`) are wired in. Agent writes to open tabs
+ * go through `edit_doc` / `write_doc`, which mutate the live Y.Doc
+ * atomically and stream to the browser directly — no internal sync
+ * hooks needed. */
 function buildHooks(
 	emitHookRun: HookRunEmitter
 ): Partial<Record<HookEvent | 'PreToolUse', HookEntry[]>> {
