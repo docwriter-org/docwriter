@@ -288,7 +288,7 @@
 							class:set={!!hook.output}
 							type="text"
 							value={hook.output ?? ''}
-							placeholder="output file (optional) → reveals the Preview button"
+							placeholder="output file (optional) reveals the Preview button"
 							title={hook.output
 								? `Output: ${hook.output} — Preview button is enabled for any matching tab`
 								: 'Add an output path (e.g. main.pdf) to enable the Preview button for matching tabs'}
@@ -375,12 +375,12 @@
 			<input
 				class="command-input"
 				bind:value={newOutput}
-				placeholder="output file (optional) — fill this to reveal the Preview button"
+				placeholder="output file (optional) reveals the Preview button"
 				onkeydown={(e) => e.key === 'Enter' && addHook()}
 			/>
 		</div>
 		<div class="form-hint">
-			Templating: <code>{'{{file}}'}</code> = edited file path, <code>{'{{stem}}'}</code> = file without extension, <code>{'{{tool}}'}</code> = tool name. <strong>Filling the output field</strong> (PDF / HTML / image) reveals a Preview button in the editor that opens a popup window — it auto-reloads with scroll preserved each time the hook finishes.
+			Templating: <code>{'{{file}}'}</code> = edited file path, <code>{'{{stem}}'}</code> = file without extension, <code>{'{{tool}}'}</code> = tool name. <strong>Filling the output field</strong> (PDF, HTML, image) reveals a Preview button in the editor that opens a popup window. It auto-reloads with scroll preserved each time the hook finishes.
 		</div>
 	</div>
 </div>

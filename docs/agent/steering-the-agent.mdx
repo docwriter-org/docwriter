@@ -1,0 +1,153 @@
+---
+title: "Steering the agent"
+description: "Auto-wake, inline feedback, typed prompts, autonomy, models."
+---
+
+The agent has one automatic trigger (auto-wake on idle) and two ways
+to steer it manually: inline feedback on a passage, or a typed prompt
+in the chat popover.
+
+## Auto-wake on idle
+
+Three seconds after your last keystroke in the editor, the agent wakes
+on its own. It reads the open tabs, picks up any [inline
+directives](/agent/inline-directives), reacts to anything you changed
+since the last turn, and proposes edits or comments based on the
+current [autonomy level](#autonomy-levels).
+
+Each new keystroke restarts the countdown, so the agent only runs when
+you've actually stopped. While the agent is rendering, the countdown is
+paused, so typing during a run does not queue another one.
+
+`Cmd+Enter` (macOS) or `Ctrl+Enter` (Linux/Windows) in the editor skips
+the countdown and triggers a review immediately.
+
+The agent pill at the top of the history pane does the same thing
+manually, if you want to trigger a review without the keyboard.
+
+## Inline feedback
+
+Highlight any passage in the editor and a feedback popup appears
+anchored to the selection.
+
+<Frame>
+  ![The inline feedback popup, with text input, mode chips, and quick-action pills](/images/inline-feedback-popup.png)
+</Frame>
+
+The popup has three things:
+
+- A **text input** auto-focused for typing custom feedback. Hit Enter
+  (or click **Go**) to submit. The agent receives the selected passage
+  plus your feedback and runs in the next turn.
+- **Mode chips**: **Auto** (the agent decides whether to edit or
+  comment), **Edit** (force an edit), **Discuss** (force a comment
+  thread). Auto is the default.
+- **Quick-action pills** below the input. The first three are pinned
+  defaults — *Too verbose*, *AI smell*, *Incorrect* — that send the
+  passage with that label as the feedback. The remaining pills are
+  your most recent custom feedbacks, kept as an LRU cache (up to six).
+  Whatever you type as custom feedback becomes a pill on the next
+  selection.
+
+Two keyboard shortcuts that aren't obvious:
+
+- **Backspace** (with the feedback input empty) deletes the highlighted
+  text from the document instead of doing nothing. Useful when you
+  highlighted a passage planning to give feedback but then decide to
+  just cut it.
+- **Esc** closes the popup and collapses the selection.
+
+## Sending a typed prompt
+
+For things that don't anchor to a spot in the document ("research X
+and pull citations in," "restructure across files," "summarize what
+changed since yesterday"), open the chat popover with the **Send**
+button in the top-right of the editor. Type a message and submit with
+`Cmd/Ctrl+Enter` (or the Send button).
+
+<Frame>
+  ![The chat popover open in the top-right of the editor](/images/chat-popover.png)
+</Frame>
+
+You can also queue a message while a render is in flight; it runs after
+the current one finishes. The Send button shows a queue count when
+something is already running.
+
+There's a **Plan first** toggle in the popover. With it on, the agent
+produces a written plan you approve before any edits land.
+
+## What the agent sees
+
+When you send a prompt, the agent receives:
+
+- The file paths of every open tab (which is active, which changed since
+  it last looked).
+- A diff of any tab that changed since the last turn.
+- Your writing rules and writing references.
+- Any open comment threads it might want to respond to.
+
+It does not get tab contents inlined. It calls `read_doc` on the files it
+needs. This keeps prompts small and lets the agent decide what to look at.
+
+## Multi-tab work
+
+If you have several files open, the agent sees all of them as candidates
+to read or edit. A typical multi-tab prompt:
+
+> Move the example from `outline.md` into `essay.md` as a new section.
+
+The agent reads both files, writes the new section into `essay.md`, and
+optionally removes it from `outline.md`. Each tab gets its own pending
+review.
+
+## Model selection
+
+In the menu bar, the Settings menu has a **Model** submenu:
+
+- **Opus.** Slowest, most capable. Use for restructuring and long-form
+  rewriting.
+- **Sonnet.** Middle of the road. Good default.
+- **Haiku.** Fastest. Good for short, local edits.
+
+You can also pass `--model opus` on the command line to set a default for
+the session. The CLI flag takes precedence over the menu selection.
+
+## Autonomy levels
+
+Settings, then **Agent behavior**, opens a panel with an autonomy
+selector:
+
+| Level          | Behavior                                                                                   |
+| -------------- | ------------------------------------------------------------------------------------------ |
+| Conservative   | Default to no edits. Only acts on inline directives, on changes you made, or on explicit asks. |
+| Balanced       | One focused improvement per round. Acts on directives, your changes, asks, and clear clarity problems. |
+| Aggressive     | Proactive. Looks for tightening, weak verbs, and broken flow, even without an ask.         |
+
+The autonomy level rewires the agent's prompt; it does not constrain its
+tool access. Track changes is still on by default, so you stay in
+control of what lands.
+
+## Track changes
+
+The same Agent behavior panel has a **Track changes** toggle. When on
+(default), agent edits land as pending reviews you accept or reject. When
+off, agent edits land directly in the document. With track changes off,
+the agent's edits are still tagged as agent-origin, so the editor's undo
+stack still groups them separately from your own typing.
+
+## Cancelling a turn
+
+To stop the agent mid-run, click the agent pill at the top of the history
+pane. It returns to the sleeping state. Any pending review the agent
+already proposed remains. Cancellation only stops further tool calls.
+
+## Where to go next
+
+- [Inline directives](/agent/inline-directives). Leave `[[ ... ]]`
+  notes in the prose for the agent to pick up.
+- [Reviewing edits](/agent/reviewing-edits). Accept and reject in
+  detail.
+- [Delegating tasks](/agent/delegating-tasks). Longer-running,
+  multi-step work.
+- [Comments](/agent/comments). When the agent leaves feedback instead
+  of editing.

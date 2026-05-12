@@ -1,0 +1,70 @@
+---
+title: "Comments"
+description: "When the agent leaves margin feedback instead of editing, and how to respond."
+---
+
+The agent uses comments when its feedback is open-ended or uncertain.
+"I'm not sure this paragraph lands — want to take another pass?", "is
+this still the right framing after the changes above?", "this claim
+could use a citation but I couldn't find a clean source." Anything
+that's a question or a soft suggestion rather than a concrete change
+shows up as a comment thread in the margin, not as a pending edit.
+
+## Where comments appear
+
+Each comment is anchored to a passage in the document. A small
+indicator sits next to the anchored text; clicking it (or clicking the
+comment in the outline pane) expands the thread inline. The thread
+shows every message in order — the agent's original comment, your
+replies, any subsequent agent messages.
+
+<Frame>
+  ![A comment thread anchored to a paragraph in the editor, with the user message and an indicator badge visible inline](/images/comment-thread.png)
+</Frame>
+
+Comment threads are persistent. They survive reloads, sessions, and
+git commits (the threads live in `.docwriter/docwriter.db`, not in
+your tab files).
+
+## What you can do with a thread
+
+**Reply** by typing in the thread input and submitting. The reply
+becomes another message in the conversation, and the agent picks it up
+on the next turn.
+
+**Approve & propose edit.** When the agent's comment carries a
+proposed edit (the SDK's `proposed_edit` field on `post_comment`), the
+thread shows an "Approve & propose edit" button. Clicking it tells
+the agent to apply the suggested change as an actual edit_doc on the
+next turn — the comment becomes a pending review you can accept or
+reject like any other edit.
+
+**Resolve** the thread when you're done with it. Resolved threads
+collapse out of the way but stay in the database; you can reopen
+them later.
+
+## When you'd cause a comment instead of an edit
+
+There are two ways an agent comment gets created:
+
+1. **The agent decides.** During an auto-wake or chat-popover turn,
+   the agent reads the open files and chooses to comment when its
+   feedback doesn't translate to a concrete edit — a question, a
+   maybe, an observation that needs your input. The autonomy level
+   biases this choice (conservative is more comment-happy;
+   aggressive prefers to just make the edit).
+2. **You force it.** When you give [inline
+   feedback](/agent/steering-the-agent#inline-feedback) on a passage,
+   the popup has three mode chips: **Auto** (the agent decides),
+   **Edit** (force an edit), **Discuss** (force a comment thread).
+   Pick Discuss when you want the agent to weigh in without
+   committing to a rewrite.
+
+## When to reply vs. when to approve
+
+If the agent's comment is a question, reply. If it's a suggestion you
+agree with, approve the proposed edit (if present) or reply with "go
+ahead and apply that" and the agent will do so next turn.
+
+Comments aren't a chat. Keep replies short — a sentence or two.
+They're for one decision at a time, not extended discussion.

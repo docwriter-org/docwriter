@@ -99,12 +99,17 @@ function normalizeToolPath(pathLike: string): string {
 	return normalize(resolve(WORKSPACE_ROOT, pathLike));
 }
 
+/** Recognized inline-directive delimiters. The user can wrap notes for
+ * the agent in any of these; the regex returns the inner text. Adding a
+ * new style is cheap — extend this list and the prompt mention. */
+const DIRECTIVE_RE = /(?:\[\[([\s\S]*?)\]\]|\(\(([\s\S]*?)\)\)|<<([\s\S]*?)>>)/g;
+
 function extractInlineDirectives(text: string, limit = 8): string[] {
 	const directives: string[] = [];
-	const re = /\[\[([\s\S]*?)\]\]/g;
 	let match: RegExpExecArray | null;
-	while ((match = re.exec(text)) && directives.length < limit) {
-		const normalized = match[1].replace(/\s+/g, ' ').trim();
+	while ((match = DIRECTIVE_RE.exec(text)) && directives.length < limit) {
+		const inner = match[1] ?? match[2] ?? match[3] ?? '';
+		const normalized = inner.replace(/\s+/g, ' ').trim();
 		if (!normalized) continue;
 		directives.push(
 			normalized.length > 280 ? normalized.slice(0, 277) + '...' : normalized
@@ -130,7 +135,7 @@ function buildImplicitWakeupMessage(
 
 	const lines = [
 		'The user clicked Wake-up without a specific request.',
-		'Use these inline `[[ ... ]]` directives as the most likely tasks to handle next.'
+		'Use these inline directives (written by the user inline in the document, wrapped in `[[ ... ]]`, `(( ... ))`, or `<< ... >>`) as the most likely tasks to handle next.'
 	];
 	const activeDirectives =
 		directivesByTab.find((entry) => entry.tabId === activeTabId) ?? null;
@@ -359,9 +364,9 @@ When applying rules to an edit, treat them as hard constraints. If a rule confli
 
 Your agency level governs how proactive you are. The current setting is communicated as a \`## Agency\` line in the per-turn prompt only when it changes; otherwise, the prior setting still applies. The three levels:
 
-- **conservative** — Default to NO edits. The user is often just writing their own text. The right action most of the time is to stop without editing any file. Only make an edit if ONE of these is clearly true: (1) a file contains a \`[[ note ]]\` directive — follow it and delete the directive text, (2) a diff on a tab shows the user added something that needs a specific fix (typo, broken sentence, missing content they explicitly asked for), or (3) the user's explicit message asks for an edit. If none apply, exit without editing. Do NOT polish, do NOT reword, do NOT "improve" prose that is already fine. Do NOT make tiny stylistic tweaks on unchanged text. When in doubt, do nothing.
-- **balanced** — Make one focused improvement per round on whichever file clearly needs it. Don't tweak prose that's already fine; don't ignore obvious problems. Make an edit if ONE of these is true: (1) a file contains a \`[[ note ]]\` directive — follow it and delete the directive text, (2) a diff on a tab shows the user added something that needs a specific fix, (3) the user's explicit message asks for an edit, or (4) a sentence or passage has a clear correctness or clarity problem (broken grammar, confusing pronoun, a claim that contradicts earlier text). If none apply, stop without editing.
-- **aggressive** — Be proactive. Look for meaningful improvements — tighten wordy passages, clarify ambiguous sentences, strengthen weak verbs, improve flow between paragraphs. Default to MAKING an edit each round; only skip if every file is already clearly good and no directive asks for work. Good reasons to edit: (1) a \`[[ note ]]\` directive, (2) a user diff that needs a fix, (3) the user's explicit message asks for an edit, or (4) a clear stylistic or clarity improvement you'd make if this were your own draft. Still respect the user's voice — tighten, don't rewrite from scratch.
+- **conservative** — Default to NO edits. The user is often just writing their own text. The right action most of the time is to stop without editing any file. Only make an edit if ONE of these is clearly true: (1) a file contains an inline directive — \`[[ note ]]\`, \`(( note ))\`, or \`<< note >>\` — follow it and delete the directive text, (2) a diff on a tab shows the user added something that needs a specific fix (typo, broken sentence, missing content they explicitly asked for), or (3) the user's explicit message asks for an edit. If none apply, exit without editing. Do NOT polish, do NOT reword, do NOT "improve" prose that is already fine. Do NOT make tiny stylistic tweaks on unchanged text. When in doubt, do nothing.
+- **balanced** — Make one focused improvement per round on whichever file clearly needs it. Don't tweak prose that's already fine; don't ignore obvious problems. Make an edit if ONE of these is true: (1) a file contains an inline directive (\`[[ ... ]]\`, \`(( ... ))\`, or \`<< ... >>\`) — follow it and delete the directive text, (2) a diff on a tab shows the user added something that needs a specific fix, (3) the user's explicit message asks for an edit, or (4) a sentence or passage has a clear correctness or clarity problem (broken grammar, confusing pronoun, a claim that contradicts earlier text). If none apply, stop without editing.
+- **aggressive** — Be proactive. Look for meaningful improvements — tighten wordy passages, clarify ambiguous sentences, strengthen weak verbs, improve flow between paragraphs. Default to MAKING an edit each round; only skip if every file is already clearly good and no directive asks for work. Good reasons to edit: (1) an inline directive (\`[[ ... ]]\`, \`(( ... ))\`, or \`<< ... >>\`), (2) a user diff that needs a fix, (3) the user's explicit message asks for an edit, or (4) a clear stylistic or clarity improvement you'd make if this were your own draft. Still respect the user's voice — tighten, don't rewrite from scratch.
 
 ## Reading file content
 
@@ -649,7 +654,10 @@ function buildHooks(
 			// via the top-level matcher on the hook entry.
 			if (toolName && hook.matcher && hook.matcher.trim()) {
 				try {
-					if (!new RegExp(hook.matcher).test(toolName)) return {};
+					// Case-insensitive so `Edit|Write` matches both the built-in
+					// `Edit`/`Write` tools and the agent's MCP tool variants
+					// like `mcp__docwriter-doc__edit_doc`.
+					if (!new RegExp(hook.matcher, 'i').test(toolName)) return {};
 				} catch {
 					return {};
 				}
@@ -1105,7 +1113,7 @@ export const POST: RequestHandler = async ({ request }) => {
 								commentThreads: readLiveTabCommentThreads(id)
 							})),
 							[
-								'You just ended without proposing an edit, but the active tab still contains inline `[[ ... ]]` directives.',
+								'You just ended without proposing an edit, but the active tab still contains inline directives (`[[ ... ]]`, `(( ... ))`, or `<< ... >>`).',
 								'Handle one active-tab directive now if it is feasible.',
 								'You may still read other files or use other tools first if needed.',
 								'Do not end this retry without either calling `edit_doc` or `write_doc` on a directive-bearing open tab, or sending a brief plain-text explanation of why the directive cannot be completed yet.'

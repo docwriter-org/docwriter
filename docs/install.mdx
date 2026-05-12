@@ -1,0 +1,111 @@
+---
+title: "Install"
+description: "Install DocWriter and authenticate it with Anthropic."
+---
+
+DocWriter is distributed as an npm package. It is not yet published to the
+public registry, so for now you install it from source.
+
+## Requirements
+
+- Node.js 22 or later (`node --version` to check; use `nvm use 22` if you
+  have nvm).
+- macOS, Linux, or WSL on Windows.
+
+## Install from source
+
+Clone the repository and install dependencies:
+
+```sh
+git clone https://github.com/shreyashankar/docwriter.git
+cd docwriter
+npm install
+npm run build
+```
+
+Then expose the `docwriter` command globally. Either:
+
+<Tabs>
+  <Tab title="npm link (development)">
+    ```sh
+    npm link
+    ```
+
+    Good if you plan to change the source. `docwriter` runs your local
+    working copy.
+  </Tab>
+  <Tab title="npm pack + install (closer to release)">
+    ```sh
+    npm pack
+    npm install -g ./docwriter-0.0.1.tgz
+    ```
+
+    Closer to what the eventual published install will look like.
+  </Tab>
+  <Tab title="Run from the repo">
+    ```sh
+    node bin/docwriter.js ~/path/to/workspace
+    ```
+
+    No global install. Useful for one-off testing.
+  </Tab>
+</Tabs>
+
+Verify the command is on your `PATH`:
+
+```sh
+docwriter --version
+```
+
+## Authenticate
+
+DocWriter calls Anthropic through the Claude Agent SDK. You can authenticate
+in two ways:
+
+<Tabs>
+  <Tab title="Claude subscription">
+    If you already use Claude through `claude` (the CLI), run:
+
+    ```sh
+    claude login
+    ```
+
+    DocWriter picks up the same credentials automatically. No further setup.
+  </Tab>
+  <Tab title="API key">
+    Set the environment variable:
+
+    ```sh
+    export ANTHROPIC_API_KEY=sk-ant-...
+    ```
+
+    Or pass `--api-key` on the command line:
+
+    ```sh
+    docwriter --api-key sk-ant-... ~/path/to/workspace
+    ```
+  </Tab>
+</Tabs>
+
+## First launch
+
+Pick any folder on your machine. The contents are not modified until you
+make edits. DocWriter does not write files on first open.
+
+```sh
+docwriter ~/writing/my-project
+```
+
+The default browser opens at `http://localhost:7723` (or the next free
+port). The folder appears in the file tree on the left.
+
+To start with a fresh AI session (no carried-over context):
+
+```sh
+docwriter --new-session ~/writing/my-project
+```
+
+## Next steps
+
+- [Quickstart](/quickstart). Open a file and run through the editing loop.
+- [CLI reference](/reference/cli). Every flag and what it does.

@@ -3,7 +3,7 @@
 	import { cubicOut } from 'svelte/easing';
 	import { FileEdit, User, Bot, Play, CheckCircle, XCircle, Eye, Terminal, Maximize2, X, RotateCcw, ScrollText, Cat } from 'lucide-svelte';
 	import type { HistoryEntry, Annotation } from '$lib/types';
-	import { agentHistory, annotations, isRendering, historyVerbosity, sessionCost, agentSettings, pendingReviewRounds, type SessionCost } from '$lib/stores';
+	import { agentHistory, annotations, isRendering, historyVerbosity, sessionCost, agentSettings, pendingReviewRounds, submitCountdown, type SessionCost } from '$lib/stores';
 	import type { HistoryVerbosity } from '$lib/stores';
 	import { onMount, onDestroy, type Snippet } from 'svelte';
 	import SessionViewer from './SessionViewer.svelte';
@@ -41,6 +41,10 @@
 
 	let rendering = $state(false);
 	isRendering.subscribe((v) => (rendering = v));
+	// Idle countdown surfaced from the editor's auto-submit timer (3s
+	// after the last user keystroke). 0 = no countdown active.
+	let countdown = $state(0);
+	submitCountdown.subscribe((v) => (countdown = v));
 	let silent = $state(false);
 	agentSettings.subscribe((v) => (silent = !v.trackChanges));
 
@@ -250,13 +254,13 @@
 	{/if}
 	<div class="pane-header">
 		<ShineBorder
-			active={rendering || pendingCount > 0}
+			active={rendering}
 			radius={999}
-			duration={rendering ? 2.5 : 5}
+			duration={2.5}
 			borderWidth={1.5}
 			size={45}
 			thickness={10}
-			color={rendering ? ['var(--accent)', 'var(--accent-subject)'] : ['var(--accent-subject)', 'var(--accent)']}
+			color={['var(--accent)', 'var(--accent-subject)']}
 		>
 			{#snippet children()}
 				<button
@@ -275,6 +279,8 @@
 					<span class="header-status" aria-hidden="true">
 						{#if rendering}
 							<span class="bounce-dots"><span>.</span><span>.</span><span>.</span></span>
+						{:else if countdown > 0}
+							<span class="countdown" title="Auto-wake in {countdown}s — click Wake up to skip">{countdown}s</span>
 						{:else}
 							<span class="sleep-dots"><span>z</span><span>z</span><span>z</span></span>
 						{/if}
@@ -630,6 +636,16 @@
 		font-size: 11px;
 		font-weight: 600;
 		color: var(--text-faint);
+	}
+	/* Countdown — same monospace + tabular nums so the digit shifting
+	 * 3 → 2 → 1 doesn't make the row jitter horizontally. Accent color
+	 * to signal "agent will wake in N seconds." */
+	.countdown {
+		font-family: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+		font-size: 11px;
+		font-weight: 600;
+		color: var(--accent);
+		font-variant-numeric: tabular-nums;
 	}
 	.bounce-dots {
 		color: var(--accent);

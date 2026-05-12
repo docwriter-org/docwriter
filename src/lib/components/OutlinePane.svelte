@@ -375,12 +375,12 @@
 							onkeydown={(e) => e.stopPropagation()}
 							role="presentation"
 						>
-							<div class="retry-feedback-label">Why should the agent try again?</div>
+							<div class="retry-feedback-label">Feedback for the agent</div>
 							<textarea
 								bind:this={retryTextareaEl}
 								bind:value={retryFeedbackText}
 								rows="3"
-								placeholder="Explain what was wrong and what to do instead."
+								placeholder="What you'd like the agent to know."
 								onkeydown={(event) => onRetryKeydown(event, round.id)}
 							></textarea>
 							<div class="retry-feedback-actions">

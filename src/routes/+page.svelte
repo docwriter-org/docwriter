@@ -1131,16 +1131,16 @@
 		if (feedback) {
 			lines.push(
 				'',
-				'The user explained why they rejected it:',
+				'User provided this feedback:',
 				'',
 				'```text',
 				feedback,
 				'```',
 				'',
-				'Follow that feedback closely in your retry. If it sounds like a standing preference rather than a one-off request, you may also propose a rule.'
+				'If the feedback sounds like a standing preference rather than a one-off request, you may also propose a rule.'
 			);
 		}
-		lines.push('', 'Propose a new edit that takes the rejection into account.');
+		lines.push('', 'Propose a new edit that takes the feedback into account.');
 		return lines.join('\n');
 	}
 

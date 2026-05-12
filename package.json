@@ -24,7 +24,9 @@
 		"preview": "vite preview",
 		"prepare": "svelte-kit sync || echo ''",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch"
+		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+		"docs": "cd docs && npx -y mintlify dev --port 3333",
+		"docs:screenshots": "node docs/capture-screenshots.mjs"
 	},
 	"devDependencies": {
 		"@sveltejs/adapter-node": "^5.5.4",
@@ -33,6 +35,7 @@
 		"@types/better-sqlite3": "^7.6.13",
 		"@types/diff": "^7.0.2",
 		"@types/node": "^25.5.2",
+		"playwright": "^1.49.0",
 		"svelte": "^5.54.0",
 		"svelte-check": "^4.4.2",
 		"typescript": "^5.9.3",

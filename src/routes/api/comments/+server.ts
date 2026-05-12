@@ -74,6 +74,13 @@ export const POST: RequestHandler = async ({ request }) => {
 	if (body?.mode === 'new-thread') {
 		const anchorText = typeof body.anchorText === 'string' ? body.anchorText : '';
 		const messageText = typeof body.message === 'string' ? body.message.trim() : '';
+		// Optional: rel positions captured by the client when the user
+		// made the selection. When present, the comment overlay anchors
+		// to the EXACT selection instead of the first occurrence of
+		// anchorText. Stored unmodified — the client computed them via
+		// y-prosemirror's absolutePositionToRelativePosition.
+		const relStart = typeof body.relStart === 'string' ? body.relStart : undefined;
+		const relEnd = typeof body.relEnd === 'string' ? body.relEnd : undefined;
 		if (!anchorText) throw error(400, 'anchorText is required for a new thread');
 		if (!messageText) throw error(400, 'message is required');
 		const outcomeBox: { threadId?: string } = {};
@@ -86,7 +93,11 @@ export const POST: RequestHandler = async ({ request }) => {
 			const now = Date.now();
 			const thread: CommentThread = {
 				id: threadId,
-				anchor: { quote: anchorText, occurrenceIndex: 0 },
+				anchor: {
+					quote: anchorText,
+					occurrenceIndex: 0,
+					...(relStart && relEnd ? { relStart, relEnd } : {})
+				},
 				messages: [
 					{
 						id: 'msg_' + cryptoRandomId(),

@@ -1,0 +1,105 @@
+---
+title: "Interface tour"
+description: "What every part of the DocWriter window does."
+---
+
+The DocWriter window has three panes plus a menu bar across the top.
+
+<Frame>
+  ![Annotated DocWriter interface](/images/tour-interface-overview.png)
+</Frame>
+
+## Menu bar (top)
+
+The menu bar runs along the top of the window. It groups commands by
+category (File, Edit, View, Settings), and exposes a few rich panels
+under the Settings menu:
+
+- **Writing rules.** Persistent style preferences the agent follows. See
+  [Writing rules](/customize/rules).
+- **Writing references.** Samples to match in voice. See [Writing
+  references](/customize/references).
+- **Hooks.** Shell commands that fire on agent events. See
+  [Hooks](/automation/hooks).
+
+Agent behavior (autonomy level, track changes) lives in its own panel
+under the Settings menu. Model selection (Opus / Sonnet / Haiku) is a
+submenu of Settings.
+
+## Left pane
+
+The left pane has two stacked sections.
+
+### File tree (top)
+
+Every file in your workspace folder. Click any file to open it as a tab in
+the editor. There is no special "supported file types" list. Any text
+file opens. Files that look binary (images, PDFs) open in the preview
+window instead.
+
+You can create files and folders inline (right-click or use the `+`
+buttons), rename, and delete. Folders are collapsible.
+
+### Outline pane (bottom)
+
+Two things live here:
+
+1. **Table of contents.** Headings from the active tab, generated on the
+   fly. Click a heading to jump.
+2. **Pending edit cards.** When the agent proposes a change, a card
+   appears here with Accept and Reject buttons. See [Reviewing
+   edits](/agent/reviewing-edits).
+
+## Center pane
+
+The editor. This is a [Tiptap](https://tiptap.dev/) instance over plain
+text. What you see is the file contents with light formatting (headings,
+lists, links).
+
+A few floating controls sit on top of the editor:
+
+- **Agent dock (top-right).** A **Send** button. Click it to open a chat
+  popover and type a prompt for the agent. (You don't have to click for
+  the agent to run. It auto-wakes three seconds after you stop typing.
+  Send is for explicit prompts that don't anchor to a spot in the doc.)
+  See [Steering the agent](/agent/steering-the-agent).
+- **Preview button (top-right, when a hook produces an output).** Opens
+  the rendered artifact (PDF, HTML, image) in a popup window. The button
+  is hidden when no hook with an `output` field matches the active tab.
+  See [Live preview](/automation/preview).
+- **Find bar (top-right when open).** `Cmd/Ctrl+F` opens a search bar
+  scoped to the active tab.
+
+## Right pane
+
+The history pane. Toggle with the button on the right side of the menu
+bar.
+
+At the top of the pane is the **agent pill**, a small mascot icon. The
+mascot animates while the agent is running. Clicking the pill wakes the
+agent on demand (the auto-wake usually does this for you, but the pill
+is the manual override).
+
+Below the pill, every interaction the agent has with your workspace is
+logged as a card:
+
+- Tool calls (`read_doc`, `edit_doc`, `write_doc`, shell commands).
+- Hook runs (the shell command, exit code, stdout, stderr, duration).
+- Plain assistant text (when the agent says something instead of editing).
+- Comments the agent posts.
+- Errors.
+
+Cards stream in as the agent works, so you can follow along live.
+
+## Tabs
+
+Above the editor, open files appear as tabs. Click to switch; middle-click
+or the `×` to close. Each tab keeps its own editing state, including
+undo/redo history, scroll position, and pending agent edits.
+
+## What's next
+
+- [Editor](/tour/editor). The editing surface itself in detail.
+- [Tabs](/tour/tabs). How DocWriter handles multiple open files.
+- [Steering the agent](/agent/steering-the-agent). How to drive the
+  agent dock.

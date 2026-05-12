@@ -10,6 +10,17 @@ DocWriter is a local web app plus CLI. You point it at a workspace directory, op
 
 This repo contains the source for the CLI and app. End users should use the packaged CLI, not run the editor inside this repo.
 
+## Documentation
+
+The user-facing docs are in [`docs/`](./docs/) and run with Mintlify:
+
+```sh
+npm run docs
+```
+
+Preview at http://localhost:3333. See [`docs/README.md`](./docs/README.md)
+for editing notes.
+
 ## Status
 
 The npm package is not published yet.

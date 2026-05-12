@@ -4,7 +4,11 @@
 	import { TextSelection, type Transaction } from '@tiptap/pm/state';
 	import { ySyncPluginKey } from 'y-prosemirror';
 	import { DiffOverlay, setDiffState } from './diff-overlay';
-	import { CommentOverlay, setCommentOverlayState } from './comment-overlay';
+	import {
+		CommentOverlay,
+		setCommentOverlayState,
+		computeRelPositionsForRange
+	} from './comment-overlay';
 	import { CelebrationOverlay, flashCelebration } from './celebration-overlay';
 	import {
 		FindOverlay,
@@ -274,10 +278,18 @@
 	/** Pre-open a comment thread with the user's feedback as the first
 	 * message, so the transcript in the agent prompt starts from the
 	 * user's voice. Returns the new thread id, or null on failure or when
-	 * the mode is `edit` (no thread wanted in that case). */
+	 * the mode is `edit` (no thread wanted in that case).
+	 *
+	 * `relPositions` carries the user's actual selection encoded as Yjs
+	 * RelativePositions — when present, the server stores them on the
+	 * anchor and the comment overlay anchors to the EXACT location the
+	 * user selected (not just the first occurrence of `passage` in the
+	 * doc). The comment-overlay backfill pass remains as a safety net
+	 * for legacy threads created before this field existed. */
 	async function maybeOpenThreadForFeedback(
 		feedback: string,
-		passage: string
+		passage: string,
+		relPositions: { relStart: string; relEnd: string } | null
 	): Promise<string | null> {
 		if (feedbackMode === 'edit') return null;
 		const tabId = getCurrentTab();
@@ -290,7 +302,8 @@
 					mode: 'new-thread',
 					tabId,
 					anchorText: passage,
-					message: feedback
+					message: feedback,
+					...(relPositions ?? {})
 				})
 			});
 			if (!res.ok) return null;
@@ -302,10 +315,25 @@
 		}
 	}
 
+	/** Snapshot rel positions for the current feedback selection BEFORE
+	 * closeFeedbackPopup wipes feedbackSelectionRange. The snapshot
+	 * encodes the user's exact PM range as Yjs RelativePositions, so the
+	 * comment anchors to where they actually clicked — not the first
+	 * occurrence of the selected text. */
+	function snapshotFeedbackRelPositions(): { relStart: string; relEnd: string } | null {
+		if (!editor || !feedbackSelectionRange) return null;
+		return computeRelPositionsForRange(
+			editor,
+			feedbackSelectionRange.from,
+			feedbackSelectionRange.to
+		);
+	}
+
 	async function sendFeedback(action: Action) {
 		if (!feedbackPopup) return;
 		const text = feedbackPopup.text;
 		const modeSnapshot = feedbackMode;
+		const relSnapshot = snapshotFeedbackRelPositions();
 		addFeedbackAnnotation(action.label, text);
 		trackActionUsage(action.label);
 		if (!action.pinned) {
@@ -315,7 +343,7 @@
 		// Restore the mode for the pre-open call — closeFeedbackPopup reset
 		// it to `auto`, but we want to honor what the user picked.
 		feedbackMode = modeSnapshot;
-		const threadId = await maybeOpenThreadForFeedback(action.label, text);
+		const threadId = await maybeOpenThreadForFeedback(action.label, text, relSnapshot);
 		const trigger = buildFeedbackTrigger(action.label, text, false, threadId);
 		feedbackMode = 'auto';
 		if (onSubmit) onSubmit(trigger);
@@ -326,6 +354,7 @@
 		const text = feedbackPopup.text;
 		const fb = feedbackInput.trim();
 		const modeSnapshot = feedbackMode;
+		const relSnapshot = snapshotFeedbackRelPositions();
 		addFeedbackAnnotation(fb, text);
 		// Preserve the full label — CSS truncates long text with an ellipsis
 		// inside the button, and `title={label}` lets the user see the whole
@@ -341,7 +370,7 @@
 		recentActions.update((prev) => [customAction, ...prev.filter((x) => x.label !== customAction.label)].slice(0, 6));
 		closeFeedbackPopup();
 		feedbackMode = modeSnapshot;
-		const threadId = await maybeOpenThreadForFeedback(fb, text);
+		const threadId = await maybeOpenThreadForFeedback(fb, text, relSnapshot);
 		const trigger = buildFeedbackTrigger(fb, text, true, threadId);
 		feedbackMode = 'auto';
 		if (onSubmit) onSubmit(trigger);

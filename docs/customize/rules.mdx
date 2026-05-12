@@ -1,0 +1,54 @@
+---
+title: "Writing rules"
+description: "Persistent style preferences and instructions the agent follows."
+---
+
+A **writing rule** is a short, persistent instruction the agent applies
+to every turn. Rules live alongside the workspace in `.docwriter/` and
+get injected into the agent's prompt automatically.
+
+## Adding a rule
+
+In the menu bar, open **Settings** and click **Writing rules**. A panel
+opens listing every rule in the workspace. Type a new rule into the
+input at the bottom and press Enter.
+
+<Frame>
+  ![The writing rules panel open under Settings](/images/writing-rules-panel.png)
+</Frame>
+
+## Examples
+
+- "Avoid passive voice."
+- "Use footnotes for parenthetical asides, not em dashes."
+- "Headings use sentence case, not title case."
+- "When citing a paper, use APA format."
+- "Never start a sentence with 'Furthermore' or 'Moreover.'"
+
+Rules are most useful when they're short, specific, and apply broadly
+across your writing. A rule like "rewrite paragraph 3" doesn't belong as
+a rule (use an [inline directive](/agent/inline-directives) for that
+instead).
+
+## Agent-proposed rules
+
+The agent can also propose rules. If you mention a preference
+incidentally ("I always want footnotes for sources"), the agent may
+suggest making it a rule. A proposal card appears in the outline pane on
+the left; accept to save the rule, reject to dismiss.
+
+This routes through the `propose_rule` MCP tool. See [How it
+works](/reference/how-it-works) for the architectural details if you're
+curious.
+
+## Editing or removing
+
+Each rule in the panel has an edit and a delete affordance. Edits take
+effect on the next agent turn. Deleted rules are gone immediately.
+
+## Where to go next
+
+- [Writing references](/customize/references). Voice samples that
+  complement rules.
+- [Skills](/customize/skills). For more complex situational behaviors
+  that don't fit a single-line rule.

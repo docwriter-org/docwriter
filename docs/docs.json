@@ -1,0 +1,115 @@
+{
+	"$schema": "https://mintlify.com/docs.json",
+	"theme": "palm",
+	"name": "DocWriter",
+	"description": "A writing IDE with an AI agent as a concurrent collaborator.",
+	"logo": {
+		"light": "/logo/light.svg",
+		"dark": "/logo/dark.svg"
+	},
+	"seo": {
+		"metatags": {
+			"robots": "noindex, nofollow"
+		}
+	},
+	"colors": {
+		"primary": "#7c3aed",
+		"light": "#a78bfa",
+		"dark": "#5b21b6"
+	},
+	"fonts": {
+		"heading": {
+			"family": "Lora"
+		},
+		"body": {
+			"family": "Inter"
+		}
+	},
+	"navigation": {
+		"groups": [
+			{
+				"group": "Get started",
+				"pages": [
+					"introduction",
+					"install",
+					"quickstart"
+				]
+			},
+			{
+				"group": "Tour",
+				"pages": [
+					"tour/interface",
+					"tour/editor",
+					"tour/tabs"
+				]
+			},
+			{
+				"group": "Working with the agent",
+				"pages": [
+					"agent/steering-the-agent",
+					"agent/inline-directives",
+					"agent/reviewing-edits",
+					"agent/delegating-tasks",
+					"agent/comments",
+					"agent/observability",
+					"agent/sessions"
+				]
+			},
+			{
+				"group": "Customize",
+				"pages": [
+					"customize/rules",
+					"customize/references",
+					"customize/skills"
+				]
+			},
+			{
+				"group": "Automation",
+				"pages": [
+					"automation/hooks",
+					"automation/events",
+					"automation/preview"
+				]
+			},
+			{
+				"group": "Guides",
+				"pages": [
+					"guides/blog-with-research",
+					"guides/overleaf",
+					"guides/pandoc-html",
+					"guides/mermaid",
+					"guides/git-workflow"
+				]
+			},
+			{
+				"group": "Reference",
+				"pages": [
+					"reference/cli",
+					"reference/shortcuts",
+					"reference/how-it-works"
+				]
+			}
+		]
+	},
+	"footer": {
+		"socials": {
+			"github": "https://github.com/shreyashankar/docwriter",
+			"website": "https://sh-reya.com"
+		},
+		"links": [
+			{
+				"header": "Project",
+				"items": [
+					{ "label": "GitHub", "href": "https://github.com/shreyashankar/docwriter" }
+				]
+			},
+			{
+				"header": "Authors",
+				"items": [
+					{ "label": "Shreya Shankar", "href": "https://sh-reya.com" },
+					{ "label": "EPIC Data Lab", "href": "https://epic.berkeley.edu" }
+				]
+			}
+		]
+	}
+}

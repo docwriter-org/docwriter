@@ -1,0 +1,81 @@
+---
+title: "Introduction"
+description: "A research project on AI-collaborative writing."
+---
+
+DocWriter is a writing IDE with an AI agent as a concurrent collaborator.
+The goal of the project is to ask, how can we reap the productivity
+benefits of AI in writing, without losing our agency and fine-grained
+control of our personal voice?
+
+<Frame>
+  ![DocWriter in action: typing a paragraph with an inline directive, the agent picking it up while you keep typing](/images/intro-flow.gif)
+</Frame>
+
+Think of it as the writing analog of an agentic coding tool like Claude
+Code or Codex. The agent runs on your local workspace with access to
+web research, shell commands, and code execution. The interface is the
+part that's different — it's organized around two design choices
+specific to writing.
+
+## Direct manipulation over delegation
+
+Most AI tools route every interaction through a chat window. DocWriter
+provides direct affordances for the writing-specific routines instead:
+
+- **Inline feedback.** Highlight a passage and a popup appears. Type
+  custom feedback or click a pill ("Too verbose", "AI smell", or your
+  recent feedbacks). Modes: Auto / Edit / Discuss.
+- **Rules.** Persistent style preferences ("avoid passive voice").
+- **References.** Voice samples the agent matches.
+- **Hooks.** Shell commands on agent events (pdflatex, pandoc,
+  mermaid, git auto-commit, and anything else you wire up).
+- **Autonomy.** One setting — conservative, balanced, or aggressive —
+  for how proactive the agent is by default.
+- **Comment threads.** Reply in the margin where the agent's comment
+  is, instead of re-anchoring the conversation in chat.
+
+For requests that don't fit a routine (research a topic, restructure
+across files, fix a build), the chat popover is still there.
+
+## Asynchronous, in-medium collaboration
+
+Most AI tools are turn-based: submit, wait, continue. DocWriter is
+structured so the agent runs continuously alongside you. Each time you
+pause typing, the agent reads the open documents, reacts to what you
+changed, picks up any inline directives, and proposes edits or
+comments. Your typing keeps going during all of this — the two
+streams of edits merge in the same buffer.
+
+- **Inline directives.** Type `[[ tighten this paragraph ]]` (or
+  `(( ))` or `<< >>`) and keep writing. The agent picks the note up
+  on its next pass and handles it, deleting the directive text from
+  the doc.
+- **Suggestions, not overwrites.** Agent edits arrive as track-changes.
+  The document is a CRDT (like Google Docs), so the agent's edits and
+  your concurrent typing merge cleanly even when you're editing the
+  same paragraph.
+- **Background work.** Long tasks (multi-file rewrites, build-fix
+  loops, web research) run without blocking the editor.
+- **Observability.** The history pane logs every tool call and hook
+  run as it happens; a separate transcript viewer browses earlier
+  turns. No black box.
+
+<CardGroup cols={2}>
+  <Card title="Install" icon="download" href="/install">
+    Get DocWriter running locally.
+  </Card>
+  <Card title="Quickstart" icon="play" href="/quickstart">
+    A five-minute walk-through.
+  </Card>
+  <Card title="Tour the interface" icon="window" href="/tour/interface">
+    What every part of the screen does.
+  </Card>
+  <Card title="Writing a research-backed blog post" icon="newspaper" href="/guides/blog-with-research">
+    The marquee end-to-end example.
+  </Card>
+</CardGroup>
+
+---
+
+*DocWriter is a research project by [Shreya Shankar](https://sh-reya.com) and collaborators at the [EPIC Data Lab](https://epic.berkeley.edu).*

@@ -90,6 +90,32 @@ function decodeRelPos(s: string): Y.RelativePosition | null {
 	}
 }
 
+/** Compute Yjs rel positions for a PM range and return them base64-
+ * encoded so callers can ship them over the wire. Returns null when the
+ * y-prosemirror binding isn't ready or the position helpers throw —
+ * caller should fall back to the indexOf-based path in that case.
+ *
+ * Used by comment creation: capturing rel positions at the user's actual
+ * selection avoids the "comment lands on the first matching keyword"
+ * bug, because the rel positions encode the exact location, not a quote
+ * + occurrence-index that loses information when the same text appears
+ * multiple times. */
+export function computeRelPositionsForRange(
+	editor: Editor,
+	from: number,
+	to: number
+): { relStart: string; relEnd: string } | null {
+	const binding = getYBinding(editor.view.state);
+	if (!binding) return null;
+	try {
+		const start = absolutePositionToRelativePosition(from, binding.type, binding.mapping);
+		const end = absolutePositionToRelativePosition(to, binding.type, binding.mapping);
+		return { relStart: encodeRelPos(start), relEnd: encodeRelPos(end) };
+	} catch {
+		return null;
+	}
+}
+
 /** Pull the y-prosemirror sync binding off the editor state. Null when
  * the editor isn't using the Collaboration extension (won't happen here
  * — every editor instance is collaborative — but typed safely anyway).

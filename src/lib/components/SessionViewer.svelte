@@ -564,7 +564,7 @@
 											{#if result !== undefined}
 												<div class="tool-section">
 													<div class="section-label" class:err-label={resultError}>
-														{resultError ? '⚠ Error' : '→ Output'}
+														{resultError ? '⚠ Error' : 'Output'}
 													</div>
 													<pre class="code-block result-block" class:err-block={resultError}>{truncate(result, 3000)}</pre>
 												</div>

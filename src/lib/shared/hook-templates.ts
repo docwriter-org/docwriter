@@ -32,9 +32,9 @@ export interface HookTemplate {
 export const HOOK_TEMPLATES: readonly HookTemplate[] = [
 	{
 		id: 'pdflatex',
-		label: 'LaTeX → PDF (pdflatex)',
+		label: 'pdflatex',
 		description:
-			'Build the project root (main.tex) on every Edit/Write. Runs pdflatex → bibtex → pdflatex → pdflatex so cross-references and citations resolve correctly. Each pass passes -synctex=1 so the preview window\'s "double-click PDF → jump to source" feature works. Edit `main` / `main.pdf` below if your entry file is named differently.',
+			'Build the project root (main.tex) on every Edit/Write. Runs pdflatex, then bibtex, then pdflatex twice more so cross-references and citations resolve correctly. Each pass passes -synctex=1 so the preview window\'s "double-click PDF to jump to source" feature works. Edit `main` / `main.pdf` below if your entry file is named differently.',
 		event: 'PostToolUse',
 		matcher: 'Edit|Write',
 		command:
@@ -43,7 +43,7 @@ export const HOOK_TEMPLATES: readonly HookTemplate[] = [
 	},
 	{
 		id: 'git-push-on-stop',
-		label: 'Git: auto-commit & push on Stop',
+		label: 'Git auto-commit & push',
 		description:
 			'When the agent finishes a turn (Stop), commit any pending changes and push to the current branch\'s upstream. Requires the workspace to be a git repo with a configured remote.',
 		event: 'Stop',
@@ -52,7 +52,7 @@ export const HOOK_TEMPLATES: readonly HookTemplate[] = [
 	},
 	{
 		id: 'pandoc-html',
-		label: 'Markdown → HTML (pandoc)',
+		label: 'pandoc HTML',
 		description:
 			'Render the active .md as HTML on every Edit/Write. Preview reloads with scroll preserved.',
 		event: 'PostToolUse',
@@ -62,7 +62,7 @@ export const HOOK_TEMPLATES: readonly HookTemplate[] = [
 	},
 	{
 		id: 'pandoc-pdf',
-		label: 'Markdown → PDF (pandoc)',
+		label: 'pandoc PDF',
 		description:
 			'Render the active .md as PDF (requires a TeX engine for pandoc).',
 		event: 'PostToolUse',
@@ -72,7 +72,7 @@ export const HOOK_TEMPLATES: readonly HookTemplate[] = [
 	},
 	{
 		id: 'mermaid',
-		label: 'Mermaid → SVG (mmdc)',
+		label: 'Mermaid (mmdc)',
 		description: 'Render a Mermaid .mmd file as SVG. Requires @mermaid-js/mermaid-cli.',
 		event: 'PostToolUse',
 		matcher: 'Edit|Write',
