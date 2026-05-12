@@ -12,14 +12,16 @@ This repo contains the source for the CLI and app. End users should use the pack
 
 ## Documentation
 
-The user-facing docs are in [`docs/`](./docs/) and run with Mintlify:
+**[https://ucberkeley-8d9be701.mintlify.app](https://ucberkeley-8d9be701.mintlify.app)**
+
+The source for the docs is in [`docs/`](./docs/). To preview locally:
 
 ```sh
 npm run docs
 ```
 
-Preview at http://localhost:3333. See [`docs/README.md`](./docs/README.md)
-for editing notes.
+Opens at http://localhost:3333. See [`docs/README.md`](./docs/README.md)
+for editing notes and regenerating screenshots.
 
 ## Status
 
