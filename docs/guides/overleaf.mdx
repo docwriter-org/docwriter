@@ -156,7 +156,7 @@ conflict. The two streams are concurrent edits on the same file.
   ![The agent's proposed TikZ figure landing as a pending review while the user concurrently types a note in the abstract](/images/overleaf-pending-edit.png)
 </Frame>
 
-Accept the pending reviews in order (the outline pane enforces
+Accept the pending reviews in order (the right pane enforces
 oldest-first). The accepted edits flush to disk, the pdflatex hook
 fires on the next tool call (or click **Run now** on the hook to
 force it), and the preview window reloads with the rendered figure.
@@ -216,7 +216,7 @@ Click **Send** in the top-right of the editor. Type a prompt:
 
 After three seconds, the agent submits. It calls `read_doc` on
 `main.tex`, then `edit_doc` with the proposed change. The change appears
-as a pending review in the outline pane.
+as a pending review in the right pane.
 
 Click **Accept**. The accepted edit:
 

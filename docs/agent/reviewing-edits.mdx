@@ -21,7 +21,7 @@ track-changes style: new text in green, removed text struck through in
 red.
 
 <Frame>
-  ![A pending edit highlighted in the editor and shown in the outline pane](/images/reviewing-edits-pending.png)
+  ![A pending edit highlighted in the editor, with the diff card shown in the right pane](/images/reviewing-edits-pending.png)
 </Frame>
 
 ## Accept
@@ -51,16 +51,9 @@ The agent can produce several edits in a single turn (for example, when
 asked to "tighten every section"). Each becomes its own card in the
 outline pane and its own highlight in the document.
 
-You can:
-
-- **Accept or reject each independently.** The cards are separate.
-- **Accept all** with the button at the top of the outline pane. Useful
-  when you have skimmed the changes and want to commit them all.
-- **Reject all** likewise.
-
-Across multiple open tabs: each tab's pending rounds live in its own
-section of the outline pane. Switching tabs keeps the open cards
-visible (so you can hold context while you decide).
+Each card shows the diff and has its own Accept, Reject, and
+Retry-with-feedback buttons. You must accept or reject the oldest card
+before the next one becomes actionable (FIFO order).
 
 ## Typing while a review is open
 

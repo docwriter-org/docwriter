@@ -300,15 +300,17 @@ async function closeMenu(page) {
  * major interface regions by name. Pairs with `clearAnnotations`. */
 async function annotateInterface(page) {
 	await page.evaluate(() => {
+		// Keep annotations to a small set of non-overlapping labels.
+		// Each `anchor` picks which corner of the element the label
+		// attaches to: tl=top-left, tr=top-right, bl=bottom-left, br=bottom-right.
 		const targets = [
-			{ selector: '.menu-bar', label: 'Menu bar', anchor: 'tl' },
-			{ selector: '.file-tree', label: 'File tree', anchor: 'tl' },
-			{ selector: '.outline-pane', label: 'Outline / TOC', anchor: 'tl' },
-			{ selector: '.tab-bar', label: 'Tab bar', anchor: 'tl' },
-			{ selector: '.tiptap-content', label: 'Editor (Tiptap)', anchor: 'tl' },
-			{ selector: '.dock-message-btn', label: 'Send', anchor: 'br' },
-			{ selector: '.history-pane', label: 'History pane', anchor: 'tl' },
-			{ selector: '.header-agent-btn', label: 'Agent pill', anchor: 'br' }
+			{ selector: '.menu-bar',            label: 'Menu bar',             anchor: 'tl' },
+			{ selector: '.file-tree',           label: 'File tree',            anchor: 'bl' },
+			{ selector: '.outline-pane',        label: 'Outline / TOC',        anchor: 'tl' },
+			{ selector: '.tiptap-content',      label: 'Editor',               anchor: 'bl' },
+			{ selector: '.history-pane',        label: 'History pane',         anchor: 'tr' },
+			{ selector: '.pending-wrap',        label: 'Pending agent edits',  anchor: 'tl' },
+			{ selector: '.header-agent-btn',    label: 'Wake-up button',       anchor: 'bl' }
 		];
 		const overlay = document.createElement('div');
 		overlay.setAttribute('data-doc-annotations', '');
@@ -329,14 +331,19 @@ async function annotateInterface(page) {
 				'background:rgba(124,58,237,0.05);border-radius:4px;';
 			overlay.appendChild(box);
 			const lbl = document.createElement('div');
-			const horiz = anchor.includes('r') ? `right:${window.innerWidth - r.right + 2}px;`
-				: `left:${r.left + 2}px;`;
-			const vert = anchor.includes('b') ? `top:${r.bottom + 4}px;`
+			// Anchor the label to the chosen corner of the box.
+			// tl = inside top-left, tr = inside top-right,
+			// bl = outside bottom-left (below), br = outside bottom-right (below).
+			const horiz = anchor.includes('r')
+				? `left:${r.right - 4}px;transform:translateX(-100%);`
+				: `left:${r.left + 4}px;`;
+			const vert = anchor.includes('b')
+				? `top:${r.bottom + 4}px;`
 				: `top:${r.top + 4}px;`;
 			lbl.style.cssText =
 				`position:absolute;${horiz}${vert}` +
 				`background:${PURPLE};color:white;padding:2px 7px;border-radius:3px;` +
-				'box-shadow:0 1px 3px rgba(0,0,0,0.2);';
+				'white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,0.2);';
 			lbl.textContent = label;
 			overlay.appendChild(lbl);
 		}
@@ -369,6 +376,48 @@ async function captureStructural(page) {
 	await annotateInterface(page);
 	await shot(page, 'tour-interface-overview.png');
 	await clearAnnotations(page);
+
+	// Close-up of the AGENT zz wake-up button for the steering page.
+	const agentPillEl = page.locator('.header-agent-btn').first();
+	const agentPillBox = await agentPillEl.boundingBox();
+	if (agentPillBox) {
+		const PAD = 16;
+		const clip = {
+			x: Math.max(0, agentPillBox.x - PAD),
+			y: Math.max(0, agentPillBox.y - PAD),
+			width: Math.min(VIEWPORT.width, agentPillBox.width + PAD * 2 + 120),
+			height: agentPillBox.height + PAD * 2
+		};
+		await page.evaluate(({ x, y, w, h }) => {
+			const d = document.createElement('div');
+			d.setAttribute('data-doc-annotations', '');
+			d.style.cssText =
+				`position:fixed;left:${x}px;top:${y}px;width:${w}px;height:${h}px;` +
+				'box-sizing:border-box;border:2.5px solid #7c3aed;border-radius:6px;' +
+				'background:rgba(124,58,237,0.08);pointer-events:none;z-index:99999;';
+			document.body.appendChild(d);
+		}, { x: agentPillBox.x - 1, y: agentPillBox.y - 1, w: agentPillBox.width + 2, h: agentPillBox.height + 2 });
+		await page.screenshot({ path: join(IMAGES_DIR, 'agent-wakeup-button.png'), clip });
+		console.log('  wrote agent-wakeup-button.png');
+		await clearAnnotations(page);
+	}
+
+	// Editor with find bar open. Click the editor first to focus it.
+	await page.locator('.tiptap-content').first().click();
+	await sleep(200);
+	await page.keyboard.press('Meta+f');
+	await sleep(600);
+	await shot(page, 'editor-find-bar.png');
+	await page.keyboard.press('Escape');
+	await sleep(300);
+
+	// Multiple tabs: open outline.md alongside the already-open essay.md.
+	await openFile(page, 'outline.md');
+	await sleep(400);
+	await shot(page, 'editor-tabs.png');
+	// Switch back to essay.md for subsequent shots.
+	await page.locator('.tab-bar [role="tab"]', { hasText: 'essay.md' }).first().click();
+	await sleep(300);
 
 	// Inline-feedback popup: triple-click a paragraph in the prose. The
 	// editor's selection listener fires, and the feedback popup pops up
@@ -472,14 +521,23 @@ async function captureIntroGif(browser, httpPort, ffmpegPath) {
 			console.log('  agent never went awake in time; continuing anyway');
 		}
 
-		// Phase 2: the agent is now working. Demonstrate concurrency by
-		// continuing to type a new paragraph below the directive while
-		// the agent processes it. Both edits land in the same buffer.
+		// Phase 2: keep writing while the agent is working. Type
+		// substantial content — multiple sentences — so the viewer can
+		// see real concurrent work, not a dead wait. Each keystroke
+		// resets the idle timer, but the agent is already running from
+		// Phase 1's trigger so it continues regardless.
 		await page.keyboard.press('Enter');
 		await page.keyboard.press('Enter');
-		await page.keyboard.type('Meanwhile, I keep writing my next paragraph here.', {
-			delay: 40
-		});
+		const concurrentText = [
+			'This is the core tension in every AI writing tool I\'ve tried.',
+			' The model wants to take over; the writer wants to stay in control.',
+			' What if those two goals didn\'t have to conflict?',
+			' What if the AI edited alongside you, in the same document,',
+			' proposing changes you could accept or reject inline?'
+		];
+		for (const chunk of concurrentText) {
+			await page.keyboard.type(chunk, { delay: 38 });
+		}
 
 		const pending = page.locator('.pending-card.round-card').first();
 		try {
@@ -488,8 +546,8 @@ async function captureIntroGif(browser, httpPort, ffmpegPath) {
 			console.log('  pending review never appeared in GIF window');
 			return;
 		}
-		// Let the pending review settle visually before accepting.
-		await sleep(2200);
+		// Brief pause so the viewer can see the review card before accept.
+		await sleep(1500);
 
 		// Click Accept on the pending review so the GIF ends with the
 		// suggestion landing in the document.
@@ -514,16 +572,15 @@ async function captureIntroGif(browser, httpPort, ffmpegPath) {
 	}
 	const gifOut = join(IMAGES_DIR, 'intro-flow.gif');
 	console.log('  converting webm to gif with ffmpeg...');
-	// Cap duration at 32s so we capture: typing + directive, the 3s
-	// pause, auto-wake, concurrent typing while the agent works, the
-	// pending review appearing, and the Accept click. 9fps + 800px +
-	// 64-color palette keep the file at ~1.5-2 MB.
+	// Cap duration at 40s: typing + directive, pause, auto-wake,
+	// substantial concurrent typing while the agent works, review
+	// card appearing, and Accept. 9fps + 800px + 64 colors.
 	const ff = spawnSync(
 		ffmpegPath,
 		[
 			'-y',
 			'-t',
-			'32',
+			'40',
 			'-i',
 			webm,
 			'-vf',

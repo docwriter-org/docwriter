@@ -3,9 +3,10 @@ title: "Steering the agent"
 description: "Auto-wake, inline feedback, typed prompts, autonomy, models."
 ---
 
-The agent has one automatic trigger (auto-wake on idle) and two ways
-to steer it manually: inline feedback on a passage, or a typed prompt
-in the chat popover.
+The agent has one automatic trigger (auto-wake on idle) and three ways
+to trigger it manually: clicking the **Agent** button in the history
+pane, giving inline feedback on a passage, or typing a prompt in the
+chat popover.
 
 ## Auto-wake on idle
 
@@ -22,8 +23,14 @@ paused, so typing during a run does not queue another one.
 `Cmd+Enter` (macOS) or `Ctrl+Enter` (Linux/Windows) in the editor skips
 the countdown and triggers a review immediately.
 
-The agent pill at the top of the history pane does the same thing
-manually, if you want to trigger a review without the keyboard.
+You can also click the **Agent** button at the top of the history
+pane (the sleeping-cat icon). Clicking it wakes the agent on demand —
+useful when you want it to read your files right now without waiting
+for the idle timer or typing a prompt.
+
+<Frame>
+  ![The Agent wake-up button at the top of the history pane, highlighted with a bounding box](/images/agent-wakeup-button.png)
+</Frame>
 
 ## Inline feedback
 

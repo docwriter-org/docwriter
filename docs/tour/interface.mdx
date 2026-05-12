@@ -30,25 +30,20 @@ submenu of Settings.
 
 The left pane has two stacked sections.
 
-### File tree (top)
+### Outline / TOC (top)
 
-Every file in your workspace folder. Click any file to open it as a tab in
-the editor. There is no special "supported file types" list. Any text
+Headings from the active tab, generated on the fly. Click a heading to
+jump to it in the editor.
+
+### File tree (bottom)
+
+Every file in your workspace folder. Click any file to open it as a tab
+in the editor. There is no special "supported file types" list. Any text
 file opens. Files that look binary (images, PDFs) open in the preview
 window instead.
 
 You can create files and folders inline (right-click or use the `+`
 buttons), rename, and delete. Folders are collapsible.
-
-### Outline pane (bottom)
-
-Two things live here:
-
-1. **Table of contents.** Headings from the active tab, generated on the
-   fly. Click a heading to jump.
-2. **Pending edit cards.** When the agent proposes a change, a card
-   appears here with Accept and Reject buttons. See [Reviewing
-   edits](/agent/reviewing-edits).
 
 ## Center pane
 
@@ -75,13 +70,12 @@ A few floating controls sit on top of the editor:
 The history pane. Toggle with the button on the right side of the menu
 bar.
 
-At the top of the pane is the **agent pill**, a small mascot icon. The
-mascot animates while the agent is running. Clicking the pill wakes the
-agent on demand (the auto-wake usually does this for you, but the pill
-is the manual override).
+The pane has two sections.
 
-Below the pill, every interaction the agent has with your workspace is
-logged as a card:
+**Top — activity log.** At the top is the **agent pill**, a small mascot
+icon. The mascot animates while the agent is running. Clicking the pill
+wakes the agent on demand. Below the pill, every interaction the agent
+has with your workspace is logged as a card:
 
 - Tool calls (`read_doc`, `edit_doc`, `write_doc`, shell commands).
 - Hook runs (the shell command, exit code, stdout, stderr, duration).
@@ -90,6 +84,13 @@ logged as a card:
 - Errors.
 
 Cards stream in as the agent works, so you can follow along live.
+
+**Bottom — pending agent edits.** When the agent proposes one or more
+changes, a "Pending agent edits" section appears at the bottom of the
+right pane. Each pending change shows as a diff card with an Accept,
+Reject, and Retry-with-feedback button. Accepting is FIFO — you must
+accept (or reject) the oldest pending change before the next one becomes
+actionable. See [Reviewing edits](/agent/reviewing-edits).
 
 ## Tabs
 
