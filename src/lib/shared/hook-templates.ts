@@ -34,9 +34,8 @@ export const HOOK_TEMPLATES: readonly HookTemplate[] = [
 		id: 'pdflatex',
 		label: 'pdflatex',
 		description:
-			'Build the project root (main.tex) on every Edit/Write. Runs pdflatex, then bibtex, then pdflatex twice more so cross-references and citations resolve correctly. Each pass passes -synctex=1 so the preview window\'s "double-click PDF to jump to source" feature works. Edit `main` / `main.pdf` below if your entry file is named differently.',
-		event: 'PostToolUse',
-		matcher: 'Edit|Write',
+			'Build the project root (main.tex) when the agent finishes a turn. Runs pdflatex, then bibtex, then pdflatex twice more so cross-references and citations resolve correctly. Each pass passes -synctex=1 so the preview window\'s "double-click PDF to jump to source" feature works. Edit `main` / `main.pdf` below if your entry file is named differently.',
+		event: 'Stop',
 		command:
 			'pdflatex -interaction=nonstopmode -halt-on-error -synctex=1 main.tex && (bibtex main || true) && pdflatex -interaction=nonstopmode -halt-on-error -synctex=1 main.tex && pdflatex -interaction=nonstopmode -halt-on-error -synctex=1 main.tex',
 		output: 'main.pdf'

@@ -13,9 +13,15 @@ control of our personal voice?
 </Frame>
 
 Think of it as the writing analog of an agentic coding tool like Claude
-Code or Codex. The agent runs on your local workspace with access to
-web research, shell commands, and code execution. The interface is the
-part that's different, organized around two design philosophies:
+Code or Codex — because it essentially **is** Claude Code, pointed at
+your writing workspace instead of a code repo. DocWriter is built on the
+[Claude Agent SDK](https://docs.claude.com/en/agent-sdk/overview), so
+the agent has the same built-in capabilities Claude Code has: file
+editing, shell / Bash, web search, and code execution. On top of those,
+DocWriter adds its own MCP tools for writing-specific operations
+(`edit_doc`, `read_doc`, `post_comment`, `propose_rule`, and so on).
+The interface is the part that's different, organized around two design
+philosophies:
 
 ## Direct manipulation over delegation
 

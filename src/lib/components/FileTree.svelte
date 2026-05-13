@@ -242,6 +242,100 @@
 		return found ? { kind: found.kind } : null;
 	}
 
+	// ── Drag-and-drop move ──────────────────────────────────────────────
+	/** Path of the entry currently being dragged. */
+	let dragPath = $state<string | null>(null);
+	/** Path of the folder currently being hovered as a drop target.
+	 *  Empty string '' = the workspace root. null = no active target. */
+	let dragOverPath = $state<string | null>(null);
+
+	function onDragStart(e: DragEvent, entry: FileEntry) {
+		dragPath = entry.path;
+		e.dataTransfer?.setData('text/plain', entry.path);
+		if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+	}
+
+	function onDragEnd() {
+		dragPath = null;
+		dragOverPath = null;
+	}
+
+	function resolveDropFolder(entry: FileEntry): string {
+		return entry.kind === 'folder' ? entry.path : parentOf(entry.path);
+	}
+
+	function isValidDrop(targetFolder: string): boolean {
+		if (dragPath === null) return false;
+		if (dragPath === targetFolder) return false;
+		if (targetFolder.startsWith(dragPath + '/')) return false;
+		if (parentOf(dragPath) === targetFolder) return false;
+		return true;
+	}
+
+	function onDragOverEntry(e: DragEvent, entry: FileEntry) {
+		const target = resolveDropFolder(entry);
+		if (!isValidDrop(target)) return;
+		e.preventDefault();
+		if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+		dragOverPath = target;
+	}
+
+	function onDragOverRoot(e: DragEvent) {
+		if (!isValidDrop('')) return;
+		e.preventDefault();
+		if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+		dragOverPath = '';
+	}
+
+	function onDragLeave(e: DragEvent) {
+		const related = e.relatedTarget as Element | null;
+		if (!related?.closest?.('.file-tree')) dragOverPath = null;
+	}
+
+	function onDropEntry(e: DragEvent, entry: FileEntry) {
+		e.preventDefault();
+		const target = resolveDropFolder(entry);
+		dragOverPath = null;
+		if (!isValidDrop(target)) return;
+		const src = dragPath!;
+		dragPath = null;
+		void doMove(src, target);
+	}
+
+	function onDropRoot(e: DragEvent) {
+		e.preventDefault();
+		dragOverPath = null;
+		if (!isValidDrop('')) return;
+		const src = dragPath!;
+		dragPath = null;
+		void doMove(src, '');
+	}
+
+	async function doMove(from: string, toFolder: string) {
+		const name = from.split('/').pop()!;
+		const to = toFolder ? `${toFolder}/${name}` : name;
+		try {
+			const res = await fetch('/api/files', {
+				method: 'PATCH',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ from, to })
+			});
+			if (!res.ok) throw new Error(await res.text());
+			await refreshFolder(parentOf(from));
+			if (toFolder !== parentOf(from)) await refreshFolder(toFolder);
+			if (selectedPath === from) selectedPath = to;
+			onRenamed?.(from, to);
+		} catch (e) {
+			await showAlert(e instanceof Error ? e.message : String(e), { title: 'Move failed' });
+		}
+	}
+
+	// ── Deselect on background click ────────────────────────────────────
+	function onTreePointerDown(e: MouseEvent) {
+		const target = e.target as Element | null;
+		if (!target?.closest('.tree-row')) selectedPath = null;
+	}
+
 	function beginCreate(kind: 'file' | 'folder', forcedParentPath: string | null = null) {
 		const parentPath = forcedParentPath ?? parentPathForSelection();
 		if (parentPath) {
@@ -296,7 +390,14 @@
 	}
 </script>
 
-<div class="file-tree">
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div
+	class="file-tree"
+	onmousedown={onTreePointerDown}
+	ondragover={onDragOverRoot}
+	ondragleave={onDragLeave}
+	ondrop={onDropRoot}
+>
 	<div class="tree-header-row">
 		<div class="tree-header">Files</div>
 		<div class="tree-actions">
@@ -328,7 +429,7 @@
 			{/if}
 		</div>
 	{:else}
-		<ul class="tree-list">
+		<ul class="tree-list" class:drag-over-root={dragOverPath === ''}>
 			{#if createDraft && createDraft.parentPath === ''}
 				{@render draftNode(0)}
 			{/if}
@@ -370,6 +471,7 @@
 	{@const st = nodeState[entry.path]}
 	{@const isActive = activePath === entry.path}
 	{@const isSelected = selectedPath === entry.path}
+	{@const isDragOver = dragOverPath === (entry.kind === 'folder' ? entry.path : parentOf(entry.path)) && dragOverPath !== null}
 	{@const Icon = entry.kind === 'folder' ? (st?.expanded ? FolderOpen : Folder) : iconFor(entry.name, entry.internal)}
 	<li>
 		<!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -380,6 +482,8 @@
 			class:selected={isSelected}
 			class:watched={entry.watched}
 			class:internal={entry.internal}
+			class:drag-over={isDragOver && entry.kind === 'folder'}
+			draggable="true"
 			style:padding-left="{4 + depth * 14}px"
 			onclick={() => {
 				selectedPath = entry.path;
@@ -387,6 +491,11 @@
 				else onOpenFile?.(entry);
 			}}
 			oncontextmenu={(e) => openMenu(e, entry)}
+			ondragstart={(e) => onDragStart(e, entry)}
+			ondragend={onDragEnd}
+			ondragover={(e) => onDragOverEntry(e, entry)}
+			ondragleave={onDragLeave}
+			ondrop={(e) => onDropEntry(e, entry)}
 			title={entry.path}
 		>
 			{#if entry.kind === 'folder'}
@@ -548,6 +657,22 @@
 	.tree-row.draft {
 		background: var(--bg-surface);
 		color: var(--text);
+	}
+	.tree-row[draggable='true'] {
+		cursor: grab;
+	}
+	.tree-row[draggable='true']:active {
+		cursor: grabbing;
+	}
+	.tree-row.drag-over {
+		background: var(--accent-bg);
+		outline: 1px solid var(--accent-light);
+		outline-offset: -1px;
+	}
+	.tree-list.drag-over-root {
+		outline: 1px dashed var(--accent-light);
+		outline-offset: 2px;
+		border-radius: 4px;
 	}
 	.chev {
 		display: inline-flex;

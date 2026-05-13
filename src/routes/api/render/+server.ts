@@ -586,7 +586,7 @@ const docwriterMcp = createSdkMcpServer({
 						'Notification'
 					])
 					.describe(
-						'When the hook fires. PostToolUse = after a tool call (most common, for pdflatex/lint/etc). PreToolUse = before. PostToolUseFailure = when a tool errors. UserPromptSubmit = when the user sends a message. Stop = end of response. SubagentStop = a subagent finished. SessionStart/End = session boundaries. Notification = permission/idle messages.'
+						'When the hook fires. Stop = end of agent turn (use for build tools like pdflatex/pandoc/lint — DocWriter edits go through edit_doc/write_doc MCP tools, not the built-in Edit/Write tools, so PostToolUse with Edit|Write matcher will never fire). PostToolUse = after any tool call; pair with a matcher regex if you need per-tool granularity. PreToolUse = before a tool call. PostToolUseFailure = when a tool errors. UserPromptSubmit = when the user sends a message. SubagentStop = a subagent finished. SessionStart/End = session boundaries. Notification = permission/idle messages.'
 					),
 				matcher: z
 					.string()

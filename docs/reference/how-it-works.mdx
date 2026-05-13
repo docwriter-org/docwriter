@@ -49,20 +49,27 @@ tab files are the source of truth for the writing.
 
 ## The agent loop
 
-When you send a prompt, the `/api/render` endpoint streams a single
-`query()` call from the Claude Agent SDK over SSE. (For how the SDK's
-agent loop works in general, see
+DocWriter is built directly on the
+[Claude Agent SDK](https://docs.claude.com/en/agent-sdk/overview) — the
+same runtime that powers Claude Code. The agent therefore has the same
+built-in tool set Claude Code has:
+
+| Tool | What it does |
+|---|---|
+| `Edit` / `Write` / `Read` | Read and patch files on disk |
+| `Bash` | Run arbitrary shell commands |
+| `WebSearch` / `WebFetch` | Web research |
+| `TodoWrite` | Track multi-step task plans |
+
+On top of those, DocWriter mounts two MCP servers with writing-specific tools:
+
+- **`docwriter`** — `propose_rule`, `propose_hook` (surface review cards in the UI before committing anything).
+- **`docwriter-doc`** — `edit_doc`, `read_doc`, `write_doc`, `post_comment`, `list_threads` (operate on the live CRDT documents rather than raw files, so edits appear as reviewable rounds).
+
+When you send a prompt, `/api/render` streams a single `query()` call
+over SSE. (For how the SDK's agent loop works in general, see
 [How the agent loop works](https://docs.claude.com/en/agent-sdk/agent-loop).)
-The query is configured with two MCP servers:
-
-- `docwriter`. Exposes `propose_rule` and `propose_hook` tools, both of
-  which surface user-review cards in the UI.
-- `docwriter-doc`. Exposes `edit_doc`, `read_doc`, `write_doc`,
-  `post_comment`, and `list_threads`, all of which operate on tabs.
-
-The agent calls these (and the built-in `Edit`/`Write`/`Read`/`Bash`
-tools) as it works. Each tool call is logged to the history pane as it
-happens.
+Each tool call is logged to the history pane as it happens.
 
 ## Further reading
 
