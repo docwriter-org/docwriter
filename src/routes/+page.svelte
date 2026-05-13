@@ -1571,7 +1571,7 @@
 
 	// Pane widths (resizable)
 	let leftWidth = $state(260);
-	let rightWidth = $state(480);
+	let rightWidth = $state(420);
 	const MIN_PANE_WIDTH = 180;
 	const MAX_PANE_WIDTH = 560;
 	function resizeLeft(delta: number) {
@@ -2217,15 +2217,6 @@
 		flex: 1;
 		min-height: 0;
 	}
-	.left-pane {
-		border-right: 1px solid var(--border-light);
-		background: var(--pane-bg);
-		overflow: hidden;
-		flex-shrink: 0;
-		display: flex;
-		flex-direction: column;
-		min-height: 0;
-	}
 	.left-pane-inner,
 	.right-pane-inner {
 		height: 100%;
@@ -2233,11 +2224,25 @@
 		flex-direction: column;
 		overflow: hidden;
 		min-height: 0;
+		--sidebar-well-a: color-mix(in srgb, var(--bg-surface) 76%, var(--pane-bg));
+		--sidebar-well-b: color-mix(in srgb, var(--bg-surface) 92%, var(--pane-bg));
+		--sidebar-edge: color-mix(in srgb, var(--border-light) 78%, var(--pane-bg));
+	}
+	.left-pane {
+		border-right: 1px solid var(--sidebar-edge);
+		box-shadow: inset -1px 0 0 color-mix(in srgb, var(--pane-bg) 18%, transparent);
+		background: var(--pane-bg);
+		overflow: hidden;
+		flex-shrink: 0;
+		display: flex;
+		flex-direction: column;
+		min-height: 0;
 	}
 	.outline-wrap {
 		flex: 1 1 auto;
 		min-height: 0;
 		overflow: hidden;
+		background: var(--sidebar-well-a);
 	}
 	.file-tree-panel {
 		flex: 0 0 auto;
@@ -2245,15 +2250,18 @@
 		max-height: 66%;
 		overflow: hidden;
 		min-width: 0;
+		display: flex;
+		flex-direction: column;
+		border-top: 1px solid var(--sidebar-edge);
+		background: var(--sidebar-well-b);
 	}
 	.file-tree-wrap {
+		flex: 1 1 auto;
 		height: 100%;
 		min-height: 0;
 		overflow: auto;
-		padding: 12px 16px 16px;
+		padding: 12px 14px 14px;
 		box-sizing: border-box;
-		border-top: 1px solid var(--border-light);
-		background: color-mix(in srgb, var(--pane-bg) 94%, var(--bg-surface));
 	}
 	.center-pane {
 		position: relative;
@@ -2287,6 +2295,8 @@
 		color: var(--text-faint);
 	}
 	.right-pane {
+		border-left: 1px solid var(--sidebar-edge);
+		box-shadow: inset 1px 0 0 color-mix(in srgb, var(--pane-bg) 18%, transparent);
 		background: var(--pane-bg);
 		overflow: hidden;
 		flex-shrink: 0;

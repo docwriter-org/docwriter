@@ -17,6 +17,8 @@
 
 	let chatOpen = $state(false);
 	let chatPopoverEl: HTMLDivElement | null = $state(null);
+	let chatMessageDraft = $state('');
+	let chatPlanModeDraft = $state(false);
 
 	function toggleChat() {
 		chatOpen = !chatOpen;
@@ -66,7 +68,13 @@
 	</button>
 	{#if chatOpen}
 		<div class="dock-chat-popover" bind:this={chatPopoverEl}>
-			<ChatPanel onSend={sendMessage} rendering={rendering} queuedCount={queuedCount} />
+			<ChatPanel
+				bind:message={chatMessageDraft}
+				bind:planMode={chatPlanModeDraft}
+				onSend={sendMessage}
+				rendering={rendering}
+				queuedCount={queuedCount}
+			/>
 		</div>
 	{/if}
 </div>

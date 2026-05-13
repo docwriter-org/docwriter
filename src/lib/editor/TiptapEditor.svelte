@@ -1161,7 +1161,7 @@
 		min-width: 0;
 		overflow-y: auto;
 		/* Tighter right padding when there's no comment gutter — the gutter
-		 * column adds ~280px of breathing room on the right when comments
+		 * column adds ~220px of breathing room on the right when comments
 		 * exist, so the wrapper itself doesn't need much. Without comments
 		 * we still want a small gap so prose doesn't kiss the right edge. */
 		padding: 48px 12px 48px 32px;
@@ -1188,12 +1188,13 @@
 		 * thread cards sit in a stable column beside the editor rather
 		 * than floating over the prose. Width matches CommentGutter's
 		 * fixed inner width. */
-		grid-template-columns: 52px minmax(0, 1fr) 280px;
+		grid-template-columns: 52px minmax(0, 1fr) 220px;
 	}
 	.plain-editor-shell.soft-wrap-enabled {
 		width: 100%;
 	}
 	.plain-line-gutter {
+		align-self: start;
 		padding: 2px 12px 0 0;
 		border-right: 1px solid var(--border-light);
 		color: var(--text-faint);
@@ -1203,7 +1204,9 @@
 		text-align: right;
 		user-select: none;
 		pointer-events: none;
-		background: color-mix(in srgb, var(--bg-surface) 52%, transparent);
+		/* Match prose canvas (--bg). Never mix bg-surface with `transparent`:
+		 * that anchors to opaque black and reads as a muddy stripe on Solarized. */
+		background: var(--bg);
 	}
 	.plain-line-number {
 		height: 1.45em;

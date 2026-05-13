@@ -302,9 +302,9 @@
 	.comment-gutter {
 		position: relative;
 		flex-shrink: 0;
-		width: 280px;
-		min-width: 280px;
-		max-width: 280px;
+		width: 220px;
+		min-width: 220px;
+		max-width: 220px;
 		height: 100%;
 		padding: 0 10px 20px;
 		box-sizing: border-box;

@@ -102,9 +102,8 @@
 	}
 
 	// Render the plan as minimally-formatted markdown-ish HTML. Full
-	// markdown rendering isn't wired here yet; the plan text tends to be
-	// short-form prose + lists, so preserving paragraph breaks and bold
-	// is enough to make it readable.
+	// markdown rendering isn't wired here yet; bullets, numbered steps,
+	// headings, **bold**, and `code` cover typical agent plans.
 	function renderPlanHtml(text: string): string {
 		const esc = (s: string) =>
 			s
@@ -113,22 +112,30 @@
 				.replace(/>/g, '&gt;');
 		const lines = text.split('\n');
 		const out: string[] = [];
-		let inList = false;
+		type ListKind = 'ul' | 'ol';
+		let listKind: ListKind | null = null;
+		function closeList() {
+			if (listKind === 'ul') out.push('</ul>');
+			else if (listKind === 'ol') out.push('</ol>');
+			listKind = null;
+		}
 		for (const raw of lines) {
 			const line = raw.trimEnd();
-			const listMatch = line.match(/^\s*([-*])\s+(.*)$/);
-			if (listMatch) {
-				if (!inList) {
-					out.push('<ul>');
-					inList = true;
+			const ulMatch = line.match(/^\s*[-*]\s+(.*)$/);
+			const olMatch = line.match(/^\s*\d+[.)]\s+(.*)$/);
+			if (ulMatch ?? olMatch) {
+				const isOl = !!olMatch;
+				const chunk = esc(isOl ? olMatch![1] : ulMatch![1]);
+				const next: ListKind = isOl ? 'ol' : 'ul';
+				if (listKind !== next) {
+					closeList();
+					out.push(next === 'ul' ? '<ul>' : '<ol>');
+					listKind = next;
 				}
-				out.push(`<li>${formatInline(esc(listMatch[2]))}</li>`);
+				out.push(`<li>${formatInline(chunk)}</li>`);
 				continue;
 			}
-			if (inList) {
-				out.push('</ul>');
-				inList = false;
-			}
+			closeList();
 			const headingMatch = line.match(/^(#{1,6})\s+(.*)$/);
 			if (headingMatch) {
 				const level = Math.min(headingMatch[1].length + 2, 6);
@@ -141,7 +148,7 @@
 			}
 			out.push(`<p>${formatInline(esc(line))}</p>`);
 		}
-		if (inList) out.push('</ul>');
+		closeList();
 		return out.join('\n');
 	}
 
@@ -156,6 +163,7 @@
 	<div class="agent-modal-backdrop" transition:fade={{ duration: 140 }}>
 		<div
 			class="agent-modal"
+			class:agent-modal--plan={Boolean(activePlan)}
 			role="dialog"
 			aria-modal="true"
 			transition:fly={{ y: 16, duration: 220, easing: cubicOut }}
@@ -228,7 +236,7 @@
 					</button>
 				</div>
 				<div class="modal-body plan-body">
-					{@html renderPlanHtml(plan.plan)}
+					<div class="plan-body-inner">{@html renderPlanHtml(plan.plan)}</div>
 				</div>
 				{#if rejectingPlanId === plan.id}
 					<div class="modal-footer reject-footer">
@@ -277,7 +285,7 @@
 		align-items: center;
 		justify-content: center;
 		z-index: 200;
-		padding: 24px;
+		padding: 16px;
 	}
 	.agent-modal {
 		background: var(--bg-elevated);
@@ -290,6 +298,19 @@
 		flex-direction: column;
 		font-family: 'Inter', -apple-system, sans-serif;
 		color: var(--text);
+	}
+	.agent-modal--plan {
+		width: min(1120px, calc(100vw - 24px));
+		max-height: min(92vh, 960px);
+		border-radius: 12px;
+		box-shadow: 0 28px 72px rgba(0, 0, 0, 0.22), 0 8px 20px rgba(0, 0, 0, 0.08);
+	}
+	.agent-modal--plan .modal-header {
+		padding: 12px 24px;
+		background: linear-gradient(180deg, var(--accent-bg) 0%, var(--bg-elevated) 72%);
+	}
+	.agent-modal--plan .modal-footer {
+		padding: 12px 24px;
 	}
 	.modal-header {
 		display: flex;
@@ -323,33 +344,108 @@
 		font-size: 13px;
 		line-height: 1.55;
 	}
-	.modal-body.plan-body :global(h3),
+	.modal-body.plan-body {
+		padding: 0;
+		flex: 1;
+		min-height: 0;
+		background: var(--prose-bg);
+		border-top: 1px solid var(--border-light);
+	}
+	.plan-body-inner {
+		counter-reset: plan-ol-item;
+		padding: 18px 24px 20px;
+		max-width: 100%;
+		box-sizing: border-box;
+		font-family: 'Lora', Georgia, 'Times New Roman', serif;
+		font-size: 14.5px;
+		line-height: 1.45;
+		letter-spacing: 0;
+		color: var(--prose-text);
+	}
+	.modal-body.plan-body :global(h3) {
+		font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+		font-size: 11px;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
+		color: var(--text-faint);
+		counter-reset: plan-ol-item;
+		margin: 14px 0 6px;
+	}
+	.modal-body.plan-body :global(h3:first-child) {
+		margin-top: 0;
+	}
 	.modal-body.plan-body :global(h4),
 	.modal-body.plan-body :global(h5),
 	.modal-body.plan-body :global(h6) {
-		font-size: 13.5px;
+		font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+		font-size: 14px;
 		font-weight: 600;
-		margin: 14px 0 6px;
+		letter-spacing: -0.02em;
+		color: var(--prose-text);
+		counter-reset: plan-ol-item;
+		margin: 12px 0 5px;
 	}
 	.modal-body.plan-body :global(p) {
-		margin: 8px 0;
+		margin: 0 0 7px;
 	}
-	.modal-body.plan-body :global(ul) {
-		margin: 8px 0;
-		padding-left: 20px;
+	.modal-body.plan-body :global(p:last-child) {
+		margin-bottom: 0;
+	}
+	.modal-body.plan-body :global(ul),
+	.modal-body.plan-body :global(ol) {
+		margin: 0 0 10px;
+		padding-left: 1.25em;
+	}
+	.modal-body.plan-body :global(ul:last-child),
+	.modal-body.plan-body :global(ol:last-child) {
+		margin-bottom: 0;
 	}
 	.modal-body.plan-body :global(li) {
-		margin: 4px 0;
+		margin: 2px 0;
+		padding-left: 2px;
+	}
+	/* Fragmented numbered lists reopen multiple <ol> blocks (paragraphs in
+	   between confuse the naive parser); one counter keeps 1 · 2 · 3 readable. */
+	.modal-body.plan-body :global(ol) {
+		list-style: none;
+		padding-left: 0;
+	}
+	.modal-body.plan-body :global(ol > li) {
+		position: relative;
+		padding-left: 1.45em;
+		counter-increment: plan-ol-item;
+	}
+	.modal-body.plan-body :global(ol > li::before) {
+		content: counter(plan-ol-item) '.';
+		position: absolute;
+		left: 0;
+		width: 1.2em;
+		text-align: right;
+		font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+		font-size: 13px;
+		font-weight: 600;
+		color: var(--accent-subject);
+		top: 0.05em;
+	}
+	.modal-body.plan-body :global(ul > li::marker) {
+		color: var(--accent-subject);
+		font-weight: 600;
+		font-size: 0.75em;
 	}
 	.modal-body.plan-body :global(code) {
 		font-family: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
-		font-size: 12px;
-		padding: 1px 4px;
-		border-radius: 3px;
-		background: var(--bg-surface);
+		font-size: 0.82em;
+		padding: 2px 6px;
+		border-radius: 4px;
+		color: var(--text-secondary);
+		background: var(--accent-bg);
+		border: 1px solid var(--border-light);
+		vertical-align: 0.04em;
 	}
 	.modal-body.plan-body :global(strong) {
 		font-weight: 600;
+		color: var(--prose-text);
 	}
 	.modal-footer {
 		display: flex;

@@ -27,7 +27,7 @@ export const themes: Theme[] = [
 			'--prose-bg': '#ffffff',
 			'--prose-text': '#1f2937',
 			'--header-bg': '#ffffff',
-			'--pane-bg': '#ffffff',
+			'--pane-bg': '#fafbfc',
 			'--diff-added-color': '#059669',
 			'--diff-added-bg': '#ecfdf5',
 			'--diff-removed-color': '#dc2626',
@@ -66,8 +66,8 @@ export const themes: Theme[] = [
 			'--accent-subject': '#c7d2fe',
 			'--prose-bg': '#0f0f0f',
 			'--prose-text': '#e8e8e8',
-			'--header-bg': '#141414',
-			'--pane-bg': '#141414',
+			'--header-bg': '#2a2a2a',
+			'--pane-bg': '#2a2a2a',
 			'--diff-added-color': '#6ee7b7',
 			'--diff-added-bg': '#1a1a1a',
 			'--diff-removed-color': '#fca5a5',
@@ -106,7 +106,7 @@ export const themes: Theme[] = [
 			'--accent-subject': '#2aa198',
 			'--prose-bg': '#fdf6e3',
 			'--prose-text': '#073642',
-			'--header-bg': '#eee8d5',
+			'--header-bg': '#fdf6e3',
 			'--pane-bg': '#fdf6e3',
 			'--diff-added-color': '#859900',
 			'--diff-added-bg': '#f0f4e0',
@@ -121,6 +121,8 @@ export const themes: Theme[] = [
 			'--color-user-edit': '#b58900',
 			'--color-agent-edit': '#859900',
 			'--color-pinned': '#6c71c4',
+			'--win-bg': '#e9f5e6',
+			'--win-border': '#859900',
 		}
 	},
 	{
@@ -144,8 +146,8 @@ export const themes: Theme[] = [
 			'--accent-subject': '#2aa198',
 			'--prose-bg': '#002b36',
 			'--prose-text': '#eee8d5',
-			'--header-bg': '#073642',
-			'--pane-bg': '#073642',
+			'--header-bg': '#227f97',
+			'--pane-bg': '#227f97',
 			'--diff-added-color': '#859900',
 			'--diff-added-bg': '#1a3a00',
 			'--diff-removed-color': '#dc322f',
@@ -159,6 +161,8 @@ export const themes: Theme[] = [
 			'--color-user-edit': '#b58900',
 			'--color-agent-edit': '#859900',
 			'--color-pinned': '#6c71c4',
+			'--win-bg': 'color-mix(in srgb, #859900 16%, transparent)',
+			'--win-border': '#859900',
 		}
 	},
 	{
@@ -182,8 +186,8 @@ export const themes: Theme[] = [
 			'--accent-subject': '#66d9ef',
 			'--prose-bg': '#272822',
 			'--prose-text': '#f8f8f2',
-			'--header-bg': '#2e2f2a',
-			'--pane-bg': '#2e2f2a',
+			'--header-bg': '#484740',
+			'--pane-bg': '#484740',
 			'--diff-added-color': '#a6e22e',
 			'--diff-added-bg': '#3a4a10',
 			'--diff-removed-color': '#f92672',
@@ -197,6 +201,8 @@ export const themes: Theme[] = [
 			'--color-user-edit': '#e6db74',
 			'--color-agent-edit': '#a6e22e',
 			'--color-pinned': '#ae81ff',
+			'--win-bg': 'color-mix(in srgb, #a6e22e 22%, transparent)',
+			'--win-border': '#a6e22e',
 		}
 	}
 ];

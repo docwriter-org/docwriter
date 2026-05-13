@@ -10,11 +10,17 @@
 		/** How many messages are already queued (excluding the in-flight
 		 * render). Used for the "Queue (3)" send-button label. */
 		queuedCount?: number;
+		/** Lifted so the parent can preserve text when the popover unmounts. */
+		message?: string;
+		planMode?: boolean;
 	}
-	let { onSend, rendering = false, queuedCount = 0 }: Props = $props();
-
-	let message = $state('');
-	let planMode = $state(false);
+	let {
+		onSend,
+		rendering = false,
+		queuedCount = 0,
+		message = $bindable(''),
+		planMode = $bindable(false)
+	}: Props = $props();
 	let textareaEl: HTMLTextAreaElement | null = $state(null);
 
 	function send() {
@@ -32,10 +38,8 @@
 		}
 	}
 
-	// Autofocus on mount. MenuBar unmounts+remounts the panel each time the
-	// user hovers a different item, so this fires fresh every open. raf
-	// guarantees the textarea is painted before we grab focus; without it,
-	// the focus can race with whatever stole focus when the hover opened.
+	// Autofocus each time the panel mounts (re-open Send). requestAnimationFrame
+	// waits until paint so focus wins over whatever handled the opening click.
 	onMount(() => {
 		requestAnimationFrame(() => textareaEl?.focus());
 	});
