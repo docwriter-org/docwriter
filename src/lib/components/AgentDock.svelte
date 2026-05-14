@@ -3,9 +3,10 @@
 	import ChatPanel from './ChatPanel.svelte';
 	import { isRendering, queuedSubmissionCount } from '$lib/stores';
 	import { tooltip } from '$lib/actions/tooltip';
+	import type { ImageAttachment } from '$lib/types';
 
 	interface Props {
-		onSendMessage: (message: string, opts: { planMode: boolean }) => void;
+		onSendMessage: (message: string, opts: { planMode: boolean; images: ImageAttachment[] }) => void;
 	}
 	let { onSendMessage }: Props = $props();
 
@@ -24,7 +25,7 @@
 		chatOpen = !chatOpen;
 	}
 
-	function sendMessage(message: string, opts: { planMode: boolean }) {
+	function sendMessage(message: string, opts: { planMode: boolean; images: ImageAttachment[] }) {
 		onSendMessage(message, opts);
 		if (!rendering) chatOpen = false;
 	}

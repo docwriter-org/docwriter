@@ -27,6 +27,40 @@ export const reviewBaseline = writable<string | null>(null);
  * (also dropping all later rounds). */
 export const pendingReviewRounds = writable<MaterializedPendingReviewRound[]>([]);
 
+/** Pending agent-edit rounds for EVERY open tab. Each entry contains a
+ * tabId and the materialized rounds for that tab, sorted oldest-first.
+ * Tabs with zero pending rounds are omitted. Used by OutlinePane to show
+ * cross-tab review cards without requiring the user to switch tabs. */
+export const allTabPendingRounds = writable<Array<{ tabId: string; rounds: MaterializedPendingReviewRound[] }>>([]);
+
+/** Agent comment threads for EVERY open tab. Each entry contains a tabId
+ * and the unresolved threads that have at least one agent message.
+ * Used by OutlinePane's cross-tab comment section. */
+export const allTabCommentThreads = writable<Array<{ tabId: string; threads: CommentThread[] }>>([]);
+
+/** Set of comment thread IDs the user has already seen (opened or clicked).
+ * Persisted to localStorage so it survives page reloads. A thread absent
+ * from this set that has an agent message is shown with an unread dot. */
+const SEEN_COMMENTS_KEY = 'docwriter.seenCommentIds';
+function readSeenCommentIds(): Set<string> {
+	if (typeof window === 'undefined') return new Set();
+	try {
+		const raw = window.localStorage.getItem(SEEN_COMMENTS_KEY);
+		return raw ? new Set(JSON.parse(raw) as string[]) : new Set();
+	} catch {
+		return new Set();
+	}
+}
+export const seenCommentIds = writable<Set<string>>(readSeenCommentIds());
+if (typeof window !== 'undefined') {
+	seenCommentIds.subscribe((s) =>
+		window.localStorage.setItem(SEEN_COMMENTS_KEY, JSON.stringify([...s]))
+	);
+}
+export function markCommentSeen(id: string) {
+	seenCommentIds.update((s) => { const n = new Set(s); n.add(id); return n; });
+}
+
 /** Comment threads for the ACTIVE tab, sorted by createdAt. Threaded
  * Google-Docs-style comments. Each thread is anchored to a passage via
  * a stored `quote`; the editor's comment-overlay plugin renders an

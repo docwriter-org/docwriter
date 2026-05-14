@@ -33,8 +33,12 @@
 		onRenamed?: (fromPath: string, toPath: string) => void;
 		/** Called after a successful delete. Host can close any open tab. */
 		onDeleted?: (path: string) => void;
+		/** Called when the user drops files from Finder / the filesystem onto
+		 * a folder (or the workspace root). `targetFolder` is the workspace-
+		 * relative folder path, or '' for the root. */
+		onDropExternalFiles?: (files: File[], targetFolder: string) => Promise<void>;
 	}
-	let { onOpenFile, activePath, onRenamed, onDeleted }: Props = $props();
+	let { onOpenFile, activePath, onRenamed, onDeleted, onDropExternalFiles }: Props = $props();
 
 	/** Per-path state: expanded flag + lazily-loaded child entries. */
 	const nodeState = $state<
@@ -122,6 +126,19 @@
 	// ── Context menu ──────────────────────────────────────────────────
 	/** Active right-click menu target + its screen coords. */
 	let menu = $state<{ entry: FileEntry; x: number; y: number } | null>(null);
+	let menuEl = $state<HTMLElement | null>(null);
+
+	$effect(() => {
+		const el = menuEl;
+		if (!el) return;
+		requestAnimationFrame(() => {
+			const r = el.getBoundingClientRect();
+			const vw = window.innerWidth;
+			const vh = window.innerHeight;
+			if (r.right > vw - 4) el.style.left = `${Math.max(4, vw - r.width - 4)}px`;
+			if (r.bottom > vh - 4) el.style.top = `${Math.max(4, vh - r.height - 4)}px`;
+		});
+	});
 
 	function openMenu(e: MouseEvent, entry: FileEntry) {
 		e.preventDefault();
@@ -272,15 +289,35 @@
 		return true;
 	}
 
+	/** True when the event carries files from outside the browser (Finder
+	 * / filesystem) and no internal drag is in progress. */
+	function isExternalFileDrop(e: DragEvent): boolean {
+		return dragPath === null && (e.dataTransfer?.types.includes('Files') ?? false);
+	}
+
 	function onDragOverEntry(e: DragEvent, entry: FileEntry) {
 		const target = resolveDropFolder(entry);
+		if (isExternalFileDrop(e)) {
+			e.preventDefault();
+			e.stopPropagation();
+			if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+			dragOverPath = entry.kind === 'folder' ? entry.path : null;
+			return;
+		}
 		if (!isValidDrop(target)) return;
 		e.preventDefault();
+		e.stopPropagation();
 		if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
 		dragOverPath = target;
 	}
 
 	function onDragOverRoot(e: DragEvent) {
+		if (isExternalFileDrop(e)) {
+			e.preventDefault();
+			if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+			if (dragOverPath === null) dragOverPath = '';
+			return;
+		}
 		if (!isValidDrop('')) return;
 		e.preventDefault();
 		if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
@@ -294,8 +331,16 @@
 
 	function onDropEntry(e: DragEvent, entry: FileEntry) {
 		e.preventDefault();
+		e.stopPropagation();
 		const target = resolveDropFolder(entry);
 		dragOverPath = null;
+		if (isExternalFileDrop(e) && e.dataTransfer?.files.length) {
+			const files = [...e.dataTransfer.files];
+			const folder = entry.kind === 'folder' ? entry.path : parentOf(entry.path);
+			dragPath = null;
+			void onDropExternalFiles?.(files, folder);
+			return;
+		}
 		if (!isValidDrop(target)) return;
 		const src = dragPath!;
 		dragPath = null;
@@ -305,6 +350,12 @@
 	function onDropRoot(e: DragEvent) {
 		e.preventDefault();
 		dragOverPath = null;
+		if (isExternalFileDrop(e) && e.dataTransfer?.files.length) {
+			const files = [...e.dataTransfer.files];
+			dragPath = null;
+			void onDropExternalFiles?.(files, '');
+			return;
+		}
 		if (!isValidDrop('')) return;
 		const src = dragPath!;
 		dragPath = null;
@@ -444,6 +495,7 @@
 	<!-- Position: fixed so the menu floats above everything and doesn't
 	     care about parent overflow. -->
 	<div
+		bind:this={menuEl}
 		class="file-tree-menu"
 		role="menu"
 		style:left="{menu.x}px"

@@ -3,6 +3,18 @@ export interface Rule {
 	text: string;
 }
 
+export const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'] as const;
+export type AllowedImageMediaType = (typeof ALLOWED_IMAGE_TYPES)[number];
+
+/** An image the user attached to an agent message (dragged into ChatPanel). */
+export interface ImageAttachment {
+	/** Original filename, for display only. */
+	name: string;
+	mediaType: AllowedImageMediaType;
+	/** Base64-encoded image data (no `data:` URI prefix). */
+	data: string;
+}
+
 /** Rule the agent proposed mid-render. Shows as a pending card in the
  * OutlinePane; Accept adds it to the `rules` list, Reject dismisses it. */
 export interface ProposedRule {

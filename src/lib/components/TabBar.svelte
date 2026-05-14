@@ -15,14 +15,57 @@
 		/** Map tabId → number of pending agent-edit rounds. Absent or 0 means
 		 * no pending reviews on that tab; >0 renders as a numbered badge. */
 		pendingTabs?: Map<string, number>;
+		/** Called when the user drops files from Finder / the filesystem onto
+		 * the tab bar. Parent is responsible for copying and registering. */
+		onDropFile?: (files: File[]) => Promise<void>;
 	}
-	let { onSwitch, onClose, onDelete, onRename, pendingTabs }: Props = $props();
+	let { onSwitch, onClose, onDelete, onRename, pendingTabs, onDropFile }: Props = $props();
+
+	let isDragOver = $state(false);
+
+	function handleDragOver(e: DragEvent) {
+		if (!e.dataTransfer?.types.includes('Files')) return;
+		e.preventDefault();
+		e.stopPropagation();
+		e.dataTransfer.dropEffect = 'copy';
+		isDragOver = true;
+	}
+	function handleDragLeave(e: DragEvent) {
+		const related = e.relatedTarget as Node | null;
+		const bar = (e.currentTarget as HTMLElement);
+		if (related && bar.contains(related)) return;
+		isDragOver = false;
+	}
+	function handleDrop(e: DragEvent) {
+		e.preventDefault();
+		e.stopPropagation();
+		isDragOver = false;
+		if (!onDropFile || !e.dataTransfer?.files.length) return;
+		void onDropFile([...e.dataTransfer.files]);
+	}
 
 	let tabList: string[] = $state([]);
 	tabs.subscribe((v) => (tabList = v));
 
 	let active = $state<string | null>(null);
 	activeTab.subscribe((v) => (active = v));
+
+	/** Visual order: pending (non-active) tabs float to sit immediately after
+	 * the active tab so they're always visible without scrolling. The
+	 * underlying store order is never mutated — this is display-only. */
+	let displayList = $derived.by(() => {
+		if (!pendingTabs || pendingTabs.size === 0) return tabList;
+		const pendingIds = new Set(
+			[...(pendingTabs.entries())].filter(([, n]) => n > 0).map(([id]) => id)
+		);
+		// Keep active tab in its natural position; pull other pending tabs out.
+		const base = tabList.filter((id) => !pendingIds.has(id) || id === active);
+		const floaters = tabList.filter((id) => pendingIds.has(id) && id !== active);
+		if (floaters.length === 0) return tabList;
+		// Insert floaters immediately after the active tab (or at front if no active).
+		const insertAt = active ? base.indexOf(active) + 1 : 0;
+		return [...base.slice(0, insertAt), ...floaters, ...base.slice(insertAt)];
+	});
 
 	// Inline rename
 	let renamingId = $state<string | null>(null);
@@ -85,6 +128,20 @@
 
 	// ── Right-click context menu ─────────────────────────────────────
 	let menu = $state<{ id: string; x: number; y: number } | null>(null);
+	let menuEl = $state<HTMLElement | null>(null);
+
+	$effect(() => {
+		const el = menuEl;
+		if (!el) return;
+		requestAnimationFrame(() => {
+			const r = el.getBoundingClientRect();
+			const vw = window.innerWidth;
+			const vh = window.innerHeight;
+			if (r.right > vw - 4) el.style.left = `${Math.max(4, vw - r.width - 4)}px`;
+			if (r.bottom > vh - 4) el.style.top = `${Math.max(4, vh - r.height - 4)}px`;
+		});
+	});
+
 	function openMenu(e: MouseEvent, id: string) {
 		e.preventDefault();
 		e.stopPropagation();
@@ -143,8 +200,15 @@
 	}
 </script>
 
-<div class="tab-bar" role="tablist">
-	{#each tabList as id}
+<div
+	class="tab-bar"
+	class:drag-over={isDragOver}
+	role="tablist"
+	ondragover={handleDragOver}
+	ondragleave={handleDragLeave}
+	ondrop={handleDrop}
+>
+	{#each displayList as id}
 		<!-- svelte-ignore a11y_click_events_have_key_events -->
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<div
@@ -197,6 +261,7 @@
 
 {#if menu}
 	<div
+		bind:this={menuEl}
 		class="tab-menu"
 		role="menu"
 		style:left="{menu.x}px"
@@ -375,5 +440,11 @@
 		height: 1px;
 		background: var(--border-light);
 		margin: 4px 0;
+	}
+	.tab-bar.drag-over {
+		background: color-mix(in srgb, var(--accent) 8%, var(--pane-bg));
+		border-bottom-color: var(--accent);
+		outline: 1.5px dashed var(--accent);
+		outline-offset: -2px;
 	}
 </style>

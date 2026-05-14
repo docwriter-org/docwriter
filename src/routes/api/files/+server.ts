@@ -81,9 +81,11 @@ export const GET: RequestHandler = async ({ url }) => {
 	return json({ path: relPath, entries });
 };
 
-/** POST /api/files { path, kind?: 'file'|'folder', content?: string } —
+/** POST /api/files { path, kind?: 'file'|'folder', content?: string, encoding?: 'base64' } —
  * create a file or folder at `path` (relative to DOCWRITER_ROOT). Parent
- * directories are created as needed. 409s if the target already exists. */
+ * directories are created as needed. 409s if the target already exists.
+ * Pass `encoding: 'base64'` with a base64-encoded `content` to write binary
+ * files (e.g. PDFs, images) without corruption. */
 export const POST: RequestHandler = async ({ request }) => {
 	const body = await request.json();
 	const relPath = typeof body.path === 'string' ? body.path.trim() : '';
@@ -95,7 +97,9 @@ export const POST: RequestHandler = async ({ request }) => {
 		mkdirSync(abs, { recursive: true });
 	} else {
 		mkdirSync(dirname(abs), { recursive: true });
-		writeFileSync(abs, typeof body.content === 'string' ? body.content : '', 'utf-8');
+		const raw = typeof body.content === 'string' ? body.content : '';
+		const buf = body.encoding === 'base64' ? Buffer.from(raw, 'base64') : Buffer.from(raw, 'utf-8');
+		writeFileSync(abs, buf);
 	}
 	return json({ ok: true, path: relPath, kind });
 };

@@ -104,16 +104,19 @@
 		resetSessionCost,
 		actionUsageCounts,
 		commentThreads,
+		allTabPendingRounds,
+		allTabCommentThreads,
 		openCommentThreadId,
 		queuedSubmissionCount
 	} from '$lib/stores';
 	import TabBar from '$lib/components/TabBar.svelte';
-	import type { AgentSettings, CommentThread, HistoryEntry, PendingReviewRound } from '$lib/types';
+	import type { AgentSettings, CommentThread, HistoryEntry, ImageAttachment, PendingReviewRound } from '$lib/types';
 	import type { MaterializedPendingReviewRound } from '$lib/review-rounds';
 
 	type EditorRef = {
 		getEditor: () => Editor | undefined;
 		flushAutosave: () => Promise<boolean>;
+		cancelIdleTimer: () => void;
 		getScrollTop: () => number;
 		flashAcceptedRange: (text: string) => void;
 	};
@@ -174,6 +177,7 @@
 		if (rawRounds.length > 0) nextPending.set(tabId, rawRounds.length);
 		else nextPending.delete(tabId);
 		pendingReviewTabs = nextPending;
+		syncAllTabsState();
 	}
 
 	function clearFeedbackAnnotationsForTab(tabId: string) {
@@ -234,6 +238,12 @@
 			tabs.set(tabIds);
 			activeTab.set(active);
 			refreshPendingReviewTabs(tabIds);
+			// Attach background observers for every non-active tab so their
+			// round/comment changes keep the all-tab pane current.
+			for (const id of tabIds) {
+				if (id !== active) attachBgTabObserver(id);
+			}
+			syncAllTabsState();
 			return active;
 		} catch (e) {
 			console.error('Failed to load tabs:', e);
@@ -283,6 +293,34 @@
 		getCommentsMapForTab(tabId).forEach((thread) => list.push(thread));
 		list.sort((a, b) => a.createdAt - b.createdAt);
 		commentThreads.set(list);
+		syncAllTabsState();
+	}
+
+	/** Refresh the all-tab aggregates: pending rounds + agent comment threads
+	 * for every currently open tab. Called after any per-tab review or
+	 * comment change so the OutlinePane cross-tab view stays current. */
+	function syncAllTabsState() {
+		const tabIds = getCurrentTabList();
+		const roundsAgg: Array<{ tabId: string; rounds: MaterializedPendingReviewRound[] }> = [];
+		const commentsAgg: Array<{ tabId: string; threads: CommentThread[] }> = [];
+		for (const id of tabIds) {
+			const rawRounds = getReviewArrayForTab(id).toArray();
+			if (rawRounds.length > 0) {
+				roundsAgg.push({ tabId: id, rounds: materializedRoundsForTab(id, rawRounds) });
+			}
+			const threads: CommentThread[] = [];
+			getCommentsMapForTab(id).forEach((t) => {
+				if (!t.resolved && t.messages.some((m) => m.author === 'agent')) {
+					threads.push(t);
+				}
+			});
+			if (threads.length > 0) {
+				threads.sort((a, b) => a.createdAt - b.createdAt);
+				commentsAgg.push({ tabId: id, threads });
+			}
+		}
+		allTabPendingRounds.set(roundsAgg);
+		allTabCommentThreads.set(commentsAgg);
 	}
 
 	async function remountActiveTabFromServer(tabId: string) {
@@ -347,6 +385,29 @@
 		syncActiveCommentThreads(tabId);
 	}
 
+	/** Lightweight observers for background tabs: any rounds/comment change
+	 * triggers syncAllTabsState so the OutlinePane cross-tab list stays
+	 * current without touching the active-tab diff overlay state. */
+	const bgTabObservers = new Map<string, { arr: ReturnType<typeof getReviewArrayForTab>; commentsMap: ReturnType<typeof getCommentsMapForTab>; arrHandler: () => void; commentsHandler: () => void }>();
+
+	function attachBgTabObserver(tabId: string) {
+		if (bgTabObservers.has(tabId)) return;
+		const arr = getReviewArrayForTab(tabId);
+		const commentsMap = getCommentsMapForTab(tabId);
+		const handler = () => syncAllTabsState();
+		arr.observe(handler);
+		commentsMap.observe(handler);
+		bgTabObservers.set(tabId, { arr, commentsMap, arrHandler: handler, commentsHandler: handler });
+	}
+
+	function detachBgTabObserver(tabId: string) {
+		const obs = bgTabObservers.get(tabId);
+		if (!obs) return;
+		obs.arr.unobserve(obs.arrHandler);
+		obs.commentsMap.unobserve(obs.commentsHandler);
+		bgTabObservers.delete(tabId);
+	}
+
 	/** Switch the editor to a different tab. Tears down the editor, sets
 	 * the current tab on the Y.Doc layer, loads the new tab's content, then
 	 * remounts the editor against the new Y.Doc. */
@@ -357,6 +418,10 @@
 			freshAgentTabs.delete(tabId);
 			freshAgentTabs = new Set(freshAgentTabs);
 		}
+		// Move the old active tab to a bg observer and drop the bg observer
+		// for the new active tab (the active observer takes over after loadTab).
+		if (current) attachBgTabObserver(current);
+		detachBgTabObserver(tabId);
 		// New tab gets its own scroll position (top); don't carry the
 		// previous tab's pendingScrollRestore over.
 		pendingScrollRestore = 0;
@@ -393,6 +458,50 @@
 		await switchTab(data.active);
 	}
 
+	/** Copy files dropped from Finder / the filesystem into the workspace
+	 * and open each as a tab. `targetFolder` is the workspace-relative
+	 * folder path, or '' for the root. Files that already exist are opened
+	 * without overwriting. */
+	async function importFilesIntoWorkspace(files: File[], targetFolder: string) {
+		for (const file of files) {
+			const path = targetFolder ? `${targetFolder}/${file.name}` : file.name;
+			const content = await readFileAsBase64(file);
+			const createRes = await fetch('/api/files', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ path, content, encoding: 'base64' })
+			});
+			if (!createRes.ok && createRes.status !== 409) continue;
+			const existing = getCurrentTabList();
+			if (existing.includes(path)) {
+				await switchTab(path);
+			} else {
+				await createTab(path);
+			}
+			fileTreeRef?.refresh();
+		}
+	}
+
+	async function readFileAsBase64(file: File): Promise<string> {
+		return new Promise((resolve, reject) => {
+			const reader = new FileReader();
+			reader.onload = () => {
+				const result = reader.result as string;
+				resolve(result.split(',')[1] ?? '');
+			};
+			reader.onerror = reject;
+			reader.readAsDataURL(file);
+		});
+	}
+
+	async function handleDropFiles(files: File[]) {
+		await importFilesIntoWorkspace(files, '');
+	}
+
+	async function handleTreeDropFiles(files: File[], targetFolder: string) {
+		await importFilesIntoWorkspace(files, targetFolder);
+	}
+
 	async function closeTab(id: string) {
 		// Just drop the tab from the registry. File stays on disk; the
 		// user can reopen it from the FileTree later.
@@ -413,6 +522,7 @@
 		const res = await fetch(`/api/tabs?${qs.toString()}`, { method: 'DELETE' });
 		if (!res.ok) throw new Error(await res.text());
 		const data = await res.json();
+		detachBgTabObserver(id);
 		// Destroy this tab's Y.Doc binding regardless of whether the file
 		// was unlinked — we don't want a stale in-memory doc if the tab
 		// gets re-opened.
@@ -514,8 +624,9 @@
 		}
 	}
 
-	async function submit(trigger?: string, opts?: { planMode?: boolean }) {
+	async function submit(trigger?: string, opts?: { planMode?: boolean; images?: ImageAttachment[] }) {
 		const planMode = opts?.planMode ?? false;
+		const images = opts?.images ?? [];
 		if (rendering || submitInFlight) {
 			queuedSubmissions = [...queuedSubmissions, { trigger, planMode }];
 			queuedSubmissionCount.set(queuedSubmissions.length);
@@ -592,7 +703,8 @@
 					userMessage: trigger,
 					model,
 					planMode,
-					tab: tabId
+					tab: tabId,
+					images: images.length > 0 ? images : undefined
 				}),
 				signal: currentAbort.signal
 			});
@@ -952,8 +1064,11 @@
 				}
 			}
 		} catch (e) {
-			console.error('Render failed:', e);
-			success = false;
+			const isAbort = e instanceof Error && e.name === 'AbortError';
+			if (!isAbort) {
+				console.error('Render failed:', e);
+				success = false;
+			}
 		} finally {
 			currentAbort = null;
 			submitInFlight = false;
@@ -1024,6 +1139,7 @@
 		const rounds = currentRounds();
 		const idx = roundId ? rounds.findIndex((r) => r.id === roundId) : -1;
 		if (roundId && idx < 0) return;
+		editorRef?.cancelIdleTimer();
 		try {
 			const synced = await editorRef?.flushAutosave();
 			if (synced === false) {
@@ -1154,7 +1270,7 @@
 		const retryFeedback = options?.retryFeedback?.trim();
 		const rejectedIdx = roundId ? rounds.findIndex((r) => r.id === roundId) : -1;
 		if (roundId && rejectedIdx < 0) return;
-
+		editorRef?.cancelIdleTimer();
 		try {
 			const synced = await editorRef?.flushAutosave();
 			if (synced === false) {
@@ -1398,6 +1514,8 @@
 			currentAbort.abort();
 			currentAbort = null;
 		}
+		queuedSubmissions = [];
+		queuedSubmissionCount.set(0);
 	}
 
 	async function newSession() {
@@ -2066,6 +2184,7 @@
 								onOpenFile={onFileOpened}
 								onRenamed={onFileTreeRenamed}
 								onDeleted={onFileTreeDeleted}
+								onDropExternalFiles={handleTreeDropFiles}
 							/>
 						</div>
 					</div>
@@ -2080,6 +2199,7 @@
 				onDelete={deleteTab}
 				onRename={renameTabAction}
 				pendingTabs={mergedPendingTabs}
+				onDropFile={handleDropFiles}
 			/>
 			{#if docLoaded && activeTabFilePath}
 				<AgentModal
@@ -2107,7 +2227,7 @@
 			<div class="right-pane-inner" bind:this={rightPaneInnerEl}>
 				{#if historyVisible}
 					<div class="history-wrap" style:height="{historyPaneHeight}px">
-						<HistoryPane onNewSession={newSession} onWakeUp={docLoaded && activeTabFilePath ? () => submit() : undefined}>
+						<HistoryPane onNewSession={newSession} onWakeUp={docLoaded && activeTabFilePath ? () => submit() : undefined} onCancel={cancelRender}>
 							{#snippet dock()}
 								{#if docLoaded && activeTabFilePath}
 									<AgentDock
@@ -2124,17 +2244,23 @@
 						<span class="pending-pane-title">Pending agent edits ({pendingRoundCount})</span>
 					</div>
 					<div class="pending-pane-body">
-						<OutlinePane
-							showOutline={false}
-							showReview={true}
-							onAccept={acceptAgentEdit}
-							onReject={rejectAgentEdit}
-							onRetryWithFeedback={retryRejectedEditWithFeedback}
-							onAcceptRule={acceptProposedRule}
-							onRejectRule={rejectProposedRule}
-							onAcceptHook={acceptProposedHook}
-							onRejectHook={rejectProposedHook}
-						/>
+					<OutlinePane
+						showOutline={false}
+						showReview={true}
+						onAccept={acceptAgentEdit}
+						onReject={rejectAgentEdit}
+						onRetryWithFeedback={retryRejectedEditWithFeedback}
+						onAcceptRule={acceptProposedRule}
+						onRejectRule={rejectProposedRule}
+						onAcceptHook={acceptProposedHook}
+						onRejectHook={rejectProposedHook}
+						onNavigateToRound={async (tabId, round) => {
+							if (tabId !== getCurrentActiveTab()) await switchTab(tabId);
+						}}
+						onNavigateToComment={async (tabId) => {
+							if (tabId !== getCurrentActiveTab()) await switchTab(tabId);
+						}}
+					/>
 					</div>
 				</div>
 			</div>

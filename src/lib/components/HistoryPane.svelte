@@ -15,10 +15,11 @@
 	interface Props {
 		onNewSession?: () => void | Promise<void>;
 		onWakeUp?: () => void;
+		onCancel?: () => void;
 		/** Optional slot for the remaining action buttons (Send, etc.). */
 		dock?: Snippet;
 	}
-	let { onNewSession, onWakeUp, dock }: Props = $props();
+	let { onNewSession, onWakeUp, onCancel, dock }: Props = $props();
 
 	let pendingCount = $state(0);
 	pendingReviewRounds.subscribe((v) => (pendingCount = v.length));
@@ -53,7 +54,7 @@
 	 * one round, so the cost stays accessible without cluttering the pill. */
 	let agentTooltip = $derived.by(() => {
 		const action = rendering
-			? 'Agent is working. Currently running a render against the open files.'
+			? 'Click to stop the agent and cancel any queued messages.'
 			: 'Wake up the agent. It reviews the open files, reacts to any pending changes, and proposes edits or comments based on the current agency setting.';
 		if (cost.rounds === 0) return action;
 		const costLine = `Session so far: ${formatCost(cost.totalCostUsd)} across ${cost.rounds} round${cost.rounds === 1 ? '' : 's'}. ${formatTokens(cost.inputTokens)} in, ${formatTokens(cost.outputTokens)} out, ${formatTokens(cost.cacheReadTokens)} cache read.`;
@@ -268,8 +269,8 @@
 					class:awake={rendering}
 					class:silent
 					class:pending={!rendering && pendingCount > 0}
-					onclick={onWakeUp}
-					disabled={rendering || !onWakeUp}
+					onclick={rendering ? onCancel : onWakeUp}
+					disabled={rendering ? !onCancel : !onWakeUp}
 					use:tooltip={agentTooltip}
 				>
 					<span class="mascot-face" aria-hidden="true">

@@ -1,4 +1,4 @@
-	<script lang="ts">
+<script lang="ts">
 	import { tick, onMount, onDestroy } from 'svelte';
 	import type { Unsubscriber } from 'svelte/store';
 	import * as Y from 'yjs';
@@ -12,28 +12,32 @@
 		X,
 		BookOpen,
 		Terminal,
-		RotateCcw
+		RotateCcw,
+		MessageSquare
 	} from 'lucide-svelte';
 	import {
 		activeTab,
 		proposedRules,
 		proposedHooks,
-		pendingReviewRounds
+		pendingReviewRounds,
+		allTabPendingRounds,
+		allTabCommentThreads,
+		seenCommentIds,
+		markCommentSeen
 	} from '$lib/stores';
 	import { getYDocForTab } from '$lib/yjs-doc';
-	import type { ProposedRule, ProposedHook } from '$lib/types';
+	import type { ProposedRule, ProposedHook, CommentThread } from '$lib/types';
 	import type { MaterializedPendingReviewRound } from '$lib/review-rounds';
 	import {
 		summarizeRound,
 		buildReviewDiffPreview,
 		type ReviewPreviewLine
 	} from '$lib/review-diff';
+	import { serializeFragment as plainTextFromFragment } from '$lib/shared/ydoc-codec';
 
 	interface Props {
 		showOutline?: boolean;
 		showReview?: boolean;
-		/** roundId is optional — callers that don't pass one accept/reject
-		 * every pending round. */
 		onAccept?: (roundId?: string) => void;
 		onReject?: (roundId?: string) => void;
 		onRetryWithFeedback?: (roundId: string, feedback: string) => void;
@@ -41,6 +45,8 @@
 		onRejectRule?: (id: string) => void;
 		onAcceptHook?: (id: string) => void;
 		onRejectHook?: (id: string) => void;
+		onNavigateToRound?: (tabId: string, round: MaterializedPendingReviewRound) => Promise<void>;
+		onNavigateToComment?: (tabId: string, thread: CommentThread) => Promise<void>;
 	}
 	let {
 		showOutline = true,
@@ -51,43 +57,46 @@
 		onAcceptRule,
 		onRejectRule,
 		onAcceptHook,
-		onRejectHook
+		onRejectHook,
+		onNavigateToRound,
+		onNavigateToComment
 	}: Props = $props();
 
 	let md = $state('');
-
-	import { serializeFragment as plainTextFromFragment } from '$lib/shared/ydoc-codec';
-
-	let activeTabUnsubscribe: Unsubscriber | null = null;
 	let observedFragment: Y.XmlFragment | null = null;
 	let observedHandler: (() => void) | null = null;
 
 	function detachOutlineObserver() {
-		if (observedFragment && observedHandler) {
-			observedFragment.unobserve(observedHandler);
-		}
+		if (observedFragment && observedHandler) observedFragment.unobserve(observedHandler);
 		observedFragment = null;
 		observedHandler = null;
 	}
 
 	function attachOutlineObserver(tabId: string | null) {
 		detachOutlineObserver();
-		if (!tabId) {
-			md = '';
-			return;
-		}
+		if (!tabId) { md = ''; return; }
 		const fragment = getYDocForTab(tabId).getXmlFragment('default');
-		const sync = () => {
-			md = plainTextFromFragment(fragment);
-		};
+		const sync = () => { md = plainTextFromFragment(fragment); };
 		sync();
 		fragment.observe(sync);
 		observedFragment = fragment;
 		observedHandler = sync;
 	}
 
-	let rounds = $state<MaterializedPendingReviewRound[]>([]);
-	pendingReviewRounds.subscribe((v) => (rounds = v));
+	// unused but kept to avoid breaking the diff overlay store subscription
+	pendingReviewRounds.subscribe(() => {});
+
+	let allRounds = $state<Array<{ tabId: string; rounds: MaterializedPendingReviewRound[] }>>([]);
+	allTabPendingRounds.subscribe((v) => (allRounds = v));
+
+	let allComments = $state<Array<{ tabId: string; threads: CommentThread[] }>>([]);
+	allTabCommentThreads.subscribe((v) => (allComments = v));
+
+	let seenIds = $state<Set<string>>(new Set());
+	seenCommentIds.subscribe((v) => (seenIds = v));
+
+	let activeTabId = $state<string | null>(null);
+	let activeTabUnsub: Unsubscriber | null = null;
 
 	let pendingRuleProposals = $state<ProposedRule[]>([]);
 	proposedRules.subscribe((v) => (pendingRuleProposals = v));
@@ -95,36 +104,38 @@
 	let pendingHookProposals = $state<ProposedHook[]>([]);
 	proposedHooks.subscribe((v) => (pendingHookProposals = v));
 
-	// Auto-extracted TOC from markdown headings
 	interface Heading { level: number; text: string; }
 	let toc = $derived.by<Heading[]>(() => {
 		const headings: Heading[] = [];
-		const lines = md.split('\n');
-		for (const line of lines) {
+		for (const line of md.split('\n')) {
 			const match = line.match(/^(#{1,6})\s+(.+)$/);
-			if (match) {
-				headings.push({ level: match[1].length, text: match[2].trim() });
-			}
+			if (match) headings.push({ level: match[1].length, text: match[2].trim() });
 		}
 		return headings;
 	});
 
-	/** Tick every 15s so "Xs ago" / "Xm ago" labels on pending cards stay
-	 * fresh. Reactive via the state dependency — `relativeTime()` reads
-	 * `nowTick` so Svelte re-renders when it changes. */
+	let totalRounds = $derived(allRounds.reduce((n, g) => n + g.rounds.length, 0));
+
+	function basename(path: string): string {
+		return path.split('/').pop() ?? path;
+	}
+
 	let nowTick = $state(Date.now());
 	let tickHandle: ReturnType<typeof setInterval> | null = null;
+
 	onMount(() => {
 		tickHandle = setInterval(() => (nowTick = Date.now()), 15_000);
-		activeTabUnsubscribe = activeTab.subscribe((tabId) => attachOutlineObserver(tabId));
+		activeTabUnsub = activeTab.subscribe((tabId) => {
+			activeTabId = tabId;
+			attachOutlineObserver(tabId);
+		});
 	});
 	onDestroy(() => {
 		if (tickHandle) clearInterval(tickHandle);
-		activeTabUnsubscribe?.();
+		activeTabUnsub?.();
 		detachOutlineObserver();
 	});
 
-	/** Short relative-time label for a round card. */
 	function relativeTime(ts: number): string {
 		const elapsed = nowTick - ts;
 		if (elapsed < 5_000) return 'just now';
@@ -134,84 +145,53 @@
 	}
 
 	function scrollToHeading(text: string) {
-		// Best-effort scroll: find the heading element in the editor DOM by text
 		const editor = document.querySelector('.tiptap-content');
 		if (!editor) return;
-		const hs = editor.querySelectorAll('h1, h2, h3, h4, h5, h6');
-		for (const h of Array.from(hs)) {
-			if (h.textContent?.trim() === text) {
-				h.scrollIntoView({ behavior: 'smooth', block: 'start' });
-				break;
-			}
+		for (const h of Array.from(editor.querySelectorAll('h1,h2,h3,h4,h5,h6'))) {
+			if (h.textContent?.trim() === text) { h.scrollIntoView({ behavior: 'smooth', block: 'start' }); break; }
 		}
 	}
 
-	/** Scroll the editor to the location of a pending round. Plain-text mode
-	 * means each line is a `<p>` and the editor's text is paragraph text
-	 * joined by `\n`. We find `oldString`'s offset in that joined text, then
-	 * walk paragraphs to scroll the one containing the start of the match.
-	 * Falls back to a substring match (first ~80 chars of the needle) when
-	 * the exact match fails — common when the doc has drifted slightly from
-	 * the round was captured but the anchor still recognizable. As a last
-	 * resort, scroll to the editor top so the click never silently no-ops. */
 	function scrollToRound(round: MaterializedPendingReviewRound) {
 		const editor = document.querySelector('.tiptap-content') as HTMLElement | null;
 		if (!editor) return;
 		const op = round.operation;
 		const fullNeedle = op?.type === 'edit' ? op.oldString : null;
-
-		// Plain-mode: direct <p> children of .tiptap-content. Tiptap can wrap
-		// in extra ProseMirror containers in some configurations, so also
-		// search descendants as a fallback. Filter to just the editor's own
-		// paragraphs (skip diff-overlay widget <div>s which use other tags).
 		let paragraphs = Array.from(editor.querySelectorAll(':scope > p')) as HTMLElement[];
-		if (paragraphs.length === 0) {
-			paragraphs = Array.from(editor.querySelectorAll('p')) as HTMLElement[];
-		}
-		if (paragraphs.length === 0) {
-			editor.scrollIntoView({ behavior: 'smooth', block: 'start' });
-			return;
-		}
-
+		if (paragraphs.length === 0) paragraphs = Array.from(editor.querySelectorAll('p')) as HTMLElement[];
+		if (paragraphs.length === 0) { editor.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
 		const scrollToParagraphAt = (charOffset: number) => {
 			const lines = paragraphs.map((p) => p.textContent ?? '');
 			let cursor = 0;
-			for (let i = 0; i < lines.length; i += 1) {
+			for (let i = 0; i < lines.length; i++) {
 				const lineEnd = cursor + lines[i].length;
-				if (charOffset <= lineEnd) {
-					paragraphs[i].scrollIntoView({ behavior: 'smooth', block: 'center' });
-					return true;
-				}
+				if (charOffset <= lineEnd) { paragraphs[i].scrollIntoView({ behavior: 'smooth', block: 'center' }); return; }
 				cursor = lineEnd + 1;
 			}
-			return false;
 		};
-
-		// No needle (e.g. write-op, full-doc rewrite): scroll to top.
-		if (!fullNeedle) {
-			editor.scrollIntoView({ behavior: 'smooth', block: 'start' });
-			return;
-		}
-
+		if (!fullNeedle) { editor.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
 		const docText = paragraphs.map((p) => p.textContent ?? '').join('\n');
-		// Try exact match.
 		let offset = docText.indexOf(fullNeedle);
-		// Fallback: first 80 chars of the needle, in case the doc drifted.
-		if (offset < 0 && fullNeedle.length > 80) {
-			offset = docText.indexOf(fullNeedle.slice(0, 80));
-		}
-		// Fallback: first non-empty line of the needle (handles needles that
-		// start with whitespace/newlines from multi-line edits).
-		if (offset < 0) {
-			const firstLine = fullNeedle.split('\n').find((l) => l.trim().length > 4);
-			if (firstLine) offset = docText.indexOf(firstLine.trim());
-		}
-		if (offset < 0) {
-			// Last resort: scroll to top so the user gets *some* feedback.
-			editor.scrollIntoView({ behavior: 'smooth', block: 'start' });
-			return;
-		}
+		if (offset < 0 && fullNeedle.length > 80) offset = docText.indexOf(fullNeedle.slice(0, 80));
+		if (offset < 0) { const fl = fullNeedle.split('\n').find((l) => l.trim().length > 4); if (fl) offset = docText.indexOf(fl.trim()); }
+		if (offset < 0) { editor.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
 		scrollToParagraphAt(offset);
+	}
+
+	async function handleRoundClick(tabId: string, round: MaterializedPendingReviewRound) {
+		if (tabId !== activeTabId && onNavigateToRound) {
+			await onNavigateToRound(tabId, round);
+			await tick();
+		}
+		scrollToRound(round);
+	}
+
+	async function handleCommentClick(tabId: string, thread: CommentThread) {
+		markCommentSeen(thread.id);
+		if (tabId !== activeTabId && onNavigateToComment) {
+			await onNavigateToComment(tabId, thread);
+			await tick();
+		}
 	}
 
 	function diffPreview(round: MaterializedPendingReviewRound): ReviewPreviewLine[] {
@@ -242,15 +222,12 @@
 	}
 
 	function onRetryKeydown(event: KeyboardEvent, roundId: string) {
-		if (event.key === 'Escape') {
-			event.preventDefault();
-			closeRetryFeedback();
-			return;
-		}
-		if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
-			event.preventDefault();
-			submitRetryFeedback(roundId);
-		}
+		if (event.key === 'Escape') { event.preventDefault(); closeRetryFeedback(); return; }
+		if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); submitRetryFeedback(roundId); }
+	}
+
+	function firstAgentMessage(thread: CommentThread): string {
+		return thread.messages.find((m) => m.author === 'agent')?.text ?? '';
 	}
 </script>
 
@@ -265,11 +242,7 @@
 					{#each toc as h}
 						<!-- svelte-ignore a11y_click_events_have_key_events -->
 						<!-- svelte-ignore a11y_no_static_element_interactions -->
-						<div
-							class="toc-item"
-							style:padding-left={`${(h.level - 1) * 12}px`}
-							onclick={() => scrollToHeading(h.text)}
-						>
+						<div class="toc-item" style:padding-left={`${(h.level - 1) * 12}px`} onclick={() => scrollToHeading(h.text)}>
 							<FileText size={11} />
 							<span>{h.text}</span>
 						</div>
@@ -279,129 +252,146 @@
 		</div>
 	{/if}
 
-	{#if showReview && rounds.length > 0}
+	{#if showReview && totalRounds > 0}
 		<div class="section">
 			<div class="section-header">
 				<Sparkles size={12} />
-				Pending agent edit{rounds.length === 1 ? '' : `s (${rounds.length})`}
+				Pending agent edit{totalRounds === 1 ? '' : `s (${totalRounds})`}
 			</div>
-			{#each rounds.slice().reverse() as round, revIdx (round.id)}
-				{@const isEarliest = revIdx === rounds.length - 1}
-				{@const preview = diffPreview(round)}
-				<div
-					class="pending-card round-card"
-					class:later-round={!isEarliest}
-					class:tiny-card={round.kind === 'tiny'}
-					in:fly={{ y: -10, duration: 260, easing: cubicOut }}
-					out:fly={{ y: 40, duration: 280, easing: cubicInOut }}
-					animate:flip={{ duration: 280, easing: cubicInOut }}
-					onclick={() => scrollToRound(round)}
-					role="button"
-					tabindex="0"
-					onkeydown={(e) => {
-						if (e.key === 'Enter' || e.key === ' ') {
-							e.preventDefault();
-							scrollToRound(round);
-						}
-					}}
-				>
-					<div class="pending-summary">
-						<span>{summarizeRound(round)}</span>
-						<span class="round-time">{relativeTime(round.timestamp)}</span>
+			{#each allRounds as group (group.tabId)}
+				{@const isActiveTab = group.tabId === activeTabId}
+				{#if !isActiveTab}
+					<div class="tab-group-label">
+						<FileText size={10} />
+						{basename(group.tabId)}
 					</div>
-					{#if round.trigger}
-						<div class="round-trigger" title={round.trigger}>{round.trigger}</div>
-					{/if}
-					{#if preview.length > 0}
-						<div class="round-diff-preview">
-							{#each preview as line}
-								<div
-									class="round-diff-line"
-									class:added={line.kind === 'added'}
-									class:removed={line.kind === 'removed'}
-									class:gap={line.kind === 'gap'}
-								>
-									<span class="round-diff-num">{line.oldLine ?? ''}</span>
-									<span class="round-diff-num">{line.newLine ?? ''}</span>
-									<span class="round-diff-prefix">
-										{line.kind === 'added' ? '+' : line.kind === 'removed' ? '-' : ' '}
-									</span>
-									<span class="round-diff-text">
-										{#if line.kind === 'gap'}
-											...
-										{:else}
-											{#each line.parts as part}
-												<span
-													class="round-diff-token"
-													class:token-added={part.type === 'added'}
-													class:token-removed={part.type === 'removed'}
-												>{part.text || ' '}</span>
-											{/each}
-										{/if}
-									</span>
-								</div>
-							{/each}
-						</div>
-					{/if}
+				{/if}
+				{#each group.rounds.slice().reverse() as round, revIdx (round.id)}
+					{@const isEarliest = revIdx === group.rounds.length - 1}
+					{@const preview = diffPreview(round)}
+					<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 					<div
-						class="pending-actions"
-						onclick={(e) => e.stopPropagation()}
-						onkeydown={(e) => e.stopPropagation()}
-						role="presentation"
+						class="pending-card round-card"
+						class:later-round={!isEarliest}
+						class:tiny-card={round.kind === 'tiny'}
+						class:cross-tab={!isActiveTab}
+						in:fly={{ y: -10, duration: 260, easing: cubicOut }}
+						out:fly={{ y: 40, duration: 280, easing: cubicInOut }}
+						animate:flip={{ duration: 280, easing: cubicInOut }}
+						onclick={() => void handleRoundClick(group.tabId, round)}
+						role="button"
+						tabindex="0"
+						onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); void handleRoundClick(group.tabId, round); } }}
 					>
-						{#if isEarliest}
-							<button class="btn-accept" onclick={() => onAccept?.(round.id)}>
-								<Check size={12} />
-								Accept
-							</button>
-						{:else}
-							<span class="action-note" title="Accept earlier edits first">
-								Accept earlier first
-							</span>
-						{/if}
-						<button class="btn-reject" onclick={() => onReject?.(round.id)}>
-							<X size={12} />
-							Reject
-						</button>
-						<button class="btn-retry" onclick={() => openRetryFeedback(round.id)}>
-							<RotateCcw size={12} />
-							Retry with feedback
-						</button>
-					</div>
-					{#if retryFeedbackRoundId === round.id}
-						<div
-							class="retry-feedback-popover"
-							onclick={(e) => e.stopPropagation()}
-							onkeydown={(e) => e.stopPropagation()}
-							role="presentation"
-						>
-							<div class="retry-feedback-label">Feedback for the agent</div>
-							<textarea
-								bind:this={retryTextareaEl}
-								bind:value={retryFeedbackText}
-								rows="3"
-								placeholder="What you'd like the agent to know."
-								onkeydown={(event) => onRetryKeydown(event, round.id)}
-							></textarea>
-							<div class="retry-feedback-actions">
-								<button class="btn-secondary" onclick={closeRetryFeedback}>Cancel</button>
-								<button
-									class="btn-retry submit"
-									disabled={!retryFeedbackText.trim()}
-									onclick={() => submitRetryFeedback(round.id)}
-								>
-									<RotateCcw size={12} />
-									Retry
-								</button>
-							</div>
+						<div class="pending-summary">
+							<span>{summarizeRound(round)}</span>
+							<span class="round-time">{relativeTime(round.timestamp)}</span>
 						</div>
-					{/if}
-				</div>
+						{#if round.trigger}
+							<div class="round-trigger" title={round.trigger}>{round.trigger}</div>
+						{/if}
+						{#if preview.length > 0}
+							<div class="round-diff-preview">
+								{#each preview as line}
+									<div class="round-diff-line" class:added={line.kind === 'added'} class:removed={line.kind === 'removed'} class:gap={line.kind === 'gap'}>
+										<span class="round-diff-num">{line.oldLine ?? ''}</span>
+										<span class="round-diff-num">{line.newLine ?? ''}</span>
+										<span class="round-diff-prefix">{line.kind === 'added' ? '+' : line.kind === 'removed' ? '-' : ' '}</span>
+										<span class="round-diff-text">
+											{#if line.kind === 'gap'}
+												...
+											{:else}
+												{#each line.parts as part}
+													<span class="round-diff-token" class:token-added={part.type === 'added'} class:token-removed={part.type === 'removed'}>{part.text || ' '}</span>
+												{/each}
+											{/if}
+										</span>
+									</div>
+								{/each}
+							</div>
+						{/if}
+						<div class="pending-actions" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()} role="presentation">
+							{#if isEarliest && isActiveTab}
+								<button class="btn-accept" onclick={() => onAccept?.(round.id)}>
+									<Check size={12} />Accept
+								</button>
+							{:else if !isActiveTab}
+								<span class="action-note" title="Switch to this file to accept/reject">Open file to review</span>
+							{:else}
+								<span class="action-note" title="Accept earlier edits first">Accept earlier first</span>
+							{/if}
+							{#if isActiveTab}
+								<button class="btn-reject" onclick={() => onReject?.(round.id)}>
+									<X size={12} />Reject
+								</button>
+								<button class="btn-retry" onclick={() => openRetryFeedback(round.id)}>
+									<RotateCcw size={12} />Retry with feedback
+								</button>
+							{/if}
+						</div>
+						{#if retryFeedbackRoundId === round.id}
+							<div class="retry-feedback-popover" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()} role="presentation">
+								<div class="retry-feedback-label">Feedback for the agent</div>
+								<textarea bind:this={retryTextareaEl} bind:value={retryFeedbackText} rows="3" placeholder="What you'd like the agent to know." onkeydown={(event) => onRetryKeydown(event, round.id)}></textarea>
+								<div class="retry-feedback-actions">
+									<button class="btn-secondary" onclick={closeRetryFeedback}>Cancel</button>
+									<button class="btn-retry submit" disabled={!retryFeedbackText.trim()} onclick={() => submitRetryFeedback(round.id)}>
+										<RotateCcw size={12} />Retry
+									</button>
+								</div>
+							</div>
+						{/if}
+					</div>
+				{/each}
 			{/each}
 		</div>
 	{/if}
 
-{#if showReview && pendingRuleProposals.length > 0}
+	{#if showReview && allComments.length > 0}
+		{@const unreadGroups = allComments.map(g => ({ ...g, threads: g.threads.filter(t => !seenIds.has(t.id)) })).filter(g => g.threads.length > 0)}
+		{#if unreadGroups.length > 0}
+		{@const totalComments = unreadGroups.reduce((n, g) => n + g.threads.length, 0)}
+		<div class="section">
+			<div class="section-header">
+				<MessageSquare size={12} />
+				Agent comment{totalComments === 1 ? '' : `s (${totalComments})`}
+				<button
+					class="dismiss-all-btn"
+					onclick={() => unreadGroups.forEach(g => g.threads.forEach(t => markCommentSeen(t.id)))}
+					title="Dismiss all"
+				>dismiss all</button>
+			</div>
+			{#each unreadGroups as group (group.tabId)}
+				{@const isActiveTab = group.tabId === activeTabId}
+				{#if !isActiveTab}
+					<div class="tab-group-label">
+						<FileText size={10} />
+						{basename(group.tabId)}
+					</div>
+				{/if}
+				{#each group.threads as thread (thread.id)}
+					<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+					<div
+						class="pending-card comment-card"
+						onclick={() => void handleCommentClick(group.tabId, thread)}
+						role="button"
+						tabindex="0"
+						onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); void handleCommentClick(group.tabId, thread); } }}
+					>
+						<div class="comment-header">
+							<span class="unread-dot" title="Unread"></span>
+							<span class="comment-anchor" title={thread.anchor.quote}>{thread.anchor.quote.slice(0, 40)}{thread.anchor.quote.length > 40 ? '…' : ''}</span>
+							<span class="round-time">{relativeTime(thread.createdAt)}</span>
+						</div>
+						<div class="comment-body">{firstAgentMessage(thread).slice(0, 80)}{firstAgentMessage(thread).length > 80 ? '…' : ''}</div>
+					</div>
+				{/each}
+			{/each}
+		</div>
+		{/if}
+	{/if}
+
+	{#if showReview && pendingRuleProposals.length > 0}
 		<div class="section">
 			<div class="section-header">
 				<BookOpen size={12} />
@@ -410,18 +400,10 @@
 			{#each pendingRuleProposals as proposal (proposal.id)}
 				<div class="pending-card rule-card">
 					<div class="rule-proposal-text">{proposal.text}</div>
-					{#if proposal.reason}
-						<div class="rule-proposal-reason">{proposal.reason}</div>
-					{/if}
+					{#if proposal.reason}<div class="rule-proposal-reason">{proposal.reason}</div>{/if}
 					<div class="pending-actions">
-						<button class="btn-accept" onclick={() => onAcceptRule?.(proposal.id)}>
-							<Check size={12} />
-							Add rule
-						</button>
-						<button class="btn-reject" onclick={() => onRejectRule?.(proposal.id)}>
-							<X size={12} />
-							Dismiss
-						</button>
+						<button class="btn-accept" onclick={() => onAcceptRule?.(proposal.id)}><Check size={12} />Add rule</button>
+						<button class="btn-reject" onclick={() => onRejectRule?.(proposal.id)}><X size={12} />Dismiss</button>
 					</div>
 				</div>
 			{/each}
@@ -441,18 +423,10 @@
 						{#if proposal.matcher}<span class="hook-matcher-tag">/{proposal.matcher}/</span>{/if}
 					</div>
 					<div class="hook-command">{proposal.command}</div>
-					{#if proposal.reason}
-						<div class="rule-proposal-reason">{proposal.reason}</div>
-					{/if}
+					{#if proposal.reason}<div class="rule-proposal-reason">{proposal.reason}</div>{/if}
 					<div class="pending-actions">
-						<button class="btn-accept" onclick={() => onAcceptHook?.(proposal.id)}>
-							<Check size={12} />
-							Add hook
-						</button>
-						<button class="btn-reject" onclick={() => onRejectHook?.(proposal.id)}>
-							<X size={12} />
-							Dismiss
-						</button>
+						<button class="btn-accept" onclick={() => onAcceptHook?.(proposal.id)}><Check size={12} />Add hook</button>
+						<button class="btn-reject" onclick={() => onRejectHook?.(proposal.id)}><X size={12} />Dismiss</button>
 					</div>
 				</div>
 			{/each}
@@ -469,9 +443,7 @@
 		font-size: 13px;
 		color: var(--text);
 	}
-	.section {
-		margin-bottom: 28px;
-	}
+	.section { margin-bottom: 28px; }
 	.section-header {
 		font-size: 12px;
 		font-weight: 600;
@@ -483,11 +455,7 @@
 		align-items: center;
 		gap: 6px;
 	}
-	.empty {
-		color: var(--text-faint);
-		font-size: 13px;
-		padding: 4px 0;
-	}
+	.empty { color: var(--text-faint); font-size: 13px; padding: 4px 0; }
 	.toc-item {
 		display: flex;
 		align-items: center;
@@ -499,19 +467,27 @@
 		font-size: 13px;
 		line-height: 1.4;
 	}
-	.toc-item:hover {
-		background: var(--bg-hover);
+	.toc-item:hover { background: var(--bg-hover); }
+	.tab-group-label {
+		display: flex;
+		align-items: center;
+		gap: 5px;
+		font-size: 10.5px;
+		font-weight: 600;
+		color: var(--text-faint);
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		padding: 8px 2px 4px;
+		margin-top: 2px;
 	}
 	.pending-card {
 		border: 1px solid var(--border-light);
 		background: var(--bg-surface);
 		border-radius: 6px;
 		padding: 10px;
+		margin-bottom: 8px;
 	}
-	/* Clickable round cards scroll the editor to the edit's location.
-	 * Use the default arrow (not a pointer hand — this is navigation
-	 * within the doc, not a button) and signal interactivity through a
-	 * subtle border + background lift on hover. */
+	.pending-card:last-child { margin-bottom: 0; }
 	.round-card {
 		cursor: default;
 		transition: border-color 120ms ease, background-color 120ms ease;
@@ -520,6 +496,8 @@
 		border-color: var(--border);
 		background: color-mix(in srgb, var(--bg-surface) 88%, var(--accent) 12%);
 	}
+	/* Dashed border signals "belongs to a different file". */
+	.round-card.cross-tab { border-style: dashed; cursor: pointer; }
 	.pending-summary {
 		font-size: 12px;
 		color: var(--text-muted);
@@ -529,39 +507,12 @@
 		justify-content: space-between;
 		gap: 8px;
 	}
-	.round-card {
-		margin-bottom: 8px;
-	}
-	.round-card:last-child {
-		margin-bottom: 0;
-	}
-	/* Later (non-earliest) rounds are dimmer — the user is meant to deal
-	 * with them after the current round resolves. Still interactive
-	 * (Reject is allowed) but visually secondary. */
-	.round-card.later-round {
-		opacity: 0.72;
-	}
-	.round-card.later-round:hover {
-		opacity: 1;
-	}
-	/* Tiny-kind rounds render in a compact card — same chrome as a normal
-	 * round (border + surface background) so the list stays visually
-	 * uniform, just with tighter padding and slightly smaller text. */
-	.round-card.tiny-card {
-		padding: 6px 8px;
-	}
-	.tiny-card .pending-summary {
-		margin-bottom: 4px;
-		font-size: 11.5px;
-	}
-	.tiny-card .pending-actions {
-		margin-top: 4px;
-	}
-	.tiny-card .btn-accept,
-	.tiny-card .btn-reject {
-		padding: 3px 7px;
-		font-size: 11px;
-	}
+	.round-card.later-round { opacity: 0.72; }
+	.round-card.later-round:hover { opacity: 1; }
+	.round-card.tiny-card { padding: 6px 8px; }
+	.tiny-card .pending-summary { margin-bottom: 4px; font-size: 11.5px; }
+	.tiny-card .pending-actions { margin-top: 4px; }
+	.tiny-card .btn-accept, .tiny-card .btn-reject { padding: 3px 7px; font-size: 11px; }
 	.action-note {
 		flex: 1;
 		font-size: 11px;
@@ -570,12 +521,7 @@
 		line-height: 1.3;
 		padding: 5px 8px;
 	}
-	.round-time {
-		font-size: 10.5px;
-		color: var(--text-faint);
-		font-variant-numeric: tabular-nums;
-		flex-shrink: 0;
-	}
+	.round-time { font-size: 10.5px; color: var(--text-faint); font-variant-numeric: tabular-nums; flex-shrink: 0; }
 	.round-trigger {
 		font-size: 11.5px;
 		color: var(--text-muted);
@@ -605,90 +551,81 @@
 		white-space: pre-wrap;
 		word-break: break-word;
 	}
-	.round-diff-line.added {
-		background: color-mix(in srgb, var(--diff-added-color) 9%, transparent);
-	}
-	.round-diff-line.removed {
-		background: color-mix(in srgb, var(--diff-removed-color) 9%, transparent);
-	}
-	.round-diff-line.gap {
+	.round-diff-line.added { background: color-mix(in srgb, var(--diff-added-color) 9%, transparent); }
+	.round-diff-line.removed { background: color-mix(in srgb, var(--diff-removed-color) 9%, transparent); }
+	.round-diff-line.gap { color: var(--text-faint); font-style: italic; }
+	.round-diff-num, .round-diff-prefix { color: var(--text-faint); user-select: none; }
+	.round-diff-prefix { text-align: center; }
+	.round-diff-text { min-width: 0; color: var(--text); }
+	.round-diff-token.token-added { background: color-mix(in srgb, var(--diff-added-color) 22%, transparent); border-radius: 2px; }
+	.round-diff-token.token-removed { background: color-mix(in srgb, var(--diff-removed-color) 18%, transparent); border-radius: 2px; }
+
+	.dismiss-all-btn {
+		margin-left: auto;
+		background: none;
+		border: none;
+		font: inherit;
+		font-size: 10.5px;
 		color: var(--text-faint);
-		font-style: italic;
-	}
-	.round-diff-num,
-	.round-diff-prefix {
-		color: var(--text-faint);
-		user-select: none;
-	}
-	.round-diff-prefix {
-		text-align: center;
-	}
-	.round-diff-text {
-		min-width: 0;
-		color: var(--text);
-	}
-	.round-diff-token.token-added {
-		background: color-mix(in srgb, var(--diff-added-color) 22%, transparent);
-		border-radius: 2px;
-	}
-	.round-diff-token.token-removed {
-		background: color-mix(in srgb, var(--diff-removed-color) 18%, transparent);
-		border-radius: 2px;
-	}
-	.rule-card {
-		margin-bottom: 8px;
-	}
-	.rule-card:last-child {
-		margin-bottom: 0;
-	}
-	.rule-proposal-text {
-		font-size: 13px;
-		color: var(--text);
-		font-weight: 500;
-		margin-bottom: 4px;
-		line-height: 1.35;
-	}
-	.rule-proposal-reason {
-		font-size: 11.5px;
-		color: var(--text-muted);
-		line-height: 1.4;
-		margin-bottom: 10px;
-		font-style: italic;
-	}
-	.hook-meta {
-		display: flex;
-		gap: 6px;
-		margin-bottom: 4px;
-	}
-	.hook-event-tag {
-		font-size: 10px;
-		font-weight: 600;
-		text-transform: uppercase;
-		letter-spacing: 0.04em;
-		color: #0891b2;
-		background: color-mix(in srgb, #0891b2 12%, transparent);
-		padding: 1px 6px;
+		cursor: pointer;
+		padding: 1px 4px;
 		border-radius: 3px;
+		text-transform: none;
+		letter-spacing: 0;
 	}
-	.hook-matcher-tag {
-		font-family: 'SF Mono', 'Menlo', monospace;
-		font-size: 10px;
-		color: var(--text-faint);
-		padding: 1px 0;
+	.dismiss-all-btn:hover { color: var(--text-secondary); background: var(--bg-hover); }
+	.comment-card {
+		cursor: pointer;
+		transition: border-color 120ms ease, background-color 120ms ease;
+		border-color: var(--accent-light);
 	}
-	.hook-command {
-		font-family: 'SF Mono', 'Menlo', monospace;
-		font-size: 11.5px;
-		color: var(--text);
-		line-height: 1.4;
-		margin-bottom: 6px;
-		word-break: break-word;
-	}
-	.pending-actions {
+	.comment-card:hover { border-color: var(--accent); background: var(--bg-hover); }
+	.comment-header {
 		display: flex;
+		align-items: center;
 		gap: 6px;
-		flex-wrap: wrap;
+		margin-bottom: 4px;
 	}
+	.unread-dot {
+		width: 6px;
+		height: 6px;
+		border-radius: 50%;
+		background: var(--accent);
+		flex-shrink: 0;
+		animation: unread-pulse 1.8s ease-in-out infinite;
+	}
+	@keyframes unread-pulse {
+		0%, 100% { opacity: 1; transform: scale(1); }
+		50%       { opacity: 0.45; transform: scale(1.3); }
+	}
+	.comment-anchor {
+		flex: 1;
+		font-size: 11px;
+		color: var(--text-faint);
+		font-style: italic;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.comment-body {
+		font-size: 12px;
+		color: var(--text-secondary);
+		line-height: 1.4;
+		overflow: hidden;
+		display: -webkit-box;
+		-webkit-line-clamp: 2;
+		-webkit-box-orient: vertical;
+	}
+
+	.rule-card { margin-bottom: 8px; }
+	.rule-card:last-child { margin-bottom: 0; }
+	.rule-proposal-text { font-size: 13px; color: var(--text); font-weight: 500; margin-bottom: 4px; line-height: 1.35; }
+	.rule-proposal-reason { font-size: 11.5px; color: var(--text-muted); line-height: 1.4; margin-bottom: 10px; font-style: italic; }
+	.hook-meta { display: flex; gap: 6px; margin-bottom: 4px; }
+	.hook-event-tag { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: #0891b2; background: color-mix(in srgb, #0891b2 12%, transparent); padding: 1px 6px; border-radius: 3px; }
+	.hook-matcher-tag { font-family: 'SF Mono', 'Menlo', monospace; font-size: 10px; color: var(--text-faint); padding: 1px 0; }
+	.hook-command { font-family: 'SF Mono', 'Menlo', monospace; font-size: 11.5px; color: var(--text); line-height: 1.4; margin-bottom: 6px; word-break: break-word; }
+	.pending-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 	.btn-accept, .btn-reject, .btn-retry, .btn-secondary {
 		flex: 1 1 0;
 		display: flex;
@@ -704,38 +641,15 @@
 		background: var(--bg-elevated);
 		font-family: inherit;
 	}
-	.btn-accept:disabled, .btn-reject:disabled, .btn-retry:disabled, .btn-secondary:disabled {
-		opacity: 0.45;
-		cursor: default;
-	}
-	.btn-accept {
-		color: var(--diff-added-color);
-	}
-	.btn-accept:hover {
-		background: color-mix(in srgb, var(--diff-added-color) 12%, transparent);
-		border-color: var(--diff-added-color);
-	}
-	.btn-reject {
-		color: var(--diff-removed-color);
-	}
-	.btn-reject:hover {
-		background: color-mix(in srgb, var(--diff-removed-color) 10%, transparent);
-		border-color: var(--diff-removed-color);
-	}
-	.btn-retry {
-		color: var(--accent);
-	}
-	.btn-retry:hover:not(:disabled) {
-		background: color-mix(in srgb, var(--accent) 12%, transparent);
-		border-color: color-mix(in srgb, var(--accent) 65%, var(--border-light));
-	}
-	.btn-secondary {
-		color: var(--text-muted);
-	}
-	.btn-secondary:hover:not(:disabled) {
-		background: var(--bg-hover);
-		border-color: var(--border);
-	}
+	.btn-accept:disabled, .btn-reject:disabled, .btn-retry:disabled, .btn-secondary:disabled { opacity: 0.45; cursor: default; }
+	.btn-accept { color: var(--diff-added-color); }
+	.btn-accept:hover { background: color-mix(in srgb, var(--diff-added-color) 12%, transparent); border-color: var(--diff-added-color); }
+	.btn-reject { color: var(--diff-removed-color); }
+	.btn-reject:hover { background: color-mix(in srgb, var(--diff-removed-color) 10%, transparent); border-color: var(--diff-removed-color); }
+	.btn-retry { color: var(--accent); }
+	.btn-retry:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 12%, transparent); border-color: color-mix(in srgb, var(--accent) 65%, var(--border-light)); }
+	.btn-secondary { color: var(--text-muted); }
+	.btn-secondary:hover:not(:disabled) { background: var(--bg-hover); border-color: var(--border); }
 	.retry-feedback-popover {
 		margin-top: 8px;
 		border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border-light));
@@ -743,12 +657,7 @@
 		border-radius: 6px;
 		padding: 10px;
 	}
-	.retry-feedback-label {
-		font-size: 11.5px;
-		font-weight: 600;
-		color: var(--text-muted);
-		margin-bottom: 6px;
-	}
+	.retry-feedback-label { font-size: 11.5px; font-weight: 600; color: var(--text-muted); margin-bottom: 6px; }
 	.retry-feedback-popover textarea {
 		width: 100%;
 		max-width: 100%;
@@ -763,22 +672,8 @@
 		line-height: 1.45;
 		padding: 8px 9px;
 	}
-	.retry-feedback-popover textarea:focus {
-		outline: none;
-		border-color: color-mix(in srgb, var(--accent) 70%, var(--border-light));
-		box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
-	}
-	.retry-feedback-popover textarea::placeholder {
-		color: var(--text-faint);
-	}
-	.retry-feedback-actions {
-		display: flex;
-		gap: 6px;
-		margin-top: 8px;
-	}
-	.retry-feedback-actions .btn-secondary,
-	.retry-feedback-actions .btn-retry {
-		flex: 0 0 auto;
-		padding-inline: 10px;
-	}
+	.retry-feedback-popover textarea:focus { outline: none; border-color: color-mix(in srgb, var(--accent) 70%, var(--border-light)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent); }
+	.retry-feedback-popover textarea::placeholder { color: var(--text-faint); }
+	.retry-feedback-actions { display: flex; gap: 6px; margin-top: 8px; }
+	.retry-feedback-actions .btn-secondary, .retry-feedback-actions .btn-retry { flex: 0 0 auto; padding-inline: 10px; }
 </style>

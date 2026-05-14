@@ -1,7 +1,8 @@
 import { error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { query, createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
-import type { HookCallback } from '@anthropic-ai/claude-agent-sdk';
+import type { HookCallback, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import type { ImageBlockParam } from '@anthropic-ai/sdk/resources';
 import { z } from 'zod';
 import { normalize, resolve } from 'path';
 import * as Y from 'yjs';
@@ -83,6 +84,32 @@ const LAST_SEEN_PREFIX = 'last_seen:';
 const GENERIC_WAKEUP_MESSAGE =
 	'The user clicked Wake-up without a specific request. Decide what (if anything) to do per the agency guidance above.';
 const WORKSPACE_ROOT = resolve(process.env.DOCWRITER_ROOT || process.cwd());
+
+interface ImageAttachmentPayload {
+	mediaType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
+	data: string;
+}
+
+/** Build an async-iterable prompt that carries both text and base64 images
+ * as a multi-part user message, required by the Claude SDK when attaching
+ * images to a `query()` call. */
+async function* buildImagePrompt(
+	textPrompt: string,
+	images: ImageAttachmentPayload[]
+): AsyncGenerator<SDKUserMessage> {
+	const imageBlocks: ImageBlockParam[] = images.map((img) => ({
+		type: 'image',
+		source: { type: 'base64', media_type: img.mediaType, data: img.data }
+	}));
+	yield {
+		type: 'user',
+		message: {
+			role: 'user',
+			content: [{ type: 'text', text: textPrompt }, ...imageBlocks]
+		},
+		parent_tool_use_id: null
+	};
+}
 
 // Keys for the rule / refs / agency snapshots used to diff per-turn updates.
 // Storing JSON strings under these kv keys lets us emit only what CHANGED
@@ -690,12 +717,13 @@ function buildHooks(
 export const POST: RequestHandler = async ({ request }) => {
 	try {
 		const body = await request.json();
-		const { userMessage, model, warmup, tab, planMode } = body as {
+		const { userMessage, model, warmup, tab, planMode, images } = body as {
 			userMessage?: string;
 			model?: string;
 			warmup?: boolean;
 			tab?: string;
 			planMode?: boolean;
+			images?: ImageAttachmentPayload[];
 		};
 
 		const active = tab || getTabsState().active;
@@ -839,20 +867,31 @@ export const POST: RequestHandler = async ({ request }) => {
 											'Plan sent to the user for review. Stop — do not execute. The user will re-run without plan mode if they approve.'
 									};
 								}
-								if (!warmup) {
-									if (toolName === 'Read') {
-										const matched = findReferencedOpenTabPath(
-											toolInput?.file_path,
-											openTabPaths
-										);
-										if (matched) {
-											return {
-												behavior: 'deny' as const,
-												message:
-													'Open tab files must be read with `read_doc(path)` so you see the review-aware content instead of reading the file directly.'
-											};
-										}
+							if (!warmup) {
+								if (toolName === 'Read') {
+									const filePath =
+										typeof toolInput?.file_path === 'string' ? toolInput.file_path : '';
+									if (/\.(png|jpe?g|gif|webp|bmp|tiff?|ico|heic|avif)$/i.test(filePath)) {
+										return {
+											behavior: 'deny' as const,
+											message:
+												`"${filePath}" is a binary image file — the Read tool cannot send it to the API as text. ` +
+												`If the user attached this image to their message it is already in your context. ` +
+												`Otherwise ask the user to attach it via the chat panel's image drop.`
+										};
 									}
+									const matched = findReferencedOpenTabPath(
+										toolInput?.file_path,
+										openTabPaths
+									);
+									if (matched) {
+										return {
+											behavior: 'deny' as const,
+											message:
+												'Open tab files must be read with `read_doc(path)` so you see the review-aware content instead of reading the file directly.'
+										};
+									}
+								}
 									if (toolName === 'Glob' || toolName === 'Grep') {
 										const matched = findReferencedOpenTabPath(
 											toolInput?.path,
@@ -918,12 +957,19 @@ export const POST: RequestHandler = async ({ request }) => {
 						};
 					}
 
-					async function runQueryRound(roundPrompt: string): Promise<QueryRoundOutcome> {
+					async function runQueryRound(
+						roundPrompt: string,
+						roundImages?: ImageAttachmentPayload[]
+					): Promise<QueryRoundOutcome> {
 						let currentToolName = '';
 						let currentToolId = '';
 						let toolInputAccum = '';
 						let usedDocMutationTool = false;
-						for await (const msg of query({ prompt: roundPrompt, options: buildQueryOptions() })) {
+						const promptArg =
+							roundImages && roundImages.length > 0
+								? buildImagePrompt(roundPrompt, roundImages)
+								: roundPrompt;
+						for await (const msg of query({ prompt: promptArg, options: buildQueryOptions() })) {
 						if (msg.type === 'system' && msg.session_id) {
 							setSessionId(msg.session_id);
 							send('session', { sessionId: msg.session_id });
@@ -1098,7 +1144,7 @@ export const POST: RequestHandler = async ({ request }) => {
 					// on the first scratch write). No render-start mkdir here
 					// — otherwise a `.docwriter/agent/` dir gets created on
 					// every render even when the agent never writes scratch.
-					const firstOutcome = await runQueryRound(prompt);
+					const firstOutcome = await runQueryRound(prompt, images);
 					if (
 						isImplicitWakeup &&
 						activeInlineDirectives.length > 0 &&

@@ -107,7 +107,7 @@
 
 <style>
 	.rules-popover {
-		width: 280px;
+		width: 380px;
 		padding: 12px;
 		font-family: 'Inter', -apple-system, sans-serif;
 	}
@@ -132,6 +132,9 @@
 		flex-direction: column;
 		gap: 4px;
 		margin-bottom: 8px;
+		max-height: 420px;
+		overflow-y: auto;
+		scrollbar-width: thin;
 	}
 	.rule-row {
 		display: flex;

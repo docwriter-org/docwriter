@@ -463,6 +463,14 @@
 	/** Wait until the current tab's local Yjs updates have been acknowledged
 	 * by the server. This preserves the old "flush before server reads"
 	 * contract even though HTTP autosave is gone. */
+	/** Cancel any pending idle-timer countdown without triggering a submit.
+	 * Call this when the user takes a non-typing action (accept/reject) so
+	 * the countdown from their last keystroke doesn't fire unexpectedly. */
+	export function cancelIdleTimer(): void {
+		if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+		clearCountdown();
+	}
+
 	export async function flushAutosave(): Promise<boolean> {
 		// Let the local ProseMirror/Yjs transaction settle into the provider
 		// before we ask whether there are unsynced changes. Without this small
