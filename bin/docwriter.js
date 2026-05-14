@@ -35,7 +35,6 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { existsSync, mkdirSync, readFileSync, watch as fsWatch } from 'node:fs';
-import { homedir } from 'node:os';
 
 // ---------------------------------------------------------------------------
 // Argument parsing (no external deps, pure stdlib)
@@ -189,32 +188,7 @@ async function getFreePort(preferred) {
 const port = isNaN(portArg) || !portArg ? await getFreePort() : portArg;
 const origin = `http://${hostArg === '0.0.0.0' ? 'localhost' : hostArg}:${port}`;
 
-// ---------------------------------------------------------------------------
-// Auth pre-flight: make sure the user has some form of credentials before
-// spawning the server, so they get a clear message rather than a confusing
-// mid-session failure.
-// ---------------------------------------------------------------------------
 const hasApiKey = !!(apiKey || process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_CODE_OAUTH_TOKEN);
-if (!hasApiKey) {
-	const claudeConfigDir = process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
-	const credentialsFile = join(claudeConfigDir, '.credentials.json');
-	if (!existsSync(credentialsFile)) {
-		console.error(`
-  [docwriter] No Anthropic credentials found.
-
-  To fix this, do one of the following:
-
-    1. Log in with your Claude subscription:
-         claude login
-
-    2. Set an API key:
-         export ANTHROPIC_API_KEY=sk-ant-...
-       or pass --api-key sk-ant-... on the command line.
-`);
-		process.exit(1);
-	}
-}
-
 const authLabel = hasApiKey ? 'api key' : 'claude.ai subscription';
 
 console.log(`\n  docwriter  ${origin}`);
