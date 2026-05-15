@@ -88,6 +88,12 @@
 					"reference/shortcuts",
 					"reference/how-it-works"
 				]
+			},
+			{
+				"group": "Changelog",
+				"pages": [
+					"changelog/2026-05-15"
+				]
 			}
 		]
 	},
