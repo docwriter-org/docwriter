@@ -38,7 +38,9 @@
 		pendingReviewRounds,
 		commentThreads,
 		openCommentThreadId,
-		activeTab
+		activeTab,
+		agentSettings,
+		expandedReviewRoundId
 	} from '$lib/stores';
 	import type { Action, Annotation, CommentThread, FeedbackMode } from '$lib/types';
 
@@ -51,8 +53,13 @@
 		 * `getScrollTop()` before tearing the editor down (Accept / Reject /
 		 * file reload) so the user keeps their place across the remount. */
 		initialScrollTop?: number;
+		/** Accept the earliest pending review round on the active tab.
+		 * Wired to the inline ✓ pill rendered next to a diff block by the
+		 * diff overlay; lets the user accept without scrolling away to
+		 * the OutlinePane card. */
+		onAcceptInlineEdit?: () => void;
 	}
-	let { onSubmit, initialScrollTop = 0 }: Props = $props();
+	let { onSubmit, initialScrollTop = 0, onAcceptInlineEdit }: Props = $props();
 
 	let element: HTMLDivElement;
 	let wrapperEl: HTMLDivElement | null = null;
@@ -278,7 +285,8 @@
 	/** Pre-open a comment thread with the user's feedback as the first
 	 * message, so the transcript in the agent prompt starts from the
 	 * user's voice. Returns the new thread id, or null on failure or when
-	 * the mode is `edit` (no thread wanted in that case).
+	 * the mode is not `discuss` (Auto should not leave a visible thread
+	 * unless the agent actually chooses to comment).
 	 *
 	 * `relPositions` carries the user's actual selection encoded as Yjs
 	 * RelativePositions — when present, the server stores them on the
@@ -291,7 +299,7 @@
 		passage: string,
 		relPositions: { relStart: string; relEnd: string } | null
 	): Promise<string | null> {
-		if (feedbackMode === 'edit') return null;
+		if (feedbackMode !== 'discuss') return null;
 		const tabId = getCurrentTab();
 		if (!tabId) return null;
 		try {
@@ -506,12 +514,40 @@
 	 * Drives a softer ghost style on the diff overlay so a one-word tweak
 	 * doesn't look like a paragraph rewrite. */
 	let allRoundsTiny = false;
+	let currentRoundsList: Array<{ id: string; beforeMd?: string; afterMd?: string }> = [];
 	pendingReviewRounds.subscribe((v) => {
 		allRoundsTiny = v.length > 0 && v.every((r) => r.kind === 'tiny');
-		currentProposalText = v.length > 0 ? v[v.length - 1].afterMd ?? null : null;
+		// Show only the EARLIEST pending round's diff at a time. Rounds
+		// accept FIFO (per the OutlinePane Accept logic), so the visible
+		// diff corresponds 1:1 to the round that's actually clickable —
+		// the inline ✓ on any block in this overlay refers to "this
+		// edit" with no ambiguity. After the user accepts, baseline
+		// auto-updates (reviewBaseline subscribes to the post-accept
+		// live Y.Doc text) and the next pending round becomes the new
+		// visible diff.
+		currentProposalText = v.length > 0 ? v[0].afterMd ?? null : null;
+		currentRoundsList = v;
 		hasPendingProposal = v.length > 0;
 		schedulePlainLineSync();
 		updateDiff();
+	});
+
+	// Muted mode + which round is "expanded" in the OutlinePane drive a
+	// peek-one-round-at-a-time variant of the overlay. See updateDiff().
+	let isMuted = false;
+	let expandedRoundId: string | null = null;
+	agentSettings.subscribe((v) => {
+		const next = v.muted;
+		if (next !== isMuted) {
+			isMuted = next;
+			updateDiff();
+		}
+	});
+	expandedReviewRoundId.subscribe((v) => {
+		if (v !== expandedRoundId) {
+			expandedRoundId = v;
+			updateDiff();
+		}
 	});
 
 	/** PM range currently highlighted as "what the user is giving feedback
@@ -646,9 +682,25 @@
 		queueMicrotask(() => {
 			diffUpdateQueued = false;
 			if (!editor) return;
+			// Muted mode: hide the overlay entirely until the user clicks a
+			// pending card, then show only that round's decorations.
+			let baselineForOverlay = currentBaseline;
+			let proposalForOverlay = currentProposalText;
+			if (isMuted && currentRoundsList.length > 0) {
+				const expanded = expandedRoundId
+					? currentRoundsList.find((r) => r.id === expandedRoundId)
+					: null;
+				if (expanded && expanded.beforeMd != null && expanded.afterMd != null) {
+					baselineForOverlay = expanded.beforeMd;
+					proposalForOverlay = expanded.afterMd;
+				} else {
+					baselineForOverlay = null;
+					proposalForOverlay = null;
+				}
+			}
 			setDiffState(editor, {
-				baseline: currentBaseline,
-				proposedText: currentProposalText,
+				baseline: baselineForOverlay,
+				proposedText: proposalForOverlay,
 				annotations: currentAnnotations.filter((annotation) => annotation.tabId === getCurrentTab()),
 				activeFeedbackRange: feedbackSelectionRange,
 				isPlainText: true,
@@ -812,6 +864,17 @@
 		};
 		editorRoot.addEventListener('docwriter:open-thread', handleOpenThread as EventListener);
 
+		// Inline ✓ pill on the diff overlay dispatches this. We just
+		// forward to the parent — the parent owns the round-id state and
+		// the actual /api/document accept call.
+		const handleAcceptPendingEdit = () => {
+			onAcceptInlineEdit?.();
+		};
+		editorRoot.addEventListener(
+			'docwriter:accept-pending-edit',
+			handleAcceptPendingEdit as EventListener
+		);
+
 		// Mousedown anywhere outside a gutter card collapses the open
 		// thread. Pill clicks stop propagation on mousedown, so window
 		// won't see those; inline-highlight clicks fire handleClick
@@ -843,6 +906,10 @@
 
 		const detachOpenThread = () => {
 			editorRoot.removeEventListener('docwriter:open-thread', handleOpenThread as EventListener);
+			editorRoot.removeEventListener(
+				'docwriter:accept-pending-edit',
+				handleAcceptPendingEdit as EventListener
+			);
 			window.removeEventListener('mousedown', handleOutsideMousedown);
 			window.removeEventListener('mousedown', handleFeedbackOutsideMousedown);
 		};
@@ -1353,32 +1420,152 @@
 		pointer-events: none;
 	}
 	/* Diff decoration classes, applied by the DiffOverlay extension */
+	/* Fade-in for diff decorations. ProseMirror creates fresh DOM for these
+	 * spans/widgets every time the decoration set rebuilds, so the keyframe
+	 * fires whenever the overlay turns on (unmute, peek a round, new edit
+	 * arrives). Going the other direction (mute / collapse peek) the nodes
+	 * are removed so out-fade isn't possible without buffering — skipped
+	 * intentionally; the pop-out reads as "dismissed" anyway. */
+	@keyframes diffFadeIn {
+		from { opacity: 0; }
+		to { opacity: var(--diff-final-opacity, 1); }
+	}
+
 	.tiptap-editor :global(.diff-added) {
 		color: var(--diff-added-color);
 		background: var(--diff-added-bg);
+		animation: diffFadeIn 320ms ease-out both;
 	}
 	.tiptap-editor :global(.tiptap-plain p.diff-added-line) {
 		color: var(--diff-added-color);
 		background: var(--diff-added-bg);
+		animation: diffFadeIn 320ms ease-out both;
 	}
 	.tiptap-editor :global(.diff-added-line) {
 		display: block;
 		color: var(--diff-added-color);
 		background: var(--diff-added-bg);
 		white-space: pre-wrap;
-		pointer-events: none;
+		cursor: text;
 		user-select: none;
+		transform-origin: top;
+		animation: diffSlideIn 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
+	}
+	@keyframes diffSlideIn {
+		0% {
+			opacity: 0;
+			transform: translateY(-3px) scaleY(0.7);
+			max-height: 0;
+		}
+		100% {
+			opacity: 1;
+			transform: translateY(0) scaleY(1);
+			max-height: 1000px;
+		}
+	}
+	/* "Show" / "Hide" pill that toggles a diff block's proposed
+	 * replacement. The inline variant lives at the end of the last
+	 * strikethrough paragraph and is pinned to the right margin via
+	 * absolute positioning so it consumes ZERO vertical space — the
+	 * cursor doesn't move when the user types nearby. The block
+	 * variant is the fallback for pure insertions (no strikethrough
+	 * to host the inline pill). */
+	.tiptap-editor :global(.diff-toggle-pill-wrap.inline) {
+		position: absolute;
+		top: 50%;
+		right: 6px;
+		transform: translateY(-50%);
+		display: inline-flex;
+		gap: 4px;
+		align-items: center;
+		user-select: none;
+		z-index: 5;
+		pointer-events: auto;
+		opacity: 1;
+		text-decoration: none;
+	}
+	.tiptap-editor :global(.diff-toggle-pill-wrap.block) {
+		display: flex;
+		gap: 4px;
+		align-items: center;
+		margin: 4px 0;
+		user-select: none;
+	}
+	.tiptap-editor :global(.diff-toggle-pill) {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		padding: 1px 8px;
+		font-family: 'Inter', -apple-system, sans-serif;
+		font-size: 10.5px;
+		font-weight: 500;
+		color: var(--accent);
+		background: var(--bg-elevated);
+		border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border-light));
+		border-radius: 999px;
+		cursor: pointer;
+		line-height: 1.4;
+		letter-spacing: 0.02em;
+		text-decoration: none;
+		opacity: 0.85;
+		transition: background 120ms ease, border-color 120ms ease, color 120ms ease, opacity 120ms ease;
+	}
+	.tiptap-editor :global(.diff-toggle-pill:hover) {
+		background: var(--accent-bg);
+		border-color: var(--accent);
+		opacity: 1;
+	}
+	.tiptap-editor :global(.diff-toggle-pill.expanded) {
+		color: var(--text-secondary);
+		background: var(--bg-surface);
+		border-color: var(--border-light);
+	}
+	.tiptap-editor :global(.diff-toggle-pill.expanded:hover) {
+		background: var(--bg);
+		color: var(--text);
+		border-color: color-mix(in srgb, var(--text-secondary) 30%, var(--border-light));
+	}
+	/* Inline ✓ accept pill — companion to the toggle pill. Green palette
+	 * so it reads as the affirmative action. */
+	.tiptap-editor :global(.diff-accept-pill) {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 22px;
+		height: 22px;
+		padding: 0;
+		font-family: 'Inter', -apple-system, sans-serif;
+		color: var(--diff-added-color);
+		background: var(--bg-elevated);
+		border: 1px solid color-mix(in srgb, var(--diff-added-color) 35%, var(--border-light));
+		border-radius: 999px;
+		cursor: pointer;
+		line-height: 1;
+		opacity: 0.85;
+		transition: background 120ms ease, border-color 120ms ease, color 120ms ease, opacity 120ms ease;
+	}
+	.tiptap-editor :global(.diff-accept-pill:hover) {
+		background: color-mix(in srgb, var(--diff-added-color) 14%, transparent);
+		border-color: var(--diff-added-color);
+		opacity: 1;
+	}
+	.tiptap-editor :global(.diff-accept-pill svg) {
+		display: block;
 	}
 	.tiptap-editor :global(.diff-removed) {
 		color: var(--diff-removed-color);
 		text-decoration: line-through;
+		--diff-final-opacity: 0.7;
 		opacity: 0.7;
+		animation: diffFadeIn 320ms ease-out both;
 	}
 	.tiptap-editor :global(.tiptap-plain p.diff-removed-line) {
 		color: var(--diff-removed-color);
-		background: color-mix(in srgb, var(--diff-removed-color) 10%, transparent);
 		text-decoration: line-through;
+		--diff-final-opacity: 0.72;
 		opacity: 0.72;
+		animation: diffFadeIn 320ms ease-out both;
+		position: relative;
 	}
 	/* Ghost strikethrough widget for agent removals. The removed text isn't
 	 * in the editor's doc tree (the editor displays the live Y.Doc state),
@@ -1387,10 +1574,12 @@
 		color: var(--diff-removed-color);
 		background: color-mix(in srgb, var(--diff-removed-color) 12%, transparent);
 		text-decoration: line-through;
+		--diff-final-opacity: 0.75;
 		opacity: 0.75;
 		padding: 0 3px;
 		border-radius: 3px;
 		user-select: none;
+		animation: diffFadeIn 320ms ease-out both;
 	}
 	/* Tiny-edit variants: when every pending round is small (< ~25 chars
 	 * delta, e.g. a typo fix), drop the solid green/red treatment and use

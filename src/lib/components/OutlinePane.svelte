@@ -5,6 +5,21 @@
 	import { fly } from 'svelte/transition';
 	import { flip } from 'svelte/animate';
 	import { cubicOut, cubicInOut } from 'svelte/easing';
+
+	/** Gentle "phase in" for newly-arriving pending cards: fade plus a
+	 * subtle scale-up and tiny downward settle. Longer duration than the
+	 * old fly so it reads as "appearing", not "sliding in from above". */
+	function phaseIn(_node: Element, { duration = 420 }: { duration?: number } = {}) {
+		return {
+			duration,
+			css: (t: number) => {
+				const eased = cubicOut(t);
+				return `opacity: ${eased};
+				        transform: translateY(${(1 - eased) * 6}px) scale(${0.97 + eased * 0.03});
+				        transform-origin: top center;`;
+			}
+		};
+	}
 	import {
 		FileText,
 		Sparkles,
@@ -23,7 +38,9 @@
 		allTabPendingRounds,
 		allTabCommentThreads,
 		seenCommentIds,
-		markCommentSeen
+		markCommentSeen,
+		agentSettings,
+		expandedReviewRoundId
 	} from '$lib/stores';
 	import { getYDocForTab } from '$lib/yjs-doc';
 	import type { ProposedRule, ProposedHook, CommentThread } from '$lib/types';
@@ -94,6 +111,12 @@
 
 	let seenIds = $state<Set<string>>(new Set());
 	seenCommentIds.subscribe((v) => (seenIds = v));
+
+	let muted = $state(false);
+	agentSettings.subscribe((v) => (muted = v.muted));
+
+	let expandedRoundId = $state<string | null>(null);
+	expandedReviewRoundId.subscribe((v) => (expandedRoundId = v));
 
 	let activeTabId = $state<string | null>(null);
 	let activeTabUnsub: Unsubscriber | null = null;
@@ -183,6 +206,11 @@
 			await onNavigateToRound(tabId, round);
 			await tick();
 		}
+		// Muted mode: clicking a card "peeks" that round into the editor
+		// overlay. Click again to collapse. No effect when not muted.
+		if (muted) {
+			expandedReviewRoundId.set(expandedRoundId === round.id ? null : round.id);
+		}
 		scrollToRound(round);
 	}
 
@@ -266,16 +294,15 @@
 						{basename(group.tabId)}
 					</div>
 				{/if}
-				{#each group.rounds.slice().reverse() as round, revIdx (round.id)}
-					{@const isEarliest = revIdx === group.rounds.length - 1}
+				{#each group.rounds.slice().reverse() as round, _revIdx (round.id)}
 					{@const preview = diffPreview(round)}
 					<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 					<div
 						class="pending-card round-card"
-						class:later-round={!isEarliest}
 						class:tiny-card={round.kind === 'tiny'}
 						class:cross-tab={!isActiveTab}
-						in:fly={{ y: -10, duration: 260, easing: cubicOut }}
+						class:peeking={muted && expandedRoundId === round.id}
+						in:phaseIn={{ duration: 420 }}
 						out:fly={{ y: 40, duration: 280, easing: cubicInOut }}
 						animate:flip={{ duration: 280, easing: cubicInOut }}
 						onclick={() => void handleRoundClick(group.tabId, round)}
@@ -311,14 +338,12 @@
 							</div>
 						{/if}
 						<div class="pending-actions" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()} role="presentation">
-							{#if isEarliest && isActiveTab}
+							{#if isActiveTab}
 								<button class="btn-accept" onclick={() => onAccept?.(round.id)}>
 									<Check size={12} />Accept
 								</button>
-							{:else if !isActiveTab}
-								<span class="action-note" title="Switch to this file to accept/reject">Open file to review</span>
 							{:else}
-								<span class="action-note" title="Accept earlier edits first">Accept earlier first</span>
+								<span class="action-note" title="Switch to this file to accept/reject">Open file to review</span>
 							{/if}
 							{#if isActiveTab}
 								<button class="btn-reject" onclick={() => onReject?.(round.id)}>
@@ -507,9 +532,12 @@
 		justify-content: space-between;
 		gap: 8px;
 	}
-	.round-card.later-round { opacity: 0.72; }
-	.round-card.later-round:hover { opacity: 1; }
 	.round-card.tiny-card { padding: 6px 8px; }
+	.round-card.peeking {
+		border-color: var(--accent);
+		box-shadow: 0 0 0 2px var(--accent-bg);
+		background: color-mix(in srgb, var(--bg-surface) 80%, var(--accent) 20%);
+	}
 	.tiny-card .pending-summary { margin-bottom: 4px; font-size: 11.5px; }
 	.tiny-card .pending-actions { margin-top: 4px; }
 	.tiny-card .btn-accept, .tiny-card .btn-reject { padding: 3px 7px; font-size: 11px; }

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { fade, fly } from 'svelte/transition';
 	import { cubicOut } from 'svelte/easing';
-	import { X, Search, ChevronDown, ChevronRight } from 'lucide-svelte';
+	import { X, Search, ChevronDown, ChevronRight, Activity } from 'lucide-svelte';
 	import { onMount } from 'svelte';
 	import { marked } from 'marked';
 
@@ -82,6 +82,81 @@
 
 	let totalInTok = $derived(events.reduce((a, e) => a + (e.inputTokens ?? 0) + (e.cacheRead ?? 0), 0));
 	let totalOutTok = $derived(events.reduce((a, e) => a + (e.outputTokens ?? 0), 0));
+
+	// ── Context breakdown ─────────────────────────────────────────────────────
+	// Estimate token usage by source so the user can see what's filling
+	// the context window. Token counts are approximations: chars/4 (a
+	// rough rule of thumb for Claude's tokenizer). The "live" buckets
+	// (system prompt, rules) come from real workspace data; tools/MCP
+	// are estimated from a fixed slate that the SDK ships per render;
+	// "conversation" is whatever the latest assistant turn reported as
+	// input + cache_read after subtracting the static buckets.
+	let rulesText = $state('');
+	let contextOpen = $state(false);
+	const TOOLS_TOKENS_ESTIMATE = 6000;
+	const MCP_TOKENS_ESTIMATE = 1800;
+	// Claude Sonnet 4 / Opus 4: 200K context window. If your model has
+	// extended context, surface it here.
+	const CONTEXT_BUDGET = 200_000;
+	function estimateTokens(s: string): number {
+		if (!s) return 0;
+		return Math.ceil(s.length / 4);
+	}
+	let systemPromptTokens = $derived(estimateTokens(systemPrompt ?? ''));
+	let rulesTokens = $derived(estimateTokens(rulesText));
+	// Latest assistant message reflects "what was sent in the last
+	// request". The SDK's input_tokens already include cached + fresh
+	// content, so taking the last one gives current context size.
+	let latestAssistant = $derived.by(() => {
+		for (let i = events.length - 1; i >= 0; i--) {
+			const ev = events[i];
+			if (ev.kind === 'assistant_text') return ev;
+		}
+		return null;
+	});
+	let lastInTok = $derived(
+		(latestAssistant?.inputTokens ?? 0) + (latestAssistant?.cacheRead ?? 0)
+	);
+	let conversationTokens = $derived(
+		Math.max(
+			0,
+			lastInTok -
+				systemPromptTokens -
+				rulesTokens -
+				TOOLS_TOKENS_ESTIMATE -
+				MCP_TOKENS_ESTIMATE
+		)
+	);
+	let totalContextTokens = $derived(
+		systemPromptTokens +
+			rulesTokens +
+			TOOLS_TOKENS_ESTIMATE +
+			MCP_TOKENS_ESTIMATE +
+			conversationTokens
+	);
+	let contextPctFull = $derived(
+		Math.min(100, Math.round((totalContextTokens / CONTEXT_BUDGET) * 100))
+	);
+	type ContextBucket = { id: string; label: string; tokens: number; color: string };
+	let contextBuckets = $derived<ContextBucket[]>([
+		{ id: 'system', label: 'System prompt', tokens: systemPromptTokens, color: 'var(--ctx-color-system)' },
+		{ id: 'tools', label: 'Tools', tokens: TOOLS_TOKENS_ESTIMATE, color: 'var(--ctx-color-tools)' },
+		{ id: 'rules', label: 'Rules', tokens: rulesTokens, color: 'var(--ctx-color-rules)' },
+		{ id: 'mcp', label: 'MCP', tokens: MCP_TOKENS_ESTIMATE, color: 'var(--ctx-color-mcp)' },
+		{ id: 'conv', label: 'Conversation', tokens: conversationTokens, color: 'var(--ctx-color-conv)' }
+	]);
+
+	async function fetchRules() {
+		try {
+			const res = await fetch('/api/document');
+			if (!res.ok) return;
+			const data = await res.json();
+			const rules = (data?.meta?.rules ?? []) as Array<{ text?: string }>;
+			rulesText = rules.map((r) => r.text ?? '').join('\n');
+		} catch {
+			// Best-effort — leave rulesText empty so the bucket reads as 0.
+		}
+	}
 	let toolCounts = $derived.by(() => {
 		const m: Record<string, number> = {};
 		for (const e of events) {
@@ -121,6 +196,7 @@
 	}
 
 	onMount(async () => {
+		void fetchRules();
 		try {
 			const res = await fetch('/api/history');
 			const data = await res.json();
@@ -416,11 +492,72 @@
 					<span class="stat-pill">{fmtTokens(totalInTok)} in</span>
 					<span class="stat-pill">{fmtTokens(totalOutTok)} out</span>
 				</div>
+				<button
+					class="context-toggle"
+					class:active={contextOpen}
+					onclick={() => (contextOpen = !contextOpen)}
+					title="Show how the context window is being used"
+				>
+					<Activity size={11} />
+					<span>Context</span>
+					<span class="context-toggle-pct">{contextPctFull}%</span>
+				</button>
 				<button class="close-btn" onclick={onClose} aria-label="Close">
 					<X size={15} />
 				</button>
 			</div>
 		</div>
+
+		{#if contextOpen}
+			<div class="context-card" transition:fly={{ y: -6, duration: 160, easing: cubicOut }}>
+				<div class="context-card-header">
+					<span class="context-card-title">Context</span>
+					<button
+						class="context-card-close"
+						onclick={() => (contextOpen = false)}
+						aria-label="Hide context breakdown"
+					>
+						<X size={12} />
+					</button>
+				</div>
+				<div class="context-card-meta">
+					<span class="context-pct">{contextPctFull}% Full</span>
+					<span class="context-totals">
+						~{fmtTokens(totalContextTokens)} / {fmtTokens(CONTEXT_BUDGET)} Tokens
+					</span>
+				</div>
+				<div class="context-bar" role="img" aria-label="Context bucket breakdown">
+					{#each contextBuckets as bucket (bucket.id)}
+						{@const pct = totalContextTokens > 0 ? (bucket.tokens / CONTEXT_BUDGET) * 100 : 0}
+						{#if pct > 0}
+							<div
+								class="context-bar-segment"
+								style:flex-basis="{pct}%"
+								style:background={bucket.color}
+								title="{bucket.label}: {fmtTokens(bucket.tokens)} tokens"
+							></div>
+						{/if}
+					{/each}
+					<div class="context-bar-rest"></div>
+				</div>
+				<div class="context-legend">
+					{#each contextBuckets as bucket (bucket.id)}
+						<div class="context-legend-row">
+							<span
+								class="context-legend-swatch"
+								style:background={bucket.color}
+								aria-hidden="true"
+							></span>
+							<span class="context-legend-label">{bucket.label}</span>
+							<span class="context-legend-tokens">{fmtTokens(bucket.tokens)}</span>
+						</div>
+					{/each}
+				</div>
+				<div class="context-foot">
+					Rough estimates: char-count ÷ 4. Tools / MCP are static-prompt approximations.
+				</div>
+			</div>
+		{/if}
 
 		<!-- ── Body ────────────────────────────────────────────────────── -->
 		<div class="body">
@@ -735,6 +872,159 @@
 		padding: 2px 8px;
 		font-family: ui-monospace, monospace;
 		white-space: nowrap;
+	}
+
+	/* ── Context breakdown ───────────────────────────────────────── */
+	/* Per-bucket palette. CSS vars so dark/light themes can override
+	 * via the same names if needed without touching this file. */
+	.panel {
+		--ctx-color-system: #94a3b8;
+		--ctx-color-tools: #7c3aed;
+		--ctx-color-rules: #16a34a;
+		--ctx-color-skills: #d97706;
+		--ctx-color-mcp: #c026d3;
+		--ctx-color-subagents: #2563eb;
+		--ctx-color-conv: #f97316;
+	}
+	.context-toggle {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		padding: 3px 9px;
+		font-size: 11px;
+		font-family: inherit;
+		color: var(--text-secondary);
+		background: var(--bg-surface);
+		border: 1px solid var(--border-light);
+		border-radius: 999px;
+		cursor: pointer;
+		white-space: nowrap;
+	}
+	.context-toggle:hover {
+		background: var(--bg-hover);
+		color: var(--text);
+	}
+	.context-toggle.active {
+		background: var(--accent-bg);
+		border-color: var(--accent-light);
+		color: var(--accent);
+	}
+	.context-toggle-pct {
+		font-family: ui-monospace, monospace;
+		font-size: 10.5px;
+		font-variant-numeric: tabular-nums;
+	}
+	.context-card {
+		position: relative;
+		margin: 0 14px 0;
+		padding: 14px 16px 12px;
+		background: var(--bg-elevated);
+		border: 1px solid var(--border-light);
+		border-bottom: none;
+		border-radius: 10px 10px 0 0;
+		box-shadow: 0 6px 16px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+		font-family: 'Inter', -apple-system, sans-serif;
+		flex-shrink: 0;
+	}
+	.context-card-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		margin-bottom: 6px;
+	}
+	.context-card-title {
+		font-size: 13px;
+		font-weight: 600;
+		color: var(--text);
+	}
+	.context-card-close {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 22px;
+		height: 22px;
+		border: none;
+		background: transparent;
+		color: var(--text-faint);
+		border-radius: 999px;
+		cursor: pointer;
+	}
+	.context-card-close:hover {
+		background: var(--bg-surface);
+		color: var(--text);
+	}
+	.context-card-meta {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: 12px;
+		margin-bottom: 8px;
+	}
+	.context-pct {
+		font-size: 11.5px;
+		color: var(--text-faint);
+	}
+	.context-totals {
+		font-size: 11.5px;
+		color: var(--text-faint);
+		font-family: ui-monospace, monospace;
+		font-variant-numeric: tabular-nums;
+	}
+	.context-bar {
+		display: flex;
+		width: 100%;
+		height: 8px;
+		border-radius: 999px;
+		overflow: hidden;
+		background: var(--bg-surface);
+		margin-bottom: 12px;
+		gap: 2px;
+		padding: 0;
+	}
+	.context-bar-segment {
+		height: 100%;
+		min-width: 6px;
+		flex-grow: 0;
+		flex-shrink: 0;
+	}
+	.context-bar-rest {
+		flex: 1 1 auto;
+	}
+	.context-legend {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+		gap: 4px 18px;
+	}
+	.context-legend-row {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 3px 0;
+		font-size: 12px;
+	}
+	.context-legend-swatch {
+		display: inline-block;
+		width: 10px;
+		height: 10px;
+		border-radius: 3px;
+		flex-shrink: 0;
+	}
+	.context-legend-label {
+		color: var(--text);
+		flex: 1;
+	}
+	.context-legend-tokens {
+		color: var(--text-faint);
+		font-family: ui-monospace, monospace;
+		font-variant-numeric: tabular-nums;
+		font-size: 11.5px;
+	}
+	.context-foot {
+		margin-top: 8px;
+		padding-top: 8px;
+		border-top: 1px dashed var(--border-light);
+		font-size: 10.5px;
+		color: var(--text-faint);
 	}
 
 	/* ── Close button ────────────────────────────────────────────── */

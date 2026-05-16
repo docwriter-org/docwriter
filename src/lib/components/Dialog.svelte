@@ -87,7 +87,7 @@
 		align-items: center;
 		justify-content: center;
 		z-index: 210;
-		padding: 24px;
+		padding: 16px;
 	}
 	.dialog {
 		background: var(--bg-elevated);
@@ -124,40 +124,5 @@
 		gap: 8px;
 		padding: 10px 16px;
 		border-top: 1px solid var(--border-light);
-	}
-	.btn-primary,
-	.btn-secondary {
-		display: inline-flex;
-		align-items: center;
-		gap: 5px;
-		padding: 6px 14px;
-		font-family: inherit;
-		font-size: 12.5px;
-		font-weight: 500;
-		border-radius: 5px;
-		cursor: pointer;
-	}
-	.btn-primary {
-		background: var(--accent);
-		color: white;
-		border: 1px solid var(--accent);
-	}
-	.btn-primary:hover {
-		filter: brightness(0.94);
-	}
-	.btn-primary.danger {
-		background: #c53030;
-		border-color: #c53030;
-	}
-	.btn-primary.danger:hover {
-		filter: brightness(0.94);
-	}
-	.btn-secondary {
-		background: var(--bg-surface);
-		color: var(--text);
-		border: 1px solid var(--border-light);
-	}
-	.btn-secondary:hover {
-		background: var(--bg);
 	}
 </style>

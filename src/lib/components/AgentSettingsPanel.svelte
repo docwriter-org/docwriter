@@ -7,7 +7,7 @@
 	}
 	let { onSettingsChange }: Props = $props();
 
-	let settings: AgentSettings = $state({ agency: 'conservative', trackChanges: true });
+	let settings: AgentSettings = $state({ agency: 'conservative', trackChanges: true, muted: false });
 	agentSettings.subscribe((v) => (settings = v));
 
 	function updateSettings(patch: Partial<AgentSettings>) {

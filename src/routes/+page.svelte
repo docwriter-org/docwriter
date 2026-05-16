@@ -89,6 +89,7 @@
 		agentHistory,
 		showHistory,
 		pushHistory,
+		nextHistoryKey,
 		selectedModel,
 		selectedTheme,
 		submitCountdown,
@@ -97,6 +98,7 @@
 		historyVerbosity,
 		showFilesPane,
 		agentSettings,
+		expandedReviewRoundId,
 		tabs,
 		activeTab,
 		recentActions,
@@ -418,6 +420,9 @@
 			freshAgentTabs.delete(tabId);
 			freshAgentTabs = new Set(freshAgentTabs);
 		}
+		// Drop any peeked round id — it belonged to the prior tab's pending
+		// list and would be a stale match (or a no-op) after the switch.
+		expandedReviewRoundId.set(null);
 		// Move the old active tab to a bg observer and drop the bg observer
 		// for the new active tab (the active observer takes over after loadTab).
 		if (current) attachBgTabObserver(current);
@@ -607,6 +612,32 @@
 	}
 
 
+	/** Clear the peeked round id when the underlying round is going away
+	 * (accept/reject). When `roundId` is undefined the caller is doing a
+	 * batch op, so clear unconditionally. */
+	function clearPeekIfMatches(roundId?: string) {
+		let current: string | null = null;
+		expandedReviewRoundId.subscribe((v) => (current = v))();
+		if (!current) return;
+		if (!roundId || current === roundId) expandedReviewRoundId.set(null);
+	}
+
+	/** Flip the agent's muted flag. Muted: pending edits land as cards but
+	 * the editor's diff overlay stays hidden until the user clicks a card.
+	 * Also clears any currently-expanded round so unmuting doesn't leave
+	 * one round selected when the full overlay returns. */
+	function toggleMuted() {
+		let next: AgentSettings | null = null;
+		agentSettings.update((prev) => {
+			next = { ...prev, muted: !prev.muted };
+			return next;
+		});
+		if (next) {
+			expandedReviewRoundId.set(null);
+			void persistAgentSettings(next);
+		}
+	}
+
 	/** Persist agent settings through `/api/document` so the server can read
 	 * them at render time (for agency-level prompt injection). */
 	async function persistAgentSettings(next: AgentSettings) {
@@ -624,10 +655,34 @@
 		}
 	}
 
+	function isAcceptedEditsMessage(trigger?: string): boolean {
+		return /^Accepted (?:all )?\d+ agent edit/.test(trigger ?? '');
+	}
+
+	/** Implicit wakeup = the user clicked Wake up with no specific prompt,
+	 * so the agent gets the generic "review the docs and see if there's
+	 * anything to do" message. If a real user message is already queued
+	 * behind it, the wakeup is redundant — the real message implies the
+	 * same review pass — so we drop it. */
+	function isImplicitWakeupTrigger(trigger?: string): boolean {
+		return !trigger;
+	}
+
+	/** True when the dequeued message can be safely skipped because there's
+	 * a more specific user message right behind it. */
+	function isSkippableWhenQueued(trigger?: string): boolean {
+		return isAcceptedEditsMessage(trigger) || isImplicitWakeupTrigger(trigger);
+	}
+
 	async function submit(trigger?: string, opts?: { planMode?: boolean; images?: ImageAttachment[] }) {
 		const planMode = opts?.planMode ?? false;
 		const images = opts?.images ?? [];
 		if (rendering || submitInFlight) {
+			// Skippable triggers (accepted-edits auto-wake, implicit
+			// wakeup) get dropped at queue time when there's already
+			// something queued — the queued message implies the same
+			// review pass.
+			if (isSkippableWhenQueued(trigger) && queuedSubmissions.length > 0) return;
 			queuedSubmissions = [...queuedSubmissions, { trigger, planMode }];
 			queuedSubmissionCount.set(queuedSubmissions.length);
 			return;
@@ -807,7 +862,7 @@
 							if (last && last.type === 'assistant_text') {
 								return [...h.slice(0, -1), { ...last, text: last.text + parsed.text }];
 							}
-							return [...h, { type: 'assistant_text', timestamp: Date.now(), text: parsed.text }];
+							return [...h, { type: 'assistant_text', timestamp: Date.now(), text: parsed.text, _key: nextHistoryKey() } as HistoryEntry];
 						});
 					} else if (event === 'assistant_thinking') {
 						agentHistory.update((h) => {
@@ -815,7 +870,7 @@
 							if (last && last.type === 'assistant_thinking') {
 								return [...h.slice(0, -1), { ...last, text: last.text + parsed.text }];
 							}
-							return [...h, { type: 'assistant_thinking', timestamp: Date.now(), text: parsed.text }];
+							return [...h, { type: 'assistant_thinking', timestamp: Date.now(), text: parsed.text, _key: nextHistoryKey() } as HistoryEntry];
 						});
 					} else if (event === 'sdk_status') {
 						if (parsed.status !== 'compacting' && !parsed.compactResult && !parsed.error) {
@@ -887,8 +942,9 @@
 									timestamp: Date.now(),
 									tool_name: parsed.tool_name,
 									elapsedSeconds: parsed.elapsedSeconds,
-									taskId: parsed.taskId
-								}
+									taskId: parsed.taskId,
+									_key: nextHistoryKey()
+								} as HistoryEntry
 							];
 						});
 					} else if (event === 'result') {
@@ -948,8 +1004,9 @@
 									hookId: parsed.hookId,
 									event: parsed.event,
 									command: parsed.command,
-									status: 'running'
-								}];
+									status: 'running',
+									_key: nextHistoryKey()
+								} as HistoryEntry];
 							}
 							// Update the most recent running entry with matching ids.
 							for (let i = h.length - 1; i >= 0; i--) {
@@ -984,8 +1041,9 @@
 								exitCode: parsed.exitCode,
 								stdout: parsed.stdout,
 								stderr: parsed.stderr,
-								durationMs: parsed.durationMs
-							}];
+								durationMs: parsed.durationMs,
+								_key: nextHistoryKey()
+							} as HistoryEntry];
 						});
 					} else if (event === 'rule_proposal') {
 						// Agent invoked the propose_rule MCP tool. Push into the
@@ -1082,11 +1140,21 @@
 					text: `Render failed after ${Math.round((Date.now() - renderStart) / 100) / 10}s.`
 				});
 			}
-			const next = queuedSubmissions[0];
+			let next = queuedSubmissions[0];
 			if (next) {
 				queuedSubmissions = queuedSubmissions.slice(1);
 				queuedSubmissionCount.set(queuedSubmissions.length);
-				setTimeout(() => void submit(next.trigger, { planMode: next.planMode }), 0);
+				// Skip generic auto-wakeups (accepted-edits, implicit "review
+				// docs" wakeup) when more specific user messages are queued
+				// behind them — they'd just duplicate the work.
+				while (isSkippableWhenQueued(next.trigger) && queuedSubmissions.length > 0) {
+					next = queuedSubmissions[0];
+					queuedSubmissions = queuedSubmissions.slice(1);
+					queuedSubmissionCount.set(queuedSubmissions.length);
+				}
+				if (!isSkippableWhenQueued(next.trigger) || queuedSubmissions.length === 0) {
+					setTimeout(() => void submit(next.trigger, { planMode: next.planMode }), 0);
+				}
 			} else {
 				queuedSubmissionCount.set(0);
 			}
@@ -1100,18 +1168,6 @@
 		return rounds;
 	}
 
-	/**
-	 * Accept the earliest pending round. The OutlinePane only surfaces the
-	 * Accept button on the first round in the list, enforcing FIFO order —
-	 * this sidesteps the "accept round 2 while round 1 still pending"
-	 * ambiguity (the composite diff overlay would keep showing round 2's
-	 * text as unresolved green). The monotonic fallback below (accepts
-	 * rounds 0..=idx) is kept as a safety net in case something triggers
-	 * this with a non-first id.
-	 *
-	 * The server replays the accepted operations against the current live
-	 * doc, then drops the accepted cards.
-	 */
 	function buildStaleAcceptFollowup(
 		tabId: string,
 		stale: MaterializedPendingReviewRound,
@@ -1133,12 +1189,28 @@
 		].join('\n');
 	}
 
+	/** Accept a single pending round by id (or all rounds if no id is
+	 * given — used by the "Accept all" path). Rounds are independent: the
+	 * server applies just this round's edit op against the current live
+	 * doc. If the round became stale (its `old_string` no longer matches
+	 * because a prior pending round changed the same text), the server
+	 * returns 409 and we re-queue it with a follow-up prompt asking the
+	 * agent to regenerate against the now-current text. */
 	async function acceptAgentEdit(roundId?: string) {
+		console.log('[accept] called', { roundId });
 		const tabId = getCurrentActiveTab();
-		if (!tabId) return;
+		if (!tabId) {
+			console.log('[accept] no active tab — bail');
+			return;
+		}
 		const rounds = currentRounds();
+		console.log('[accept] active rounds', rounds.map((r) => r.id), 'looking for', roundId);
 		const idx = roundId ? rounds.findIndex((r) => r.id === roundId) : -1;
-		if (roundId && idx < 0) return;
+		if (roundId && idx < 0) {
+			console.log('[accept] round not in active list — bail (this is the bug if it fires)');
+			return;
+		}
+		clearPeekIfMatches(roundId);
 		editorRef?.cancelIdleTimer();
 		try {
 			const synced = await editorRef?.flushAutosave();
@@ -1200,15 +1272,17 @@
 				if (!op.newString) continue;
 				editorRef?.flashAcceptedRange(op.newString);
 			}
-			clearFeedbackAnnotationsForTab(tabId);
-			pushHistory({
-				type: 'user_action',
-				timestamp: Date.now(),
-				description:
-					acceptedCount === rounds.length
-						? `Accepted all ${rounds.length} agent edit${rounds.length === 1 ? '' : 's'}`
-						: `Accepted ${acceptedCount} agent edit${acceptedCount === 1 ? '' : 's'}`
-			});
+		clearFeedbackAnnotationsForTab(tabId);
+		const acceptedMsg =
+			acceptedCount === rounds.length
+				? `Accepted all ${rounds.length} agent edit${rounds.length === 1 ? '' : 's'}`
+				: `Accepted ${acceptedCount} agent edit${acceptedCount === 1 ? '' : 's'}`;
+		pushHistory({
+			type: 'user_action',
+			timestamp: Date.now(),
+			description: acceptedMsg
+		});
+		void submit(acceptedMsg);
 		} catch (e) {
 			console.error('Failed to accept agent edit:', e);
 			pushHistory({
@@ -1270,6 +1344,7 @@
 		const retryFeedback = options?.retryFeedback?.trim();
 		const rejectedIdx = roundId ? rounds.findIndex((r) => r.id === roundId) : -1;
 		if (roundId && rejectedIdx < 0) return;
+		clearPeekIfMatches(roundId);
 		editorRef?.cancelIdleTimer();
 		try {
 			const synced = await editorRef?.flushAutosave();
@@ -1516,6 +1591,13 @@
 		}
 		queuedSubmissions = [];
 		queuedSubmissionCount.set(0);
+		// Defensive: if the controller is gone (HMR re-instantiated this
+		// component while a render was in flight, leaving the store true
+		// but the closure orphaned), the abort above no-ops and the
+		// submit() finally never runs. Clear the store directly so
+		// Restart always unsticks the UI.
+		isRendering.set(false);
+		submitInFlight = false;
 	}
 
 	async function newSession() {
@@ -1578,6 +1660,13 @@
 
 	let filesVisible = $state(true);
 	showFilesPane.subscribe((v) => (filesVisible = v));
+
+	// Mirror of agentSettings.muted for class binding on the right pane.
+	// When true, everything in the right sidebar except the agent dock
+	// gets a translucent veil so the user isn't distracted by inflight
+	// activity. They unmute via the bell icon in the dock.
+	let muted = $state(false);
+	agentSettings.subscribe((v) => (muted = v.muted));
 
 	let pendingRoundCount = $state(0);
 	pendingReviewRounds.subscribe((v) => (pendingRoundCount = v.length));
@@ -2212,6 +2301,16 @@
 					bind:this={editorRef}
 					onSubmit={(trigger) => submit(trigger)}
 					initialScrollTop={pendingScrollRestore}
+					onAcceptInlineEdit={() => {
+						const rounds = currentRounds();
+						if (rounds.length === 0) return;
+						// Diff overlay shows just the EARLIEST pending round
+						// at a time (TiptapEditor passes round[0]'s afterMd as
+						// proposedText), so the inline ✓ accepts exactly that
+						// round — and no other. Subsequent rounds become the
+						// new visible diff after this one's accepted.
+						void acceptAgentEdit(rounds[0].id);
+					}}
 				/>
 			{:else if docLoaded}
 				<div class="empty-editor-state">
@@ -2227,7 +2326,7 @@
 			<div class="right-pane-inner" bind:this={rightPaneInnerEl}>
 				{#if historyVisible}
 					<div class="history-wrap" style:height="{historyPaneHeight}px">
-						<HistoryPane onNewSession={newSession} onWakeUp={docLoaded && activeTabFilePath ? () => submit() : undefined} onCancel={cancelRender}>
+						<HistoryPane onNewSession={newSession} onWakeUp={docLoaded && activeTabFilePath ? () => submit() : undefined} onCancel={cancelRender} onToggleMuted={toggleMuted}>
 							{#snippet dock()}
 								{#if docLoaded && activeTabFilePath}
 									<AgentDock
@@ -2239,10 +2338,12 @@
 					</div>
 					<HorizontalPanelResizer onResize={resizeHistoryPane} />
 				{/if}
-				<div class="pending-wrap" class:history-hidden={!historyVisible}>
-					<div class="pending-pane-header">
-						<span class="pending-pane-title">Pending agent edits ({pendingRoundCount})</span>
-					</div>
+				<div
+					class="pending-wrap"
+					class:history-hidden={!historyVisible}
+					class:muted-veil={muted}
+					aria-hidden={muted}
+				>
 					<div class="pending-pane-body">
 					<OutlinePane
 						showOutline={false}
@@ -2433,21 +2534,12 @@
 		overflow: hidden;
 	}
 	.pending-wrap {
+		transition: opacity 240ms ease, filter 240ms ease;
 		flex: 1 1 auto;
 		min-height: 0;
 		overflow: hidden;
 		display: flex;
 		flex-direction: column;
-	}
-	.pending-pane-header {
-		padding: 12px 16px 10px;
-	}
-	.pending-pane-title {
-		font-size: 12px;
-		font-weight: 600;
-		color: var(--text-faint);
-		text-transform: uppercase;
-		letter-spacing: 0.05em;
 	}
 	.pending-pane-body {
 		flex: 1 1 auto;

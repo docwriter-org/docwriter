@@ -178,17 +178,26 @@ export async function acceptTabRounds(
 	return withLiveDoc(tabId, (ydoc) => {
 		const reviewArr = getReviewArray(ydoc);
 		const current = reviewArr.toArray();
-		let cutIdx: number;
+		// roundId omitted → batch-accept everything (kept oldest-first so
+		// each round applies against the previous round's output, the same
+		// order the agent generated them in).
+		// roundId given → accept ONLY that round, leave the rest pending.
+		// Rounds are independent unless their text overlaps; the stale
+		// check below will surface a 409 if accepting this one alone would
+		// leave it inapplicable (e.g. its old_string only existed after a
+		// prior pending round had landed).
+		let accepted: PendingReviewRound[];
+		let remaining: PendingReviewRound[];
 		if (!roundId) {
 			if (current.length === 0) return { acceptedCount: 0, rounds: [], yjsUpdate: null };
-			cutIdx = current.length;
+			accepted = current;
+			remaining = [];
 		} else {
 			const idx = current.findIndex((r) => r.id === roundId);
 			if (idx < 0) return { acceptedCount: 0, rounds: current, yjsUpdate: null };
-			cutIdx = idx + 1;
+			accepted = [current[idx]];
+			remaining = current.slice(0, idx).concat(current.slice(idx + 1));
 		}
-		const accepted = current.slice(0, cutIdx);
-		const remaining = current.slice(cutIdx);
 
 		// Stale check first: walk the ops as a string transform to verify each
 		// round can still apply. Only after every round passes do we commit
@@ -264,7 +273,17 @@ export async function acceptTabRounds(
 					throw err;
 				}
 			}
-			reviewArr.delete(0, cutIdx);
+			// Remove the accepted rounds in reverse order so each delete's
+			// index stays valid. With single-round accept this loop runs once;
+			// with batch accept it walks all rounds.
+			const acceptedIds = new Set(accepted.map((r) => r.id));
+			const indices: number[] = [];
+			reviewArr.toArray().forEach((r, i) => {
+				if (acceptedIds.has(r.id)) indices.push(i);
+			});
+			for (let i = indices.length - 1; i >= 0; i--) {
+				reviewArr.delete(indices[i], 1);
+			}
 		}, USER_ORIGIN);
 
 		// Encode the exact Yjs delta so the client can apply it immediately

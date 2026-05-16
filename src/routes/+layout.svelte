@@ -32,4 +32,63 @@
 	:global(.dw-tooltip.visible) {
 		opacity: 1;
 	}
+
+	/* Shared button shells for modal/dialog footers. Defined globally so
+	 * AgentModal, Dialog, and any future dialog stay visually identical
+	 * without each component redefining the styles. Component-local
+	 * variants (e.g. OutlinePane's btn-accept/btn-reject) keep their own
+	 * styling on purpose because they encode action semantics. */
+	:global(.btn-primary),
+	:global(.btn-secondary) {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		padding: 6px 14px;
+		font-family: inherit;
+		font-size: 12.5px;
+		font-weight: 500;
+		border-radius: 5px;
+		cursor: pointer;
+	}
+	:global(.btn-primary) {
+		background: var(--accent);
+		color: white;
+		border: 1px solid var(--accent);
+	}
+	:global(.btn-primary:hover) {
+		filter: brightness(0.94);
+	}
+	:global(.btn-primary:disabled) {
+		opacity: 0.4;
+		cursor: default;
+	}
+	:global(.btn-primary.danger) {
+		background: #c53030;
+		border-color: #c53030;
+	}
+	:global(.btn-primary.danger:hover) {
+		filter: brightness(0.94);
+	}
+	:global(.btn-secondary) {
+		background: var(--bg-surface);
+		color: var(--text);
+		border: 1px solid var(--border-light);
+	}
+	:global(.btn-secondary:hover) {
+		background: var(--bg);
+	}
+
+	/* Veil applied to right-pane content (history entries + pending
+	 * review cards) when the agent is muted. Heavy fade + blur + no
+	 * pointer events, so the user really cannot follow what the agent
+	 * is doing until they unmute. The agent dock at the top of the
+	 * pane stays unaffected so the user always has access to the
+	 * Bell / Send / Restart controls. */
+	:global(.muted-veil) {
+		opacity: 0.18;
+		filter: blur(3px);
+		pointer-events: none;
+		user-select: none;
+		transition: opacity 240ms ease, filter 240ms ease;
+	}
 </style>

@@ -289,4 +289,10 @@ export type HistoryEntry =
 export interface AgentSettings {
 	agency: 'conservative' | 'balanced' | 'aggressive';
 	trackChanges: boolean;
+	/** When true, agent edits still land in the pending-review array, but the
+	 * editor's inline diff overlay stays hidden until the user clicks a
+	 * pending card — at which point only that round's decorations render.
+	 * Lets you keep writing without the green/red overlay competing for
+	 * attention while the agent works in the background. */
+	muted: boolean;
 }

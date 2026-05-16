@@ -124,7 +124,7 @@
 		bind:this={textareaEl}
 		bind:value={message}
 		onkeydown={onKeyDown}
-		placeholder={`Ask the agent anything, e.g.\n• "Add a hook that runs pdflatex after every Edit"\n• "Tighten the first paragraph of every open file"\n• "Create outline.md and fill it from document.md"`}
+		placeholder="Message the agent…"
 		rows="5"
 	></textarea>
 
@@ -231,8 +231,6 @@
 	}
 	textarea::placeholder {
 		color: var(--text-faint);
-		font-size: 12px;
-		line-height: 1.5;
 	}
 	.image-chips {
 		display: flex;

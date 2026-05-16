@@ -1,7 +1,9 @@
 <script lang="ts">
-	import { fly } from 'svelte/transition';
+	import { fly, fade } from 'svelte/transition';
+	import { flip } from 'svelte/animate';
 	import { cubicOut } from 'svelte/easing';
-	import { FileEdit, User, Bot, Play, CheckCircle, XCircle, Eye, Terminal, Maximize2, X, RotateCcw, ScrollText, Cat } from 'lucide-svelte';
+	import { marked } from 'marked';
+	import { FileEdit, User, Bot, Play, CheckCircle, XCircle, Eye, Terminal, Maximize2, X, RotateCcw, MessagesSquare, Cat, Sparkles, BellOff, Bell } from 'lucide-svelte';
 	import type { HistoryEntry, Annotation } from '$lib/types';
 	import { agentHistory, annotations, isRendering, historyVerbosity, sessionCost, agentSettings, pendingReviewRounds, submitCountdown, type SessionCost } from '$lib/stores';
 	import type { HistoryVerbosity } from '$lib/stores';
@@ -16,10 +18,14 @@
 		onNewSession?: () => void | Promise<void>;
 		onWakeUp?: () => void;
 		onCancel?: () => void;
+		/** Toggle the agent's "muted" mode: when on, agent edits still land
+		 * in the pending-review array but the editor's inline diff overlay
+		 * stays hidden until the user clicks a pending card. */
+		onToggleMuted?: () => void;
 		/** Optional slot for the remaining action buttons (Send, etc.). */
 		dock?: Snippet;
 	}
-	let { onNewSession, onWakeUp, onCancel, dock }: Props = $props();
+	let { onNewSession, onWakeUp, onCancel, onToggleMuted, dock }: Props = $props();
 
 	let pendingCount = $state(0);
 	pendingReviewRounds.subscribe((v) => (pendingCount = v.length));
@@ -47,7 +53,11 @@
 	let countdown = $state(0);
 	submitCountdown.subscribe((v) => (countdown = v));
 	let silent = $state(false);
-	agentSettings.subscribe((v) => (silent = !v.trackChanges));
+	let muted = $state(false);
+	agentSettings.subscribe((v) => {
+		silent = !v.trackChanges;
+		muted = v.muted;
+	});
 
 	/** Tooltip for the Agent pill. Always describes what the button does;
 	 * folds in cost / token breakdown when the session has run at least
@@ -205,6 +215,19 @@
 			.replace(/\n/g, '<br>');
 	}
 
+	marked.setOptions({ gfm: true, breaks: true, async: false });
+	function escapeHtml(s: string): string {
+		return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+	}
+	function renderRichMarkdown(text: string): string {
+		if (!text) return '';
+		try {
+			return marked.parse(text) as string;
+		} catch {
+			return `<p>${escapeHtml(text).replace(/\n/g, '<br>')}</p>`;
+		}
+	}
+
 	function formatDuration(ms?: number): string {
 		if (!ms) return '';
 		if (ms < 1000) return `${ms}ms`;
@@ -291,13 +314,30 @@
 		</ShineBorder>
 		{#if dock}
 			<div class="header-actions">
+				{#if onToggleMuted}
+					<button
+						class="header-pill-btn icon-only"
+						class:muted-on={muted}
+						onclick={onToggleMuted}
+						aria-pressed={muted}
+						use:tooltip={muted
+							? 'Unmute the agent. Pending edits will show inline in the editor again.'
+							: 'Mute the agent. Pending edits still appear as cards in the outline, but the green/red diff overlay stays hidden until you click a card.'}
+					>
+						{#if muted}
+							<BellOff size={12} />
+						{:else}
+							<Bell size={12} />
+						{/if}
+					</button>
+				{/if}
 				<button
-					class="header-pill-btn"
+					class="header-pill-btn icon-only"
 					onclick={() => (transcriptOpen = true)}
+					aria-label="Transcript"
 					use:tooltip={'Open the session transcript. Shows every user message, Claude response, tool call, and result in this session, with filters and search.'}
 				>
-					<ScrollText size={12} />
-					<span>Transcript</span>
+					<MessagesSquare size={12} />
 				</button>
 				{@render dock()}
 				<button
@@ -312,7 +352,7 @@
 		{/if}
 	</div>
 
-	<div class="entries">
+	<div class="entries" class:muted-veil={muted} aria-hidden={muted}>
 		{#if pinnedTurn}
 			<div class="pinned-turn-card">
 				<div
@@ -338,12 +378,11 @@
 		{#if displayed.length === 0}
 			<div class="empty">No activity yet. Wake up the agent to see what it does.</div>
 		{/if}
-		{#each displayed as entry, idx (entry.timestamp + '-' + idx)}
-			{@const depth = Math.min(idx, 6)}
+		{#each displayed as entry, idx (((entry as { _key?: number })._key) ?? `${entry.timestamp}-${idx}`)}
 			<div
 				class="entry-slot"
-				style:--depth={depth}
-				in:fly={{ y: -8, duration: 220, easing: cubicOut }}
+				in:fly|local={{ y: -4, duration: 180, easing: cubicOut }}
+				animate:flip={{ duration: 220, easing: cubicOut }}
 			>
 			{#if entry.type === 'user_action'}
 				{#if entry.tabDiffs && Object.keys(entry.tabDiffs).length > 0}
@@ -558,23 +597,37 @@
 <svelte:window onkeydown={onExpandedKeydown} />
 
 {#if expanded}
-	<div class="expand-backdrop" onclick={closeExpanded} role="presentation">
+	<div
+		class="expand-backdrop"
+		onclick={closeExpanded}
+		role="presentation"
+		transition:fade={{ duration: 140 }}
+	>
 		<div
 			class="expand-modal"
+			class:thinking={expanded.title === 'Agent thinking'}
 			onclick={(e) => e.stopPropagation()}
 			onkeydown={(e) => e.stopPropagation()}
 			role="dialog"
 			aria-modal="true"
 			tabindex="-1"
+			transition:fly={{ y: 16, duration: 220, easing: cubicOut }}
 		>
 			<div class="expand-header">
+				{#if expanded.title === 'Agent thinking'}
+					<Bot size={14} />
+				{:else}
+					<Sparkles size={14} />
+				{/if}
 				<span class="expand-title">{expanded.title}</span>
 				<span class="expand-time">{relativeTime(expanded.timestamp)}</span>
 				<button class="expand-close" onclick={closeExpanded} aria-label="Close">
 					<X size={14} />
 				</button>
 			</div>
-			<div class="expand-body">{@html renderMarkdown(expanded.text)}</div>
+			<div class="expand-body">
+				<div class="expand-body-inner">{@html renderRichMarkdown(expanded.text)}</div>
+			</div>
 		</div>
 	</div>
 {/if}
@@ -754,12 +807,22 @@
 		cursor: default;
 		opacity: 0.6;
 	}
+	.pane-header :global(.header-pill-btn.icon-only) {
+		padding: 0 7px;
+		gap: 0;
+	}
+	.pane-header :global(.header-pill-btn.muted-on) {
+		color: var(--accent);
+		background: var(--accent-bg);
+		border-color: var(--accent-light);
+	}
 
 	/* Entries */
 	.entries {
 		flex: 1;
 		overflow-y: auto;
 		padding: 6px 8px;
+		transition: opacity 240ms ease, filter 240ms ease;
 	}
 	.pinned-turn-card {
 		padding: 9px 10px;
@@ -822,40 +885,54 @@
 	.expand-backdrop {
 		position: fixed;
 		inset: 0;
-		background: rgba(15, 15, 20, 0.32);
-		backdrop-filter: blur(3px);
+		background: rgba(15, 15, 20, 0.28);
+		backdrop-filter: blur(2px);
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		padding: 32px;
+		padding: 16px;
 		z-index: 220;
 	}
 	.expand-modal {
 		background: var(--bg-elevated);
 		border: 1px solid var(--border-light);
-		border-radius: 10px;
-		box-shadow: 0 24px 60px rgba(0, 0, 0, 0.25);
-		width: min(760px, 100%);
-		max-height: 85vh;
+		border-radius: 12px;
+		box-shadow: 0 28px 72px rgba(0, 0, 0, 0.22), 0 8px 20px rgba(0, 0, 0, 0.08);
+		width: min(1120px, calc(100vw - 24px));
+		max-height: min(92vh, 960px);
 		display: flex;
 		flex-direction: column;
+		font-family: 'Inter', -apple-system, sans-serif;
+		color: var(--text);
 	}
 	.expand-header {
 		display: flex;
 		align-items: center;
-		gap: 10px;
-		padding: 12px 16px;
+		gap: 8px;
+		padding: 12px 24px;
 		border-bottom: 1px solid var(--border-light);
+		background: linear-gradient(180deg, var(--accent-bg) 0%, var(--bg-elevated) 72%);
 		font-size: 12px;
+		font-weight: 600;
+		color: var(--text-faint);
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+	}
+	.expand-modal.thinking .expand-header {
+		background: linear-gradient(180deg, color-mix(in srgb, #6366f1 14%, transparent) 0%, var(--bg-elevated) 72%);
 	}
 	.expand-title {
 		flex: 1;
-		font-weight: 600;
-		font-size: 13px;
-		color: var(--text);
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 	.expand-time {
 		font-size: 11px;
+		font-weight: 500;
+		text-transform: none;
+		letter-spacing: 0;
 		color: var(--text-faint);
 		font-variant-numeric: tabular-nums;
 	}
@@ -863,8 +940,8 @@
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
-		width: 26px;
-		height: 26px;
+		width: 24px;
+		height: 24px;
 		border-radius: 5px;
 		border: none;
 		background: transparent;
@@ -876,31 +953,167 @@
 		color: var(--text);
 	}
 	.expand-body {
-		padding: 18px 22px;
+		flex: 1;
+		min-height: 0;
 		overflow-y: auto;
+		background: var(--prose-bg);
+		border-top: 1px solid var(--border-light);
+	}
+	.expand-body-inner {
+		counter-reset: expand-ol-item;
+		padding: 22px 28px 24px;
+		max-width: 100%;
+		box-sizing: border-box;
+		font-family: 'Lora', Georgia, 'Times New Roman', serif;
+		font-size: 15px;
+		line-height: 1.55;
+		color: var(--prose-text);
+	}
+	.expand-modal.thinking .expand-body-inner {
+		font-style: italic;
+		color: var(--text-secondary);
+	}
+	.expand-body-inner :global(h1),
+	.expand-body-inner :global(h2),
+	.expand-body-inner :global(h3) {
+		font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+		font-size: 11px;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
+		color: var(--text-faint);
+		margin: 18px 0 6px;
+	}
+	.expand-body-inner :global(h1:first-child),
+	.expand-body-inner :global(h2:first-child),
+	.expand-body-inner :global(h3:first-child) {
+		margin-top: 0;
+	}
+	.expand-body-inner :global(h4),
+	.expand-body-inner :global(h5),
+	.expand-body-inner :global(h6) {
+		font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
 		font-size: 14px;
-		line-height: 1.65;
+		font-weight: 600;
+		letter-spacing: -0.02em;
+		color: var(--prose-text);
+		margin: 14px 0 5px;
+	}
+	.expand-body-inner :global(p) {
+		margin: 0 0 9px;
+	}
+	.expand-body-inner :global(p:last-child) {
+		margin-bottom: 0;
+	}
+	.expand-body-inner :global(strong) {
+		font-weight: 600;
+		color: var(--prose-text);
+	}
+	.expand-body-inner :global(em) {
+		font-style: italic;
+	}
+	.expand-body-inner :global(ul),
+	.expand-body-inner :global(ol) {
+		margin: 0 0 12px;
+		padding-left: 1.25em;
+	}
+	.expand-body-inner :global(ul:last-child),
+	.expand-body-inner :global(ol:last-child) {
+		margin-bottom: 0;
+	}
+	.expand-body-inner :global(li) {
+		margin: 3px 0;
+		padding-left: 2px;
+	}
+	.expand-body-inner :global(ol) {
+		list-style: none;
+		padding-left: 0;
+	}
+	.expand-body-inner :global(ol > li) {
+		position: relative;
+		padding-left: 1.55em;
+		counter-increment: expand-ol-item;
+	}
+	.expand-body-inner :global(ol > li::before) {
+		content: counter(expand-ol-item) '.';
+		position: absolute;
+		left: 0;
+		width: 1.3em;
+		text-align: right;
+		font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+		font-size: 13px;
+		font-weight: 600;
+		color: var(--accent-subject);
+		top: 0.05em;
+	}
+	.expand-body-inner :global(ul > li::marker) {
+		color: var(--accent-subject);
+		font-weight: 600;
+		font-size: 0.8em;
+	}
+	.expand-body-inner :global(code) {
+		font-family: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+		font-size: 0.84em;
+		padding: 2px 6px;
+		border-radius: 4px;
+		color: var(--text-secondary);
+		background: var(--accent-bg);
+		border: 1px solid var(--border-light);
+		vertical-align: 0.04em;
+	}
+	.expand-body-inner :global(pre) {
+		margin: 10px 0 14px;
+		padding: 12px 14px;
+		background: var(--bg-elevated);
+		border: 1px solid var(--border-light);
+		border-radius: 8px;
+		overflow-x: auto;
+		font-family: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+		font-size: 12.5px;
+		line-height: 1.55;
 		color: var(--text);
 	}
-	.expand-body :global(p) { margin: 0 0 12px; }
-	.expand-body :global(p:last-child) { margin-bottom: 0; }
-	.expand-body :global(strong) { color: var(--text); }
-	.expand-body :global(code) {
-		font-family: 'SF Mono', Menlo, monospace;
-		font-size: 12.5px;
-		padding: 1px 5px;
+	.expand-body-inner :global(pre code) {
+		background: transparent;
+		border: none;
+		padding: 0;
+		font-size: inherit;
+		color: inherit;
+		vertical-align: baseline;
+	}
+	.expand-body-inner :global(blockquote) {
+		margin: 8px 0;
+		padding: 4px 12px;
+		border-left: 3px solid var(--accent-light);
+		color: var(--text-secondary);
+		background: color-mix(in srgb, var(--accent) 4%, transparent);
+		border-radius: 0 4px 4px 0;
+	}
+	.expand-body-inner :global(a) {
+		color: var(--accent);
+		text-decoration: underline;
+		text-underline-offset: 2px;
+	}
+	.expand-body-inner :global(hr) {
+		border: none;
+		border-top: 1px solid var(--border-light);
+		margin: 14px 0;
+	}
+	.expand-body-inner :global(table) {
+		border-collapse: collapse;
+		margin: 10px 0;
+		font-family: 'Inter', -apple-system, sans-serif;
+		font-size: 13px;
+	}
+	.expand-body-inner :global(th),
+	.expand-body-inner :global(td) {
+		padding: 6px 10px;
+		border: 1px solid var(--border-light);
+		text-align: left;
+	}
+	.expand-body-inner :global(th) {
 		background: var(--bg-surface);
-		border-radius: 4px;
-	}
-	.expand-body :global(.md-bullet) {
-		display: block;
-		margin: 4px 0 4px 18px;
-		text-indent: -14px;
-		padding-left: 14px;
-	}
-	.expand-body :global(.md-bullet::before) {
-		content: "•  ";
-		color: var(--text-faint);
+		font-weight: 600;
 	}
 	.empty {
 		font-size: 13px;
@@ -976,24 +1189,15 @@
 		font-size: 11px;
 	}
 	.entry-slot {
-		/* Wrapper for the fly transition — gives each history row its own
-		 * transition context without interfering with the entry's layout.
-		 *
-		 * MagicUI animated-list treatment: newest entry (depth 0) is full
-		 * emphasis; older entries fade and shrink progressively. Capped at
-		 * depth 6 so the stack stays readable instead of disappearing. */
+		/* Wrapper for the fly transition + flip animation. Just stacks
+		 * the entries with consistent spacing. The previous version
+		 * varied opacity/scale by stack depth and triggered a transition
+		 * on every depth change — combined with a per-entry fly-in that
+		 * was firing for every entry on every update (because the each
+		 * key included idx), the pane felt chaotic. Both are gone now;
+		 * `in:fly|local` handles entry, `animate:flip` handles smooth
+		 * repositioning when older entries shift down. */
 		margin-bottom: 4px;
-		opacity: calc(1 - var(--depth, 0) * 0.11);
-		transform: scale(calc(1 - var(--depth, 0) * 0.018));
-		transform-origin: center top;
-		transition: opacity 0.25s ease, transform 0.25s ease;
-	}
-	/* Let hover/focus temporarily restore full emphasis so older entries
-	 * stay readable when you interact with them. */
-	.entry-slot:hover,
-	.entry-slot:focus-within {
-		opacity: 1;
-		transform: none;
 	}
 	.entry-time {
 		margin-left: 8px;

@@ -30,6 +30,7 @@ export interface Rule {
 export interface AgentSettings {
 	agency: 'conservative' | 'balanced' | 'aggressive';
 	trackChanges: boolean;
+	muted: boolean;
 }
 
 // Default soft-wrap on so long lines (e.g. a paragraph with inline [[ agent ]]
@@ -48,7 +49,8 @@ const DEFAULT_TABS: TabsState = { order: [], active: null };
 
 const DEFAULT_AGENT_SETTINGS: AgentSettings = {
 	agency: 'conservative',
-	trackChanges: true
+	trackChanges: true,
+	muted: false
 };
 
 /** A process-unique UUID generated once in `hooks.server.ts`. Clients read

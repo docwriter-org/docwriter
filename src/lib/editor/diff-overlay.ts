@@ -1,6 +1,6 @@
 import { Editor, Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
-import { Decoration, DecorationSet } from '@tiptap/pm/view';
+import { Decoration, DecorationSet, type EditorView } from '@tiptap/pm/view';
 import { diffLines, diffWords } from 'diff';
 import type { Annotation } from '$lib/types';
 import { buildReviewDiffPreview, normalizeReviewText } from '$lib/review-diff';
@@ -66,6 +66,12 @@ export interface DiffState {
 	 * softer ghost-text style for inline additions so a single typo fix
 	 * doesn't look like a paragraph rewrite. */
 	allRoundsTiny?: boolean;
+	/** Block ids whose proposed (green) lines are currently expanded.
+	 * Default state hides the proposed lines so the doc length stays
+	 * neutral while the user is typing elsewhere; the user clicks the
+	 * "Show suggestion" pill at the end of each strikethrough block to
+	 * reveal the proposed replacement. */
+	expandedBlocks?: Set<string>;
 }
 
 const diffKey = new PluginKey<DiffState>('diffOverlay');
@@ -75,28 +81,181 @@ const diffKey = new PluginKey<DiffState>('diffOverlay');
 	annotations: [],
 	activeFeedbackRange: null,
 	isPlainText: false,
-	allRoundsTiny: false
+	allRoundsTiny: false,
+	expandedBlocks: new Set<string>()
 };
 
 export function setDiffState(editor: Editor, state: DiffState) {
 	editor.view.dispatch(editor.state.tr.setMeta(diffKey, state));
 }
 
+/** Toggle whether a single diff block's proposed lines are visible.
+ * Block ids are derived from the block's baseline line index (see the
+ * decoration loop below); they're stable as long as the diff structure
+ * is unchanged, and reset implicitly when a fresh diff arrives. */
+function toggleDiffBlock(view: EditorView, blockId: string) {
+	const current = diffKey.getState(view.state);
+	if (!current) return;
+	const next = new Set(current.expandedBlocks ?? []);
+	if (next.has(blockId)) next.delete(blockId);
+	else next.add(blockId);
+	view.dispatch(
+		view.state.tr.setMeta(diffKey, { expandedBlocks: next })
+	);
+}
+
+/** Selectors that mark a DOM node as part of the diff overlay — clicks
+ * on these should redirect to the nearest real (un-struck, non-widget)
+ * paragraph so the user can actually type. */
+const DIFF_NODE_SELECTOR =
+	'.diff-added-line, .diff-removed-line, .diff-added, .diff-removed-widget';
+
+function isDiffNode(el: Element | null): boolean {
+	return !!el?.matches?.(DIFF_NODE_SELECTOR);
+}
+
+/** Walk siblings of `start` in `direction` until reaching a non-diff
+ * element (a real paragraph the user can type into). Returns null if we
+ * fall off either end without finding one. */
+function findRealSibling(
+	start: Element,
+	direction: 'next' | 'prev'
+): HTMLElement | null {
+	let cur = direction === 'next' ? start.nextElementSibling : start.previousElementSibling;
+	while (cur && isDiffNode(cur)) {
+		cur = direction === 'next' ? cur.nextElementSibling : cur.previousElementSibling;
+	}
+	return cur instanceof HTMLElement ? cur : null;
+}
+
+/** Move the caret to `pos` and focus the editor.
+ *
+ * Tiptap's `editor.commands.focus(pos)` chains the focus + selection
+ * change as a single command. That's the only path I've found that
+ * survives the focus race with the browser's native mousedown handling
+ * on a `contenteditable=false` widget. Raw `view.dispatch` +
+ * `view.focus()` keeps losing the selection because the browser fires a
+ * post-mousedown selectionchange that PM's domObserver picks up and
+ * clobbers the dispatched selection.
+ *
+ * The handler is wrapped in setTimeout(0) so the focus command runs
+ * AFTER the click event has fully unwound, putting our selection in the
+ * last word edge-wise. */
+function applyCaret(editor: Editor, pos: number): boolean {
+	const docSize = editor.state.doc.content.size;
+	const clampedPos = Math.max(0, Math.min(pos, docSize));
+	setTimeout(() => {
+		try {
+			editor.commands.focus(clampedPos);
+		} catch {
+			editor.commands.focus();
+		}
+	}, 0);
+	return true;
+}
+
+/** Handle a click on a diff overlay node (green proposal, red
+ * strikethrough paragraph, or removal widget). Redirects the caret to
+ * the start of the next real paragraph, or the end of the previous one
+ * if there is no real paragraph below. The struck-out paragraphs are
+ * read-only by intent — the user said they don't want to type into a
+ * line that's about to be deleted. The proposed (green) lines are
+ * widgets, not real doc content, so we have to manually find a real
+ * caret target.
+ *
+ * We use `view.posAtDOM` to translate the DOM node's start/end into a
+ * doc position; this is more reliable than `posAtCoords` over a
+ * `contenteditable=false` widget surface, which often returns null. */
+function redirectCaretAroundDiff(
+	editor: Editor,
+	view: EditorView,
+	anchor: HTMLElement
+): boolean {
+	const next = findRealSibling(anchor, 'next');
+	if (next) {
+		try {
+			const pos = view.posAtDOM(next, 0);
+			if (typeof pos === 'number' && pos >= 0) {
+				return applyCaret(editor, pos);
+			}
+		} catch {
+			/* fall through to prev */
+		}
+	}
+	const prev = findRealSibling(anchor, 'prev');
+	if (prev) {
+		try {
+			const pos = view.posAtDOM(prev, prev.childNodes.length);
+			if (typeof pos === 'number' && pos >= 0) {
+				return applyCaret(editor, pos);
+			}
+		} catch {
+			/* fall through */
+		}
+	}
+	return false;
+}
+
+/** Plugin-level click router. Runs before PM's default mousedown logic.
+ *
+ * - Click landed on a real paragraph (not part of any diff): return false
+ *   so PM places the caret naturally.
+ * - Click landed on a diff overlay node (green proposal widget OR
+ *   strikethrough paragraph OR removal widget): hijack the click and
+ *   redirect the caret around the diff block to the nearest typable
+ *   paragraph.
+ *
+ * Why a plugin handler and not a per-widget DOM listener: Tiptap's
+ * Collaboration + y-prosemirror layers can swallow listeners attached
+ * to widget DOM nodes when the decoration set rebuilds; the plugin
+ * handler always has the live view and runs through PM's standard
+ * event pipeline. */
+function placeCaretFromClick(
+	editor: Editor,
+	view: EditorView,
+	event: MouseEvent
+): boolean {
+	const target = event.target as Element | null;
+	if (!target) return false;
+	const anchor = target.closest(DIFF_NODE_SELECTOR) as HTMLElement | null;
+	if (!anchor) return false;
+	event.preventDefault();
+	if (redirectCaretAroundDiff(editor, view, anchor)) return true;
+	const rect = anchor.getBoundingClientRect();
+	const probe =
+		view.posAtCoords({ left: event.clientX, top: rect.bottom + 1 }) ??
+		view.posAtCoords({ left: event.clientX, top: rect.top - 1 });
+	if (probe) return applyCaret(editor, probe.pos);
+	setTimeout(() => editor.commands.focus(), 0);
+	return true;
+}
+
 export const DiffOverlay = Extension.create({
 	name: 'diffOverlay',
 
 	addProseMirrorPlugins() {
+		const editor = this.editor;
 		return [
 			new Plugin({
 				key: diffKey,
 				state: {
 					init: () => ({ ...INITIAL_STATE }),
 					apply: (tr, prev) => {
-						const next = tr.getMeta(diffKey);
-						return next !== undefined ? next : prev;
+						const meta = tr.getMeta(diffKey) as Partial<DiffState> | undefined;
+						if (meta === undefined) return prev;
+						// Merge so partial updates (e.g. toggling expandedBlocks)
+						// don't wipe baseline / proposedText / etc.
+						return { ...prev, ...meta };
 					}
 				},
 				props: {
+					handleDOMEvents: {
+						mousedown(view, event) {
+							const target = event.target as Element | null;
+							if (!target?.closest(DIFF_NODE_SELECTOR)) return false;
+							return placeCaretFromClick(editor, view, event);
+						}
+					},
 					decorations(state) {
 						const {
 							baseline,
@@ -104,7 +263,8 @@ export const DiffOverlay = Extension.create({
 							annotations = [],
 							activeFeedbackRange,
 							isPlainText,
-							allRoundsTiny
+							allRoundsTiny,
+							expandedBlocks = new Set<string>()
 						} = diffKey.getState(state) ?? INITIAL_STATE;
 						const addedClass = allRoundsTiny ? 'diff-added diff-added-tiny' : 'diff-added';
 						const removedWidgetClass = allRoundsTiny
@@ -151,45 +311,148 @@ export const DiffOverlay = Extension.create({
 										normalizeReviewText(proposedText),
 										diffLines
 									);
+									// Group consecutive non-context parts into "blocks".
+									// Each block is one strikethrough section + its
+									// proposed replacement. Default UX: only the
+									// strikethrough renders; a "Show suggestion" pill at
+									// the end of the block reveals the green lines on
+									// click. This keeps the doc visually length-neutral
+									// while the user types elsewhere.
+									interface DiffBlock {
+										id: string;
+										insertionPos: number;
+										removedParagraphIdxs: number[];
+										addedLines: string[];
+									}
+									const blocks: DiffBlock[] = [];
 									let baselineLineIdx = 0;
+									let currentBlock: DiffBlock | null = null;
+									function ensureBlock(): DiffBlock {
+										if (currentBlock) return currentBlock;
+										currentBlock = {
+											id: `block:${baselineLineIdx}`,
+											insertionPos: 0,
+											removedParagraphIdxs: [],
+											addedLines: []
+										};
+										return currentBlock;
+									}
+									function flushBlock() {
+										if (!currentBlock) return;
+										currentBlock.insertionPos = resolveParagraphWidgetPos(
+											state.doc.content.size,
+											paragraphs,
+											baselineLineIdx
+										);
+										blocks.push(currentBlock);
+										currentBlock = null;
+									}
 									for (const part of lineParts) {
 										const lines = splitLogicalLines(part.value);
 										if (part.added) {
-											const widgetPos = resolveParagraphWidgetPos(state.doc.content.size, paragraphs, baselineLineIdx);
-											for (const line of lines) {
-												decorations.push(
-													Decoration.widget(
-														widgetPos,
-														() => {
-															const block = document.createElement('div');
-															block.className = allRoundsTiny
-																? 'diff-added-line diff-added-line-tiny'
-																: 'diff-added-line';
-															block.textContent = line || ' ';
-															block.setAttribute('contenteditable', 'false');
-															return block;
-														},
-														{ side: -1 }
-													)
-												);
-											}
+											const block = ensureBlock();
+											for (const line of lines) block.addedLines.push(line);
 											continue;
 										}
 										if (part.removed) {
+											const block = ensureBlock();
 											for (const _line of lines) {
-												const paragraph = paragraphs[baselineLineIdx];
-												if (paragraph) {
-													decorations.push(
-														Decoration.node(paragraph.pos, paragraph.pos + paragraph.nodeSize, {
-															class: 'diff-removed-line'
-														})
-													);
-												}
+												block.removedParagraphIdxs.push(baselineLineIdx);
 												baselineLineIdx += 1;
 											}
 											continue;
 										}
+										flushBlock();
 										baselineLineIdx += lines.length;
+									}
+									flushBlock();
+
+									for (const block of blocks) {
+										const expanded = expandedBlocks.has(block.id);
+										// Red strikethrough on the paragraphs slated for
+										// removal — always rendered, since they're real
+										// document content.
+										for (const idx of block.removedParagraphIdxs) {
+											const paragraph = paragraphs[idx];
+											if (paragraph) {
+												decorations.push(
+													Decoration.node(
+														paragraph.pos,
+														paragraph.pos + paragraph.nodeSize,
+														{ class: 'diff-removed-line' }
+													)
+												);
+											}
+										}
+										// Proposed (green) lines: only when expanded.
+										if (expanded && block.addedLines.length > 0) {
+											const className = allRoundsTiny
+												? 'diff-added-line diff-added-line-tiny'
+												: 'diff-added-line';
+											for (const line of block.addedLines) {
+												decorations.push(
+													Decoration.widget(
+														block.insertionPos,
+														(view, getPos) =>
+															createAddedLineWidget(view, getPos, line, className),
+														{
+															side: -1,
+															ignoreSelection: true,
+															key: `addline:${block.id}:${line}`
+														}
+													)
+												);
+											}
+										}
+										// Toggle pill — only when there's a proposed
+										// replacement. We anchor it INSIDE the last
+										// removed paragraph (at the position right
+										// before its close token) so the pill becomes
+										// an inline child of that paragraph; CSS then
+										// pins it to the right margin without taking
+										// any vertical layout space, leaving the
+										// surrounding text flow untouched.
+										//
+										// A pure insertion (no removed lines, just
+										// proposed adds) has no host paragraph; for
+										// that case we fall back to the block-level
+										// `insertionPos` so the pill at least stays
+										// visible.
+										if (block.addedLines.length > 0) {
+											const addedCount = block.addedLines.length;
+											const lastRemovedIdx =
+												block.removedParagraphIdxs.length > 0
+													? block.removedParagraphIdxs[
+															block.removedParagraphIdxs.length - 1
+													  ]
+													: -1;
+											const hostParagraph =
+												lastRemovedIdx >= 0
+													? paragraphs[lastRemovedIdx]
+													: null;
+											const pillPos = hostParagraph
+												? hostParagraph.pos + hostParagraph.nodeSize - 1
+												: block.insertionPos;
+											const pillSide = hostParagraph ? 1 : -1;
+											decorations.push(
+												Decoration.widget(
+													pillPos,
+													(view) =>
+														createDiffTogglePill(
+															view,
+															block.id,
+															addedCount,
+															expanded,
+															hostParagraph !== null
+														),
+													{
+														side: pillSide,
+														ignoreSelection: true,
+														key: `pill:${block.id}:${expanded}`
+													}
+												)
+											);
+										}
 									}
 								} else if (proposedText !== null && proposedText !== undefined) {
 									let baselineIdx = 0;
@@ -208,7 +471,7 @@ export const DiffOverlay = Extension.create({
 															span.setAttribute('contenteditable', 'false');
 															return span;
 														},
-														{ side: -1 }
+														{ side: -1, key: `add:${editorPos}:${value}` }
 													)
 												);
 											}
@@ -251,7 +514,7 @@ export const DiffOverlay = Extension.create({
 															span.setAttribute('contenteditable', 'false');
 															return span;
 														},
-														{ side: -1 }
+														{ side: -1, key: `rem:${editorPos}:${value}` }
 													)
 												);
 											}
@@ -368,6 +631,90 @@ function resolveParagraphWidgetPos(
 ): number {
 	if (lineIdx < paragraphs.length) return paragraphs[lineIdx].pos;
 	return docEnd;
+}
+
+function createAddedLineWidget(
+	_view: EditorView,
+	_getPos: () => number | undefined,
+	line: string,
+	className: string
+): HTMLElement {
+	const block = document.createElement('div');
+	block.className = className;
+	block.textContent = line || ' ';
+	// `contenteditable=false` keeps PM from treating the widget DOM as
+	// document content. Click handling lives in the plugin's
+	// `handleDOMEvents.mousedown` so we don't need a per-widget listener
+	// (and so the closure stays out of the way of HMR / view re-mounts).
+	block.setAttribute('contenteditable', 'false');
+	return block;
+}
+
+/** Render the inline "Show suggestion (+N lines)" / "Hide suggestion"
+ * pill that toggles a diff block's proposed lines. We attach our own
+ * `mousedown` listener that calls `toggleDiffBlock` and stops further
+ * propagation so the plugin's general "click on diff" handler doesn't
+ * also try to redirect the caret. */
+function createDiffTogglePill(
+	view: EditorView,
+	blockId: string,
+	addedCount: number,
+	expanded: boolean,
+	inline: boolean
+): HTMLElement {
+	const wrapper = document.createElement(inline ? 'span' : 'div');
+	wrapper.className = inline
+		? 'diff-toggle-pill-wrap inline'
+		: 'diff-toggle-pill-wrap block';
+	wrapper.setAttribute('contenteditable', 'false');
+
+	const toggleBtn = document.createElement('button');
+	toggleBtn.type = 'button';
+	toggleBtn.className = expanded ? 'diff-toggle-pill expanded' : 'diff-toggle-pill';
+	toggleBtn.textContent = expanded ? 'Hide' : `Show (+${addedCount})`;
+	toggleBtn.title = expanded
+		? 'Hide proposed replacement'
+		: `Show proposed replacement (+${addedCount} line${addedCount === 1 ? '' : 's'})`;
+	toggleBtn.addEventListener('mousedown', (e) => {
+		e.preventDefault();
+		e.stopPropagation();
+		toggleDiffBlock(view, blockId);
+	});
+	toggleBtn.addEventListener('click', (e) => {
+		e.preventDefault();
+		e.stopPropagation();
+	});
+	wrapper.appendChild(toggleBtn);
+
+	// Inline Accept pill: lets the user accept the change without
+	// leaving their editing flow. The actual mutation lives in
+	// `+page.svelte`'s `acceptAgentEdit` (gated by Y.Doc transaction +
+	// review-state cleanup), so we just dispatch a bubbling custom event
+	// that the editor host listens for and forwards to the parent.
+	const acceptBtn = document.createElement('button');
+	acceptBtn.type = 'button';
+	acceptBtn.className = 'diff-accept-pill';
+	acceptBtn.title = 'Accept this proposed change';
+	acceptBtn.setAttribute('aria-label', 'Accept this proposed change');
+	acceptBtn.innerHTML = `
+		<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<polyline points="20 6 9 17 4 12"></polyline>
+		</svg>
+	`;
+	acceptBtn.addEventListener('mousedown', (e) => {
+		e.preventDefault();
+		e.stopPropagation();
+		wrapper.dispatchEvent(
+			new CustomEvent('docwriter:accept-pending-edit', { bubbles: true })
+		);
+	});
+	acceptBtn.addEventListener('click', (e) => {
+		e.preventDefault();
+		e.stopPropagation();
+	});
+	wrapper.appendChild(acceptBtn);
+
+	return wrapper;
 }
 
 /** Strip markdown syntax to plain text, matching node.textContent semantics. */

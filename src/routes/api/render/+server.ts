@@ -295,9 +295,10 @@ Use it WHEN:
 Do NOT use it WHEN:
 
 - The user asked for a concrete change ("too verbose", "fix this typo", "rewrite for clarity"). Call \`edit_doc\` directly.
+- The feedback is actionable enough to edit in \`[mode: auto]\` ("awk", "unclear", "too wordy", "tighten this", "make this land"). Call \`edit_doc\` and do not also call \`post_comment\`.
 - You're just narrating what you already edited. Review cards speak for themselves.
 
-Mode override: the user can attach an explicit routing hint to a feedback message — **[mode: auto|edit|discuss]**. When you see \`[mode: edit]\`, do NOT call \`post_comment\`; call \`edit_doc\`. When you see \`[mode: discuss]\`, do NOT call \`edit_doc\`; call \`post_comment\`. When you see \`[mode: auto]\` or no mode tag, use your judgment per the rules above.
+Mode override: the user can attach an explicit routing hint to a feedback message — **[mode: auto|edit|discuss]**. When you see \`[mode: edit]\`, do NOT call \`post_comment\`; call \`edit_doc\`. When you see \`[mode: discuss]\`, do NOT call \`edit_doc\`; call \`post_comment\`. When you see \`[mode: auto]\` or no mode tag, use your judgment per the rules above: if the feedback can be resolved with a concrete edit, edit only; if the user is asking for judgment or discussion, comment only. Do not combine \`edit_doc\` and \`post_comment\` for the same feedback unless the user explicitly asks for both.
 
 When commenting:
 
@@ -423,16 +424,12 @@ No tab content is inlined in the per-turn prompt — only diffs since your last 
 function renderCommentThreadsBlock(threads: CommentThread[]): string {
 	const open = threads.filter((t) => !t.resolved);
 	if (open.length === 0) return '';
-	const lines: string[] = ['', `**Open comment threads (${open.length}) — call \`list_threads("…path…")\` to read full conversations:**`];
+	const lines: string[] = ['', `Open threads (${open.length}):`];
 	for (const thread of open) {
 		const quote = thread.anchor.quote.replace(/\n+/g, ' ').slice(0, 100);
 		const ellipsis = thread.anchor.quote.length > 100 ? '…' : '';
 		lines.push(`- \`${thread.id}\` on "${quote}${ellipsis}"`);
 	}
-	lines.push(
-		'',
-		'When replying on a thread, call `post_comment` with the matching `thread_id`. Call `list_threads(path)` first to read the thread before replying.'
-	);
 	return '\n' + lines.join('\n');
 }
 
@@ -520,41 +517,38 @@ function buildMultiTabPrompt(
 			const isActive = tabId === activeTabId;
 			const hasLastSeen = lastSeenMd !== null;
 			const hasDiff = hasLastSeen && lastSeenMd !== currentMd;
-			const star = isActive ? '⭐ ' : '';
-			const activeNote = isActive ? ' (active — the user is currently looking at this one)' : '';
-			const header = `### ${star}\`${tabId}\`${activeNote}\n\nPath (use as \`path\` argument to edit_doc / write_doc / read_doc): \`${tabId}\``;
+			const activeNote = isActive ? ' [active]' : '';
+			const header = `### \`${tabId}\`${activeNote}\n\nPath: \`${tabId}\``;
 			const threadBlock = renderCommentThreadsBlock(commentThreads);
 
 			if (!hasLastSeen) {
-				return `${header}\n\nFirst time you're seeing this tab — call \`read_doc("${tabId}")\` to fetch its current content.${threadBlock}`;
+				return `${header}\n\nNew — call \`read_doc("${tabId}")\` to read it.${threadBlock}`;
 			}
 			if (hasDiff) {
-				return `${header}\n\n**User changes since your last edit:**\n\`\`\`diff\n${unifiedLineDiff(lastSeenMd as string, currentMd)}\n\`\`\`${threadBlock}`;
+				return `${header}\n\nChanges:\n\`\`\`diff\n${unifiedLineDiff(lastSeenMd as string, currentMd)}\n\`\`\`${threadBlock}`;
 			}
-			return `${header}\n\nUnchanged since your last edit.${threadBlock}`;
+			return `${header}\n\nUnchanged.${threadBlock}`;
 		})
 		.join('\n\n');
 
 	// Assemble the dynamic prompt: only the delta blocks + the user's message.
 	// Static guidance (refs usage, rules meta, agency definitions, read_doc
 	// reminder) lives in the system prompt and isn't re-sent here.
-	const sections: string[] = [`## Files (${tabs.length})\n\n${tabSections}`];
+	const sections: string[] = [`## Files\n\n${tabSections}`];
 
 	if (currentRefsJson !== priorRefsJson) {
 		const refsBlock = buildRefsBlock();
 		if (refsBlock) sections.push(refsBlock);
-		else sections.push('## Style references\n\nNo style references currently registered.');
 	}
 
 	const rulesDelta = buildRulesDelta(currentRuleTexts, priorRulesJson);
 	if (rulesDelta) sections.push(rulesDelta);
 
 	if (currentAgency !== priorAgency) {
-		sections.push(`## Agency\n\nCurrent setting: **${currentAgency}**.`);
+		sections.push(`Agency: ${currentAgency}`);
 	}
 
-	// User message goes LAST so the model's attention lands on the actual ask.
-	sections.push(`## What the user wants\n\n${userMessage}`);
+	sections.push(`## Request\n\n${userMessage}`);
 
 	// Persist the new snapshots for next turn's diff. Failures are swallowed —
 	// at worst the next turn sends a redundant full block.

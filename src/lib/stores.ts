@@ -152,6 +152,18 @@ export function trackActionUsage(actionLabel: string) {
 
 export const agentHistory = writable<HistoryEntry[]>([]);
 
+/** Monotonic counter used to give every history entry a stable per-row
+ * key. Without it the HistoryPane's `{#each}` keyed-block falls back to
+ * an index-based key and every entry gets torn down + replaced when a
+ * new one prepends, causing the whole pane to fly-in cascade on every
+ * tick. Exported so the few direct `agentHistory.update(...)` push
+ * sites in +page.svelte can stamp `_key` too. */
+let historyKeyCounter = 0;
+export function nextHistoryKey(): number {
+	historyKeyCounter += 1;
+	return historyKeyCounter;
+}
+
 /** Submissions waiting for the current render to finish. Updated by
  * `submit()` in +page.svelte; read by AgentDock so the dock can show a
  * queued-message badge during a render. */
@@ -229,7 +241,10 @@ export function pushHistory(entry: HistoryEntry) {
 		if (entry.type === 'render_end' && h.length > 0 && h[h.length - 1].type === 'render_end') {
 			return h;
 		}
-		return [...h, entry];
+		const stamped = (entry as HistoryEntry & { _key?: number })._key
+			? entry
+			: ({ ...entry, _key: nextHistoryKey() } as unknown as HistoryEntry);
+		return [...h, stamped];
 	});
 }
 
@@ -280,5 +295,12 @@ if (typeof window !== 'undefined') {
  * layer (SQLite-backed) whenever the user changes them via the settings UI. */
 export const agentSettings = writable<AgentSettings>({
 	agency: 'conservative',
-	trackChanges: true
+	trackChanges: true,
+	muted: false
 });
+
+/** When the agent is muted, the editor's diff overlay stays hidden by
+ * default. Clicking a pending-review card sets this id; the overlay then
+ * renders only that round's decorations. Cleared on accept/reject and
+ * tab switch. Null otherwise. Has no effect when muted is false. */
+export const expandedReviewRoundId = writable<string | null>(null);

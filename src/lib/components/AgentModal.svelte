@@ -307,7 +307,6 @@
 	}
 	.agent-modal--plan .modal-header {
 		padding: 12px 24px;
-		background: linear-gradient(180deg, var(--accent-bg) 0%, var(--bg-elevated) 72%);
 	}
 	.agent-modal--plan .modal-footer {
 		padding: 12px 24px;
@@ -318,6 +317,7 @@
 		gap: 6px;
 		padding: 12px 16px;
 		border-bottom: 1px solid var(--border-light);
+		background: linear-gradient(180deg, var(--accent-bg) 0%, var(--bg-elevated) 72%);
 		font-size: 12px;
 		font-weight: 600;
 		color: var(--text-faint);
@@ -488,39 +488,6 @@
 		font-size: 11px;
 		color: var(--text-faint);
 	}
-	.btn-primary,
-	.btn-secondary {
-		display: inline-flex;
-		align-items: center;
-		gap: 5px;
-		padding: 6px 14px;
-		font-family: inherit;
-		font-size: 12.5px;
-		font-weight: 500;
-		border-radius: 5px;
-		cursor: pointer;
-	}
-	.btn-primary {
-		background: var(--accent);
-		color: white;
-		border: 1px solid var(--accent);
-	}
-	.btn-primary:hover {
-		filter: brightness(0.94);
-	}
-	.btn-primary:disabled {
-		opacity: 0.4;
-		cursor: default;
-	}
-	.btn-secondary {
-		background: var(--bg-surface);
-		color: var(--text);
-		border: 1px solid var(--border-light);
-	}
-	.btn-secondary:hover {
-		background: var(--bg);
-	}
-
 	.question-header {
 		font-size: 11px;
 		font-weight: 600;
