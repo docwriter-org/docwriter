@@ -50,6 +50,15 @@ export const HOOK_TEMPLATES: readonly HookTemplate[] = [
 			'git add -A && (git diff --cached --quiet || (git commit -m "docwriter: auto-commit" && git push))'
 	},
 	{
+		id: 'git-push-on-stop-private',
+		label: 'Git auto-commit & push (ignoring LLM artifacts)',
+		description:
+			'Auto-commit and push, but leave the LLM trail behind: skip .claude/ (agent transcripts), .docwriter/ (CRDT log + session state), and CLAUDE.md (project memory). Use this when the repo is shared and you don\'t want agent context leaking into the remote.',
+		event: 'Stop',
+		command:
+			"git add -A -- ':(exclude).claude' ':(exclude).docwriter' ':(exclude)CLAUDE.md' && (git diff --cached --quiet || (git commit -m \"docwriter: auto-commit\" && git push))"
+	},
+	{
 		id: 'pandoc-html',
 		label: 'pandoc HTML',
 		description:
