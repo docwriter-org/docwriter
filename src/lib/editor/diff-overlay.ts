@@ -4,7 +4,9 @@ import { Decoration, DecorationSet, type EditorView } from '@tiptap/pm/view';
 import { diffLines, diffWords } from 'diff';
 import type { Annotation } from '$lib/types';
 import { buildReviewDiffPreview, normalizeReviewText } from '$lib/review-diff';
-import { buildCharIndex } from './char-index';
+import { wordDiff, type DiffPart as WordDiffPart } from '$lib/diff';
+import type { Node as PMNode } from '@tiptap/pm/model';
+import { buildCharIndex, paragraphPlainText } from './char-index';
 
 /** Memoize diffWords / diffLines by their string inputs. The diff inputs
  * (baseline + proposedText) only change when the review state changes,
@@ -37,6 +39,31 @@ function cachedDiff(
 		// Evict the oldest entry (Map iteration order is insertion order).
 		const oldest = cache.keys().next().value;
 		if (oldest !== undefined) cache.delete(oldest);
+	}
+	return out;
+}
+
+/** Memoized per-paragraph word diff. Keyed on the (before, after) string
+ * pair, same LRU discipline as `cachedDiff`. A modified paragraph's
+ * inputs only change when the user types into THAT paragraph (the
+ * before-line is fixed for the round, the after-text is the live
+ * paragraph), so typing elsewhere reuses the cached result. The cap is a
+ * little larger because a single round can touch several paragraphs. */
+const wordDiffCache = new Map<string, WordDiffPart[]>();
+const WORD_DIFF_CACHE_MAX = 32;
+function cachedWordDiff(before: string, after: string): WordDiffPart[] {
+	const key = `${before.length}|${before}\x00${after}`;
+	const hit = wordDiffCache.get(key);
+	if (hit) {
+		wordDiffCache.delete(key);
+		wordDiffCache.set(key, hit);
+		return hit;
+	}
+	const out = wordDiff(before, after);
+	wordDiffCache.set(key, out);
+	if (wordDiffCache.size > WORD_DIFF_CACHE_MAX) {
+		const oldest = wordDiffCache.keys().next().value;
+		if (oldest !== undefined) wordDiffCache.delete(oldest);
 	}
 	return out;
 }
@@ -107,8 +134,14 @@ function toggleDiffBlock(view: EditorView, blockId: string) {
 /** Selectors that mark a DOM node as part of the diff overlay — clicks
  * on these should redirect to the nearest real (un-struck, non-widget)
  * paragraph so the user can actually type. */
+// NOTE: `.diff-added` is intentionally NOT listed. In the word-level
+// modified-paragraph path it decorates *real, editable* doc text, so a
+// click on it must place the caret normally rather than being redirected
+// around a diff block. `.diff-removed-inline` (the inline removal ghost)
+// is likewise omitted so a click near it lands in the host paragraph via
+// PM's default handling instead of jumping to a sibling.
 const DIFF_NODE_SELECTOR =
-	'.diff-added-line, .diff-removed-line, .diff-added, .diff-removed-widget';
+	'.diff-added-line, .diff-removed-line, .diff-removed-widget';
 
 function isDiffNode(el: Element | null): boolean {
 	return !!el?.matches?.(DIFF_NODE_SELECTOR);
@@ -304,7 +337,7 @@ export const DiffOverlay = Extension.create({
 								const parts = cachedDiff(diffWordsCache, baselinePlain, targetPlain, diffWords);
 
 								if (proposedText !== null && proposedText !== undefined && isPlainText) {
-									const paragraphs = paragraphRanges(state.doc);
+									const paragraphs = buildParagraphTextIndex(state.doc);
 									const lineParts = cachedDiff(
 										diffLinesCache,
 										normalizeReviewText(baseline),
@@ -325,7 +358,33 @@ export const DiffOverlay = Extension.create({
 										addedLines: string[];
 									}
 									const blocks: DiffBlock[] = [];
+									// `baselineLineIdx` tracks the running BEFORE line
+									// index. The editor doc holds the BEFORE text while
+									// a review is pending (the agent only pushes a
+									// review round; the proposed text isn't applied to
+									// the Y.Doc until Accept), so a removed line's live
+									// paragraph is `paragraphs[baselineLineIdx]`.
 									let baselineLineIdx = 0;
+									interface ModifiedPara {
+										id: string;
+										para: ParagraphTextSpan;
+										afterText: string;
+										/** `true` when the live paragraph text has
+										 * diverged from the baseline line (the user
+										 * typed into this paragraph since the
+										 * snapshot). We skip inline word-level
+										 * decorations in that case — they'd strike
+										 * chars the user just typed — but still emit
+										 * the pill so the user can see a proposal
+										 * exists, and reveal the proposed line as a
+										 * green ghost block on expand. */
+										stale: boolean;
+										/** The baseline line for the pill's change
+										 * count when `stale`. (Inline path computes
+										 * from `para.text`.) */
+										baselineText: string;
+									}
+									const modified: ModifiedPara[] = [];
 									let currentBlock: DiffBlock | null = null;
 									function ensureBlock(): DiffBlock {
 										if (currentBlock) return currentBlock;
@@ -347,7 +406,69 @@ export const DiffOverlay = Extension.create({
 										blocks.push(currentBlock);
 										currentBlock = null;
 									}
-									for (const part of lineParts) {
+									for (let i = 0; i < lineParts.length; i++) {
+										const part = lineParts[i];
+										const next = lineParts[i + 1];
+										// A removed run immediately followed by an added
+										// run is a replacement. When the line counts
+										// match 1:1, each pair is a paragraph modified
+										// in place → render a word-level inline diff
+										// instead of striking the whole paragraph, so a
+										// near-identical edit no longer looks like a
+										// wholesale rewrite (mirrors buildReviewDiffPreview).
+										if (part.removed && next?.added) {
+											const removedLines = splitLogicalLines(part.value);
+											const addedLines = splitLogicalLines(next.value);
+											const canModifyInPlace =
+												removedLines.length === addedLines.length &&
+												removedLines.every(
+													(line, k) => line !== '' && addedLines[k] !== ''
+												);
+											if (canModifyInPlace) {
+												flushBlock();
+												for (let j = 0; j < removedLines.length; j++) {
+													// Doc holds the BEFORE text → the
+													// removed line's live paragraph is at
+													// the BEFORE line index.
+													const beforeIdx = baselineLineIdx + j;
+													const para = paragraphs[beforeIdx];
+													if (!para) {
+														// No live paragraph to host the
+														// inline diff (shouldn't happen for
+														// a clean replacement) — fall back
+														// to a block so the proposed text
+														// is still visible.
+														ensureBlock().addedLines.push(addedLines[j]);
+														continue;
+													}
+													// `reviewBaseline` is captured at sync
+													// time and doesn't update as the user
+													// types. If the live paragraph has
+													// diverged from the baseline line, the
+													// user is actively editing this exact
+													// paragraph — a word-level diff against
+													// `para.text` would mark the chars they
+													// just typed as "removed". Mark the
+													// entry stale; the renderer emits the
+													// pill + a green ghost block on expand,
+													// but no inline strikes.
+													const stale = para.text !== removedLines[j];
+													modified.push({
+														id: `mod:${beforeIdx}`,
+														para,
+														afterText: addedLines[j],
+														stale,
+														baselineText: removedLines[j]
+													});
+												}
+												baselineLineIdx += removedLines.length;
+												i += 1; // consumed `next` (the added run)
+												continue;
+											}
+											// Non-1:1 replacement: fall through and let
+											// the generic removed/added branches build a
+											// block, exactly as before this change.
+										}
 										const lines = splitLogicalLines(part.value);
 										if (part.added) {
 											const block = ensureBlock();
@@ -453,6 +574,89 @@ export const DiffOverlay = Extension.create({
 												)
 											);
 										}
+									}
+
+									// ── Modified-in-place paragraphs ───────────────
+									// Word-level inline diff. The doc holds the BEFORE
+									// text, so removed tokens are struck on the real
+									// text (always shown, length-neutral) and the
+									// proposed (added) tokens are ghost widgets revealed
+									// only when the per-paragraph pill is expanded. No
+									// whole-paragraph strikethrough.
+									for (const m of modified) {
+										const expanded = expandedBlocks.has(m.id);
+										let changeGroups: number;
+										if (m.stale) {
+											// User has been typing into this paragraph
+											// since `reviewBaseline` was captured —
+											// inline strikes against `para.text` would
+											// hit the chars they just typed. Count
+											// changes from the baseline line instead,
+											// and render the proposal as a green ghost
+											// block beneath the paragraph on expand.
+											changeGroups = countWordDiffGroups(
+												m.baselineText,
+												m.afterText
+											);
+											if (changeGroups > 0 && expanded) {
+												const className = allRoundsTiny
+													? 'diff-added-line diff-added-line-tiny'
+													: 'diff-added-line';
+												const value = m.afterText;
+												decorations.push(
+													Decoration.widget(
+														m.para.pos + m.para.nodeSize,
+														(view, getPos) =>
+															createAddedLineWidget(view, getPos, value, className),
+														{
+															side: 1,
+															ignoreSelection: true,
+															key: `staleadd:${m.id}`
+														}
+													)
+												);
+											}
+										} else {
+											changeGroups = renderModifiedParagraph(
+												decorations,
+												m.para,
+												m.afterText,
+												expanded,
+												addedClass
+											);
+										}
+										if (changeGroups <= 0) continue;
+										// Positioning-only class (no color / strike):
+										// makes the paragraph the containing block for
+										// the absolutely-positioned inline pill below.
+										// Deliberately NOT in DIFF_NODE_SELECTOR — the
+										// paragraph stays normal editable text.
+										decorations.push(
+											Decoration.node(
+												m.para.pos,
+												m.para.pos + m.para.nodeSize,
+												{ class: 'diff-modified-line' }
+											)
+										);
+										decorations.push(
+											Decoration.widget(
+												m.para.pos + m.para.nodeSize - 1,
+												(view) =>
+													createDiffTogglePill(
+														view,
+														m.id,
+														changeGroups,
+														expanded,
+														true,
+														'tokens'
+													),
+												{
+													side: 1,
+													ignoreSelection: true,
+													key: `pill:${m.id}:${expanded}`
+												}
+											)
+										);
 									}
 								} else if (proposedText !== null && proposedText !== undefined) {
 									let baselineIdx = 0;
@@ -616,21 +820,175 @@ function splitLogicalLines(value: string): string[] {
 	return lines.length > 0 ? lines : [''];
 }
 
-function paragraphRanges(doc: any): Array<{ pos: number; nodeSize: number }> {
-	const ranges: Array<{ pos: number; nodeSize: number }> = [];
-	doc.forEach((node: any, offset: number) => {
-		ranges.push({ pos: offset, nodeSize: node.nodeSize });
+/** One top-level paragraph of the live doc, with the slice of the
+ * plain-text char index it occupies. `text` is the paragraph's literal
+ * content (in plain-text mode this is the raw markdown line). `charStart`
+ * / `charEnd` index into the same flat `charPositions` / `plainText` that
+ * `buildCharIndex` produces — there are no separators between paragraphs,
+ * so paragraph N's chars are `[charStart, charEnd)`. */
+interface ParagraphTextSpan {
+	pos: number;
+	nodeSize: number;
+	charStart: number;
+	charEnd: number;
+	text: string;
+	/** PM position for each char in `text` (same order as paragraphPlainText). */
+	localCharPositions: number[];
+}
+
+/** Map each character of a paragraph to its document position. Kept local
+ * to the paragraph so word-level diff decorations never read the global
+ * char index (which jumps across block boundaries and can leave only the
+ * first character of a token decorated). */
+function buildLocalCharPositions(paraNode: PMNode, paraPos: number): number[] {
+	const positions: number[] = [];
+	paraNode.forEach((child, offset) => {
+		const base = paraPos + 1 + offset;
+		if (child.isText && child.text) {
+			for (let i = 0; i < child.text.length; i += 1) {
+				positions.push(base + i);
+			}
+		} else if (child.type.name === 'hardBreak') {
+			positions.push(base);
+		}
 	});
-	return ranges;
+	return positions;
+}
+
+function buildParagraphTextIndex(doc: PMNode): ParagraphTextSpan[] {
+	const out: ParagraphTextSpan[] = [];
+	let running = 0;
+	doc.forEach((node, offset) => {
+		const text = paragraphPlainText(node);
+		out.push({
+			pos: offset,
+			nodeSize: node.nodeSize,
+			charStart: running,
+			charEnd: running + text.length,
+			text,
+			localCharPositions: buildLocalCharPositions(node, offset)
+		});
+		running += text.length;
+	});
+	return out;
 }
 
 function resolveParagraphWidgetPos(
 	docEnd: number,
-	paragraphs: Array<{ pos: number; nodeSize: number }>,
+	paragraphs: ParagraphTextSpan[],
 	lineIdx: number
 ): number {
 	if (lineIdx < paragraphs.length) return paragraphs[lineIdx].pos;
 	return docEnd;
+}
+
+/** PM position for a proposed-token ghost inside a modified paragraph. */
+function ghostPosLocal(para: ParagraphTextSpan, cursor: number): number {
+	const local = para.localCharPositions;
+	if (cursor < local.length) return local[cursor];
+	return para.pos + para.nodeSize - 1;
+}
+
+/** Count the number of distinct change groups (maximal runs of
+ * non-`same` parts) in a word diff. Used by the stale-modified path,
+ * which needs the pill's count but skips the inline decorations. */
+function countWordDiffGroups(before: string, after: string): number {
+	let groups = 0;
+	let inChange = false;
+	for (const p of cachedWordDiff(before, after)) {
+		if (p.type === 'same') {
+			inChange = false;
+			continue;
+		}
+		if (!inChange) {
+			groups += 1;
+			inChange = true;
+		}
+	}
+	return groups;
+}
+
+/** Render one paragraph that was modified in place as a word-level
+ * inline diff.
+ *
+ * While a review is pending the editor doc still holds the BEFORE text
+ * (the agent only pushes a review round; the proposed text isn't applied
+ * to the Y.Doc until Accept). So `para.text` is the original line and
+ * `afterText` is the proposed replacement. Per word-diff token:
+ *   - removed (in the doc, not in the proposal) → inline strikethrough
+ *     on the real text. Always shown — it's existing content, so the
+ *     decoration is length-neutral, and it gives the reviewer the
+ *     "what's going away" signal at a glance.
+ *   - added (in the proposal, not in the doc) → green ghost span, shown
+ *     only when `expanded`, so the collapsed view stays length-neutral
+ *     and uncluttered until the reader opens the pill.
+ *   - same → no decoration.
+ *
+ * Returns the number of distinct change groups (drives the pill count).
+ */
+function renderModifiedParagraph(
+	decorations: Decoration[],
+	para: ParagraphTextSpan,
+	afterText: string,
+	expanded: boolean,
+	addedClass: string
+): number {
+	const parts = cachedWordDiff(para.text, afterText);
+	const charPositions = para.localCharPositions;
+	let cursor = 0;
+	let changeGroups = 0;
+	let inChange = false;
+	for (const p of parts) {
+		if (p.type === 'same') {
+			inChange = false;
+			cursor += p.text.length;
+			continue;
+		}
+		if (!inChange) {
+			changeGroups += 1;
+			inChange = true;
+		}
+		if (p.type === 'removed') {
+			// Real text in the doc — strike just these tokens (not the
+			// whole paragraph). Length-neutral, so it's always rendered.
+			applyInlineClassRange(
+				decorations,
+				charPositions,
+				cursor,
+				cursor + p.text.length,
+				'diff-removed'
+			);
+			cursor += p.text.length;
+		} else if (expanded) {
+			// Proposed text is NOT in the doc; show it as a green ghost
+			// at the position it would occupy. contenteditable=false and
+			// its class is intentionally absent from DIFF_NODE_SELECTOR
+			// so a click near it lands in this paragraph normally instead
+			// of being redirected.
+			const widgetPos = ghostPosLocal(para, cursor);
+			const value = p.text;
+			decorations.push(
+				Decoration.widget(
+					widgetPos,
+					() => {
+						const span = document.createElement('span');
+						span.className = addedClass;
+						span.textContent = value;
+						span.setAttribute('contenteditable', 'false');
+						return span;
+					},
+					{
+						side: -1,
+						ignoreSelection: true,
+						key: `modadd:${para.pos}:${cursor}:${value}`
+					}
+				)
+			);
+			// Do NOT advance `cursor`: proposed text occupies no space in
+			// the BEFORE paragraph that's currently in the doc.
+		}
+	}
+	return changeGroups;
 }
 
 function createAddedLineWidget(
@@ -660,7 +1018,8 @@ function createDiffTogglePill(
 	blockId: string,
 	addedCount: number,
 	expanded: boolean,
-	inline: boolean
+	inline: boolean,
+	mode: 'lines' | 'tokens' = 'lines'
 ): HTMLElement {
 	const wrapper = document.createElement(inline ? 'span' : 'div');
 	wrapper.className = inline
@@ -671,10 +1030,20 @@ function createDiffTogglePill(
 	const toggleBtn = document.createElement('button');
 	toggleBtn.type = 'button';
 	toggleBtn.className = expanded ? 'diff-toggle-pill expanded' : 'diff-toggle-pill';
-	toggleBtn.textContent = expanded ? 'Hide' : `Show (+${addedCount})`;
-	toggleBtn.title = expanded
-		? 'Hide proposed replacement'
-		: `Show proposed replacement (+${addedCount} line${addedCount === 1 ? '' : 's'})`;
+	if (mode === 'tokens') {
+		// Modified-in-place paragraph: the count is the number of
+		// changed word groups within that paragraph, not a line count.
+		const plural = addedCount === 1 ? '' : 's';
+		toggleBtn.textContent = expanded ? 'Hide diff' : `Show diff · ${addedCount}`;
+		toggleBtn.title = expanded
+			? 'Hide the word-level diff'
+			: `Show the word-level diff (${addedCount} change${plural} in this paragraph)`;
+	} else {
+		toggleBtn.textContent = expanded ? 'Hide' : `Show (+${addedCount})`;
+		toggleBtn.title = expanded
+			? 'Hide proposed replacement'
+			: `Show proposed replacement (+${addedCount} line${addedCount === 1 ? '' : 's'})`;
+	}
 	toggleBtn.addEventListener('mousedown', (e) => {
 		e.preventDefault();
 		e.stopPropagation();
@@ -700,6 +1069,7 @@ function createDiffTogglePill(
 		<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
 			<polyline points="20 6 9 17 4 12"></polyline>
 		</svg>
+		<span>Accept diff</span>
 	`;
 	acceptBtn.addEventListener('mousedown', (e) => {
 		e.preventDefault();

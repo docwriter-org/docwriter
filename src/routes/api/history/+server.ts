@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import type { RequestHandler } from './$types';
 import { getSessionMessages } from '@anthropic-ai/claude-agent-sdk';
-import { getSessionId } from '$lib/server/runtime-state';
+import { getSessionId, getLastSystemPrompt } from '$lib/server/runtime-state';
 
 /** Encode a filesystem path the same way the Claude SDK does when creating its
  * `~/.claude/projects/<encoded>/<sessionId>.jsonl` file layout. */
@@ -31,11 +31,7 @@ function encodeProjectPath(absPath: string): string {
  * (e.g. very first session before any messages have been written).
  */
 export const GET: RequestHandler = async () => {
-	// systemPrompt is set per-render via the SDK's `systemPrompt` option and
-	// never lands in the JSONL transcript. Surfacing it in the viewer would
-	// require importing from the render route, which has caused HMR breakage
-	// in dev. Leave it null for now — the user/assistant flow is what matters.
-	const systemPrompt: string | null = null;
+	const systemPrompt = getLastSystemPrompt();
 
 	const sessionId = getSessionId();
 	if (!sessionId) return json({ sessionId: null, raw: [], messages: [], systemPrompt });

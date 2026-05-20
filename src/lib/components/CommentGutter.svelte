@@ -302,9 +302,13 @@
 	.comment-gutter {
 		position: relative;
 		flex-shrink: 0;
-		width: 220px;
-		min-width: 220px;
-		max-width: 220px;
+		/* Keep in sync with `.plain-editor-shell.has-comment-gutter`'s
+		 * third grid column in TiptapEditor.svelte. Compromise between
+		 * the original 220px (felt too wide collapsed) and 180px (too
+		 * narrow for an expanded thread with code paths / long URLs). */
+		width: 200px;
+		min-width: 200px;
+		max-width: 200px;
 		height: 100%;
 		padding: 0 10px 20px;
 		box-sizing: border-box;

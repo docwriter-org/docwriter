@@ -19,6 +19,8 @@
 		findStep,
 		type FindState
 	} from './find-overlay';
+	import { MediaOverlay } from './media-overlay';
+	import { handleEditorPaste, handleEditorDrop } from './media-paste';
 	import FindBar from '$lib/components/FindBar.svelte';
 	import PreviewButton from '$lib/components/PreviewButton.svelte';
 	import CommentGutter from '$lib/components/CommentGutter.svelte';
@@ -74,7 +76,17 @@
 	editorFontScale.subscribe((v) => (fontScale = v));
 	let softWrap = $state(false);
 	editorSoftWrap.subscribe((v) => (softWrap = v));
-	let plainLineRows = $state<string[]>(['1']);
+	/** Per-paragraph row entries for the line gutter. Each row carries a
+	 * label and an absolute `top` offset (px) from the editor content's
+	 * top. Absolute positioning lets the gutter follow paragraphs through
+	 * any vertical space introduced by media-overlay widgets, diff
+	 * decorations, or soft-wrap continuations — `1` stays next to its
+	 * markdown line even when a 360px image widget sits below it. */
+	let plainLineRows = $state<Array<{ label: string; top: number }>>([{ label: '1', top: 0 }]);
+	/** Total content height the gutter must span; without this, the gutter
+	 * collapses to 0 (children are absolutely positioned) and the
+	 * border-right disappears. */
+	let plainGutterMinHeight = $state(0);
 	let hasPendingProposal = false;
 	let pointerSelecting = false;
 	let shouldFocusFeedbackInput = false;
@@ -99,7 +111,8 @@
 	let feedbackInput = $state('');
 	/** Routing mode for the current feedback submission. `auto` lets the
 	 * agent decide comment vs. edit; `edit` forces an edit_doc call;
-	 * `discuss` forces a post_comment call. Resets to `auto` whenever the
+	 * `discuss` forces a reply_to_comment call on the user-opened thread.
+	 * Resets to `auto` whenever the
 	 * popup closes so each feedback session starts fresh. */
 	let feedbackMode = $state<FeedbackMode>('auto');
 
@@ -277,7 +290,7 @@
 			? `The user flagged this passage with feedback "${label}"`
 			: `The user flagged this passage as "${label}"`;
 		const threadHint = threadId
-			? ` A thread is already open for this feedback (thread_id="${threadId}"). If you comment, use post_comment with that thread_id — do not open a new thread.`
+			? ` A thread is already open for this feedback (thread_id="${threadId}"). If you reply, use reply_to_comment with that thread_id. You cannot open new threads.`
 			: '';
 		return `${prefix}. ${tag} ${verb} it: "${passage}"${threadHint}`;
 	}
@@ -402,62 +415,36 @@
 		]);
 	}
 
-	function logicalPlainLineCount(): number {
-		if (!editor) return 1;
-		let count = 0;
-		editor.state.doc.forEach((node) => {
-			if (node.content.size === 0) {
-				count += 1;
-				return;
-			}
-			let blockLines = 1;
-			node.forEach((child) => {
-				if (child.type?.name === 'hardBreak') blockLines += 1;
-			});
-			count += blockLines;
-		});
-		return Math.max(1, count);
-	}
-
 	function syncPlainLineRows() {
 		if (!editor) return;
 		const contentEl = editor.view.dom as HTMLElement | null;
-		const lineHeight = contentEl
-			? parseFloat(getComputedStyle(contentEl).lineHeight || '0')
-			: 0;
-		if (hasPendingProposal && contentEl && lineHeight) {
-			const totalRows = Math.max(1, Math.round(contentEl.getBoundingClientRect().height / lineHeight));
-			plainLineRows = Array.from({ length: totalRows }, (_, i) => String(i + 1));
-			return;
-		}
-		const logicalCount = logicalPlainLineCount();
-		if (!softWrap) {
-			plainLineRows = Array.from({ length: logicalCount }, (_, i) => String(i + 1));
-			return;
-		}
-		const paragraphs = contentEl
-			? Array.from(contentEl.querySelectorAll(':scope > p'))
-			: [];
-		if (paragraphs.length === 0) {
-			plainLineRows = Array.from({ length: logicalCount }, (_, i) => String(i + 1));
-			return;
-		}
-		if (!contentEl) {
-			plainLineRows = Array.from({ length: logicalCount }, (_, i) => String(i + 1));
-			return;
-		}
+		if (!contentEl) return;
+		const lineHeight = parseFloat(getComputedStyle(contentEl).lineHeight || '0');
 		if (!lineHeight) {
-			plainLineRows = Array.from({ length: logicalCount }, (_, i) => String(i + 1));
+			plainLineRows = [{ label: '1', top: 0 }];
 			return;
 		}
-		const rows: string[] = [];
-		paragraphs.forEach((paragraph, index) => {
-			const height = paragraph.getBoundingClientRect().height;
-			const visualRows = Math.max(1, Math.round(height / lineHeight));
-			rows.push(String(index + 1));
-			for (let i = 1; i < visualRows; i += 1) rows.push('');
+		const paragraphs = Array.from(
+			contentEl.querySelectorAll(':scope > p')
+		) as HTMLElement[];
+		const contentRect = contentEl.getBoundingClientRect();
+		if (paragraphs.length === 0) {
+			plainLineRows = [{ label: '1', top: 0 }];
+			plainGutterMinHeight = Math.max(lineHeight, contentRect.height);
+			return;
+		}
+		// Number every paragraph at its actual top — labels stay sequential
+		// (1, 2, 3, …) even when a media-overlay thumbnail or diff ghost
+		// pushes paragraph N+1 hundreds of pixels down. Absolute positioning
+		// is the only way to do this; a flow column with 1.45em pitch
+		// breaks the moment any block-level chrome between paragraphs
+		// adds height the gutter doesn't know about.
+		const contentTop = contentRect.top;
+		plainLineRows = paragraphs.map((paragraph, index) => {
+			const rect = paragraph.getBoundingClientRect();
+			return { label: String(index + 1), top: Math.max(0, rect.top - contentTop) };
 		});
-		plainLineRows = rows.length > 0 ? rows : ['1'];
+		plainGutterMinHeight = Math.max(lineHeight, contentRect.height);
 	}
 
 	function schedulePlainLineSync() {
@@ -517,15 +504,13 @@
 	let currentRoundsList: Array<{ id: string; beforeMd?: string; afterMd?: string }> = [];
 	pendingReviewRounds.subscribe((v) => {
 		allRoundsTiny = v.length > 0 && v.every((r) => r.kind === 'tiny');
-		// Show only the EARLIEST pending round's diff at a time. Rounds
-		// accept FIFO (per the OutlinePane Accept logic), so the visible
-		// diff corresponds 1:1 to the round that's actually clickable —
-		// the inline ✓ on any block in this overlay refers to "this
-		// edit" with no ambiguity. After the user accepts, baseline
-		// auto-updates (reviewBaseline subscribes to the post-accept
-		// live Y.Doc text) and the next pending round becomes the new
-		// visible diff.
-		currentProposalText = v.length > 0 ? v[0].afterMd ?? null : null;
+		// Compose the full pending stack in the overlay: baseline is
+		// rounds[0].beforeMd (via reviewBaseline) and the proposal is the
+		// last round's afterMd (all ops applied in order). The inline ✓
+		// still accepts only rounds[0] (FIFO); after accept the next
+		// round becomes visible.
+		currentProposalText =
+			v.length > 0 ? (v[v.length - 1].afterMd ?? null) : null;
 		currentRoundsList = v;
 		hasPendingProposal = v.length > 0;
 		schedulePlainLineSync();
@@ -790,12 +775,15 @@
 				DiffOverlay,
 				CommentOverlay,
 				CelebrationOverlay,
-				FindOverlay
+				FindOverlay,
+				MediaOverlay
 			],
 			// Collaboration provides initial content from the Y.Doc; do NOT
 			// pass a string `content` here (doing so would wipe the Y.Doc).
 			editorProps: {
 				attributes: { class: 'tiptap-content tiptap-plain' },
+				handlePaste: (view, event) => handleEditorPaste(view, event).handled,
+				handleDrop: (view, event) => handleEditorDrop(view, event as DragEvent).handled,
 				handleKeyDown: (_view, event) => {
 					// Cmd/Ctrl+F opens the find bar. Block the browser's
 					// native find dialog so we own the in-doc search UX.
@@ -1037,9 +1025,13 @@
 		class:soft-wrap-enabled={softWrap}
 		class:has-comment-gutter={threadsForTab.some((t) => !t.resolved)}
 	>
-		<div class="plain-line-gutter" aria-hidden="true">
-			{#each plainLineRows as line}
-				<div class="plain-line-number">{line}</div>
+		<div
+			class="plain-line-gutter"
+			aria-hidden="true"
+			style:min-height="{plainGutterMinHeight}px"
+		>
+			{#each plainLineRows as row}
+				<div class="plain-line-number" style:top="{row.top}px">{row.label}</div>
 			{/each}
 		</div>
 		<div class="tiptap-editor plain-mode" class:soft-wrap-enabled={softWrap} bind:this={element}></div>
@@ -1077,9 +1069,9 @@
 					].join('\n');
 					const trigger =
 						`The user replied on comment thread "${t.id}" on this tab. ` +
-						`Decide whether to reply on the same thread (call post_comment with thread_id "${t.id}") or, ` +
+						`Decide whether to reply on the same thread (call reply_to_comment with thread_id "${t.id}") or, ` +
 						`if the user's reply is now a clear edit request, call edit_doc instead. ` +
-						`Do NOT open a new thread for this reply.\n\n` +
+						`You cannot open new threads.\n\n` +
 						`Anchor passage: "${t.anchor.quote}"\n` +
 						`User's latest reply: "${replyText}"\n` +
 						`Full thread (latest reply included):\n${transcript}`;
@@ -1236,7 +1228,7 @@
 		min-width: 0;
 		overflow-y: auto;
 		/* Tighter right padding when there's no comment gutter — the gutter
-		 * column adds ~220px of breathing room on the right when comments
+		 * column adds ~180px of breathing room on the right when comments
 		 * exist, so the wrapper itself doesn't need much. Without comments
 		 * we still want a small gap so prose doesn't kiss the right edge. */
 		padding: 48px 12px 48px 32px;
@@ -1262,21 +1254,29 @@
 		/* Third column reserved for the right-side comment gutter so
 		 * thread cards sit in a stable column beside the editor rather
 		 * than floating over the prose. Width matches CommentGutter's
-		 * fixed inner width. */
-		grid-template-columns: 52px minmax(0, 1fr) 220px;
+		 * fixed inner width — keep this and the `.comment-gutter` rule
+		 * in CommentGutter.svelte in sync. */
+		grid-template-columns: 52px minmax(0, 1fr) 200px;
 	}
 	.plain-editor-shell.soft-wrap-enabled {
 		width: 100%;
 	}
 	.plain-line-gutter {
+		position: relative;
 		align-self: start;
-		padding: 2px 12px 0 0;
+		/* No padding: when children are absolutely positioned, gutter
+		 * padding doesn't reserve visual space for them — instead the
+		 * number itself owns its right inset (so it stops short of the
+		 * border) and its width (so multi-digit and single-digit numbers
+		 * right-align consistently). Padding-top would also offset all
+		 * line numbers down because their `top` values are measured from
+		 * the editor's content top, not from this padding edge. */
+		padding: 0;
 		border-right: 1px solid var(--border-light);
 		color: var(--text-faint);
 		font-family: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
 		font-size: calc(15px * var(--font-scale, 1));
 		line-height: 1.45;
-		text-align: right;
 		user-select: none;
 		pointer-events: none;
 		/* Match prose canvas (--bg). Never mix bg-surface with `transparent`:
@@ -1284,7 +1284,18 @@
 		background: var(--bg);
 	}
 	.plain-line-number {
+		position: absolute;
+		right: 0;
+		/* Match the old flow-column geometry exactly: each number block
+		 * spans the gutter's content area (40px) with a 12px right inset
+		 * so the digit stops well before the column rule. Fixed width +
+		 * `text-align: right` keeps single- and multi-digit numbers
+		 * right-aligned consistently. */
+		width: 40px;
+		padding-right: 12px;
+		box-sizing: border-box;
 		height: 1.45em;
+		text-align: right;
 	}
 	.tiptap-editor :global(.tiptap-content) {
 		max-width: 680px;
@@ -1530,17 +1541,18 @@
 	.tiptap-editor :global(.diff-accept-pill) {
 		display: inline-flex;
 		align-items: center;
-		justify-content: center;
-		width: 22px;
-		height: 22px;
-		padding: 0;
+		gap: 4px;
+		padding: 1px 8px 1px 6px;
 		font-family: 'Inter', -apple-system, sans-serif;
+		font-size: 10.5px;
+		font-weight: 500;
+		letter-spacing: 0.02em;
 		color: var(--diff-added-color);
 		background: var(--bg-elevated);
 		border: 1px solid color-mix(in srgb, var(--diff-added-color) 35%, var(--border-light));
 		border-radius: 999px;
 		cursor: pointer;
-		line-height: 1;
+		line-height: 1.4;
 		opacity: 0.85;
 		transition: background 120ms ease, border-color 120ms ease, color 120ms ease, opacity 120ms ease;
 	}
@@ -1551,6 +1563,7 @@
 	}
 	.tiptap-editor :global(.diff-accept-pill svg) {
 		display: block;
+		flex: none;
 	}
 	.tiptap-editor :global(.diff-removed) {
 		color: var(--diff-removed-color);
@@ -1565,6 +1578,15 @@
 		--diff-final-opacity: 0.72;
 		opacity: 0.72;
 		animation: diffFadeIn 320ms ease-out both;
+		position: relative;
+	}
+	/* Word-level modified paragraph: no color or strikethrough — the
+	 * paragraph reads as normal editable text and only the changed tokens
+	 * are decorated. `position: relative` is the sole effect, so the
+	 * absolutely-positioned inline "Show diff" pill anchors to this
+	 * paragraph's right margin instead of the editor edge. */
+	.tiptap-editor :global(.tiptap-plain p.diff-modified-line),
+	.tiptap-editor :global(.diff-modified-line) {
 		position: relative;
 	}
 	/* Ghost strikethrough widget for agent removals. The removed text isn't
@@ -1890,5 +1912,232 @@
 		background: color-mix(in srgb, var(--action-color) 10%, transparent);
 		border-color: var(--action-color);
 		color: var(--action-color);
+	}
+	/* Media overlay widgets — Substack-style inline previews layered on
+	 * top of plain markdown source. The thumbnail variant is a block
+	 * decoration that appears after a host paragraph; the card variant
+	 * is the body of the floating hover tooltip (`.media-link-tooltip`,
+	 * which lives in document.body). The card styles MUST be top-level
+	 * `:global` rather than scoped under `.tiptap-editor` because the
+	 * tooltip is rendered outside the editor's DOM tree — scoping under
+	 * `.tiptap-editor` would silently fail to apply, leaving the og
+	 * image to render at its native (often gigantic) size. */
+	:global(.media-widget) {
+		display: block;
+		margin: 6px 0 12px;
+		user-select: none;
+		max-width: 680px;
+	}
+	:global(.media-image-widget) {
+		display: block;
+		max-width: 100%;
+	}
+	:global(.media-thumb) {
+		display: block;
+		max-width: 100%;
+		max-height: 360px;
+		border-radius: 6px;
+		border: 1px solid var(--border-light);
+		background: var(--bg-surface);
+		object-fit: contain;
+		object-position: left center;
+		animation: media-fade-in 240ms ease-out both;
+	}
+	:global(.media-thumb-error) {
+		padding: 10px 12px;
+		border-radius: 6px;
+		border: 1px dashed var(--border-light);
+		background: var(--bg-surface);
+		color: var(--text-faint);
+		font-family: 'Inter', -apple-system, sans-serif;
+		font-size: 12px;
+	}
+	:global(.media-thumb-error-label) {
+		font-style: italic;
+	}
+	/* Link card. Row layout: image left, body right. Falls back to a
+	 * body-only card when og:image is missing. */
+	:global(.media-card-widget) {
+		display: flex;
+		gap: 12px;
+		align-items: stretch;
+		padding: 12px;
+		border: 1px solid var(--border-light);
+		border-radius: 8px;
+		background: var(--bg-elevated);
+		text-decoration: none;
+		color: inherit;
+		font-family: 'Inter', -apple-system, sans-serif;
+		min-height: 88px;
+		max-width: 560px;
+		transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
+		animation: media-fade-in 240ms ease-out both;
+	}
+	:global(.media-card-widget:hover) {
+		border-color: color-mix(in srgb, var(--accent) 35%, var(--border-light));
+		background: var(--bg-hover);
+	}
+	:global(.media-card-image) {
+		flex: 0 0 88px;
+		width: 88px;
+		height: 88px;
+		overflow: hidden;
+		border-radius: 4px;
+		background: var(--bg-surface);
+	}
+	:global(.media-card-image img) {
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
+		display: block;
+	}
+	:global(.media-card-body) {
+		flex: 1;
+		min-width: 0;
+		display: flex;
+		flex-direction: column;
+		justify-content: space-between;
+		gap: 4px;
+	}
+	:global(.media-card-title) {
+		font-size: 14px;
+		font-weight: 600;
+		color: var(--text);
+		line-height: 1.35;
+		display: -webkit-box;
+		-webkit-line-clamp: 2;
+		line-clamp: 2;
+		-webkit-box-orient: vertical;
+		overflow: hidden;
+	}
+	:global(.media-card-desc) {
+		font-size: 12.5px;
+		color: var(--text-muted);
+		line-height: 1.4;
+		display: -webkit-box;
+		-webkit-line-clamp: 2;
+		line-clamp: 2;
+		-webkit-box-orient: vertical;
+		overflow: hidden;
+	}
+	:global(.media-card-host) {
+		font-size: 10.5px;
+		color: var(--text-faint);
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		margin-top: auto;
+	}
+	:global(.media-card-minimal) {
+		font-size: 12px;
+		color: var(--text-muted);
+		font-style: italic;
+		align-self: center;
+	}
+	/* Skeleton for the og card while metadata is fetching. The shimmer
+	 * gradient sweeps left-to-right; same hue as the surrounding chrome
+	 * so it reads as "loading" not "broken". */
+	:global(.media-card-skeleton) {
+		display: flex;
+		gap: 12px;
+		flex: 1;
+		min-width: 0;
+	}
+	:global(.media-card-skeleton-image) {
+		flex: 0 0 88px;
+		width: 88px;
+		height: 88px;
+		border-radius: 4px;
+		background: linear-gradient(
+			90deg,
+			var(--bg-surface) 0%,
+			var(--bg-hover) 50%,
+			var(--bg-surface) 100%
+		);
+		background-size: 200% 100%;
+		animation: media-shimmer 1.4s linear infinite;
+	}
+	:global(.media-card-skeleton-body) {
+		flex: 1;
+		min-width: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+		justify-content: center;
+	}
+	:global(.media-card-skeleton-line) {
+		height: 10px;
+		border-radius: 3px;
+		background: linear-gradient(
+			90deg,
+			var(--bg-surface) 0%,
+			var(--bg-hover) 50%,
+			var(--bg-surface) 100%
+		);
+		background-size: 200% 100%;
+		animation: media-shimmer 1.4s linear infinite;
+	}
+	@keyframes media-shimmer {
+		from { background-position: 200% 0; }
+		to { background-position: -200% 0; }
+	}
+	@keyframes media-fade-in {
+		from { opacity: 0; transform: translateY(-2px); }
+		to { opacity: 1; transform: translateY(0); }
+	}
+	/* Inline URL mark — classic web-link affordance: accent color + solid
+	 * underline. Plain-text editor philosophy says don't mutate the
+	 * source, but visually styling URLs as links is the universal cue
+	 * that they're interactive. Hovering surfaces a floating og-card
+	 * tooltip (`.media-link-tooltip` below) — the mark stays clickable
+	 * looking even when you're not hovering. */
+	.tiptap-editor :global(.media-link-inline) {
+		color: var(--accent);
+		text-decoration: underline;
+		text-decoration-color: color-mix(in srgb, var(--accent) 55%, transparent);
+		text-decoration-thickness: 1px;
+		text-underline-offset: 2px;
+		cursor: pointer;
+	}
+	.tiptap-editor :global(.media-link-inline:hover) {
+		text-decoration-color: var(--accent);
+	}
+	/* Floating hover tooltip. Lives in document.body (outside the editor's
+	 * scroll container) so position: fixed coordinates work without being
+	 * clipped, and so it stacks above any other editor chrome. Uses the
+	 * same `.media-card-widget` chrome the standalone-line cards use, so
+	 * the visual language is consistent — just smaller and lifted. */
+	:global(.media-link-tooltip) {
+		position: fixed;
+		z-index: 200;
+		max-width: 360px;
+		font-family: 'Inter', -apple-system, sans-serif;
+		filter: drop-shadow(0 6px 16px rgba(0, 0, 0, 0.16));
+		animation: media-tooltip-in 160ms ease-out both;
+	}
+	:global(.media-link-tooltip .media-card-widget) {
+		max-width: 360px;
+		min-height: 0;
+		padding: 10px;
+		background: var(--bg-elevated);
+	}
+	:global(.media-link-tooltip .media-card-image) {
+		flex: 0 0 64px;
+		width: 64px;
+		height: 64px;
+	}
+	:global(.media-link-tooltip .media-card-title) {
+		font-size: 13px;
+	}
+	:global(.media-link-tooltip .media-card-desc) {
+		font-size: 11.5px;
+		-webkit-line-clamp: 2;
+		line-clamp: 2;
+	}
+	:global(.media-link-tooltip .media-card-host) {
+		font-size: 10px;
+	}
+	@keyframes media-tooltip-in {
+		from { opacity: 0; transform: translateY(-3px); }
+		to { opacity: 1; transform: translateY(0); }
 	}
 </style>

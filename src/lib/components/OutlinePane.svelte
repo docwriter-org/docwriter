@@ -138,6 +138,16 @@
 	});
 
 	let totalRounds = $derived(allRounds.reduce((n, g) => n + g.rounds.length, 0));
+	/** True when every review sub-section (edits, comments, proposed rules,
+	 * proposed hooks) has nothing to show. Drives the empty-state header
+	 * — without it the lower-right pane is just a blank surface and there's
+	 * no label telling the user what this space is for. */
+	let nothingPending = $derived(
+		totalRounds === 0 &&
+			pendingRuleProposals.length === 0 &&
+			pendingHookProposals.length === 0 &&
+			allComments.every((g) => g.threads.every((t) => seenIds.has(t.id)))
+	);
 
 	function basename(path: string): string {
 		return path.split('/').pop() ?? path;
@@ -340,17 +350,17 @@
 						<div class="pending-actions" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()} role="presentation">
 							{#if isActiveTab}
 								<button class="btn-accept" onclick={() => onAccept?.(round.id)}>
-									<Check size={12} />Accept
+									<Check size={11} />Accept
 								</button>
 							{:else}
 								<span class="action-note" title="Switch to this file to accept/reject">Open file to review</span>
 							{/if}
 							{#if isActiveTab}
 								<button class="btn-reject" onclick={() => onReject?.(round.id)}>
-									<X size={12} />Reject
+									<X size={11} />Reject
 								</button>
 								<button class="btn-retry" onclick={() => openRetryFeedback(round.id)}>
-									<RotateCcw size={12} />Retry with feedback
+									<RotateCcw size={11} />Retry with feedback
 								</button>
 							{/if}
 						</div>
@@ -455,6 +465,16 @@
 					</div>
 				</div>
 			{/each}
+		</div>
+	{/if}
+
+	{#if showReview && nothingPending}
+		<div class="section">
+			<div class="section-header">
+				<Sparkles size={12} />
+				Pending agent suggestions
+			</div>
+			<div class="empty">No agent suggestions yet.</div>
 		</div>
 	{/if}
 </div>
@@ -654,16 +674,26 @@
 	.hook-matcher-tag { font-family: 'SF Mono', 'Menlo', monospace; font-size: 10px; color: var(--text-faint); padding: 1px 0; }
 	.hook-command { font-family: 'SF Mono', 'Menlo', monospace; font-size: 11.5px; color: var(--text); line-height: 1.4; margin-bottom: 6px; word-break: break-word; }
 	.pending-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+	/* Fill the card width so the actions don't bunch up on the left.
+	 * Accept + Reject share a balanced top row; "Retry with feedback"
+	 * gets its own full-width row below (basis 100% forces the wrap),
+	 * keeping it clearly labelled without crowding the primary actions.
+	 * Two-button cards (rule / hook proposals) just get even halves. */
+	.pending-actions .btn-accept,
+	.pending-actions .btn-reject { flex: 1 1 0; }
+	.pending-actions .btn-retry { flex: 1 1 100%; }
 	.btn-accept, .btn-reject, .btn-retry, .btn-secondary {
-		flex: 1 1 0;
-		display: flex;
+		flex: 0 1 auto;
+		display: inline-flex;
 		align-items: center;
 		justify-content: center;
 		gap: 4px;
-		padding: 5px 8px;
+		padding: 3px 8px;
 		border-radius: 4px;
-		font-size: 12px;
+		font-size: 11px;
 		font-weight: 500;
+		line-height: 1.4;
+		white-space: nowrap;
 		cursor: pointer;
 		border: 1px solid var(--border-light);
 		background: var(--bg-elevated);

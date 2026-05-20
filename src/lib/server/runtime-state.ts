@@ -67,6 +67,16 @@ export function getServerInstanceId(): string {
 	return value ?? 'unknown';
 }
 
+let _lastSystemPrompt: string | null = null;
+
+export function getLastSystemPrompt(): string | null {
+	return _lastSystemPrompt;
+}
+
+export function setLastSystemPrompt(prompt: string) {
+	_lastSystemPrompt = prompt;
+}
+
 export function getSessionId(): string | null {
 	return kvGet('sessionId');
 }

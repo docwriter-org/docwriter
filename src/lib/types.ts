@@ -138,9 +138,11 @@ export interface CommentThreadAnchor {
 	 * typing, agent edits, syncs across clients), so the highlight stays
 	 * glued to the text instead of teleporting when the quote no longer
 	 * matches. Optional because:
-	 *   - Server-side `post_comment` can't compute them (it has no PM
+	 *   - Server-side `reply_to_comment` can't compute them (it has no PM
 	 *     binding), so it omits them — the client backfills on first
-	 *     render via the comment-overlay's view hook.
+	 *     render via the comment-overlay's view hook. Same applies to any
+	 *     thread the user opens through a server-side path (e.g. the
+	 *     feedback popup's auto-created thread).
 	 *   - Legacy threads (created before this field existed) lack them
 	 *     and also get backfilled on first render.
 	 * When absent, the overlay falls back to indexOf-based anchoring. */
@@ -170,9 +172,10 @@ export interface CommentThread {
 }
 
 /** Routing hint carried from the feedback popup to the agent prompt.
- *  - `auto`: agent decides comment vs. edit based on tone.
- *  - `edit`: force an `edit_doc` call (no `post_comment`).
- *  - `discuss`: force a `post_comment` call (no `edit_doc`). */
+ *  - `auto`: agent decides reply-on-thread vs. edit based on tone.
+ *  - `edit`: force an `edit_doc` call (no `reply_to_comment`).
+ *  - `discuss`: force a `reply_to_comment` call on the user-opened
+ *    thread for this feedback (agents cannot open new threads). */
 export type FeedbackMode = 'auto' | 'edit' | 'discuss';
 
 export interface Annotation {

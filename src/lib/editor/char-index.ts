@@ -20,6 +20,13 @@ export interface CharIndex {
 	plainText: string;
 }
 
+/** Plain text for one top-level paragraph, matching `serializeYDoc` /
+ * `buildParagraphElements`: hard breaks become `\n` inside the line. */
+export function paragraphPlainText(node: PMNode): string {
+	if (node.content.size === 0) return '';
+	return node.textBetween(0, node.content.size, '\n', '');
+}
+
 const cache = new WeakMap<PMNode, CharIndex>();
 
 export function buildCharIndex(doc: PMNode): CharIndex {
@@ -38,6 +45,11 @@ export function buildCharIndex(doc: PMNode): CharIndex {
 			for (let i = 0; i < text.length; i += 1) {
 				positions.push(pos + i);
 			}
+		} else if (node.type.name === 'hardBreak') {
+			// Match `paragraphPlainText` / Y.Doc serialization so word-level
+			// diff decorations land on the correct inline positions.
+			segments.push('\n');
+			positions.push(pos);
 		}
 		return true;
 	});
