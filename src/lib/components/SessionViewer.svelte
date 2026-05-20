@@ -610,7 +610,7 @@
 							{/if}
 						</div>
 					{/if}
-					{#each events as ev, i}
+						{#each events as ev, i}
 						{#if visibleIndices[i] !== false}
 							{@const result = ev._result}
 							{@const resultError = ev._resultError}

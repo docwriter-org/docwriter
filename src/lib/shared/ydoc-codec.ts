@@ -16,6 +16,14 @@ export const FRAGMENT_NAME = 'default';
 export const REVIEW_ARRAY_NAME = 'rounds';
 export const COMMENTS_MAP_NAME = 'comments';
 export const AGENT_ORIGIN = 'agent';
+/** Origin for user-initiated server-side mutations (accept / reject /
+ * reject-all). Anything `ydoc.transact(..., USER_ORIGIN)` tags becomes
+ * client-undoable: the Tiptap Collaboration extension is configured to
+ * include this origin in its `Y.UndoManager.trackedOrigins`, so ctrl+z
+ * in the editor reverses these transactions one step at a time. Reuse
+ * carefully — adding a new USER_ORIGIN transact site opts it into undo
+ * by default. Use SYSTEM_ORIGIN (or a fresh origin) for mutations that
+ * should NOT be reversible from the editor. */
 export const USER_ORIGIN = 'user';
 export const SYSTEM_ORIGIN = 'system';
 

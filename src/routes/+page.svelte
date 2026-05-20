@@ -174,7 +174,7 @@
 	function syncActiveReviewState(tabId: string, rawRounds: PendingReviewRound[]) {
 		const rounds = materializedRoundsForTab(tabId, rawRounds);
 		pendingReviewRounds.set(rounds);
-		reviewBaseline.set(rounds.length > 0 ? currentTabText(tabId) : null);
+		reviewBaseline.set(rounds.length > 0 ? rounds[0].beforeMd : null);
 		const nextPending = new Map(pendingReviewTabs);
 		if (rawRounds.length > 0) nextPending.set(tabId, rawRounds.length);
 		else nextPending.delete(tabId);
@@ -2304,11 +2304,9 @@
 					onAcceptInlineEdit={() => {
 						const rounds = currentRounds();
 						if (rounds.length === 0) return;
-						// Diff overlay shows just the EARLIEST pending round
-						// at a time (TiptapEditor passes round[0]'s afterMd as
-						// proposedText), so the inline ✓ accepts exactly that
-						// round — and no other. Subsequent rounds become the
-						// new visible diff after this one's accepted.
+						// Diff overlay shows the full pending stack; the inline ✓
+						// accepts rounds[0] only (FIFO). Subsequent rounds stay
+						// in the composed diff until their turn is accepted.
 						void acceptAgentEdit(rounds[0].id);
 					}}
 				/>
