@@ -44,6 +44,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	if (!existsSync(path)) {
 		mkdirSync(dirname(path), { recursive: true });
 		writeTextAtomic(path, '');
+		await destroyTabState(id);
 	}
 
 	const state = reconcileTabsState();

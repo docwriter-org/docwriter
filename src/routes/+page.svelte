@@ -2291,6 +2291,7 @@
 				onDropFile={handleDropFiles}
 			/>
 			{#if docLoaded && activeTabFilePath}
+				{#key activeTabFilePath}
 				<AgentModal
 					onAnswerQuestion={(id, answers) => answerUserQuestion(id, answers)}
 					onRunPlan={(id) => runPlanProposal(id)}
@@ -2310,6 +2311,7 @@
 						void acceptAgentEdit(rounds[0].id);
 					}}
 				/>
+				{/key}
 			{:else if docLoaded}
 				<div class="empty-editor-state">
 					<div class="empty-editor-title">No file open</div>
