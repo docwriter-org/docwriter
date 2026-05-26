@@ -1,6 +1,5 @@
 {
-  "event": "PostToolUse",
-  "matcher": "Edit|Write",
+  "event": "Stop",
   "command": "pdflatex -interaction=nonstopmode main.tex",
-  "reason": "Rebuilds main.tex into a PDF after any file mutation."
+  "reason": "Rebuilds main.tex into a PDF once the agent finishes its turn. Using Stop rather than PostToolUse/Edit|Write because DocWriter's edits go through edit_doc / write_doc MCP tools, which don't match the built-in Edit/Write tool names."
 }
