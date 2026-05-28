@@ -1,7 +1,7 @@
 import { diffLines, diffWords } from 'diff';
 import type { PendingReviewRound } from './types';
 import type { DiffPart } from './diff';
-import { wordDiff } from './diff';
+import { pairLinesForDiff } from './diff-utils';
 
 export function normalizeReviewText(text: string): string {
 	return text.replace(/\r\n?/g, '\n').replace(/\n+$/g, '');
@@ -57,29 +57,25 @@ export function buildReviewDiffPreview(
 		if (part.removed && next?.added) {
 			const removedLines = splitLines(part.value);
 			const addedLines = splitLines(next.value);
-			const pairs = Math.max(removedLines.length, addedLines.length);
-			for (let j = 0; j < pairs; j++) {
-				const removedLine = removedLines[j];
-				const addedLine = addedLines[j];
-				const paired = removedLine !== undefined && addedLine !== undefined
-					? wordDiff(removedLine, addedLine)
-					: null;
-				if (removedLine !== undefined) {
+			const linePairs = pairLinesForDiff(removedLines, addedLines);
+
+			for (const pair of linePairs) {
+				if (pair.removedLine !== undefined) {
 					raw.push({
 						kind: 'removed',
 						oldLine: oldLine++,
-						parts: paired
-							? paired.filter((p) => p.type !== 'added')
-							: [{ text: removedLine, type: 'removed' }]
+						parts: pair.parts
+							? pair.parts.filter((p) => p.type !== 'added')
+							: [{ text: pair.removedLine, type: 'removed' }]
 					});
 				}
-				if (addedLine !== undefined) {
+				if (pair.addedLine !== undefined) {
 					raw.push({
 						kind: 'added',
 						newLine: newLine++,
-						parts: paired
-							? paired.filter((p) => p.type !== 'removed')
-							: [{ text: addedLine, type: 'added' }]
+						parts: pair.parts
+							? pair.parts.filter((p) => p.type !== 'removed')
+							: [{ text: pair.addedLine, type: 'added' }]
 					});
 				}
 			}

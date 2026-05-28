@@ -5,6 +5,7 @@ import { diffLines, diffWords } from 'diff';
 import type { Annotation } from '$lib/types';
 import { buildReviewDiffPreview, normalizeReviewText } from '$lib/review-diff';
 import { wordDiff, type DiffPart as WordDiffPart } from '$lib/diff';
+import { charDiff, pairLinesForDiff } from '$lib/diff-utils';
 import type { Node as PMNode } from '@tiptap/pm/model';
 import { buildCharIndex, paragraphPlainText } from './char-index';
 
@@ -64,6 +65,27 @@ function cachedWordDiff(before: string, after: string): WordDiffPart[] {
 	if (wordDiffCache.size > WORD_DIFF_CACHE_MAX) {
 		const oldest = wordDiffCache.keys().next().value;
 		if (oldest !== undefined) wordDiffCache.delete(oldest);
+	}
+	return out;
+}
+
+/** Memoized character-level diff using diff-match-patch with semantic cleanup.
+ * Produces more intuitive diffs by merging tiny character edits into word-level changes. */
+const charDiffCache = new Map<string, WordDiffPart[]>();
+const CHAR_DIFF_CACHE_MAX = 32;
+function cachedCharDiff(before: string, after: string): WordDiffPart[] {
+	const key = `${before.length}|${before}\x00${after}`;
+	const hit = charDiffCache.get(key);
+	if (hit) {
+		charDiffCache.delete(key);
+		charDiffCache.set(key, hit);
+		return hit;
+	}
+	const out = charDiff(before, after);
+	charDiffCache.set(key, out);
+	if (charDiffCache.size > CHAR_DIFF_CACHE_MAX) {
+		const oldest = charDiffCache.keys().next().value;
+		if (oldest !== undefined) charDiffCache.delete(oldest);
 	}
 	return out;
 }
@@ -410,64 +432,45 @@ export const DiffOverlay = Extension.create({
 										const part = lineParts[i];
 										const next = lineParts[i + 1];
 										// A removed run immediately followed by an added
-										// run is a replacement. When the line counts
-										// match 1:1, each pair is a paragraph modified
-										// in place → render a word-level inline diff
-										// instead of striking the whole paragraph, so a
-										// near-identical edit no longer looks like a
-										// wholesale rewrite (mirrors buildReviewDiffPreview).
+										// run is a replacement. Use greedy line pairing
+										// to show word-level inline diffs even when
+										// line counts don't match. This prevents near-
+										// identical edits from looking like wholesale
+										// rewrites (mirrors buildReviewDiffPreview).
 										if (part.removed && next?.added) {
 											const removedLines = splitLogicalLines(part.value);
 											const addedLines = splitLogicalLines(next.value);
-											const canModifyInPlace =
-												removedLines.length === addedLines.length &&
-												removedLines.every(
-													(line, k) => line !== '' && addedLines[k] !== ''
-												);
-											if (canModifyInPlace) {
-												flushBlock();
-												for (let j = 0; j < removedLines.length; j++) {
-													// Doc holds the BEFORE text → the
-													// removed line's live paragraph is at
-													// the BEFORE line index.
-													const beforeIdx = baselineLineIdx + j;
+											const pairs = pairLinesForDiff(removedLines, addedLines);
+
+											flushBlock();
+											let removedIdx = 0;
+											for (const pair of pairs) {
+												if (pair.removedLine !== undefined && pair.addedLine !== undefined) {
+													const beforeIdx = baselineLineIdx + removedIdx;
 													const para = paragraphs[beforeIdx];
 													if (!para) {
-														// No live paragraph to host the
-														// inline diff (shouldn't happen for
-														// a clean replacement) — fall back
-														// to a block so the proposed text
-														// is still visible.
-														ensureBlock().addedLines.push(addedLines[j]);
-														continue;
+														ensureBlock().addedLines.push(pair.addedLine);
+													} else {
+														const stale = para.text !== pair.removedLine;
+														modified.push({
+															id: `mod:${beforeIdx}`,
+															para,
+															afterText: pair.addedLine,
+															stale,
+															baselineText: pair.removedLine
+														});
 													}
-													// `reviewBaseline` is captured at sync
-													// time and doesn't update as the user
-													// types. If the live paragraph has
-													// diverged from the baseline line, the
-													// user is actively editing this exact
-													// paragraph — a word-level diff against
-													// `para.text` would mark the chars they
-													// just typed as "removed". Mark the
-													// entry stale; the renderer emits the
-													// pill + a green ghost block on expand,
-													// but no inline strikes.
-													const stale = para.text !== removedLines[j];
-													modified.push({
-														id: `mod:${beforeIdx}`,
-														para,
-														afterText: addedLines[j],
-														stale,
-														baselineText: removedLines[j]
-													});
+													removedIdx++;
+												} else if (pair.removedLine !== undefined) {
+													ensureBlock().removedParagraphIdxs.push(baselineLineIdx + removedIdx);
+													removedIdx++;
+												} else if (pair.addedLine !== undefined) {
+													ensureBlock().addedLines.push(pair.addedLine);
 												}
-												baselineLineIdx += removedLines.length;
-												i += 1; // consumed `next` (the added run)
-												continue;
 											}
-											// Non-1:1 replacement: fall through and let
-											// the generic removed/added branches build a
-											// block, exactly as before this change.
+											baselineLineIdx += removedLines.length;
+											i += 1; // consumed `next` (the added run)
+											continue;
 										}
 										const lines = splitLogicalLines(part.value);
 										if (part.added) {
