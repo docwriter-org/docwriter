@@ -2305,10 +2305,16 @@
 					onAcceptInlineEdit={() => {
 						const rounds = currentRounds();
 						if (rounds.length === 0) return;
-						// Diff overlay shows the full pending stack; the inline ✓
-						// accepts rounds[0] only (FIFO). Subsequent rounds stay
-						// in the composed diff until their turn is accepted.
-						void acceptAgentEdit(rounds[0].id);
+						// In muted mode, the user clicks a card to peek a specific
+						// round — accept that one. Otherwise (non-muted or no peek
+						// selected) accept rounds[0] (FIFO).
+						let targetId: string | null = null;
+						expandedReviewRoundId.subscribe((v) => (targetId = v))();
+						const target = targetId
+							? rounds.find((r) => r.id === targetId)
+							: rounds[0];
+						if (!target) return;
+						void acceptAgentEdit(target.id);
 					}}
 				/>
 				{/key}
