@@ -2305,10 +2305,16 @@
 					onAcceptInlineEdit={() => {
 						const rounds = currentRounds();
 						if (rounds.length === 0) return;
-						// Diff overlay shows the full pending stack; the inline ✓
-						// accepts rounds[0] only (FIFO). Subsequent rounds stay
-						// in the composed diff until their turn is accepted.
-						void acceptAgentEdit(rounds[0].id);
+						// Get the currently expanded round (if user clicked a specific
+						// pending card in the outline) — that's the diff they're viewing.
+						let targetRoundId: string | null = null;
+						expandedReviewRoundId.subscribe((v) => (targetRoundId = v))();
+						// If a specific round is expanded, accept it. Otherwise fall
+						// back to rounds[0] (FIFO for the composed diff overlay).
+						const targetRound = targetRoundId
+							? rounds.find((r) => r.id === targetRoundId)
+							: null;
+						void acceptAgentEdit(targetRound?.id ?? rounds[0].id);
 					}}
 				/>
 				{/key}
