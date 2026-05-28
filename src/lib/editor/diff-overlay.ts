@@ -586,6 +586,7 @@ export const DiffOverlay = Extension.create({
 									for (const m of modified) {
 										const expanded = expandedBlocks.has(m.id);
 										let changeGroups: number;
+										let heavyEdit = false;
 										if (m.stale) {
 											// User has been typing into this paragraph
 											// since `reviewBaseline` was captured —
@@ -617,13 +618,36 @@ export const DiffOverlay = Extension.create({
 												);
 											}
 										} else {
-											changeGroups = renderModifiedParagraph(
+											const result = renderModifiedParagraph(
 												decorations,
 												m.para,
 												m.afterText,
 												expanded,
 												addedClass
 											);
+											changeGroups = result.changeGroups;
+											heavyEdit = result.heavyEdit;
+											// Heavy edits skip inline strikethrough and
+											// show the proposed text as a ghost block on
+											// expand (like stale paragraphs) to avoid
+											// showing mostly red struck text.
+											if (heavyEdit && changeGroups > 0 && expanded) {
+												const className = allRoundsTiny
+													? 'diff-added-line diff-added-line-tiny'
+													: 'diff-added-line';
+												decorations.push(
+													Decoration.widget(
+														m.para.pos + m.para.nodeSize,
+														(view, getPos) =>
+															createAddedLineWidget(view, getPos, m.afterText, className),
+														{
+															side: 1,
+															ignoreSelection: true,
+															key: `heavyadd:${m.id}`
+														}
+													)
+												);
+											}
 										}
 										if (changeGroups <= 0) continue;
 										// Positioning-only class (no color / strike):
@@ -631,11 +655,14 @@ export const DiffOverlay = Extension.create({
 										// the absolutely-positioned inline pill below.
 										// Deliberately NOT in DIFF_NODE_SELECTOR — the
 										// paragraph stays normal editable text.
+										const nodeClass = heavyEdit
+											? 'diff-modified-line diff-heavy-edit'
+											: 'diff-modified-line';
 										decorations.push(
 											Decoration.node(
 												m.para.pos,
 												m.para.pos + m.para.nodeSize,
-												{ class: 'diff-modified-line' }
+												{ class: nodeClass }
 											)
 										);
 										decorations.push(
@@ -648,7 +675,7 @@ export const DiffOverlay = Extension.create({
 														changeGroups,
 														expanded,
 														true,
-														'tokens'
+														heavyEdit ? 'heavy' : 'tokens'
 													),
 												{
 													side: 1,
@@ -908,6 +935,26 @@ function countWordDiffGroups(before: string, after: string): number {
 	return groups;
 }
 
+/** Threshold for "heavy edit" detection. If the ratio of changed characters
+ * to total characters exceeds this, we collapse the inline diff to avoid
+ * showing mostly red strikethrough text. */
+const HEAVY_EDIT_RATIO = 0.6;
+
+/** Returns true if most of the text in a paragraph is changing, making
+ * inline strikethrough visually awkward. */
+function isHeavyEdit(before: string, after: string): boolean {
+	const parts = cachedWordDiff(before, after);
+	let removed = 0;
+	let same = 0;
+	for (const p of parts) {
+		if (p.type === 'removed') removed += p.text.length;
+		else if (p.type === 'same') same += p.text.length;
+	}
+	const total = removed + same;
+	if (total === 0) return false;
+	return removed / total > HEAVY_EDIT_RATIO;
+}
+
 /** Render one paragraph that was modified in place as a word-level
  * inline diff.
  *
@@ -932,9 +979,10 @@ function renderModifiedParagraph(
 	afterText: string,
 	expanded: boolean,
 	addedClass: string
-): number {
+): { changeGroups: number; heavyEdit: boolean } {
 	const parts = cachedWordDiff(para.text, afterText);
 	const charPositions = para.localCharPositions;
+	const heavyEdit = isHeavyEdit(para.text, afterText);
 	let cursor = 0;
 	let changeGroups = 0;
 	let inChange = false;
@@ -949,17 +997,20 @@ function renderModifiedParagraph(
 			inChange = true;
 		}
 		if (p.type === 'removed') {
-			// Real text in the doc — strike just these tokens (not the
-			// whole paragraph). Length-neutral, so it's always rendered.
-			applyInlineClassRange(
-				decorations,
-				charPositions,
-				cursor,
-				cursor + p.text.length,
-				'diff-removed'
-			);
+			// Skip inline strikethrough for heavy edits — showing mostly
+			// red text is visually awkward. Instead we'll show a ghost
+			// block with the proposed text on expand (like the stale path).
+			if (!heavyEdit) {
+				applyInlineClassRange(
+					decorations,
+					charPositions,
+					cursor,
+					cursor + p.text.length,
+					'diff-removed'
+				);
+			}
 			cursor += p.text.length;
-		} else if (expanded) {
+		} else if (expanded && !heavyEdit) {
 			// Proposed text is NOT in the doc; show it as a green ghost
 			// at the position it would occupy. contenteditable=false and
 			// its class is intentionally absent from DIFF_NODE_SELECTOR
@@ -988,7 +1039,7 @@ function renderModifiedParagraph(
 			// the BEFORE paragraph that's currently in the doc.
 		}
 	}
-	return changeGroups;
+	return { changeGroups, heavyEdit };
 }
 
 function createAddedLineWidget(
@@ -1019,7 +1070,7 @@ function createDiffTogglePill(
 	addedCount: number,
 	expanded: boolean,
 	inline: boolean,
-	mode: 'lines' | 'tokens' = 'lines'
+	mode: 'lines' | 'tokens' | 'heavy' = 'lines'
 ): HTMLElement {
 	const wrapper = document.createElement(inline ? 'span' : 'div');
 	wrapper.className = inline
@@ -1030,7 +1081,14 @@ function createDiffTogglePill(
 	const toggleBtn = document.createElement('button');
 	toggleBtn.type = 'button';
 	toggleBtn.className = expanded ? 'diff-toggle-pill expanded' : 'diff-toggle-pill';
-	if (mode === 'tokens') {
+	if (mode === 'heavy') {
+		// Heavily modified paragraph: most text is changing, so we skip
+		// inline strikethrough and show a cleaner comparison view.
+		toggleBtn.textContent = expanded ? 'Hide suggestion' : 'Show suggestion';
+		toggleBtn.title = expanded
+			? 'Hide the proposed rewrite'
+			: 'Show the proposed rewrite for this paragraph';
+	} else if (mode === 'tokens') {
 		// Modified-in-place paragraph: the count is the number of
 		// changed word groups within that paragraph, not a line count.
 		const plural = addedCount === 1 ? '' : 's';

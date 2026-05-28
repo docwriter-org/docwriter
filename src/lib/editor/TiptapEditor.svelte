@@ -1589,6 +1589,14 @@
 	.tiptap-editor :global(.diff-modified-line) {
 		position: relative;
 	}
+	/* Heavy-edit paragraphs: most of the text is changing, so we skip
+	 * inline strikethrough (which would make the paragraph mostly red)
+	 * and show a subtle left border to indicate a pending rewrite. */
+	.tiptap-editor :global(.diff-heavy-edit) {
+		border-left: 3px solid color-mix(in srgb, var(--accent) 50%, transparent);
+		padding-left: 12px;
+		margin-left: -15px;
+	}
 	/* Ghost strikethrough widget for agent removals. The removed text isn't
 	 * in the editor's doc tree (the editor displays the live Y.Doc state),
 	 * so we inject this inline span at the position the text used to occupy. */
