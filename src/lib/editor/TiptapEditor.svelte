@@ -44,6 +44,7 @@
 		expandedReviewRoundId
 	} from '$lib/stores';
 	import type { Action, Annotation, CommentThread, FeedbackMode } from '$lib/types';
+	import type { MaterializedPendingReviewRound } from '$lib/review-rounds';
 
 	const IDLE_MS = 3_000;
 
@@ -56,12 +57,10 @@
 		 * `getScrollTop()` before tearing the editor down (Accept / Reject /
 		 * file reload) so the user keeps their place across the remount. */
 		initialScrollTop?: number;
-		/** Accept the earliest pending review round on the active tab.
-		 * Wired to the inline ✓ pill rendered next to a diff block by the
-		 * diff overlay; lets the user accept without scrolling away to
-		 * the OutlinePane card. */
-		onAcceptInlineEdit?: () => void;
-		onRejectInlineEdit?: () => void;
+		/** Accept the pending review round tied to the inline diff pill the
+		 * user clicked. The pill carries the same round id as the sidebar. */
+		onAcceptInlineEdit?: (roundId: string | null) => void;
+		onRejectInlineEdit?: (roundId: string | null) => void;
 	}
 	let { tabId, onSubmit, initialScrollTop = 0, onAcceptInlineEdit, onRejectInlineEdit }: Props = $props();
 
@@ -500,14 +499,13 @@
 	 * Drives a softer ghost style on the diff overlay so a one-word tweak
 	 * doesn't look like a paragraph rewrite. */
 	let allRoundsTiny = false;
-	let currentRoundsList: Array<{ id: string; beforeMd?: string; afterMd?: string }> = [];
+	let currentRoundsList: MaterializedPendingReviewRound[] = [];
 	pendingReviewRounds.subscribe((v) => {
 		allRoundsTiny = v.length > 0 && v.every((r) => r.kind === 'tiny');
 		// Compose the full pending stack in the overlay: baseline is
 		// rounds[0].beforeMd (via reviewBaseline) and the proposal is the
-		// last round's afterMd (all ops applied in order). The inline ✓
-		// still accepts only rounds[0] (FIFO); after accept the next
-		// round becomes visible.
+		// last round's afterMd (all ops applied in order). Each round's
+		// hunks are rendered separately with that round's id on the pill.
 		currentProposalText =
 			v.length > 0 ? (v[v.length - 1].afterMd ?? null) : null;
 		currentRoundsList = v;
@@ -666,6 +664,7 @@
 			// pending card, then show only that round's decorations.
 			let baselineForOverlay = currentBaseline;
 			let proposalForOverlay = currentProposalText;
+			let pendingRoundsForOverlay: MaterializedPendingReviewRound[] = [];
 			if (isMuted && currentRoundsList.length > 0) {
 				const expanded = expandedRoundId
 					? currentRoundsList.find((r) => r.id === expandedRoundId)
@@ -673,10 +672,13 @@
 				if (expanded && expanded.beforeMd != null && expanded.afterMd != null) {
 					baselineForOverlay = expanded.beforeMd;
 					proposalForOverlay = expanded.afterMd;
+					pendingRoundsForOverlay = [expanded];
 				} else {
 					baselineForOverlay = null;
 					proposalForOverlay = null;
 				}
+			} else if (currentRoundsList.length > 0) {
+				pendingRoundsForOverlay = currentRoundsList;
 			}
 			setDiffState(editor, {
 				baseline: baselineForOverlay,
@@ -684,7 +686,8 @@
 				annotations: currentAnnotations.filter((annotation) => annotation.tabId === tabId),
 				activeFeedbackRange: feedbackSelectionRange,
 				isPlainText: true,
-				allRoundsTiny
+				allRoundsTiny,
+				pendingRounds: pendingRoundsForOverlay
 			});
 		});
 	}
@@ -850,15 +853,17 @@
 		// Inline ✓ pill on the diff overlay dispatches this. We just
 		// forward to the parent — the parent owns the round-id state and
 		// the actual /api/document accept call.
-		const handleAcceptPendingEdit = () => {
-			onAcceptInlineEdit?.();
+		const handleAcceptPendingEdit = (ev: Event) => {
+			const detail = (ev as CustomEvent<{ roundId?: string | null }>).detail;
+			onAcceptInlineEdit?.(detail?.roundId ?? null);
 		};
 		editorRoot.addEventListener(
 			'docwriter:accept-pending-edit',
 			handleAcceptPendingEdit as EventListener
 		);
-		const handleRejectPendingEdit = () => {
-			onRejectInlineEdit?.();
+		const handleRejectPendingEdit = (ev: Event) => {
+			const detail = (ev as CustomEvent<{ roundId?: string | null }>).detail;
+			onRejectInlineEdit?.(detail?.roundId ?? null);
 		};
 		editorRoot.addEventListener(
 			'docwriter:reject-pending-edit',

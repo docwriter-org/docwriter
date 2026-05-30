@@ -4,6 +4,7 @@ import { Decoration, DecorationSet, type EditorView } from '@tiptap/pm/view';
 import { diffLines, diffWords } from 'diff';
 import type { Annotation } from '$lib/types';
 import { buildReviewDiffPreview, normalizeReviewText } from '$lib/review-diff';
+import type { MaterializedPendingReviewRound } from '$lib/review-rounds';
 import { wordDiff, type DiffPart as WordDiffPart } from '$lib/diff';
 import type { Node as PMNode } from '@tiptap/pm/model';
 import { buildCharIndex, paragraphPlainText } from './char-index';
@@ -99,6 +100,9 @@ export interface DiffState {
 	 * "Show suggestion" pill at the end of each strikethrough block to
 	 * reveal the proposed replacement. */
 	expandedBlocks?: Set<string>;
+	/** Same pending rounds as the sidebar cards — each inline diff hunk is
+	 * rendered from one round and carries that round's id on its pill. */
+	pendingRounds?: MaterializedPendingReviewRound[];
 }
 
 const diffKey = new PluginKey<DiffState>('diffOverlay');
@@ -109,7 +113,8 @@ const diffKey = new PluginKey<DiffState>('diffOverlay');
 	activeFeedbackRange: null,
 	isPlainText: false,
 	allRoundsTiny: false,
-	expandedBlocks: new Set<string>()
+	expandedBlocks: new Set<string>(),
+	pendingRounds: []
 };
 
 export function setDiffState(editor: Editor, state: DiffState) {
@@ -129,6 +134,33 @@ function toggleDiffBlock(view: EditorView, blockId: string) {
 	view.dispatch(
 		view.state.tr.setMeta(diffKey, { expandedBlocks: next })
 	);
+}
+
+/** Map line indices in `currentMd` to the document baseline (rounds[0].beforeMd)
+ * so each round's hunks land on the correct live paragraphs. */
+function buildLineAlignmentMap(anchorMd: string, currentMd: string): Map<number, number> {
+	const map = new Map<number, number>();
+	const parts = diffLines(normalizeReviewText(anchorMd), normalizeReviewText(currentMd));
+	let anchorIdx = 0;
+	let currentIdx = 0;
+	for (const part of parts) {
+		const lineCount = splitLogicalLines(part.value).length;
+		if (part.removed) {
+			anchorIdx += lineCount;
+		} else if (part.added) {
+			for (let i = 0; i < lineCount; i += 1) {
+				map.set(currentIdx + i, Math.max(0, anchorIdx - 1));
+			}
+			currentIdx += lineCount;
+		} else {
+			for (let i = 0; i < lineCount; i += 1) {
+				map.set(currentIdx + i, anchorIdx + i);
+			}
+			anchorIdx += lineCount;
+			currentIdx += lineCount;
+		}
+	}
+	return map;
 }
 
 /** Selectors that mark a DOM node as part of the diff overlay — clicks
@@ -297,7 +329,8 @@ export const DiffOverlay = Extension.create({
 							activeFeedbackRange,
 							isPlainText,
 							allRoundsTiny,
-							expandedBlocks = new Set<string>()
+							expandedBlocks = new Set<string>(),
+							pendingRounds = []
 						} = diffKey.getState(state) ?? INITIAL_STATE;
 						const addedClass = allRoundsTiny ? 'diff-added diff-added-tiny' : 'diff-added';
 						const removedWidgetClass = allRoundsTiny
@@ -338,155 +371,117 @@ export const DiffOverlay = Extension.create({
 
 								if (proposedText !== null && proposedText !== undefined && isPlainText) {
 									const paragraphs = buildParagraphTextIndex(state.doc);
-									const lineParts = cachedDiff(
-										diffLinesCache,
-										normalizeReviewText(baseline),
-										normalizeReviewText(proposedText),
-										diffLines
-									);
-									// Group consecutive non-context parts into "blocks".
-									// Each block is one strikethrough section + its
-									// proposed replacement. Default UX: only the
-									// strikethrough renders; a "Show suggestion" pill at
-									// the end of the block reveals the green lines on
-									// click. This keeps the doc visually length-neutral
-									// while the user types elsewhere.
+									const documentBaseline = baseline;
 									interface DiffBlock {
 										id: string;
+										roundId: string;
 										insertionPos: number;
 										removedParagraphIdxs: number[];
 										addedLines: string[];
 									}
-									const blocks: DiffBlock[] = [];
-									// `baselineLineIdx` tracks the running BEFORE line
-									// index. The editor doc holds the BEFORE text while
-									// a review is pending (the agent only pushes a
-									// review round; the proposed text isn't applied to
-									// the Y.Doc until Accept), so a removed line's live
-									// paragraph is `paragraphs[baselineLineIdx]`.
-									let baselineLineIdx = 0;
 									interface ModifiedPara {
 										id: string;
+										roundId: string;
 										para: ParagraphTextSpan;
 										afterText: string;
-										/** `true` when the live paragraph text has
-										 * diverged from the baseline line (the user
-										 * typed into this paragraph since the
-										 * snapshot). We skip inline word-level
-										 * decorations in that case — they'd strike
-										 * chars the user just typed — but still emit
-										 * the pill so the user can see a proposal
-										 * exists, and reveal the proposed line as a
-										 * green ghost block on expand. */
 										stale: boolean;
-										/** The baseline line for the pill's change
-										 * count when `stale`. (Inline path computes
-										 * from `para.text`.) */
 										baselineText: string;
 									}
+									const blocks: DiffBlock[] = [];
 									const modified: ModifiedPara[] = [];
-									let currentBlock: DiffBlock | null = null;
-									function ensureBlock(): DiffBlock {
-										if (currentBlock) return currentBlock;
-										currentBlock = {
-											id: `block:${baselineLineIdx}`,
-											insertionPos: 0,
-											removedParagraphIdxs: [],
-											addedLines: []
-										};
-										return currentBlock;
-									}
-									function flushBlock() {
-										if (!currentBlock) return;
-										currentBlock.insertionPos = resolveParagraphWidgetPos(
-											state.doc.content.size,
-											paragraphs,
-											baselineLineIdx
+									for (const round of pendingRounds) {
+										if (round.beforeMd == null || round.afterMd == null) continue;
+										const lineToDoc = buildLineAlignmentMap(
+											documentBaseline,
+											round.beforeMd
 										);
-										blocks.push(currentBlock);
-										currentBlock = null;
-									}
-									for (let i = 0; i < lineParts.length; i++) {
-										const part = lineParts[i];
-										const next = lineParts[i + 1];
-										// A removed run immediately followed by an added
-										// run is a replacement. When the line counts
-										// match 1:1, each pair is a paragraph modified
-										// in place → render a word-level inline diff
-										// instead of striking the whole paragraph, so a
-										// near-identical edit no longer looks like a
-										// wholesale rewrite (mirrors buildReviewDiffPreview).
-										if (part.removed && next?.added) {
-											const removedLines = splitLogicalLines(part.value);
-											const addedLines = splitLogicalLines(next.value);
-											const canModifyInPlace =
-												removedLines.length === addedLines.length &&
-												removedLines.every(
-													(line, k) => line !== '' && addedLines[k] !== ''
-												);
-											if (canModifyInPlace) {
-												flushBlock();
-												for (let j = 0; j < removedLines.length; j++) {
-													// Doc holds the BEFORE text → the
-													// removed line's live paragraph is at
-													// the BEFORE line index.
-													const beforeIdx = baselineLineIdx + j;
-													const para = paragraphs[beforeIdx];
-													if (!para) {
-														// No live paragraph to host the
-														// inline diff (shouldn't happen for
-														// a clean replacement) — fall back
-														// to a block so the proposed text
-														// is still visible.
-														ensureBlock().addedLines.push(addedLines[j]);
-														continue;
+										const toDocLine = (roundLine: number) =>
+											lineToDoc.get(roundLine) ?? roundLine;
+										const lineParts = cachedDiff(
+											diffLinesCache,
+											normalizeReviewText(round.beforeMd),
+											normalizeReviewText(round.afterMd),
+											diffLines
+										);
+										let roundLineIdx = 0;
+										let currentBlock: DiffBlock | null = null;
+										function ensureBlock(): DiffBlock {
+											if (currentBlock) return currentBlock;
+											const docLine = toDocLine(roundLineIdx);
+											currentBlock = {
+												id: `block:${round.id}:${docLine}`,
+												roundId: round.id,
+												insertionPos: 0,
+												removedParagraphIdxs: [],
+												addedLines: []
+											};
+											return currentBlock;
+										}
+										function flushBlock() {
+											if (!currentBlock) return;
+											currentBlock.insertionPos = resolveParagraphWidgetPos(
+												state.doc.content.size,
+												paragraphs,
+												toDocLine(roundLineIdx)
+											);
+											blocks.push(currentBlock);
+											currentBlock = null;
+										}
+										for (let i = 0; i < lineParts.length; i++) {
+											const part = lineParts[i];
+											const next = lineParts[i + 1];
+											if (part.removed && next?.added) {
+												const removedLines = splitLogicalLines(part.value);
+												const addedLines = splitLogicalLines(next.value);
+												const canModifyInPlace =
+													removedLines.length === addedLines.length &&
+													removedLines.every(
+														(line, k) => line !== '' && addedLines[k] !== ''
+													);
+												if (canModifyInPlace) {
+													flushBlock();
+													for (let j = 0; j < removedLines.length; j++) {
+														const roundLine = roundLineIdx + j;
+														const docLine = toDocLine(roundLine);
+														const para = paragraphs[docLine];
+														if (!para) {
+															ensureBlock().addedLines.push(addedLines[j]);
+															continue;
+														}
+														const stale = para.text !== removedLines[j];
+														modified.push({
+															id: `mod:${round.id}:${docLine}`,
+															roundId: round.id,
+															para,
+															afterText: addedLines[j],
+															stale,
+															baselineText: removedLines[j]
+														});
 													}
-													// `reviewBaseline` is captured at sync
-													// time and doesn't update as the user
-													// types. If the live paragraph has
-													// diverged from the baseline line, the
-													// user is actively editing this exact
-													// paragraph — a word-level diff against
-													// `para.text` would mark the chars they
-													// just typed as "removed". Mark the
-													// entry stale; the renderer emits the
-													// pill + a green ghost block on expand,
-													// but no inline strikes.
-													const stale = para.text !== removedLines[j];
-													modified.push({
-														id: `mod:${beforeIdx}`,
-														para,
-														afterText: addedLines[j],
-														stale,
-														baselineText: removedLines[j]
-													});
+													roundLineIdx += removedLines.length;
+													i += 1;
+													continue;
 												}
-												baselineLineIdx += removedLines.length;
-												i += 1; // consumed `next` (the added run)
+											}
+											const lines = splitLogicalLines(part.value);
+											if (part.added) {
+												const block = ensureBlock();
+												for (const line of lines) block.addedLines.push(line);
 												continue;
 											}
-											// Non-1:1 replacement: fall through and let
-											// the generic removed/added branches build a
-											// block, exactly as before this change.
-										}
-										const lines = splitLogicalLines(part.value);
-										if (part.added) {
-											const block = ensureBlock();
-											for (const line of lines) block.addedLines.push(line);
-											continue;
-										}
-										if (part.removed) {
-											const block = ensureBlock();
-											for (const _line of lines) {
-												block.removedParagraphIdxs.push(baselineLineIdx);
-												baselineLineIdx += 1;
+											if (part.removed) {
+												const block = ensureBlock();
+												for (const _line of lines) {
+													block.removedParagraphIdxs.push(toDocLine(roundLineIdx));
+													roundLineIdx += 1;
+												}
+												continue;
 											}
-											continue;
+											flushBlock();
+											roundLineIdx += lines.length;
 										}
 										flushBlock();
-										baselineLineIdx += lines.length;
 									}
-									flushBlock();
 
 									for (const block of blocks) {
 										const expanded = expandedBlocks.has(block.id);
@@ -564,7 +559,9 @@ export const DiffOverlay = Extension.create({
 															block.id,
 															addedCount,
 															expanded,
-															hostParagraph !== null
+															hostParagraph !== null,
+															'lines',
+															block.roundId
 														),
 													{
 														side: pillSide,
@@ -648,7 +645,8 @@ export const DiffOverlay = Extension.create({
 														changeGroups,
 														expanded,
 														true,
-														'tokens'
+														'tokens',
+														m.roundId
 													),
 												{
 													side: 1,
@@ -1061,7 +1059,8 @@ function createDiffTogglePill(
 	addedCount: number,
 	expanded: boolean,
 	inline: boolean,
-	mode: 'lines' | 'tokens' = 'lines'
+	mode: 'lines' | 'tokens' = 'lines',
+	roundId: string
 ): HTMLElement {
 	const wrapper = document.createElement(inline ? 'span' : 'div');
 	wrapper.className = inline
@@ -1117,7 +1116,10 @@ function createDiffTogglePill(
 		e.preventDefault();
 		e.stopPropagation();
 		wrapper.dispatchEvent(
-			new CustomEvent('docwriter:accept-pending-edit', { bubbles: true })
+			new CustomEvent('docwriter:accept-pending-edit', {
+				bubbles: true,
+				detail: { roundId }
+			})
 		);
 	});
 	acceptBtn.addEventListener('click', (e) => {
@@ -1127,7 +1129,7 @@ function createDiffTogglePill(
 	wrapper.appendChild(acceptBtn);
 
 	// Inline ✕ Reject pill — mirror of Accept. Parent listens for
-	// `docwriter:reject-pending-edit` and calls `rejectAgentEdit(rounds[0].id)`.
+	// `docwriter:reject-pending-edit` and calls `rejectAgentEdit(roundId)`.
 	const rejectBtn = document.createElement('button');
 	rejectBtn.type = 'button';
 	rejectBtn.className = 'diff-reject-pill';
@@ -1144,7 +1146,10 @@ function createDiffTogglePill(
 		e.preventDefault();
 		e.stopPropagation();
 		wrapper.dispatchEvent(
-			new CustomEvent('docwriter:reject-pending-edit', { bubbles: true })
+			new CustomEvent('docwriter:reject-pending-edit', {
+				bubbles: true,
+				detail: { roundId }
+			})
 		);
 	});
 	rejectBtn.addEventListener('click', (e) => {
