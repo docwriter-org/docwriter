@@ -1204,6 +1204,12 @@
 						e.preventDefault();
 						e.clipboardData?.setData('text/plain', feedbackPopup.text);
 					}}
+					oncut={(e) => {
+						if (feedbackInput || !feedbackPopup) return;
+						e.preventDefault();
+						e.clipboardData?.setData('text/plain', feedbackPopup.text);
+						deleteSelectedTextFromEditor();
+					}}
 				></div>
 				<button class="feedback-submit" onclick={sendCustomFeedback}>Go</button>
 			</div>
