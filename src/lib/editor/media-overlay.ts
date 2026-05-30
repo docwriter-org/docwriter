@@ -200,6 +200,27 @@ const INLINE_URL_RE = /https?:\/\/[^\s<>"'()]+/g;
  * URL only, not the period. */
 const URL_TRAILING_TRIM_RE = /[.,;:!?)\]}]+$/;
 
+/** First absolute http(s) URL in `text`, or null. Shared with the diff
+ * overlay so proposed (green ghost) URL tokens get the same hover-card
+ * affordance as live doc links. */
+export function extractUrlFromText(text: string): string | null {
+	INLINE_URL_RE.lastIndex = 0;
+	const match = INLINE_URL_RE.exec(text);
+	if (!match) return null;
+	const trimmed = match[0].replace(URL_TRAILING_TRIM_RE, '');
+	return trimmed || null;
+}
+
+/** When proposed diff text contains a URL, mark the element so the
+ * media-overlay hover handler shows og metadata for the NEW url rather
+ * than the live-doc inline mark (which still points at the old one). */
+export function applyProposedLinkAttrs(el: HTMLElement, text: string): void {
+	const url = extractUrlFromText(text);
+	if (!url) return;
+	el.classList.add('media-link-inline');
+	el.dataset.url = url;
+}
+
 function scanInlineLinks(doc: PMNode): InlineLink[] {
 	const out: InlineLink[] = [];
 	doc.descendants((node, pos) => {

@@ -8,6 +8,7 @@ import type { MaterializedPendingReviewRound } from '$lib/review-rounds';
 import { wordDiff, type DiffPart as WordDiffPart } from '$lib/diff';
 import type { Node as PMNode } from '@tiptap/pm/model';
 import { buildCharIndex, paragraphPlainText } from './char-index';
+import { applyProposedLinkAttrs } from './media-overlay';
 
 /** Memoize diffWords / diffLines by their string inputs. The diff inputs
  * (baseline + proposedText) only change when the review state changes,
@@ -671,6 +672,7 @@ export const DiffOverlay = Extension.create({
 															span.className = addedClass;
 															span.textContent = value;
 															span.setAttribute('contenteditable', 'false');
+															applyProposedLinkAttrs(span, value);
 															return span;
 														},
 														{ side: -1, key: `add:${editorPos}:${value}` }
@@ -966,6 +968,7 @@ function renderModifiedParagraph(
 						span.className = addedClass;
 						span.textContent = afterText;
 						span.setAttribute('contenteditable', 'false');
+						applyProposedLinkAttrs(span, afterText);
 						return span;
 					},
 					{ side: -1, ignoreSelection: true, key: `modadd-block:${para.pos}` }
@@ -1015,6 +1018,7 @@ function renderModifiedParagraph(
 						span.className = addedClass;
 						span.textContent = value;
 						span.setAttribute('contenteditable', 'false');
+						applyProposedLinkAttrs(span, value);
 						return span;
 					},
 					{
@@ -1040,6 +1044,7 @@ function createAddedLineWidget(
 	const block = document.createElement('div');
 	block.className = className;
 	block.textContent = line || ' ';
+	applyProposedLinkAttrs(block, line);
 	// `contenteditable=false` keeps PM from treating the widget DOM as
 	// document content. Click handling lives in the plugin's
 	// `handleDOMEvents.mousedown` so we don't need a per-widget listener
