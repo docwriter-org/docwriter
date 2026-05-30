@@ -61,11 +61,19 @@ first `synced` event — on localhost this is sub-20ms.
 
 ## Three-pane layout
 
-- **Left (`OutlinePane`, 260px):** auto-generated TOC from headings, plus
-  the pending-edit card with Accept / Reject when a review is active.
+- **Left (`OutlinePane`, 260px):** auto-generated TOC from headings only
+  (`showOutline`), with the `FileTree` below it.
 - **Center:** Tiptap editor + `AgentDock` in the top-right (Wake up button,
   sleeping-cat mascot, gear-icon settings popover).
-- **Right (`HistoryPane`, 340px, toggleable):** agent tool-call log.
+- **Right (340px, toggleable):** `HistoryPane` (agent tool-call log) on top,
+  and a second `OutlinePane` instance (`showReview`) below it holding the
+  pending-edit cards with Accept / Reject / Retry, unread comments, and
+  proposed rules / hooks.
+
+`OutlinePane` is one component reused twice: `showOutline={true}
+showReview={false}` for the left TOC, and `showOutline={false}
+showReview={true}` for the right pending-review sidebar. The pending-edit
+cards live in the **right** column, not the left.
 
 ## Agent SDK integration
 

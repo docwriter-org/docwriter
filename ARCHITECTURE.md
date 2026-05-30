@@ -570,21 +570,27 @@ on a hot scheduler.
 ```
 ┌───────────────┬──────────────────────────────────────┬────────────────┐
 │ OutlinePane   │ TabBar                               │ HistoryPane    │
-│ (260px)       ├──────────────────────────────────────┤ (340px,        │
-│               │                                      │  toggleable)   │
-│ • outline     │          TiptapEditor                │                │
-│   from        │     (bound to per-tab Y.Doc          │ • agent events │
-│   headings    │      via HocuspocusProvider)         │ • tool calls   │
-│ • review      │                                      │ • thinking     │
-│   cards       │                          AgentDock ──┤   summaries    │
-│ • proposed    │                         (wake, cost, │ • notifications│
-│   rules/hooks │                          settings)   │                │
-│ • user        │                                      │                │
-│   questions   │                                      │                │
-├───────────────┤                                      │                │
-│ FileTree      │                                      │                │
+│ (260px,       ├──────────────────────────────────────┤ (340px,        │
+│  showOutline) │                                      │  toggleable)   │
+│               │          TiptapEditor                │ • agent events │
+│ • outline     │     (bound to per-tab Y.Doc          │ • tool calls   │
+│   from        │      via HocuspocusProvider)         │ • thinking     │
+│   headings    │                                      │   summaries    │
+│               │                          AgentDock ──┤ • notifications│
+├───────────────┤                         (wake, cost, ├────────────────┤
+│ FileTree      │                          settings)   │ OutlinePane    │
+│               │                                      │ (showReview)   │
+│               │                                      │ • review cards │
+│               │                                      │ • comments     │
+│               │                                      │ • proposed     │
+│               │                                      │   rules/hooks  │
+│               │                                      │ • user qs      │
 └───────────────┴──────────────────────────────────────┴────────────────┘
 ```
+
+`OutlinePane` is one component mounted twice: `showOutline` (left, TOC only)
+and `showReview` (right, below `HistoryPane` — pending review cards,
+comments, and proposals). The two modes render disjoint blocks.
 
 ### Per-tab client Y.Doc (`src/lib/yjs-doc.ts`)
 
@@ -625,7 +631,7 @@ All in `src/lib/components/`:
 | Component | Role |
 | --- | --- |
 | `TabBar` | Tab strip with open / close / rename / context menu. |
-| `OutlinePane` | Left sidebar: auto outline, pending review cards (Accept/Reject), proposed rules, proposed hooks, user questions. |
+| `OutlinePane` | Mounted twice via `showOutline` / `showReview` flags (disjoint blocks). `showOutline` → left sidebar: auto outline from headings. `showReview` → right column under `HistoryPane`: pending review cards (Accept/Reject/Retry), comments, proposed rules, proposed hooks, user questions. |
 | `FileTree` | Workspace file explorer with inline create/rename. |
 | `HistoryPane` | Right sidebar: agent history, tool calls, thinking summaries, cost, notifications. Two modes: `verbose` / `minimal`. |
 | `AgentDock` | Floating top-right: wake button, sleeping-cat mascot, cost pill, gear-icon settings popover. |
