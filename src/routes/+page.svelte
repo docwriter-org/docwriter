@@ -517,24 +517,43 @@
 		void submit(`The user deleted the file "${id}". Update any open files that referenced it.`);
 	}
 
+	/** No open tabs: tear down review/editor state and show the empty pane. */
+	function showEmptyEditor() {
+		const activeId = getCurrentActiveTab();
+		if (activeId) detachActiveReviewObservers(activeId);
+		expandedReviewRoundId.set(null);
+		pendingReviewRounds.set([]);
+		reviewBaseline.set(null);
+		commentThreads.set([]);
+		openCommentThreadId.set(null);
+		activeTab.set(null);
+		docLoaded = true;
+	}
+
 	async function removeTab(id: string, deleteFile: boolean) {
 		const qs = new URLSearchParams({ id });
 		if (deleteFile) qs.set('deleteFile', 'true');
+		const closedWasActive = getCurrentActiveTab() === id;
 		const res = await fetch(`/api/tabs?${qs.toString()}`, { method: 'DELETE' });
 		if (!res.ok) throw new Error(await res.text());
 		const data = await res.json();
 		detachBgTabObserver(id);
+		if (closedWasActive) detachActiveReviewObservers(id);
 		// Destroy this tab's Y.Doc binding regardless of whether the file
 		// was unlinked — we don't want a stale in-memory doc if the tab
 		// gets re-opened.
 		await destroyTab(id);
 		const listData = await fetch('/api/tabs').then((r) => r.json());
-		tabs.set(listData.tabs || []);
-		if (data.active && data.active !== getCurrentActiveTab()) {
-			await switchTab(data.active);
-		} else if (!data.active) {
-			docLoaded = false;
-			activeTab.set(null);
+		const tabIds: string[] = listData.tabs ?? data.order ?? [];
+		tabs.set(tabIds);
+		const nextActive =
+			typeof data.active === 'string' && tabIds.includes(data.active)
+				? data.active
+				: tabIds[0] ?? null;
+		if (!nextActive) {
+			showEmptyEditor();
+		} else if (closedWasActive || nextActive !== getCurrentActiveTab()) {
+			await switchTab(nextActive);
 		}
 	}
 
