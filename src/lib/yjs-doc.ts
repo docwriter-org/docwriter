@@ -1,6 +1,6 @@
 import * as Y from 'yjs';
 import { HocuspocusProvider } from '@hocuspocus/provider';
-import { COMMENTS_MAP_NAME, FRAGMENT_NAME, REVIEW_ARRAY_NAME } from '$lib/shared/ydoc-codec';
+import { COMMENTS_MAP_NAME, FRAGMENT_NAME, REVIEW_ARRAY_NAME, USER_ORIGIN } from '$lib/shared/ydoc-codec';
 import type { CommentThread, PendingReviewRound } from './types';
 
 /**
@@ -152,6 +152,23 @@ export function waitForTabSync(tabId: string, timeoutMs = 2_000): Promise<boolea
 	return waitForProviderIdle(doc.wsProvider, timeoutMs);
 }
 
+/** Temporarily stop receiving WebSocket updates for a tab. Accept/Reject use
+ * this to prevent the server's broadcast from winning the race against the
+ * HTTP response: the returned update must be applied locally with USER_ORIGIN
+ * so the editor creates a real undo stack item. */
+export function pauseTabSync(tabId: string): () => void {
+	const doc = registry.get(tabId);
+	const provider = doc?.wsProvider;
+	if (!provider) return () => {};
+	provider.disconnect();
+	let resumed = false;
+	return () => {
+		if (resumed) return;
+		resumed = true;
+		void provider.connect();
+	};
+}
+
 export function isYDocEmptyForTab(tabId: string): boolean {
 	return getXmlFragmentForTab(tabId).length === 0;
 }
@@ -187,16 +204,15 @@ export async function renameTab(oldId: string, newId: string): Promise<void> {
 	registry.set(newId, { ydoc: newYdoc, wsProvider, readyPromise });
 }
 
-/** Apply a base64-encoded Yjs update directly to a tab's local Y.Doc,
- * using the tab's own WebSocket provider as the Yjs origin. This prevents
- * the HocuspocusProvider from echoing the update back to the server (the
- * provider skips forwarding updates whose origin equals itself). When the
- * server later delivers the same update via WebSocket it will be a no-op. */
+/** Apply a base64-encoded Yjs update directly to a tab's local Y.Doc.
+ * Use USER_ORIGIN so the editor's UndoManager records accept/reject
+ * transactions as user actions; the later WebSocket broadcast of the same
+ * server update is a CRDT no-op. */
 export function applyUpdateToTab(tabId: string, updateBase64: string): void {
 	const doc = registry.get(tabId);
 	if (!doc) return;
 	const bytes = Uint8Array.from(atob(updateBase64), (c) => c.charCodeAt(0));
-	Y.applyUpdate(doc.ydoc, bytes, doc.wsProvider ?? 'server-accept');
+	Y.applyUpdate(doc.ydoc, bytes, USER_ORIGIN);
 }
 
 export async function resetAllYDocs(): Promise<void> {

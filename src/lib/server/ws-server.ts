@@ -298,23 +298,28 @@ export async function acceptTabRounds(
 export async function rejectTabRounds(
 	tabId: string,
 	roundId?: string
-): Promise<{ rejectedCount: number; rounds: PendingReviewRound[] }> {
+): Promise<{ rejectedCount: number; rounds: PendingReviewRound[]; yjsUpdate: string | null }> {
 	return withLiveDoc(tabId, (ydoc) => {
 		const reviewArr = getReviewArray(ydoc);
 		const current = reviewArr.toArray();
-		if (current.length === 0) return { rejectedCount: 0, rounds: [] };
+		if (current.length === 0) return { rejectedCount: 0, rounds: [], yjsUpdate: null };
 		// No roundId = reject everything. With a roundId, drop only that
 		// round; later rounds stay and will surface stale if they no longer
 		// apply (the materializer marks them).
+		const beforeStateVector = Y.encodeStateVector(ydoc);
 		if (!roundId) {
 			ydoc.transact(() => reviewArr.delete(0, current.length), USER_ORIGIN);
-			return { rejectedCount: current.length, rounds: [] };
+			const deltaBytes = Y.encodeStateAsUpdate(ydoc, beforeStateVector);
+			const yjsUpdate = Buffer.from(deltaBytes).toString('base64');
+			return { rejectedCount: current.length, rounds: [], yjsUpdate };
 		}
 		const idx = current.findIndex((r) => r.id === roundId);
-		if (idx < 0) return { rejectedCount: 0, rounds: current };
+		if (idx < 0) return { rejectedCount: 0, rounds: current, yjsUpdate: null };
 		ydoc.transact(() => reviewArr.delete(idx, 1), USER_ORIGIN);
 		const remaining = current.slice(0, idx).concat(current.slice(idx + 1));
-		return { rejectedCount: 1, rounds: remaining };
+		const deltaBytes = Y.encodeStateAsUpdate(ydoc, beforeStateVector);
+		const yjsUpdate = Buffer.from(deltaBytes).toString('base64');
+		return { rejectedCount: 1, rounds: remaining, yjsUpdate };
 	});
 }
 

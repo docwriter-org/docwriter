@@ -990,6 +990,10 @@
 		return wrapperEl?.scrollTop ?? 0;
 	}
 
+	export function focusEditor(): void {
+		editor?.commands.focus();
+	}
+
 	// Flash a sage-green halo on the freshly-accepted text range. Called
 	// by the parent right after a successful Accept; locates the new
 	// text in the live PM doc and dispatches the celebration decoration
