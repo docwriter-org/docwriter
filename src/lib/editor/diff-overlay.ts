@@ -935,6 +935,48 @@ function renderModifiedParagraph(
 ): number {
 	const parts = cachedWordDiff(para.text, afterText);
 	const charPositions = para.localCharPositions;
+
+	// Threshold fallback: when most of the paragraph is being rewritten,
+	// the per-token diff turns into a confetti of small strikes around
+	// short common substrings (real overlap, but visually noisy). At
+	// that point "rewrote this paragraph" reads better than a dozen
+	// interleaved word swaps. Render the whole BEFORE as one strike +
+	// the whole AFTER as one ghost.
+	let removedChars = 0;
+	let addedChars = 0;
+	let groupCount = 0;
+	{
+		let inGroup = false;
+		for (const p of parts) {
+			if (p.type === 'same') { inGroup = false; continue; }
+			if (!inGroup) { groupCount += 1; inGroup = true; }
+			if (p.type === 'removed') removedChars += p.text.length;
+			else addedChars += p.text.length;
+		}
+	}
+	const denom = Math.max(1, para.text.length + afterText.length);
+	const churnRatio = (removedChars + addedChars) / denom;
+	if (churnRatio > 0.8 || groupCount > 6) {
+		applyInlineClassRange(decorations, charPositions, 0, para.text.length, 'diff-removed');
+		if (expanded && afterText.length > 0) {
+			const widgetPos = ghostPosLocal(para, para.text.length);
+			decorations.push(
+				Decoration.widget(
+					widgetPos,
+					() => {
+						const span = document.createElement('span');
+						span.className = addedClass;
+						span.textContent = afterText;
+						span.setAttribute('contenteditable', 'false');
+						return span;
+					},
+					{ side: -1, ignoreSelection: true, key: `modadd-block:${para.pos}` }
+				)
+			);
+		}
+		return 1;
+	}
+
 	let cursor = 0;
 	let changeGroups = 0;
 	let inChange = false;
@@ -1083,6 +1125,33 @@ function createDiffTogglePill(
 		e.stopPropagation();
 	});
 	wrapper.appendChild(acceptBtn);
+
+	// Inline ✕ Reject pill — mirror of Accept. Parent listens for
+	// `docwriter:reject-pending-edit` and calls `rejectAgentEdit(rounds[0].id)`.
+	const rejectBtn = document.createElement('button');
+	rejectBtn.type = 'button';
+	rejectBtn.className = 'diff-reject-pill';
+	rejectBtn.title = 'Reject this proposed change';
+	rejectBtn.setAttribute('aria-label', 'Reject this proposed change');
+	rejectBtn.innerHTML = `
+		<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<line x1="18" y1="6" x2="6" y2="18"></line>
+			<line x1="6" y1="6" x2="18" y2="18"></line>
+		</svg>
+		<span>Reject diff</span>
+	`;
+	rejectBtn.addEventListener('mousedown', (e) => {
+		e.preventDefault();
+		e.stopPropagation();
+		wrapper.dispatchEvent(
+			new CustomEvent('docwriter:reject-pending-edit', { bubbles: true })
+		);
+	});
+	rejectBtn.addEventListener('click', (e) => {
+		e.preventDefault();
+		e.stopPropagation();
+	});
+	wrapper.appendChild(rejectBtn);
 
 	return wrapper;
 }

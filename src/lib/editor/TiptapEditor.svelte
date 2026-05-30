@@ -26,7 +26,7 @@
 	import CommentGutter from '$lib/components/CommentGutter.svelte';
 	import { Crosshair } from 'lucide-svelte';
 	import { collaborativeExtensions } from '$lib/editor-extensions';
-	import { getYDoc, whenYDocReady, getCurrentTab, waitForCurrentTabSync } from '$lib/yjs-doc';
+	import { getYDocForTab, whenYDocReadyForTab, waitForTabSync } from '$lib/yjs-doc';
 	import {
 		reviewBaseline,
 		annotations,
@@ -40,7 +40,6 @@
 		pendingReviewRounds,
 		commentThreads,
 		openCommentThreadId,
-		activeTab,
 		agentSettings,
 		expandedReviewRoundId
 	} from '$lib/stores';
@@ -49,6 +48,8 @@
 	const IDLE_MS = 3_000;
 
 	interface Props {
+		/** Workspace path for the tab this editor instance is bound to. */
+		tabId: string;
 		onSubmit?: (trigger?: string) => void;
 		/** One-shot scroll restore. Read once in onMount after the editor's
 		 * content has laid out, then ignored. The parent captures this from
@@ -60,8 +61,9 @@
 		 * diff overlay; lets the user accept without scrolling away to
 		 * the OutlinePane card. */
 		onAcceptInlineEdit?: () => void;
+		onRejectInlineEdit?: () => void;
 	}
-	let { onSubmit, initialScrollTop = 0, onAcceptInlineEdit }: Props = $props();
+	let { tabId, onSubmit, initialScrollTop = 0, onAcceptInlineEdit, onRejectInlineEdit }: Props = $props();
 
 	let element: HTMLDivElement;
 	let wrapperEl: HTMLDivElement | null = null;
@@ -313,8 +315,6 @@
 		relPositions: { relStart: string; relEnd: string } | null
 	): Promise<string | null> {
 		if (feedbackMode !== 'discuss') return null;
-		const tabId = getCurrentTab();
-		if (!tabId) return null;
 		try {
 			const res = await fetch('/api/comments', {
 				method: 'POST',
@@ -399,8 +399,7 @@
 
 	function addFeedbackAnnotation(comment: string, excerpt: string) {
 		const range = feedbackSelectionRange;
-		const tabId = getCurrentTab();
-		if (!range || !tabId) return;
+		if (!range) return;
 		annotations.update((prev) => [
 			{
 				id: 'anno_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
@@ -480,7 +479,7 @@
 			}
 			setTimeout(resolve, 0);
 		});
-		return waitForCurrentTabSync();
+		return waitForTabSync(tabId);
 	}
 
 	// Diff overlay state — baseline changes when a review starts/ends.
@@ -545,13 +544,11 @@
 	// when there's a build hook producing a PDF (or other previewable
 	// file) for the current tab. Refreshed on every active-tab change.
 	let previewOutputPath = $state<string | null>(null);
-	activeTab.subscribe(() => void refreshPreviewOutputPath());
+	$effect(() => {
+		tabId;
+		void refreshPreviewOutputPath();
+	});
 	async function refreshPreviewOutputPath() {
-		const tabId = getCurrentTab();
-		if (!tabId) {
-			previewOutputPath = null;
-			return;
-		}
 		try {
 			const res = await fetch(
 				`/api/hooks/preview-match?file=${encodeURIComponent(tabId)}`
@@ -601,8 +598,6 @@
 
 	async function showInPdf() {
 		if (!previewOutputPath) return;
-		const tabId = getCurrentTab();
-		if (!tabId) return;
 		const line = selectionLineNumber();
 		if (line == null) return;
 		try {
@@ -686,7 +681,7 @@
 			setDiffState(editor, {
 				baseline: baselineForOverlay,
 				proposedText: proposalForOverlay,
-				annotations: currentAnnotations.filter((annotation) => annotation.tabId === getCurrentTab()),
+				annotations: currentAnnotations.filter((annotation) => annotation.tabId === tabId),
 				activeFeedbackRange: feedbackSelectionRange,
 				isPlainText: true,
 				allRoundsTiny
@@ -765,8 +760,8 @@
 		// server is authoritative: it replays the tab's Yjs update log from
 		// SQLite (seeding from the workspace file on first open if the log
 		// is empty) and streams the result here before `synced` fires.
-		const ydoc = getYDoc();
-		await whenYDocReady();
+		const ydoc = getYDocForTab(tabId);
+		await whenYDocReadyForTab(tabId);
 
 		editor = new Editor({
 			element,
@@ -862,6 +857,13 @@
 			'docwriter:accept-pending-edit',
 			handleAcceptPendingEdit as EventListener
 		);
+		const handleRejectPendingEdit = () => {
+			onRejectInlineEdit?.();
+		};
+		editorRoot.addEventListener(
+			'docwriter:reject-pending-edit',
+			handleRejectPendingEdit as EventListener
+		);
 
 		// Mousedown anywhere outside a gutter card collapses the open
 		// thread. Pill clicks stop propagation on mousedown, so window
@@ -897,6 +899,10 @@
 			editorRoot.removeEventListener(
 				'docwriter:accept-pending-edit',
 				handleAcceptPendingEdit as EventListener
+			);
+			editorRoot.removeEventListener(
+				'docwriter:reject-pending-edit',
+				handleRejectPendingEdit as EventListener
 			);
 			window.removeEventListener('mousedown', handleOutsideMousedown);
 			window.removeEventListener('mousedown', handleFeedbackOutsideMousedown);
@@ -994,7 +1000,7 @@
 	     outside the scroll container so they pin regardless of scroll.
 	     When find is open, the preview button shifts down so the two
 	     don't overlap (FindBar wins the corner). -->
-	<PreviewButton activeTabPath={getCurrentTab() ?? null} />
+	<PreviewButton activeTabPath={tabId} />
 	{#if findState.open}
 		<FindBar
 			findState={findState}
@@ -1039,7 +1045,7 @@
 			<CommentGutter
 				threads={threadsForTab}
 				editor={editor}
-				tabId={getCurrentTab() ?? ''}
+				tabId={tabId}
 				openThreadId={openThreadId}
 				onOpen={(id) => openCommentThreadId.set(id)}
 				onClose={() => openCommentThreadId.set(null)}
@@ -1553,15 +1559,45 @@
 		border-radius: 999px;
 		cursor: pointer;
 		line-height: 1.4;
+		text-decoration: none;
 		opacity: 0.85;
 		transition: background 120ms ease, border-color 120ms ease, color 120ms ease, opacity 120ms ease;
 	}
 	.tiptap-editor :global(.diff-accept-pill:hover) {
-		background: color-mix(in srgb, var(--diff-added-color) 14%, transparent);
+		background: color-mix(in srgb, var(--diff-added-color) 14%, var(--bg-elevated));
 		border-color: var(--diff-added-color);
 		opacity: 1;
 	}
 	.tiptap-editor :global(.diff-accept-pill svg) {
+		display: block;
+		flex: none;
+	}
+	/* Inline ✕ reject pill — mirror of accept, red palette. */
+	.tiptap-editor :global(.diff-reject-pill) {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		padding: 1px 8px 1px 6px;
+		font-family: 'Inter', -apple-system, sans-serif;
+		font-size: 10.5px;
+		font-weight: 500;
+		letter-spacing: 0.02em;
+		color: var(--diff-removed-color);
+		background: var(--bg-elevated);
+		border: 1px solid color-mix(in srgb, var(--diff-removed-color) 35%, var(--border-light));
+		border-radius: 999px;
+		cursor: pointer;
+		line-height: 1.4;
+		text-decoration: none;
+		opacity: 0.85;
+		transition: background 120ms ease, border-color 120ms ease, color 120ms ease, opacity 120ms ease;
+	}
+	.tiptap-editor :global(.diff-reject-pill:hover) {
+		background: color-mix(in srgb, var(--diff-removed-color) 14%, var(--bg-elevated));
+		border-color: var(--diff-removed-color);
+		opacity: 1;
+	}
+	.tiptap-editor :global(.diff-reject-pill svg) {
 		display: block;
 		flex: none;
 	}

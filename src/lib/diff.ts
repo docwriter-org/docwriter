@@ -1,12 +1,19 @@
-import { diffWords, createTwoFilesPatch } from 'diff';
+import { createTwoFilesPatch } from 'diff';
+import DiffMatchPatch from 'diff-match-patch';
 
 export type DiffPart = { text: string; type: 'same' | 'added' | 'removed' };
 
-/** Word-level diff. Wraps the `diff` package's diffWords. */
+const dmp = new DiffMatchPatch.diff_match_patch();
+
+/** Human-readable diff. Uses diff-match-patch with `diff_cleanupSemantic`,
+ * which merges noisy small fragments into bigger blocks — so a mostly-rewritten
+ * paragraph reads as one removed + one added chunk instead of confetti. */
 export function wordDiff(oldText: string, newText: string): DiffPart[] {
-	return diffWords(oldText, newText).map((change) => ({
-		text: change.value,
-		type: change.added ? 'added' : change.removed ? 'removed' : 'same'
+	const diffs = dmp.diff_main(oldText, newText);
+	dmp.diff_cleanupSemantic(diffs);
+	return diffs.map(([op, text]) => ({
+		text,
+		type: op === 1 ? 'added' : op === -1 ? 'removed' : 'same'
 	}));
 }
 

@@ -146,7 +146,7 @@ function extractInlineDirectives(text: string, limit = 8): string[] {
 }
 
 function buildImplicitWakeupMessage(
-	activeTabId: string,
+	activeTabId: string | null,
 	tabs: TabPromptInfo[]
 ): string {
 	const directivesByTab = tabs
@@ -500,7 +500,7 @@ function buildRefsBlock(): string | null {
 }
 
 function buildMultiTabPrompt(
-	activeTabId: string,
+	activeTabId: string | null,
 	tabs: TabPromptInfo[],
 	userMessage: string
 ): string {
@@ -517,24 +517,26 @@ function buildMultiTabPrompt(
 	const currentRulesJson = snapshotRules(meta.rules);
 	const currentRefsJson = snapshotRefs();
 
-	const tabSections = tabs
-		.map(({ tabId, currentMd, lastSeenMd, commentThreads }) => {
-			const isActive = tabId === activeTabId;
-			const hasLastSeen = lastSeenMd !== null;
-			const hasDiff = hasLastSeen && lastSeenMd !== currentMd;
-			const activeNote = isActive ? ' [active]' : '';
-			const header = `### \`${tabId}\`${activeNote}\n\nPath: \`${tabId}\``;
-			const threadBlock = renderCommentThreadsBlock(commentThreads);
+	const tabSections = tabs.length === 0
+		? 'No files are open as tabs. Use `Read` / `Glob` / `Grep` to explore the workspace; use `edit_doc({ path, ... })` to edit, or `write_doc({ path, ... })` to create a file (the path argument is the workspace-relative path).'
+		: tabs
+				.map(({ tabId, currentMd, lastSeenMd, commentThreads }) => {
+					const isActive = tabId === activeTabId;
+					const hasLastSeen = lastSeenMd !== null;
+					const hasDiff = hasLastSeen && lastSeenMd !== currentMd;
+					const activeNote = isActive ? ' [active]' : '';
+					const header = `### \`${tabId}\`${activeNote}\n\nPath: \`${tabId}\``;
+					const threadBlock = renderCommentThreadsBlock(commentThreads);
 
-			if (!hasLastSeen) {
-				return `${header}\n\nNew — call \`read_doc("${tabId}")\` to read it.${threadBlock}`;
-			}
-			if (hasDiff) {
-				return `${header}\n\nChanges:\n\`\`\`diff\n${unifiedLineDiff(lastSeenMd as string, currentMd)}\n\`\`\`${threadBlock}`;
-			}
-			return `${header}\n\nUnchanged.${threadBlock}`;
-		})
-		.join('\n\n');
+					if (!hasLastSeen) {
+						return `${header}\n\nNew — call \`read_doc("${tabId}")\` to read it.${threadBlock}`;
+					}
+					if (hasDiff) {
+						return `${header}\n\nChanges:\n\`\`\`diff\n${unifiedLineDiff(lastSeenMd as string, currentMd)}\n\`\`\`${threadBlock}`;
+					}
+					return `${header}\n\nUnchanged.${threadBlock}`;
+				})
+				.join('\n\n');
 
 	// Assemble the dynamic prompt: only the delta blocks + the user's message.
 	// Static guidance (refs usage, rules meta, agency definitions, read_doc
@@ -725,14 +727,20 @@ export const POST: RequestHandler = async ({ request }) => {
 			images?: ImageAttachmentPayload[];
 		};
 
-		const active = tab || getTabsState().active;
-		if (!active || !isValidTabId(active)) {
-			throw error(400, 'No active tab');
-		}
-
 		const allTabIds = getTabsState().order;
-		if (!allTabIds.includes(active)) {
-			throw error(400, `Active tab "${active}" not found on disk`);
+		// `active` is nullable: the user can message the agent with zero tabs
+		// open (e.g. "create a new file with X"). We only resolve it when a
+		// tab is actually open and valid.
+		const candidateActive = tab || getTabsState().active;
+		const active: string | null =
+			candidateActive && isValidTabId(candidateActive) && allTabIds.includes(candidateActive)
+				? candidateActive
+				: null;
+		// With no anchor (no tab) AND no user message, there's nothing to do
+		// — the agent has no prompt context. Warmup is exempt because it's a
+		// dry "are you alive?" ping.
+		if (!active && !userMessage && !warmup) {
+			throw error(400, 'No active tab and no message');
 		}
 
 		// Snapshot each tab's live authoritative content + its last-seen
