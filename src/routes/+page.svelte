@@ -71,7 +71,8 @@
 		destroyTab,
 		renameTab,
 		reconcileServerInstance,
-		applyUpdateToTab
+		applyUpdateToTab,
+		pauseTabSync
 	} from '$lib/yjs-doc';
 	import type { Editor } from '@tiptap/core';
 	import {
@@ -89,6 +90,10 @@
 		pushHistory,
 		nextHistoryKey,
 		selectedModel,
+		setSelectedModel,
+		availableModels,
+		loadAvailableModels,
+		type ModelOption,
 		selectedTheme,
 		submitCountdown,
 		editorFontScale,
@@ -118,6 +123,7 @@
 		flushAutosave: () => Promise<boolean>;
 		cancelIdleTimer: () => void;
 		getScrollTop: () => number;
+		focusEditor: () => void;
 		flashAcceptedRange: (text: string) => void;
 	};
 
@@ -1206,6 +1212,52 @@
 		].join('\n');
 	}
 
+	type ReviewAction = 'accept_rounds' | 'reject_rounds';
+	type ReviewActionResponse = {
+		ok?: boolean;
+		rounds?: PendingReviewRound[];
+		yjsUpdate?: string | null;
+		acceptedCount?: number;
+		rejectedCount?: number;
+		error?: string;
+		stale?: boolean;
+		staleRoundId?: string | null;
+		staleRoundKind?: string | null;
+	};
+
+	/** Shared accept/reject transport. The ordering here is the undo contract:
+	 * pause WebSocket sync, let the server mutate, apply the returned delta
+	 * locally with USER_ORIGIN, then reconnect. That guarantees the browser's
+	 * UndoManager sees Accept/Reject as a local user action instead of a
+	 * provider-origin remote update. */
+	async function postReviewAction(
+		tabId: string,
+		action: ReviewAction,
+		roundId?: string
+	): Promise<{ res: Response; data: ReviewActionResponse }> {
+		const synced = await editorRef?.flushAutosave();
+		if (synced === false) {
+			throw new Error('Latest local edits are still syncing to the server. Try again in a moment.');
+		}
+
+		const resumeTabSync = pauseTabSync(tabId);
+		try {
+			const res = await fetch(`/api/document?tab=${encodeURIComponent(tabId)}`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ action, roundId })
+			});
+			const data = (await res.json().catch(() => ({}))) as ReviewActionResponse;
+			if (res.ok && data?.ok && Array.isArray(data.rounds) && typeof data.yjsUpdate === 'string') {
+				applyUpdateToTab(tabId, data.yjsUpdate);
+				editorRef?.focusEditor();
+			}
+			return { res, data };
+		} finally {
+			resumeTabSync();
+		}
+	}
+
 	/** Accept a single pending round by id (or all rounds if no id is
 	 * given — used by the "Accept all" path). Rounds are independent: the
 	 * server applies just this round's edit op against the current live
@@ -1230,16 +1282,7 @@
 		clearPeekIfMatches(roundId);
 		editorRef?.cancelIdleTimer();
 		try {
-			const synced = await editorRef?.flushAutosave();
-			if (synced === false) {
-				throw new Error('Latest local edits are still syncing to the server. Try again in a moment.');
-			}
-			const res = await fetch(`/api/document?tab=${encodeURIComponent(tabId)}`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ action: 'accept_rounds', roundId })
-			});
-			const data = await res.json().catch(() => ({}));
+			const { res, data } = await postReviewAction(tabId, 'accept_rounds', roundId);
 			if (res.status === 409 && data?.stale) {
 				const staleRoundId: string | null = data.staleRoundId ?? roundId ?? null;
 				const reason: string = typeof data.error === 'string' && data.error
@@ -1265,16 +1308,6 @@
 			if (!res.ok || !data?.ok || !Array.isArray(data.rounds)) {
 				throw new Error(data?.error || `HTTP ${res.status}`);
 			}
-			// Apply the server's Yjs delta directly to the local Y.Doc.
-			// This updates the editor in-place without any disconnect/remount:
-			// the same update Hocuspocus broadcasts over WebSocket, but
-			// delivered via the HTTP response so it arrives synchronously.
-			// Using the tab's own provider as origin prevents the provider
-			// from echoing it back; when the WebSocket broadcast arrives
-			// shortly after it will be a CRDT no-op.
-			if (typeof data.yjsUpdate === 'string') {
-				applyUpdateToTab(tabId, data.yjsUpdate);
-			}
 			const acceptedCount =
 				typeof data.acceptedCount === 'number'
 					? data.acceptedCount
@@ -1291,17 +1324,17 @@
 				if (!op.newString) continue;
 				editorRef?.flashAcceptedRange(op.newString);
 			}
-		clearFeedbackAnnotationsForTab(tabId);
-		const acceptedMsg =
-			acceptedCount === rounds.length
-				? `Accepted all ${rounds.length} agent edit${rounds.length === 1 ? '' : 's'}`
-				: `Accepted ${acceptedCount} agent edit${acceptedCount === 1 ? '' : 's'}`;
-		pushHistory({
-			type: 'user_action',
-			timestamp: Date.now(),
-			description: acceptedMsg
-		});
-		void submit(acceptedMsg);
+			clearFeedbackAnnotationsForTab(tabId);
+			const acceptedMsg =
+				acceptedCount === rounds.length
+					? `Accepted all ${rounds.length} agent edit${rounds.length === 1 ? '' : 's'}`
+					: `Accepted ${acceptedCount} agent edit${acceptedCount === 1 ? '' : 's'}`;
+			pushHistory({
+				type: 'user_action',
+				timestamp: Date.now(),
+				description: acceptedMsg
+			});
+			void submit(acceptedMsg);
 		} catch (e) {
 			console.error('Failed to accept agent edit:', e);
 			pushHistory({
@@ -1366,22 +1399,7 @@
 		clearPeekIfMatches(roundId);
 		editorRef?.cancelIdleTimer();
 		try {
-			const synced = await editorRef?.flushAutosave();
-			if (synced === false) {
-				throw new Error('Latest local edits are still syncing to the server. Try again in a moment.');
-			}
-			// No more disconnect/remount: reject only deletes from the review
-			// Y.Array on the server, never touches the doc fragment. The Yjs
-			// sync delivers the array-mutation update to the editor, the
-			// review observer fires, and the pending-edits panel updates in
-			// place. The teardown was a leftover from the wholesale-replace
-			// accept path; it never had a reason to apply to reject.
-			const res = await fetch(`/api/document?tab=${encodeURIComponent(tabId)}`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ action: 'reject_rounds', roundId })
-			});
-			const data = await res.json().catch(() => ({}));
+			const { res, data } = await postReviewAction(tabId, 'reject_rounds', roundId);
 			if (!res.ok || !data?.ok || !Array.isArray(data.rounds)) {
 				throw new Error(data?.error || `HTTP ${res.status}`);
 			}
@@ -1671,6 +1689,9 @@
 	let model = $state('opus');
 	selectedModel.subscribe((v) => (model = v));
 
+	let modelOptions = $state<ModelOption[]>([]);
+	availableModels.subscribe((v) => (modelOptions = v));
+
 	let themeName = $state('light');
 	selectedTheme.subscribe((v) => (themeName = v));
 
@@ -1724,11 +1745,12 @@
 				{
 					kind: 'submenu',
 					label: 'Model',
-					items: [
-						{ kind: 'action', label: 'Opus', checked: model === 'opus', onClick: () => selectedModel.set('opus') },
-						{ kind: 'action', label: 'Sonnet', checked: model === 'sonnet', onClick: () => selectedModel.set('sonnet') },
-						{ kind: 'action', label: 'Haiku', checked: model === 'haiku', onClick: () => selectedModel.set('haiku') }
-					]
+					items: modelOptions.map((m) => ({
+						kind: 'action' as const,
+						label: m.label,
+						checked: model === m.id,
+						onClick: () => setSelectedModel(m.id)
+					}))
 				},
 				{ kind: 'panel', label: 'Agent behavior', panelKey: 'agentSettings' },
 				{
@@ -1981,6 +2003,10 @@
 		// writes every session to disk keyed by sessionId; we just read it
 		// back and convert to our HistoryEntry format.
 		void restoreAgentHistory();
+
+		// Pull the live model catalog for the Settings → Model menu and adopt
+		// the latest-Opus default if the user hasn't pinned a model.
+		void loadAvailableModels();
 
 		// Now that stores are populated, attach persist-on-change subscribers.
 		// The debounced write coalesces bursts of clicks into one PUT.

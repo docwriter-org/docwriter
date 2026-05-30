@@ -262,7 +262,58 @@ export const activeTab = writable<string | null>(null);
 
 // ── Preferences ───────────────────────────────────────────────────────
 
-export const selectedModel = writable<string>('opus');
+/** One selectable model in the Settings → Model menu. `id` is the full Claude
+ * API model ID sent to the agent; `label` is the human-readable name. */
+export type ModelOption = { id: string; label: string };
+
+/** Newest-first static list, shown immediately on load and used as the
+ * fallback whenever the live Models API can't be reached. Mirrors the server
+ * fallback in `/api/models`. */
+export const FALLBACK_MODELS: ModelOption[] = [
+	{ id: 'claude-opus-4-8', label: 'Claude Opus 4.8' },
+	{ id: 'claude-opus-4-7', label: 'Claude Opus 4.7' },
+	{ id: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
+	{ id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
+	{ id: 'claude-opus-4-5', label: 'Claude Opus 4.5' },
+	{ id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5' },
+	{ id: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5' }
+];
+
+/** Live model catalog populated by `loadAvailableModels()`. Starts on the
+ * static fallback so the menu is never empty. */
+export const availableModels = writable<ModelOption[]>(FALLBACK_MODELS);
+
+// `selectedModel` persists only on an EXPLICIT user pick (via
+// `setSelectedModel`). The bare initial default ('opus') is NOT written, so we
+// can tell "user hasn't chosen" apart from "user picked Opus" and keep
+// defaulting to the latest Opus as new models ship.
+const SELECTED_MODEL_KEY = 'docwriter.selectedModel';
+const storedModel = typeof window === 'undefined' ? null : window.localStorage.getItem(SELECTED_MODEL_KEY);
+export const selectedModel = writable<string>(storedModel ?? 'opus');
+
+/** Set the model in response to an explicit user choice and persist it. */
+export function setSelectedModel(id: string) {
+	selectedModel.set(id);
+	if (typeof window !== 'undefined') window.localStorage.setItem(SELECTED_MODEL_KEY, id);
+}
+
+/** Fetch the live model list from `/api/models`. If the user hasn't explicitly
+ * pinned a model yet, adopt the server's default (latest Opus). Silently keeps
+ * the fallback list on any error. */
+export async function loadAvailableModels() {
+	if (typeof window === 'undefined') return;
+	try {
+		const res = await fetch('/api/models');
+		if (!res.ok) return;
+		const data = (await res.json()) as { models?: ModelOption[]; defaultModel?: string };
+		if (data.models?.length) availableModels.set(data.models);
+		// Only auto-adopt the default when the user has made no explicit pick.
+		if (!storedModel && data.defaultModel) selectedModel.set(data.defaultModel);
+	} catch {
+		// Keep the fallback list / current selection.
+	}
+}
+
 export const selectedTheme = writable<string>('light');
 
 /** History pane verbosity. `verbose` = every tool call, assistant monologue,

@@ -4,9 +4,10 @@ import Paragraph from '@tiptap/extension-paragraph';
 import Text from '@tiptap/extension-text';
 import HardBreak from '@tiptap/extension-hard-break';
 import Collaboration from '@tiptap/extension-collaboration';
+import { ySyncPluginKey } from '@tiptap/y-tiptap';
 import type { Extensions } from '@tiptap/core';
-import type * as Y from 'yjs';
-import { USER_ORIGIN } from '$lib/shared/ydoc-codec';
+import * as Y from 'yjs';
+import { FRAGMENT_NAME, REVIEW_ARRAY_NAME, USER_ORIGIN } from '$lib/shared/ydoc-codec';
 
 /** Plain-text extension set: minimal schema (doc, paragraph, text, hard-break).
  * Every file — including `.md` / `.markdown` / `.mdx` — is rendered as source
@@ -29,24 +30,26 @@ export function plainBaseExtensions(options?: { placeholder?: string }): Extensi
  * and binds them to the supplied Y.Doc's `default` XmlFragment. Always plain
  * text — see `plainBaseExtensions` for why.
  *
- * `yUndoOptions.trackedOrigins` is additive: y-prosemirror's yUndoPlugin
- * always tracks `ySyncPluginKey` (so local typing stays undoable) and
- * concatenates whatever we pass here. Including `USER_ORIGIN` makes the
- * server-side accept / reject / reject-all transactions undoable from
- * the client — ctrl+z after an Accept reverts the text edit AND
- * resurrects the just-deleted pending review card in one step (they're
- * applied in a single `ydoc.transact(..., USER_ORIGIN)`, so the
- * UndoManager treats them as one stack entry). */
+ * The custom UndoManager scopes both the text fragment and the pending
+ * review array. That keeps ordinary local typing undoable (`ySyncPluginKey`)
+ * while letting Accept/Reject apply as undoable user actions (`USER_ORIGIN`):
+ * ctrl+z after Accept reverts the text and resurrects the just-deleted
+ * pending review card; ctrl+z after Reject resurrects the diff card. */
 export function collaborativeExtensions(
 	ydoc: Y.Doc,
 	options?: { placeholder?: string }
 ): Extensions {
+	const fragment = ydoc.getXmlFragment(FRAGMENT_NAME);
+	const reviewArray = ydoc.getArray(REVIEW_ARRAY_NAME);
+	const undoManager = new Y.UndoManager([fragment, reviewArray], {
+		trackedOrigins: new Set([ySyncPluginKey, USER_ORIGIN])
+	});
 	return [
 		...plainBaseExtensions(options),
 		Collaboration.configure({
 			document: ydoc,
-			field: 'default',
-			yUndoOptions: { trackedOrigins: [USER_ORIGIN] }
+			field: FRAGMENT_NAME,
+			yUndoOptions: { undoManager }
 		})
 	];
 }

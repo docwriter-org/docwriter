@@ -44,6 +44,7 @@
 	},
 	"dependencies": {
 		"@anthropic-ai/claude-agent-sdk": "^0.2.92",
+		"@anthropic-ai/sdk": "^0.81.0",
 		"@hocuspocus/provider": "^3.4.4",
 		"@hocuspocus/server": "^3.4.4",
 		"@tiptap/core": "^3.22.3",

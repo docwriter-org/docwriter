@@ -118,12 +118,9 @@
 	let verbosity = $state<HistoryVerbosity>('verbose');
 	historyVerbosity.subscribe((v) => (verbosity = v));
 
-	/** Minimal-mode filter: keep only user actions WITH an explicit trigger,
-	 * actual file mutations (Edit/Write tool calls), hook runs, and
-	 * render_end markers. Hide the intermediate noise (Read/Glob/Grep/Bash/
-	 * Skill exploration, assistant prose, render_start) AND the implicit
-	 * "Review document and improve" user_action that fires on bare Wake Up
-	 * (it adds no information — the edit itself tells the story). */
+	/** Minimal-mode filter: keep user-facing conversation, actual file
+	 * mutations (Edit/Write tool calls), hook runs, and important status.
+	 * Hide intermediate tool noise and housekeeping actions. */
 	function keepInMinimal(e: HistoryEntry): boolean {
 		if (e.type === 'user_action') {
 			// Drop the default / housekeeping descriptions that are just
@@ -131,15 +128,17 @@
 			const d = e.description;
 			if (
 				d === 'Review documents & see if there’s anything to do' ||
+				d === 'Agent ran and made no edits' ||
 				d === 'Accepted agent\'s edit' ||
 				d === 'Rejected agent\'s edit' ||
-				/^Accepted \d+ agent edit/.test(d) ||
-				/^Rejected \d+ agent edit/.test(d)
+				/^Accepted (?:all )?\d+ agent edit/.test(d) ||
+				/^Rejected (?:all )?\d+ agent edit/.test(d)
 			) {
 				return false;
 			}
 			return true;
 		}
+		if (e.type === 'assistant_text') return e.text.trim() !== '';
 		if (e.type === 'hook_run') return true;
 		if (e.type === 'tool_call') {
 			return /^(Edit|Write)$/.test(e.tool_name);
@@ -156,7 +155,7 @@
 		if (e.type === 'notification') {
 			return e.priority === 'high' || e.priority === 'immediate';
 		}
-		// Skip render_end / render_start / assistant_text in minimal.
+		// Skip render_end / render_start / assistant_thinking in minimal.
 		return false;
 	}
 
