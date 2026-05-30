@@ -132,6 +132,13 @@
 	let recent: Action[] = $state([]);
 	recentActions.subscribe((v) => (recent = v));
 
+	type FeedbackRange = { from: number; to: number };
+	let dismissedFeedbackSelectionRange: FeedbackRange | null = null;
+
+	function sameFeedbackRange(a: FeedbackRange | null, b: FeedbackRange): boolean {
+		return a?.from === b.from && a?.to === b.to;
+	}
+
 	function updateFeedbackPopup(autoFocus = false) {
 		if (!editor || !editor.isFocused) return;
 		const selection = editor.state.selection;
@@ -141,6 +148,7 @@
 		// the paragraph auto-selected on a bare click. Only treat genuine text
 		// selections as feedback selections.
 		if (!(selection instanceof TextSelection) || empty || to - from < 2) {
+			dismissedFeedbackSelectionRange = null;
 			feedbackPopup = null;
 			feedbackInput = '';
 			feedbackSelectionRange = null;
@@ -150,6 +158,7 @@
 		}
 		const selectedText = editor.state.doc.textBetween(from, to, ' ');
 		if (!selectedText.trim()) {
+			dismissedFeedbackSelectionRange = null;
 			feedbackPopup = null;
 			feedbackInput = '';
 			feedbackSelectionRange = null;
@@ -157,6 +166,16 @@
 			updateDiff();
 			return;
 		}
+		const selectionRange = { from, to };
+		if (sameFeedbackRange(dismissedFeedbackSelectionRange, selectionRange)) {
+			feedbackPopup = null;
+			feedbackInput = '';
+			feedbackSelectionRange = null;
+			shouldFocusFeedbackInput = false;
+			updateDiff();
+			return;
+		}
+		dismissedFeedbackSelectionRange = null;
 		const start = editor.view.coordsAtPos(from);
 		const end = editor.view.coordsAtPos(to);
 		const POPUP_W_APPROX = 340;
@@ -176,7 +195,7 @@
 		x = Math.max(POPUP_W_APPROX / 2 + MARGIN, Math.min(vw - POPUP_W_APPROX / 2 - MARGIN, x));
 		shouldFocusFeedbackInput = autoFocus;
 		feedbackPopup = { text: selectedText, x, y, flipBelow, anchorTop, anchorBottom };
-		feedbackSelectionRange = { from, to };
+		feedbackSelectionRange = selectionRange;
 		updateDiff();
 	}
 
@@ -243,18 +262,29 @@
 		}
 	});
 
-	function closeFeedbackPopup() {
-		// Collapse the editor's text selection so the blue highlight on the
-		// passage goes away. Without this, after sending feedback (or any
-		// other path that closes the popup) the underlying selection stays
-		// selected and the user sees a highlighted span sitting there with
-		// no popup attached. We collapse to the END of the selection (`to`)
-		// so the cursor lands just past where they were looking. No focus
-		// call — paths like onBlur close the popup specifically because the
-		// editor lost focus, and we don't want to steal it back.
+	function closeFeedbackPopup({
+		preserveSelection = false,
+		refocusEditor = false
+	}: { preserveSelection?: boolean; refocusEditor?: boolean } = {}) {
+		// Most close paths collapse the selection so the blue highlight does
+		// not linger after a submit/outside click. Escape is different: the
+		// user may want to keep the range selected for copy, drag, delete, or
+		// replacement, so preserve it and suppress reopening for that range.
 		if (editor) {
-			const { to } = editor.state.selection;
-			editor.commands.setTextSelection({ from: to, to });
+			if (preserveSelection) {
+				const selection = editor.state.selection;
+				dismissedFeedbackSelectionRange =
+					feedbackSelectionRange ??
+					(selection instanceof TextSelection && !selection.empty
+						? { from: selection.from, to: selection.to }
+						: null);
+			} else {
+				const { to } = editor.state.selection;
+				editor.commands.setTextSelection({ from: to, to });
+				dismissedFeedbackSelectionRange = null;
+			}
+		} else {
+			dismissedFeedbackSelectionRange = null;
 		}
 		feedbackPopup = null;
 		feedbackInput = '';
@@ -262,6 +292,16 @@
 		shouldFocusFeedbackInput = false;
 		feedbackMode = 'auto';
 		updateDiff();
+		if (preserveSelection && refocusEditor) {
+			requestAnimationFrame(() => editor?.commands.focus());
+		}
+	}
+
+	function handleFeedbackWindowKeydown(e: KeyboardEvent) {
+		if (!feedbackPopup || e.key !== 'Escape') return;
+		e.preventDefault();
+		e.stopPropagation();
+		closeFeedbackPopup({ preserveSelection: true, refocusEditor: true });
 	}
 
 	function deleteSelectedTextFromEditor() {
@@ -809,6 +849,7 @@
 			onSelectionUpdate: () => handleSelectionChange(),
 			onBlur: () => {
 				setTimeout(() => {
+					if (!feedbackPopup) return;
 					if (feedbackPopupEl && feedbackPopupEl.contains(document.activeElement)) return;
 					closeFeedbackPopup();
 				}, 150);
@@ -1004,6 +1045,8 @@
 	}
 </script>
 
+<svelte:window onkeydown={handleFeedbackWindowKeydown} />
+
 <div class="tiptap-host" class:find-open={findState.open}>
 	<!-- Top-right floating chrome: preview button + find bar. Both live
 	     outside the scroll container so they pin regardless of scroll.
@@ -1134,15 +1177,9 @@
 					onkeydown={(e) => {
 						if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendCustomFeedback(); }
 						if (e.key === 'Escape') {
-							// Collapse the editor selection so a subsequent click
-							// inside the previously-highlighted range doesn't cause
-							// the browser to restore that selection on refocus
-							// (which would re-open the feedback popup).
-							if (editor) {
-								const pos = editor.state.selection.to;
-								editor.chain().focus().setTextSelection(pos).run();
-							}
-							closeFeedbackPopup();
+							e.preventDefault();
+							e.stopPropagation();
+							closeFeedbackPopup({ preserveSelection: true, refocusEditor: true });
 						}
 						if (
 							(e.key === 'Backspace' || e.key === 'Delete') &&
