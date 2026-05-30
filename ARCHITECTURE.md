@@ -591,9 +591,10 @@ on a hot scheduler.
 A registry of `{ ydoc, wsProvider, readyPromise }` per tab id.
 
 - `getYDocForTab(tabId)` — get or create Y.Doc + HocuspocusProvider.
-- `whenYDocReady()` — resolves on the provider's first `synced` event.
+- `whenYDocReadyForTab(tabId)` — resolves on the provider's first `synced` event.
   Tiptap does not mount until this resolves (no flicker from unhydrated doc).
-- `setCurrentTab(tabId)` — swap which doc the live editor binds to.
+- There is no module-level "current tab"; the UI `activeTab` store names the
+  focused tab and `TiptapEditor` receives that id as an explicit prop.
 - `renameTab(oldId, newId)` — snapshot and hand state over.
 - `reconcileServerInstance(id)` — the server stamps a UUID on boot.
   If the browser's stored instance id doesn't match, all client Y.Docs

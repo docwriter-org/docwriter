@@ -65,11 +65,9 @@
 
 	import {
 		getYDocForTab,
-		getReviewArray,
 		getReviewArrayForTab,
 		getCommentsMapForTab,
-		whenYDocReady,
-		setCurrentTab,
+		whenYDocReadyForTab,
 		destroyTab,
 		renameTab,
 		reconcileServerInstance,
@@ -239,6 +237,7 @@
 			let active: string | null = data.active ?? null;
 			tabs.set(tabIds);
 			activeTab.set(active);
+			if (active) getYDocForTab(active);
 			refreshPendingReviewTabs(tabIds);
 			// Attach background observers for every non-active tab so their
 			// round/comment changes keep the all-tab pane current.
@@ -253,19 +252,18 @@
 		}
 	}
 
-	/** Load a single tab's meta and hydrate the per-tab review state from its
-	 * Y.Doc. Must be called after `setCurrentTab(tabId)` so `getReviewArray()`
-	 * operates on the right Y.Doc. */
+	/** Load a single tab's meta and hydrate review state from its Y.Doc. */
 	async function loadTab(tabId: string) {
 		try {
+			getYDocForTab(tabId);
 			const res = await fetch(`/api/document?tab=${encodeURIComponent(tabId)}`);
 			const data = await res.json();
 			rules.set(data.meta?.rules || []);
 			if (data.meta?.agentSettings) {
 				agentSettings.set(data.meta.agentSettings);
 			}
-			await whenYDocReady();
-			const rounds = getReviewArray().toArray();
+			await whenYDocReadyForTab(tabId);
+			const rounds = getReviewArrayForTab(tabId).toArray();
 			syncActiveReviewState(tabId, rounds);
 			attachActiveReviewObserver(tabId);
 		} catch (e) {
@@ -336,7 +334,6 @@
 		}
 		docLoaded = false;
 		await destroyTab(tabId);
-		setCurrentTab(tabId);
 		await loadTab(tabId);
 		docLoaded = true;
 	}
@@ -431,7 +428,6 @@
 		// previous tab's pendingScrollRestore over.
 		pendingScrollRestore = 0;
 		docLoaded = false; // unmounts TiptapEditor
-		setCurrentTab(tabId);
 		activeTab.set(tabId);
 		try {
 			await fetch('/api/tabs', {
@@ -521,24 +517,43 @@
 		void submit(`The user deleted the file "${id}". Update any open files that referenced it.`);
 	}
 
+	/** No open tabs: tear down review/editor state and show the empty pane. */
+	function showEmptyEditor() {
+		const activeId = getCurrentActiveTab();
+		if (activeId) detachActiveReviewObservers(activeId);
+		expandedReviewRoundId.set(null);
+		pendingReviewRounds.set([]);
+		reviewBaseline.set(null);
+		commentThreads.set([]);
+		openCommentThreadId.set(null);
+		activeTab.set(null);
+		docLoaded = true;
+	}
+
 	async function removeTab(id: string, deleteFile: boolean) {
 		const qs = new URLSearchParams({ id });
 		if (deleteFile) qs.set('deleteFile', 'true');
+		const closedWasActive = getCurrentActiveTab() === id;
 		const res = await fetch(`/api/tabs?${qs.toString()}`, { method: 'DELETE' });
 		if (!res.ok) throw new Error(await res.text());
 		const data = await res.json();
 		detachBgTabObserver(id);
+		if (closedWasActive) detachActiveReviewObservers(id);
 		// Destroy this tab's Y.Doc binding regardless of whether the file
 		// was unlinked — we don't want a stale in-memory doc if the tab
 		// gets re-opened.
 		await destroyTab(id);
 		const listData = await fetch('/api/tabs').then((r) => r.json());
-		tabs.set(listData.tabs || []);
-		if (data.active && data.active !== getCurrentActiveTab()) {
-			await switchTab(data.active);
-		} else if (!data.active) {
-			docLoaded = false;
-			activeTab.set(null);
+		const tabIds: string[] = listData.tabs ?? data.order ?? [];
+		tabs.set(tabIds);
+		const nextActive =
+			typeof data.active === 'string' && tabIds.includes(data.active)
+				? data.active
+				: tabIds[0] ?? null;
+		if (!nextActive) {
+			showEmptyEditor();
+		} else if (closedWasActive || nextActive !== getCurrentActiveTab()) {
+			await switchTab(nextActive);
 		}
 	}
 
@@ -687,7 +702,9 @@
 			queuedSubmissionCount.set(queuedSubmissions.length);
 			return;
 		}
-		if (!getCurrentActiveTab()) return;
+		// With no open tabs, only typed-message sends make sense; Wake Up /
+		// implicit triggers have nothing to anchor to.
+		if (!getCurrentActiveTab() && !trigger) return;
 		submitInFlight = true;
 
 		// Diff composition: if there's an existing pending review, we do NOT
@@ -1844,7 +1861,7 @@
 	 * attach. Otherwise stale Yjs ops from the previous server instance
 	 * would sync up into the freshly-seeded server doc and the debounced
 	 * markdown flush would clobber disk edits made while the server was
-	 * down. Must run BEFORE any `setCurrentTab` / `getYDocForTab` call.
+	 * down. Must run BEFORE any `getYDocForTab` call.
 	 */
 	async function restoreSessionState() {
 		try {
@@ -1954,10 +1971,7 @@
 		await restoreSessionState();
 
 		const active = await loadTabs();
-		if (active) {
-			setCurrentTab(active);
-			await loadTab(active);
-		}
+		if (active) await loadTab(active);
 		docLoaded = true;
 
 		// Rehydrate the Agent History pane from the SDK's persisted session
@@ -2299,6 +2313,7 @@
 					onRejectPlan={(id, feedback) => rejectPlanProposal(id, feedback)}
 				/>
 				<TiptapEditor
+					tabId={activeTabFilePath}
 					bind:this={editorRef}
 					onSubmit={(trigger) => submit(trigger)}
 					initialScrollTop={pendingScrollRestore}
@@ -2309,6 +2324,11 @@
 						// accepts rounds[0] only (FIFO). Subsequent rounds stay
 						// in the composed diff until their turn is accepted.
 						void acceptAgentEdit(rounds[0].id);
+					}}
+					onRejectInlineEdit={() => {
+						const rounds = currentRounds();
+						if (rounds.length === 0) return;
+						void rejectAgentEdit(rounds[0].id);
 					}}
 				/>
 				{/key}
@@ -2328,7 +2348,7 @@
 					<div class="history-wrap" style:height="{historyPaneHeight}px">
 						<HistoryPane onNewSession={newSession} onWakeUp={docLoaded && activeTabFilePath ? () => submit() : undefined} onCancel={cancelRender} onToggleMuted={toggleMuted}>
 							{#snippet dock()}
-								{#if docLoaded && activeTabFilePath}
+								{#if docLoaded}
 									<AgentDock
 										onSendMessage={(msg, opts) => void submit(msg, opts)}
 									/>
