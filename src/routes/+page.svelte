@@ -1282,7 +1282,9 @@
 			if (acceptedCount <= 0) return;
 			// Small-win celebration: flash a sage halo on the accepted range.
 			// Skip 'write' ops — a full-doc rewrite would paint everything green.
-			const justAccepted = rounds.slice(0, acceptedCount);
+			const justAccepted = roundId
+				? rounds.filter((r) => r.id === roundId)
+				: rounds.slice(0, acceptedCount);
 			for (const r of justAccepted) {
 				const op = r.operation;
 				if (op?.type !== 'edit') continue;
@@ -2317,18 +2319,15 @@
 					bind:this={editorRef}
 					onSubmit={(trigger) => submit(trigger)}
 					initialScrollTop={pendingScrollRestore}
-					onAcceptInlineEdit={() => {
+					onAcceptInlineEdit={(roundId) => {
 						const rounds = currentRounds();
-						if (rounds.length === 0) return;
-						// Diff overlay shows the full pending stack; the inline ✓
-						// accepts rounds[0] only (FIFO). Subsequent rounds stay
-						// in the composed diff until their turn is accepted.
-						void acceptAgentEdit(rounds[0].id);
+						if (rounds.length === 0 || !roundId) return;
+						void acceptAgentEdit(roundId);
 					}}
-					onRejectInlineEdit={() => {
+					onRejectInlineEdit={(roundId) => {
 						const rounds = currentRounds();
-						if (rounds.length === 0) return;
-						void rejectAgentEdit(rounds[0].id);
+						if (rounds.length === 0 || !roundId) return;
+						void rejectAgentEdit(roundId);
 					}}
 				/>
 				{/key}
