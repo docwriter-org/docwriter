@@ -35,7 +35,7 @@ flowchart LR
   Agent[Claude Agent SDK<br/>DirectConnection]
   Hoco[Hocuspocus Server<br/>per-tab Y.Doc<br/>+ Y.UndoManager]
   DB[(SQLite<br/>yjs_updates)]
-  Disk[document.md<br/>debounced flush]
+  Disk[document.md<br/>500ms flush tick]
 
   User -- WS: USER_ORIGIN updates --> Hoco
   Agent -- transact AGENT_ORIGIN --> Hoco
@@ -178,9 +178,14 @@ classDiagram
   YArray~PendingReviewRound~ --> PendingReviewRound
 ```
 
-Content and review metadata sit inside the same Y.Doc, so a single
-`transact(..., AGENT_ORIGIN)` can atomically update both and the
-browser sees the change + review card in one frame.
+Content and review metadata sit inside the same Y.Doc. An agent edit is
+a single `transact(..., AGENT_ORIGIN)` that pushes a `PendingReviewRound`
+onto the review array — it does **not** touch the content fragment. The
+browser sees the review card appear; the underlying paragraphs change
+only later, when the user accepts (a separate `transact(..., USER_ORIGIN)`
+that applies the round's op via `applyEditToFragment`). Keeping content
+and review metadata in one Y.Doc is what lets both the proposal and the
+later commit ride the same per-tab sync channel.
 
 Constants (all exported from `shared/ydoc-codec.ts`):
 
@@ -205,7 +210,7 @@ Three layers, one source of truth.
 flowchart LR
   LiveDoc[Live Hocuspocus Y.Doc<br/>SOURCE OF TRUTH<br/>in-memory]
   SQLite[(SQLite<br/>yjs_updates append log)]
-  MD[workspace/*.md<br/>debounced 1s flush]
+  MD[workspace/*.md<br/>500ms flush tick]
 
   LiveDoc -- onChange, per update --> SQLite
   LiveDoc -- 500ms flush tick --> MD
@@ -288,8 +293,10 @@ update's origin was `AGENT_ORIGIN`.
 
 ## Flow 2 — Agent edit
 
-The most important flow. An agent tool call must land the content
-change and the review card atomically.
+The most important flow. An agent `edit_doc`/`write_doc` call does NOT
+change the document content — it lands a `PendingReviewRound` (the
+stored edit operation) on the review array. The content fragment changes
+only later, on Accept (Flow 3).
 
 ```mermaid
 sequenceDiagram
@@ -309,11 +316,11 @@ sequenceDiagram
     MCP->>H: openDirectConnection(tabId)
     H-->>MCP: DirectConnection
     MCP->>DC: direct.transact(doc => ...)
-    Note over DC: inside one doc.transact(..., AGENT_ORIGIN):<br/>1. serialize current, find unique old_string<br/>2. replaceYDocText(ydoc, newMd)<br/>3. reviewArray.push(PendingReviewRound)
-    DC-->>H: Yjs update(s) with origin=AGENT_ORIGIN
+    Note over DC: inside one doc.transact(..., AGENT_ORIGIN):<br/>1. materialize review-aware text, find unique old_string<br/>2. reviewArray.push(PendingReviewRound{operation})<br/>(content fragment is NOT modified)
+    DC-->>H: Yjs update with origin=AGENT_ORIGIN
     H->>DB: append row origin='agent'
     H-->>Br: broadcast
-    Br->>Br: Tiptap renders diff overlay<br/>+ OutlinePane shows review card
+    Br->>Br: OutlinePane shows review card<br/>+ Tiptap renders proposed-diff overlay<br/>(paragraphs unchanged until Accept)
   else unknown path
     MCP-->>SDK: isError: true
   end
@@ -361,37 +368,51 @@ accept/reject is just a Yjs mutation that propagates to every client.
 ```mermaid
 sequenceDiagram
   actor User
-  participant UI as OutlinePane
-  participant API as /api/tabs
+  participant UI as OutlinePane / +page.svelte
+  participant API as /api/document
   participant WS as ws-server.ts
   participant H as Hocuspocus Y.Doc
-  participant UM as Y.UndoManager
 
   User->>UI: clicks Accept on round #k
-  UI->>API: POST accept {tabId, roundId}
+  UI->>UI: pauseTabSync(tabId) (disconnect provider)
+  UI->>API: POST {action: accept_rounds, roundId?}
   API->>WS: acceptTabRounds(tabId, roundId?)
-  WS->>H: openDirectConnection → transact:<br/>delete rounds[0..=k] from 'rounds'
-  Note right of H: content stays put.<br/>round entries removed.
-  H-->>UI: broadcast update
+  WS->>H: openDirectConnection → transact(..., USER_ORIGIN):<br/>1. stale-check each round (string transform)<br/>2. applyEditToFragment / replaceYDocText (surgical)<br/>3. delete accepted rounds from 'rounds'
+  Note right of H: content fragment IS mutated here<br/>(only the affected paragraphs).
+  WS-->>API: base64 yjsUpdate delta
+  API-->>UI: { rounds, yjsUpdate }
+  UI->>UI: applyUpdateToTab(delta, USER_ORIGIN); resumeTabSync()
+  Note over UI: later WS broadcast of the same<br/>update is a CRDT no-op.
 
   User->>UI: clicks Reject on round #k
-  UI->>API: POST reject {tabId, roundId}
+  UI->>API: POST {action: reject_rounds, roundId?}
   API->>WS: rejectTabRounds(tabId, roundId?)
-  WS->>UM: undoManager.undo() × stepCount
-  Note right of UM: UndoManager only tracks<br/>AGENT_ORIGIN, so user keystrokes<br/>between/after agent edits survive.
-  UM->>H: inverse transaction (origin='agent')
-  H-->>UI: broadcast update
+  WS->>H: transact(..., USER_ORIGIN): reviewArr.delete(k)
+  Note right of H: content fragment untouched —<br/>it was never modified at edit time.
+  WS-->>UI: { rounds, yjsUpdate } → applyUpdateToTab
 ```
 
-The `Y.UndoManager` lives on the server, attached to each Y.Doc in
-`src/lib/server/ws-server.ts` with `trackedOrigins: new Set([AGENT_ORIGIN])`
-and `captureTimeout: 0` (so each tool call is one undo step).
+Both Accept and Reject route through `POST /api/document`
+(`acceptTabRounds` / `rejectTabRounds` in `src/lib/server/ws-server.ts`),
+mutate the live Hocuspocus doc in one `transact(..., USER_ORIGIN)`, and
+return a base64 Yjs delta. The client disconnects the provider
+(`pauseTabSync`) around the request and applies that delta locally with
+`USER_ORIGIN` (`applyUpdateToTab`) so it lands as a real editor
+undo-stack item; the eventual WebSocket re-broadcast of the same update
+is idempotent.
 
-> **Gotcha — construction order.** The UndoManager must be attached
-> **before** `replayUpdatesInto(...)` runs. Otherwise, after a server
-> restart, Reject on a round from a prior session becomes a no-op
-> because the undo stack is empty. See `ws-server.ts` for the guarded
-> order.
+Accept's surgical apply (`applyEditToFragment`) deletes + reinserts only
+the paragraphs the edit covers, so concurrent user typing in other
+paragraphs merges through Yjs untouched. `write` ops are wholesale
+(`replaceYDocText`).
+
+> **Note — the server `Y.UndoManager` is currently vestigial.**
+> `ws-server.ts` still attaches one per Y.Doc
+> (`trackedOrigins: {AGENT_ORIGIN}`, `captureTimeout: 0`) **before**
+> `replayUpdatesInto(...)` runs, but no code path calls `.undo()` /
+> `.redo()` — Reject is a plain `reviewArr.delete`, not an undo. The
+> construction-order guard is retained for safety, but breaking it no
+> longer makes Reject a no-op the way it once did.
 
 ### Staleness
 
@@ -646,15 +667,20 @@ All in `src/lib/components/`:
 
 ### Editor update loop (`src/lib/editor/TiptapEditor.svelte`)
 
-On every ProseMirror transaction:
+On every ProseMirror transaction, `classifyUpdate` looks at a single
+piece of meta:
 
-1. If it carries `ySyncPluginKey` meta (Yjs pushing a remote update
-   into the editor), skip — no idle timer, no serialization side effects.
-2. Serialize editor content and publish to the `userMd` store (outline).
-3. If it carries `AGENT_APPLY_KEY` meta (set locally when an
-   agent-origin Y.Doc update is applied), skip the idle-timer restart
-   — an agent edit is not "the user is still writing."
-4. Otherwise, restart the 3-second idle-submit countdown.
+1. If it carries `ySyncPluginKey` meta, it's a **yjs-remote** update —
+   any update Yjs pushed into the editor, whether from the agent, an
+   accept/reject delta, or another client. Skip the idle-timer restart:
+   a remote update is not "the user is still writing."
+2. Otherwise it's a **user-edit**: restart the 3-second idle-submit
+   countdown.
+
+(There is no separate `AGENT_APPLY_KEY` — agent edits are
+indistinguishable from any other remote update at this layer, which is
+exactly why the single `ySyncPluginKey` check suffices.) Either way the
+content is scheduled for serialization to the `userMd` store (outline).
 
 Cmd/Ctrl+Enter skips the countdown. The client does not `PUT
 /api/document` with markdown; the server's Y.Doc-to-disk flush owns that.
@@ -668,8 +694,8 @@ All under `src/routes/api/`:
 | Endpoint | Purpose |
 | --- | --- |
 | `render/` | **SSE stream.** POST kicks off one Agent SDK `query()`. Returns tool events, thinking, proposals, status. The main agent loop. |
-| `tabs/` | GET order/active/tabs. POST opens/creates. PATCH focuses or renames. DELETE closes, optionally deletes file. Also hosts accept/reject review endpoints. |
-| `document/` | GET reads workspace file + metadata (calls `flushTabMarkdownNow` first). PUT accepts only `meta` (rules / agent settings). No accept/reject here anymore — those are Y.Map mutations. |
+| `tabs/` | GET order/active/tabs. POST opens/creates. PATCH focuses or renames. DELETE closes, optionally deletes file. |
+| `document/` | GET reads workspace file + metadata (calls `flushTabMarkdownNow` first). PUT accepts only `meta` (rules / agent settings). **POST hosts accept/reject** (`{action: accept_rounds \| reject_rounds, roundId?}`) → `acceptTabRounds` / `rejectTabRounds`, which mutate the `Y.Array('rounds')` and return a base64 Yjs delta. |
 | `files/` | Workspace file tree: list / create / rename / move / delete. |
 | `file-content/` | Raw read/write for non-editor files. |
 | `history/` | Rehydrate agent event timeline from SDK transcript. |
@@ -760,15 +786,19 @@ Hook configuration is never agent-writable. The agent can only call
   `Document` is the source of truth. Server code that wants to mutate
   a tab MUST go through `server.hocuspocus.openDirectConnection(tabId)`
   — not a cached Y.Doc reference.
-- **`"update"` is a SQLite reserved word.** Always quote the column.
-- **Tiptap-markdown escapes brackets.** The serializer turns `[` into
-  `\[`. `read_doc` returns the escaped form, and `edit_doc`'s
-  `old_string` must match. If an edit fails with "not found" in a spot
-  you can see, check bracket escaping.
-- **`undoRedo: false` in StarterKit.** Collaboration ships its own Yjs
-  undo. Registering both corrupts plugin state.
-- **`Link` is bundled via StarterKit.** Don't import
-  `@tiptap/extension-link` separately.
+- **The Yjs blob column is `payload`, not `update`.** `update` is a
+  SQLite reserved word; migration v2 renamed the column to `payload`.
+  Don't revive the old name.
+- **No markdown round-trip in the editor.** The editor uses a plain-text
+  extension set (`Document`, `Paragraph`, `Text`, `HardBreak`,
+  `Placeholder`, `Collaboration`) — no `tiptap-markdown`, no parser. The
+  Y.Doc serializes byte-identically to disk, so `read_doc` returns raw
+  source and `edit_doc`'s `old_string` matches verbatim (no
+  bracket-escaping to account for).
+- **No StarterKit.** Collaboration owns undo via a custom
+  `Y.UndoManager` (`yUndoOptions`); there's no `undoRedo: false` to set
+  and no bundled `Link`. Add individual Tiptap mark/extension packages
+  explicitly if you need them.
 - **Vite HMR re-executes `hooks.server.ts`.** The
   `globalThis.__docwriterWsServer` guard keeps us from double-binding
   the WS port on every save.
@@ -780,8 +810,8 @@ Hook configuration is never agent-writable. The agent can only call
 1. **User edits must not be lost.** Per-tab Y.Docs, `AGENT_ORIGIN`
    isolation for undo, CRDT item-level merge for concurrent writes.
 2. **Agent work must remain reviewable.** Every `edit_doc` /
-   `write_doc` atomically pairs its content change with a
-   `PendingReviewRound` entry.
+   `write_doc` lands a `PendingReviewRound` (the stored edit operation)
+   without changing document content; the content only changes on Accept.
 3. **The app works against a real folder, not a sandbox.**
    Workspace-relative tab ids, filesystem-backed APIs, file tree + raw
    file endpoints, CLI root selection.
@@ -800,10 +830,12 @@ DocWriter is a local multi-file writing environment where:
 
 - each tab is a server-owned CRDT synced to the browser over WebSocket,
 - every Yjs update is appended to a SQLite log tagged with its origin,
-- a Claude Agent SDK loop edits the live Y.Doc through custom MCP tools
-  (atomic content + review card, no shadows, no merge),
+- a Claude Agent SDK loop proposes edits through custom MCP tools as
+  pending review rounds; content changes only on Accept (no shadows, no
+  3-way merge),
 - review queue entries are just items in a `Y.Array` inside the same doc,
-- markdown on disk is a debounced backup for git and portability.
+- markdown on disk is a backup for git and portability, flushed from the
+  Y.Doc on a 500ms tick.
 
 Content convergence is the CRDT's job. Everything else — review, undo,
 reject, history — is a consequence of origin-tagged transactions on a

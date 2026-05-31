@@ -283,11 +283,13 @@ export type HistoryEntry =
  *    the current "default to NO edits" posture; `balanced` makes one focused
  *    improvement per round when there's clearly something to do; `aggressive`
  *    proactively rewrites for clarity, tightness, and flow.
- *  - `trackChanges`: when true (default), agent edits land behind the
- *    green/red diff overlay with an Accept/Reject card. When false, the
- *    agent's changes merge silently into the doc — no review step, no
- *    overlay. Ctrl+Z still works because agent ops are then applied with
- *    the default origin (user undo stack).
+ *  - `trackChanges`: review mode toggle surfaced in the settings UI.
+ *    NOTE: the agent edit path (`runTabWrite` in mcp-doc-tools.ts) does
+ *    not currently read this flag — agent edits always land as
+ *    `PendingReviewRound`s behind the green/red diff overlay regardless.
+ *    There is no silent-merge / auto-accept path today; if you need one,
+ *    it has to be wired into the edit path and accept flow. (Historical:
+ *    this once meant "merge agent ops silently with the default origin.")
  */
 export interface AgentSettings {
 	agency: 'conservative' | 'balanced' | 'aggressive';
