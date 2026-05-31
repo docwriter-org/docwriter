@@ -1258,6 +1258,9 @@
 					</button>
 				{/each}
 			</div>
+			<div class="feedback-hint">
+				<kbd>Enter</kbd> to send · <kbd>Esc</kbd> to dismiss
+			</div>
 		</div>
 	{/if}
 </div>
@@ -1927,6 +1930,28 @@
 		color: var(--text);
 		background: var(--bg);
 		box-shadow: 0 0 0 1px var(--border-light);
+	}
+	/* Footer keyboard hint — reminds you the popover is dismissable with
+	 * Esc (and submittable with Enter) so it never feels like a trap. */
+	.feedback-hint {
+		margin-top: 8px;
+		padding-top: 7px;
+		border-top: 1px solid var(--border-light);
+		font-size: 11px;
+		color: var(--text-faint);
+		display: flex;
+		align-items: center;
+		gap: 4px;
+	}
+	.feedback-hint kbd {
+		font-family: inherit;
+		font-size: 10px;
+		line-height: 1;
+		padding: 2px 5px;
+		border: 1px solid var(--border-light);
+		border-radius: 4px;
+		background: var(--bg-surface);
+		color: var(--text-secondary);
 	}
 	/* Comment thread overlay: unresolved threads get a subtle amber
 	 * highlight, and a small gutter pill shows the message count. */
