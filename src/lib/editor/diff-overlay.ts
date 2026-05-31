@@ -95,12 +95,18 @@ export interface DiffState {
 	 * softer ghost-text style for inline additions so a single typo fix
 	 * doesn't look like a paragraph rewrite. */
 	allRoundsTiny?: boolean;
-	/** Block ids whose proposed (green) lines are currently expanded.
-	 * Default state hides the proposed lines so the doc length stays
-	 * neutral while the user is typing elsewhere; the user clicks the
-	 * "Show suggestion" pill at the end of each strikethrough block to
-	 * reveal the proposed replacement. */
-	expandedBlocks?: Set<string>;
+	/** Round ids whose proposed (green) lines are currently revealed. Default
+	 * hides them so the doc length stays neutral while typing elsewhere; a
+	 * suggestion is revealed by focusing its gutter card or pinning it with
+	 * the card's "keep diff visible" switch. Empty = nothing revealed. */
+	revealedRoundIds?: Set<string>;
+	/** roundId → 1-based number, shown as a badge on the round's in-doc diff
+	 * when its feedback thread card is open (so each in-doc change maps to a
+	 * numbered row in the card). Empty when no thread is focused. */
+	roundNumbers?: Map<string, number>;
+	/** roundId whose in-doc diff should pulse — set while the user hovers
+	 * that edit's row in a thread card. Null when nothing is hovered. */
+	flashRoundId?: string | null;
 	/** Same pending rounds as the sidebar cards — each inline diff hunk is
 	 * rendered from one round and carries that round's id on its pill. */
 	pendingRounds?: MaterializedPendingReviewRound[];
@@ -114,7 +120,9 @@ const diffKey = new PluginKey<DiffState>('diffOverlay');
 	activeFeedbackRange: null,
 	isPlainText: false,
 	allRoundsTiny: false,
-	expandedBlocks: new Set<string>(),
+	revealedRoundIds: new Set<string>(),
+	roundNumbers: new Map<string, number>(),
+	flashRoundId: null,
 	pendingRounds: []
 };
 
@@ -122,19 +130,15 @@ export function setDiffState(editor: Editor, state: DiffState) {
 	editor.view.dispatch(editor.state.tr.setMeta(diffKey, state));
 }
 
-/** Toggle whether a single diff block's proposed lines are visible.
- * Block ids are derived from the block's baseline line index (see the
- * decoration loop below); they're stable as long as the diff structure
- * is unchanged, and reset implicitly when a fresh diff arrives. */
-function toggleDiffBlock(view: EditorView, blockId: string) {
-	const current = diffKey.getState(view.state);
-	if (!current) return;
-	const next = new Set(current.expandedBlocks ?? []);
-	if (next.has(blockId)) next.delete(blockId);
-	else next.add(blockId);
-	view.dispatch(
-		view.state.tr.setMeta(diffKey, { expandedBlocks: next })
-	);
+/** Undo Tiptap-markdown's backslash escaping (`\[` → `[`, etc.). Round text
+ * (beforeMd/afterMd) comes from the SERIALIZED doc, where the serializer
+ * escapes markdown specials — but the editor's paragraph text shows the
+ * UNescaped characters. The per-round diff matches round lines against
+ * paragraph text, so both must be in the same (unescaped) space; otherwise a
+ * line containing `[[ ]]` (or `*`, `_`, etc.) never matches and its diff
+ * silently fails to render. */
+function unescapeMarkdown(text: string): string {
+	return text.replace(/\\([\\`*_{}[\]()#+\-.!>~|])/g, '$1');
 }
 
 /** Map line indices in `currentMd` to the document baseline (rounds[0].beforeMd)
@@ -330,7 +334,9 @@ export const DiffOverlay = Extension.create({
 							activeFeedbackRange,
 							isPlainText,
 							allRoundsTiny,
-							expandedBlocks = new Set<string>(),
+							revealedRoundIds = new Set<string>(),
+							roundNumbers = new Map<string, number>(),
+							flashRoundId = null,
 							pendingRounds = []
 						} = diffKey.getState(state) ?? INITIAL_STATE;
 						const addedClass = allRoundsTiny ? 'diff-added diff-added-tiny' : 'diff-added';
@@ -372,7 +378,9 @@ export const DiffOverlay = Extension.create({
 
 								if (proposedText !== null && proposedText !== undefined && isPlainText) {
 									const paragraphs = buildParagraphTextIndex(state.doc);
-									const documentBaseline = baseline;
+									// Match round text against paragraph text in the same
+									// (unescaped) space — see unescapeMarkdown.
+									const documentBaseline = unescapeMarkdown(baseline);
 									interface DiffBlock {
 										id: string;
 										roundId: string;
@@ -392,16 +400,18 @@ export const DiffOverlay = Extension.create({
 									const modified: ModifiedPara[] = [];
 									for (const round of pendingRounds) {
 										if (round.beforeMd == null || round.afterMd == null) continue;
+										const beforeMdU = unescapeMarkdown(round.beforeMd);
+										const afterMdU = unescapeMarkdown(round.afterMd);
 										const lineToDoc = buildLineAlignmentMap(
 											documentBaseline,
-											round.beforeMd
+											beforeMdU
 										);
 										const toDocLine = (roundLine: number) =>
 											lineToDoc.get(roundLine) ?? roundLine;
 										const lineParts = cachedDiff(
 											diffLinesCache,
-											normalizeReviewText(round.beforeMd),
-											normalizeReviewText(round.afterMd),
+											normalizeReviewText(beforeMdU),
+											normalizeReviewText(afterMdU),
 											diffLines
 										);
 										let roundLineIdx = 0;
@@ -484,8 +494,37 @@ export const DiffOverlay = Extension.create({
 										flushBlock();
 									}
 
+									// Number badges (when a feedback thread card is open) +
+									// hover flash. One badge per round, on its first hunk.
+									// Multiple badges landing on the same line fan out to the
+									// left so they don't stack on top of each other.
+									const numberedRoundsDone = new Set<string>();
+									const badgeStackAtPos = new Map<number, number>();
+									const pushNumberBadge = (roundId: string, pos: number) => {
+										const num = roundNumbers.get(roundId);
+										if (num == null || numberedRoundsDone.has(roundId)) return;
+										numberedRoundsDone.add(roundId);
+										const stackIdx = badgeStackAtPos.get(pos) ?? 0;
+										badgeStackAtPos.set(pos, stackIdx + 1);
+										decorations.push(
+											Decoration.widget(
+												pos,
+												() => {
+													const el = document.createElement('span');
+													el.className = 'diff-num-badge';
+													el.textContent = String(num);
+													el.style.setProperty('--badge-i', String(stackIdx));
+													el.setAttribute('contenteditable', 'false');
+													return el;
+												},
+												{ side: -1, ignoreSelection: true, key: `numbadge:${roundId}:${num}` }
+											)
+										);
+									};
+
 									for (const block of blocks) {
-										const expanded = expandedBlocks.has(block.id);
+										const expanded = revealedRoundIds.has(block.roundId);
+										const flashing = block.roundId === flashRoundId;
 										// Red strikethrough on the paragraphs slated for
 										// removal — always rendered, since they're real
 										// document content.
@@ -496,9 +535,10 @@ export const DiffOverlay = Extension.create({
 													Decoration.node(
 														paragraph.pos,
 														paragraph.pos + paragraph.nodeSize,
-														{ class: 'diff-removed-line' }
+														{ class: flashing ? 'diff-removed-line diff-flash' : 'diff-removed-line' }
 													)
 												);
+												pushNumberBadge(block.roundId, paragraph.pos + 1);
 											}
 										}
 										// Proposed (green) lines: only when expanded.
@@ -521,57 +561,6 @@ export const DiffOverlay = Extension.create({
 												);
 											}
 										}
-										// Toggle pill — only when there's a proposed
-										// replacement. We anchor it INSIDE the last
-										// removed paragraph (at the position right
-										// before its close token) so the pill becomes
-										// an inline child of that paragraph; CSS then
-										// pins it to the right margin without taking
-										// any vertical layout space, leaving the
-										// surrounding text flow untouched.
-										//
-										// A pure insertion (no removed lines, just
-										// proposed adds) has no host paragraph; for
-										// that case we fall back to the block-level
-										// `insertionPos` so the pill at least stays
-										// visible.
-										if (block.addedLines.length > 0) {
-											const addedCount = block.addedLines.length;
-											const lastRemovedIdx =
-												block.removedParagraphIdxs.length > 0
-													? block.removedParagraphIdxs[
-															block.removedParagraphIdxs.length - 1
-													  ]
-													: -1;
-											const hostParagraph =
-												lastRemovedIdx >= 0
-													? paragraphs[lastRemovedIdx]
-													: null;
-											const pillPos = hostParagraph
-												? hostParagraph.pos + hostParagraph.nodeSize - 1
-												: block.insertionPos;
-											const pillSide = hostParagraph ? 1 : -1;
-											decorations.push(
-												Decoration.widget(
-													pillPos,
-													(view) =>
-														createDiffTogglePill(
-															view,
-															block.id,
-															addedCount,
-															expanded,
-															hostParagraph !== null,
-															'lines',
-															block.roundId
-														),
-													{
-														side: pillSide,
-														ignoreSelection: true,
-														key: `pill:${block.id}:${expanded}`
-													}
-												)
-											);
-										}
 									}
 
 									// ── Modified-in-place paragraphs ───────────────
@@ -582,7 +571,7 @@ export const DiffOverlay = Extension.create({
 									// only when the per-paragraph pill is expanded. No
 									// whole-paragraph strikethrough.
 									for (const m of modified) {
-										const expanded = expandedBlocks.has(m.id);
+										const expanded = revealedRoundIds.has(m.roundId);
 										let changeGroups: number;
 										if (m.stale) {
 											// User has been typing into this paragraph
@@ -624,38 +613,22 @@ export const DiffOverlay = Extension.create({
 											);
 										}
 										if (changeGroups <= 0) continue;
-										// Positioning-only class (no color / strike):
-										// makes the paragraph the containing block for
-										// the absolutely-positioned inline pill below.
+										// Positioning-only class (no color / strike).
 										// Deliberately NOT in DIFF_NODE_SELECTOR — the
 										// paragraph stays normal editable text.
 										decorations.push(
 											Decoration.node(
 												m.para.pos,
 												m.para.pos + m.para.nodeSize,
-												{ class: 'diff-modified-line' }
-											)
-										);
-										decorations.push(
-											Decoration.widget(
-												m.para.pos + m.para.nodeSize - 1,
-												(view) =>
-													createDiffTogglePill(
-														view,
-														m.id,
-														changeGroups,
-														expanded,
-														true,
-														'tokens',
-														m.roundId
-													),
 												{
-													side: 1,
-													ignoreSelection: true,
-													key: `pill:${m.id}:${expanded}`
+													class:
+														m.roundId === flashRoundId
+															? 'diff-modified-line diff-flash'
+															: 'diff-modified-line'
 												}
 											)
 										);
+										pushNumberBadge(m.roundId, m.para.pos + 1);
 									}
 								} else if (proposedText !== null && proposedText !== undefined) {
 									let baselineIdx = 0;
@@ -882,6 +855,40 @@ function resolveParagraphWidgetPos(
 	return docEnd;
 }
 
+/** PM position of the first paragraph a pending round changes, so a margin
+ * gutter card can be aligned to its in-situ diff. Mirrors the first-changed
+ * line walk the decoration pass does for DiffBlocks: it locates the first
+ * added/removed line in the round and maps it (via the baseline alignment)
+ * to the live paragraph's document position. Returns null when the round has
+ * no materialized text. */
+export function resolveRoundAnchorPos(
+	editor: Editor,
+	round: MaterializedPendingReviewRound,
+	baseline: string
+): number | null {
+	if (round.beforeMd == null || round.afterMd == null) return null;
+	const doc = editor.state.doc;
+	const paragraphs = buildParagraphTextIndex(doc);
+	// Unescape so bracketed / markdown lines align with paragraph text.
+	const beforeMdU = unescapeMarkdown(round.beforeMd);
+	const lineToDoc = buildLineAlignmentMap(unescapeMarkdown(baseline), beforeMdU);
+	const toDocLine = (roundLine: number) => lineToDoc.get(roundLine) ?? roundLine;
+	const lineParts = cachedDiff(
+		diffLinesCache,
+		normalizeReviewText(beforeMdU),
+		normalizeReviewText(unescapeMarkdown(round.afterMd)),
+		diffLines
+	);
+	let beforeLineIdx = 0;
+	for (const part of lineParts) {
+		if (part.added || part.removed) {
+			return resolveParagraphWidgetPos(doc.content.size, paragraphs, toDocLine(beforeLineIdx));
+		}
+		beforeLineIdx += splitLogicalLines(part.value).length;
+	}
+	return null;
+}
+
 /** PM position for a proposed-token ghost inside a modified paragraph. */
 function ghostPosLocal(para: ParagraphTextSpan, cursor: number): number {
 	const local = para.localCharPositions;
@@ -1030,6 +1037,27 @@ function renderModifiedParagraph(
 			);
 			// Do NOT advance `cursor`: proposed text occupies no space in
 			// the BEFORE paragraph that's currently in the doc.
+		} else {
+			// Collapsed (card not open) AND this group only ADDS text — so
+			// there's nothing struck out to mark the change and the green
+			// ghost is hidden until the card opens. Drop a small insertion
+			// caret where the proposed text will land, so a purely additive
+			// edit still reads as "more coming here" in the document.
+			const caretPos = ghostPosLocal(para, cursor);
+			decorations.push(
+				Decoration.widget(
+					caretPos,
+					() => {
+						const el = document.createElement('span');
+						el.className = 'diff-insert-caret';
+						el.setAttribute('contenteditable', 'false');
+						el.setAttribute('aria-hidden', 'true');
+						return el;
+					},
+					{ side: -1, ignoreSelection: true, key: `inscaret:${para.pos}:${cursor}` }
+				)
+			);
+			// Do NOT advance `cursor` (proposed text isn't in the doc yet).
 		}
 	}
 	return changeGroups;
@@ -1051,119 +1079,6 @@ function createAddedLineWidget(
 	// (and so the closure stays out of the way of HMR / view re-mounts).
 	block.setAttribute('contenteditable', 'false');
 	return block;
-}
-
-/** Render the inline "Show suggestion (+N lines)" / "Hide suggestion"
- * pill that toggles a diff block's proposed lines. We attach our own
- * `mousedown` listener that calls `toggleDiffBlock` and stops further
- * propagation so the plugin's general "click on diff" handler doesn't
- * also try to redirect the caret. */
-function createDiffTogglePill(
-	view: EditorView,
-	blockId: string,
-	addedCount: number,
-	expanded: boolean,
-	inline: boolean,
-	mode: 'lines' | 'tokens' = 'lines',
-	roundId: string
-): HTMLElement {
-	const wrapper = document.createElement(inline ? 'span' : 'div');
-	wrapper.className = inline
-		? 'diff-toggle-pill-wrap inline'
-		: 'diff-toggle-pill-wrap block';
-	wrapper.setAttribute('contenteditable', 'false');
-
-	const toggleBtn = document.createElement('button');
-	toggleBtn.type = 'button';
-	toggleBtn.className = expanded ? 'diff-toggle-pill expanded' : 'diff-toggle-pill';
-	if (mode === 'tokens') {
-		// Modified-in-place paragraph: the count is the number of
-		// changed word groups within that paragraph, not a line count.
-		const plural = addedCount === 1 ? '' : 's';
-		toggleBtn.textContent = expanded ? 'Hide diff' : `Show diff · ${addedCount}`;
-		toggleBtn.title = expanded
-			? 'Hide the word-level diff'
-			: `Show the word-level diff (${addedCount} change${plural} in this paragraph)`;
-	} else {
-		toggleBtn.textContent = expanded ? 'Hide' : `Show (+${addedCount})`;
-		toggleBtn.title = expanded
-			? 'Hide proposed replacement'
-			: `Show proposed replacement (+${addedCount} line${addedCount === 1 ? '' : 's'})`;
-	}
-	toggleBtn.addEventListener('mousedown', (e) => {
-		e.preventDefault();
-		e.stopPropagation();
-		toggleDiffBlock(view, blockId);
-	});
-	toggleBtn.addEventListener('click', (e) => {
-		e.preventDefault();
-		e.stopPropagation();
-	});
-	wrapper.appendChild(toggleBtn);
-
-	// Inline Accept pill: lets the user accept the change without
-	// leaving their editing flow. The actual mutation lives in
-	// `+page.svelte`'s `acceptAgentEdit` (gated by Y.Doc transaction +
-	// review-state cleanup), so we just dispatch a bubbling custom event
-	// that the editor host listens for and forwards to the parent.
-	const acceptBtn = document.createElement('button');
-	acceptBtn.type = 'button';
-	acceptBtn.className = 'diff-accept-pill';
-	acceptBtn.title = 'Accept this proposed change';
-	acceptBtn.setAttribute('aria-label', 'Accept this proposed change');
-	acceptBtn.innerHTML = `
-		<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-			<polyline points="20 6 9 17 4 12"></polyline>
-		</svg>
-		<span>Accept diff</span>
-	`;
-	acceptBtn.addEventListener('mousedown', (e) => {
-		e.preventDefault();
-		e.stopPropagation();
-		wrapper.dispatchEvent(
-			new CustomEvent('docwriter:accept-pending-edit', {
-				bubbles: true,
-				detail: { roundId }
-			})
-		);
-	});
-	acceptBtn.addEventListener('click', (e) => {
-		e.preventDefault();
-		e.stopPropagation();
-	});
-	wrapper.appendChild(acceptBtn);
-
-	// Inline ✕ Reject pill — mirror of Accept. Parent listens for
-	// `docwriter:reject-pending-edit` and calls `rejectAgentEdit(roundId)`.
-	const rejectBtn = document.createElement('button');
-	rejectBtn.type = 'button';
-	rejectBtn.className = 'diff-reject-pill';
-	rejectBtn.title = 'Reject this proposed change';
-	rejectBtn.setAttribute('aria-label', 'Reject this proposed change');
-	rejectBtn.innerHTML = `
-		<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-			<line x1="18" y1="6" x2="6" y2="18"></line>
-			<line x1="6" y1="6" x2="18" y2="18"></line>
-		</svg>
-		<span>Reject diff</span>
-	`;
-	rejectBtn.addEventListener('mousedown', (e) => {
-		e.preventDefault();
-		e.stopPropagation();
-		wrapper.dispatchEvent(
-			new CustomEvent('docwriter:reject-pending-edit', {
-				bubbles: true,
-				detail: { roundId }
-			})
-		);
-	});
-	rejectBtn.addEventListener('click', (e) => {
-		e.preventDefault();
-		e.stopPropagation();
-	});
-	wrapper.appendChild(rejectBtn);
-
-	return wrapper;
 }
 
 /** Strip markdown syntax to plain text, matching node.textContent semantics. */

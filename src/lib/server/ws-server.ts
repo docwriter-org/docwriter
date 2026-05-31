@@ -3,25 +3,23 @@
  *
  * Hocuspocus owns the one Y.Doc per tab. `onLoadDocument` hydrates it from
  * SQLite; `onChange` appends every update to `yjs_updates` and marks the tab
- * dirty for the global 500ms flush loop. One UndoManager per live Document,
- * stored as a private property on the doc so it tracks the live state for
- * the full lifetime of that doc (and gets GC'd with it).
+ * dirty for the global 500ms flush loop.
  *
- * Origin tagging:
+ * Origin tagging (persisted per update, used to drive the client's undo and
+ * the diff overlay; the server itself doesn't undo):
  *   - agent writes via `openDirectConnection` transact with AGENT_ORIGIN.
  *   - user keystrokes arrive with a Connection object as the origin; onChange
  *     normalizes those to USER_ORIGIN.
  *   - cold-start replay and file-seed carry SYSTEM_ORIGIN.
- * The UndoManager's `trackedOrigins` = {AGENT_ORIGIN}.
  */
 import { Server } from '@hocuspocus/server';
 import * as Y from 'yjs';
 import type { PendingReviewRound } from '$lib/types';
 import {
-	AGENT_ORIGIN,
 	USER_ORIGIN,
 	FRAGMENT_NAME,
 	getReviewArray,
+	getCommentsMap,
 	getFragment,
 	readReviewRounds,
 	serializeYDoc,
@@ -38,23 +36,6 @@ import {
 	purgeTabUpdates,
 	setLiveDocResolver
 } from './ydoc-persistence';
-
-const UNDO_MANAGER_KEY = Symbol('docwriter.undoManager');
-
-interface DocWithUndo extends Y.Doc {
-	[UNDO_MANAGER_KEY]?: Y.UndoManager;
-}
-
-function ensureUndoManager(doc: Y.Doc): Y.UndoManager {
-	const d = doc as DocWithUndo;
-	if (d[UNDO_MANAGER_KEY]) return d[UNDO_MANAGER_KEY]!;
-	const mgr = new Y.UndoManager(doc.getXmlFragment(FRAGMENT_NAME), {
-		trackedOrigins: new Set([AGENT_ORIGIN]),
-		captureTimeout: 0
-	});
-	d[UNDO_MANAGER_KEY] = mgr;
-	return mgr;
-}
 
 function globalHolder() {
 	return globalThis as unknown as { __docwriterWsServer?: Server };
@@ -88,9 +69,6 @@ export function createWsServer(port: number): Server {
 		async onLoadDocument({ documentName: tabId, document }) {
 			const ydoc = document as unknown as Y.Doc;
 			const fragment = ydoc.getXmlFragment(FRAGMENT_NAME);
-			// UndoManager must exist BEFORE replay so agent-origin transactions
-			// from prior sessions repopulate the undo stack.
-			ensureUndoManager(ydoc);
 			if (fragment.length === 0) {
 				replayUpdatesInto(ydoc, tabId);
 			}
@@ -171,9 +149,40 @@ async function withLiveDoc<T>(
 	return result;
 }
 
+/** After rounds are accepted/rejected, tidy up any comment threads they
+ * were attached to. An *edit-only* thread — one the system auto-opened to
+ * wrap a spontaneous agent edit, so it carries no real conversation (no
+ * user message) — has nothing left to show once its edit is gone, so we
+ * auto-resolve it (the card disappears). A thread with genuine back-and-
+ * forth (any user message) is left open: the edit row clears but the
+ * conversation stays, and the user resolves it manually via the card's
+ * Resolve button. Runs inside the caller's transaction so the resolve
+ * lands in the same Yjs delta as the round removal.
+ *
+ * `threadIds` are the feedbackThreadIds of the just-removed rounds. */
+function resolveEmptyEditThreads(ydoc: Y.Doc, threadIds: Set<string>): void {
+	if (threadIds.size === 0) return;
+	const commentsMap = getCommentsMap(ydoc);
+	const stillReferenced = new Set(
+		getReviewArray(ydoc)
+			.toArray()
+			.map((r) => r.feedbackThreadId)
+			.filter((id): id is string => typeof id === 'string')
+	);
+	for (const tid of threadIds) {
+		const thread = commentsMap.get(tid);
+		if (!thread || thread.resolved) continue;
+		// Keep the thread if it still has a pending edit, or if it holds a
+		// real conversation (any user message).
+		if (stillReferenced.has(tid)) continue;
+		if (thread.messages.some((m) => m.author === 'user')) continue;
+		commentsMap.set(tid, { ...thread, resolved: true });
+	}
+}
+
 export async function acceptTabRounds(
 	tabId: string,
-	roundId?: string
+	roundId?: string | string[]
 ): Promise<{ acceptedCount: number; rounds: PendingReviewRound[]; yjsUpdate: string | null }> {
 	return withLiveDoc(tabId, (ydoc) => {
 		const reviewArr = getReviewArray(ydoc);
@@ -181,17 +190,23 @@ export async function acceptTabRounds(
 		// roundId omitted → batch-accept everything (kept oldest-first so
 		// each round applies against the previous round's output, the same
 		// order the agent generated them in).
-		// roundId given → accept ONLY that round, leave the rest pending.
-		// Rounds are independent unless their text overlaps; the stale
-		// check below will surface a 409 if accepting this one alone would
-		// leave it inapplicable (e.g. its old_string only existed after a
-		// prior pending round had landed).
+		// roundId given (string) → accept ONLY that round, leave the rest.
+		// roundId given (array) → accept that SET of rounds (e.g. all edits
+		// for one feedback thread), preserving oldest-first order so they
+		// apply in sequence. Rounds are independent unless their text
+		// overlaps; the stale check below surfaces a 409 if accepting this
+		// subset alone would leave one inapplicable.
 		let accepted: PendingReviewRound[];
 		let remaining: PendingReviewRound[];
 		if (!roundId) {
 			if (current.length === 0) return { acceptedCount: 0, rounds: [], yjsUpdate: null };
 			accepted = current;
 			remaining = [];
+		} else if (Array.isArray(roundId)) {
+			const idSet = new Set(roundId);
+			accepted = current.filter((r) => idSet.has(r.id));
+			remaining = current.filter((r) => !idSet.has(r.id));
+			if (accepted.length === 0) return { acceptedCount: 0, rounds: current, yjsUpdate: null };
 		} else {
 			const idx = current.findIndex((r) => r.id === roundId);
 			if (idx < 0) return { acceptedCount: 0, rounds: current, yjsUpdate: null };
@@ -284,6 +299,14 @@ export async function acceptTabRounds(
 			for (let i = indices.length - 1; i >= 0; i--) {
 				reviewArr.delete(indices[i], 1);
 			}
+			resolveEmptyEditThreads(
+				ydoc,
+				new Set(
+					accepted
+						.map((r) => r.feedbackThreadId)
+						.filter((id): id is string => typeof id === 'string')
+				)
+			);
 		}, USER_ORIGIN);
 
 		// Encode the exact Yjs delta so the client can apply it immediately
@@ -307,19 +330,66 @@ export async function rejectTabRounds(
 		// round; later rounds stay and will surface stale if they no longer
 		// apply (the materializer marks them).
 		const beforeStateVector = Y.encodeStateVector(ydoc);
+		const threadIdsOf = (rs: PendingReviewRound[]) =>
+			new Set(
+				rs
+					.map((r) => r.feedbackThreadId)
+					.filter((id): id is string => typeof id === 'string')
+			);
 		if (!roundId) {
-			ydoc.transact(() => reviewArr.delete(0, current.length), USER_ORIGIN);
+			ydoc.transact(() => {
+				reviewArr.delete(0, current.length);
+				resolveEmptyEditThreads(ydoc, threadIdsOf(current));
+			}, USER_ORIGIN);
 			const deltaBytes = Y.encodeStateAsUpdate(ydoc, beforeStateVector);
 			const yjsUpdate = Buffer.from(deltaBytes).toString('base64');
 			return { rejectedCount: current.length, rounds: [], yjsUpdate };
 		}
 		const idx = current.findIndex((r) => r.id === roundId);
 		if (idx < 0) return { rejectedCount: 0, rounds: current, yjsUpdate: null };
-		ydoc.transact(() => reviewArr.delete(idx, 1), USER_ORIGIN);
+		ydoc.transact(() => {
+			reviewArr.delete(idx, 1);
+			resolveEmptyEditThreads(ydoc, threadIdsOf([current[idx]]));
+		}, USER_ORIGIN);
 		const remaining = current.slice(0, idx).concat(current.slice(idx + 1));
 		const deltaBytes = Y.encodeStateAsUpdate(ydoc, beforeStateVector);
 		const yjsUpdate = Buffer.from(deltaBytes).toString('base64');
 		return { rejectedCount: 1, rounds: remaining, yjsUpdate };
+	});
+}
+
+/** Resolve (or reopen) a comment thread. The thread is the PARENT of any
+ * edits grouped under it, so resolving it also drops those pending edits —
+ * a resolved thread carries no live proposals. Both the comments-map write
+ * and the review-array deletes happen in ONE `USER_ORIGIN` transaction, so
+ * the returned delta — applied on the client with `USER_ORIGIN` — lands as a
+ * single undoable step: ctrl+z reopens the thread AND resurrects its edits
+ * (both the comments map and the review array are in the editor's
+ * UndoManager scope). Reopening (resolved=false) just clears the flag. */
+export async function setThreadResolution(
+	tabId: string,
+	threadId: string,
+	resolved: boolean
+): Promise<{ ok: boolean; yjsUpdate: string | null }> {
+	return withLiveDoc(tabId, (ydoc) => {
+		const commentsMap = getCommentsMap(ydoc);
+		const thread = commentsMap.get(threadId);
+		if (!thread) return { ok: false, yjsUpdate: null };
+		const reviewArr = getReviewArray(ydoc);
+		const beforeStateVector = Y.encodeStateVector(ydoc);
+		ydoc.transact(() => {
+			commentsMap.set(threadId, { ...thread, resolved });
+			if (resolved) {
+				const arr = reviewArr.toArray();
+				for (let i = arr.length - 1; i >= 0; i--) {
+					if (arr[i].feedbackThreadId === threadId) reviewArr.delete(i, 1);
+				}
+			}
+		}, USER_ORIGIN);
+		const yjsUpdate = Buffer.from(
+			Y.encodeStateAsUpdate(ydoc, beforeStateVector)
+		).toString('base64');
+		return { ok: true, yjsUpdate };
 	});
 }
 

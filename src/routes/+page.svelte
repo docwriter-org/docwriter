@@ -7,7 +7,9 @@
 	import FileTree from '$lib/components/FileTree.svelte';
 	import type { FileEntry } from '$lib/components/FileTree.svelte';
 	import TiptapEditor from '$lib/editor/TiptapEditor.svelte';
-	import HistoryPane from '$lib/components/HistoryPane.svelte';
+	import AgentDockShell from '$lib/components/AgentDockShell.svelte';
+	import ToastStack from '$lib/components/ToastStack.svelte';
+	import { pushToast, dismissToast, toastQueue, type ToastSpec } from '$lib/toasts';
 	import RulesPanel from '$lib/components/RulesPanel.svelte';
 	import ReferencesPanel from '$lib/components/ReferencesPanel.svelte';
 	import PanelResizer from '$lib/components/PanelResizer.svelte';
@@ -86,7 +88,6 @@
 		annotations,
 		isRendering,
 		agentHistory,
-		showHistory,
 		pushHistory,
 		nextHistoryKey,
 		selectedModel,
@@ -115,7 +116,7 @@
 		queuedSubmissionCount
 	} from '$lib/stores';
 	import TabBar from '$lib/components/TabBar.svelte';
-	import type { AgentSettings, CommentThread, HistoryEntry, ImageAttachment, PendingReviewRound } from '$lib/types';
+	import type { AgentSettings, CommentThread, HistoryEntry, ImageAttachment, PendingReviewRound, ProposedRule, ProposedHook } from '$lib/types';
 	import type { MaterializedPendingReviewRound } from '$lib/review-rounds';
 
 	type EditorRef = {
@@ -147,15 +148,59 @@
 	 * still want the pulsing "new content" dot so the user notices the
 	 * new file appeared. Cleared when the user switches to that tab. */
 	let freshAgentTabs: Set<string> = $state(new Set());
-	/** Combined map for the TabBar dot: real pending-review counts plus a
+	// Local mirror of the cross-tab comment aggregate. The merged gutter only
+	// renders the active tab's cards, so awareness of comments on background
+	// tabs rides on the TabBar dots derived from this.
+	let allCommentsAgg = $state<Array<{ tabId: string; threads: CommentThread[] }>>([]);
+	allTabCommentThreads.subscribe((v) => (allCommentsAgg = v));
+
+	/** Combined map for the TabBar dot: real pending-review counts, a
 	 * sentinel count of 1 for brand-new agent tabs (which have no review
-	 * round). Real counts win when both are present. */
+	 * round), and a dot for tabs that have only unresolved agent comments.
+	 * Real pending-edit counts win when both are present. */
 	let mergedPendingTabs: Map<string, number> = $derived.by(() => {
 		const map = new Map(pendingReviewTabs);
 		for (const id of freshAgentTabs) {
 			if (!map.has(id)) map.set(id, 1);
 		}
+		for (const { tabId, threads } of allCommentsAgg) {
+			if (threads.length > 0 && !map.has(tabId)) map.set(tabId, threads.length);
+		}
 		return map;
+	});
+
+	// Surface proposed rules/hooks as sticky toasts (the showReview sidebar
+	// used to render them as cards). The toast queue is reconciled against
+	// the proposal stores: push one per proposal, dismiss when the proposal
+	// is gone (accepted/rejected via the toast clears it from the store).
+	let proposedRulesList = $state<ProposedRule[]>([]);
+	proposedRules.subscribe((v) => (proposedRulesList = v));
+	let proposedHooksList = $state<ProposedHook[]>([]);
+	proposedHooks.subscribe((v) => (proposedHooksList = v));
+
+	$effect(() => {
+		const ruleIds = new Set(proposedRulesList.map((r) => r.id));
+		const hookIds = new Set(proposedHooksList.map((h) => h.id));
+		for (const r of proposedRulesList) {
+			pushToast({ kind: 'rule', title: 'Agent proposed a rule', body: r.text, refId: r.id });
+		}
+		for (const h of proposedHooksList) {
+			pushToast({
+				kind: 'hook',
+				title: 'Agent proposed a hook',
+				body: `${h.event}${h.matcher ? ` · ${h.matcher}` : ''} → ${h.command}`,
+				refId: h.id
+			});
+		}
+		// Drop toasts whose proposal no longer exists. Reading the queue via a
+		// one-shot subscribe doesn't register a rune dependency, so this effect
+		// only re-runs on proposal changes (no write-read loop).
+		let current: ToastSpec[] = [];
+		toastQueue.subscribe((v) => (current = v))();
+		for (const t of current) {
+			if (t.kind === 'rule' && !ruleIds.has(t.refId)) dismissToast(t.id);
+			if (t.kind === 'hook' && !hookIds.has(t.refId)) dismissToast(t.id);
+		}
 	});
 
 	function getCurrentTabList(): string[] {
@@ -1233,7 +1278,7 @@
 	async function postReviewAction(
 		tabId: string,
 		action: ReviewAction,
-		roundId?: string
+		roundId?: string | string[]
 	): Promise<{ res: Response; data: ReviewActionResponse }> {
 		const synced = await editorRef?.flushAutosave();
 		if (synced === false) {
@@ -1242,10 +1287,13 @@
 
 		const resumeTabSync = pauseTabSync(tabId);
 		try {
+			const body = Array.isArray(roundId)
+				? { action, roundIds: roundId }
+				: { action, roundId };
 			const res = await fetch(`/api/document?tab=${encodeURIComponent(tabId)}`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ action, roundId })
+				body: JSON.stringify(body)
 			});
 			const data = (await res.json().catch(() => ({}))) as ReviewActionResponse;
 			if (res.ok && data?.ok && Array.isArray(data.rounds) && typeof data.yjsUpdate === 'string') {
@@ -1258,6 +1306,37 @@
 		}
 	}
 
+	/** Resolve / reopen a thread through the same undo-friendly transport as
+	 * Accept/Reject: pause sync, let the server resolve the thread AND drop its
+	 * pending edits in one transaction, apply the delta locally with
+	 * USER_ORIGIN. ctrl+z then reopens the thread and resurrects its edits in a
+	 * single step. */
+	async function resolveThread(threadId: string, resolved: boolean) {
+		const tabId = getCurrentActiveTab();
+		if (!tabId) return;
+		const resumeTabSync = pauseTabSync(tabId);
+		try {
+			const res = await fetch(`/api/document?tab=${encodeURIComponent(tabId)}`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ action: 'set_thread_resolution', threadId, resolved })
+			});
+			const data = (await res.json().catch(() => ({}))) as {
+				ok?: boolean;
+				yjsUpdate?: string | null;
+			};
+			if (res.ok && data?.ok && typeof data.yjsUpdate === 'string') {
+				applyUpdateToTab(tabId, data.yjsUpdate);
+				if (resolved) clearPeekIfMatches(undefined);
+				editorRef?.focusEditor();
+			}
+		} catch (e) {
+			console.error('Failed to set thread resolution:', e);
+		} finally {
+			resumeTabSync();
+		}
+	}
+
 	/** Accept a single pending round by id (or all rounds if no id is
 	 * given — used by the "Accept all" path). Rounds are independent: the
 	 * server applies just this round's edit op against the current live
@@ -1265,26 +1344,20 @@
 	 * because a prior pending round changed the same text), the server
 	 * returns 409 and we re-queue it with a follow-up prompt asking the
 	 * agent to regenerate against the now-current text. */
-	async function acceptAgentEdit(roundId?: string) {
-		console.log('[accept] called', { roundId });
+	async function acceptAgentEdit(roundId?: string | string[]) {
 		const tabId = getCurrentActiveTab();
-		if (!tabId) {
-			console.log('[accept] no active tab — bail');
-			return;
-		}
+		if (!tabId) return;
 		const rounds = currentRounds();
-		console.log('[accept] active rounds', rounds.map((r) => r.id), 'looking for', roundId);
-		const idx = roundId ? rounds.findIndex((r) => r.id === roundId) : -1;
-		if (roundId && idx < 0) {
-			console.log('[accept] round not in active list — bail (this is the bug if it fires)');
-			return;
-		}
-		clearPeekIfMatches(roundId);
+		const single = typeof roundId === 'string' ? roundId : undefined;
+		const ids = Array.isArray(roundId) ? roundId : single ? [single] : null;
+		if (single && rounds.findIndex((r) => r.id === single) < 0) return;
+		if (Array.isArray(roundId) && !rounds.some((r) => roundId.includes(r.id))) return;
+		clearPeekIfMatches(single);
 		editorRef?.cancelIdleTimer();
 		try {
 			const { res, data } = await postReviewAction(tabId, 'accept_rounds', roundId);
 			if (res.status === 409 && data?.stale) {
-				const staleRoundId: string | null = data.staleRoundId ?? roundId ?? null;
+				const staleRoundId: string | null = data.staleRoundId ?? single ?? null;
 				const reason: string = typeof data.error === 'string' && data.error
 					? data.error
 					: 'The proposal no longer fits the current text.';
@@ -1315,8 +1388,8 @@
 			if (acceptedCount <= 0) return;
 			// Small-win celebration: flash a sage halo on the accepted range.
 			// Skip 'write' ops — a full-doc rewrite would paint everything green.
-			const justAccepted = roundId
-				? rounds.filter((r) => r.id === roundId)
+			const justAccepted = ids
+				? rounds.filter((r) => ids.includes(r.id))
 				: rounds.slice(0, acceptedCount);
 			for (const r of justAccepted) {
 				const op = r.operation;
@@ -1695,9 +1768,6 @@
 	let themeName = $state('light');
 	selectedTheme.subscribe((v) => (themeName = v));
 
-	let historyVisible = $state(true);
-	showHistory.subscribe((v) => (historyVisible = v));
-
 	let filesVisible = $state(true);
 	showFilesPane.subscribe((v) => (filesVisible = v));
 
@@ -1803,11 +1873,6 @@
 				},
 				{
 					kind: 'action',
-					label: historyVisible ? 'Hide history pane' : 'Show history pane',
-					onClick: () => showHistory.set(!historyVisible)
-				},
-				{
-					kind: 'action',
 					label: 'Files pane',
 					checked: filesVisible,
 					onClick: () => showFilesPane.set(!filesVisible)
@@ -1819,26 +1884,17 @@
 
 	// Pane widths (resizable)
 	let leftWidth = $state(260);
-	let rightWidth = $state(420);
 	const MIN_PANE_WIDTH = 180;
 	const MAX_PANE_WIDTH = 560;
 	function resizeLeft(delta: number) {
 		leftWidth = Math.max(MIN_PANE_WIDTH, Math.min(MAX_PANE_WIDTH, leftWidth + delta));
 	}
-	function resizeRight(delta: number) {
-		rightWidth = Math.max(MIN_PANE_WIDTH, Math.min(MAX_PANE_WIDTH, rightWidth - delta));
-	}
 
 	const MIN_FILE_TREE_HEIGHT = 160;
-	const MIN_HISTORY_HEIGHT = 140;
-	const MIN_PENDING_HEIGHT = 220;
 	let fileTreeHeight = $state(280);
-	let historyPaneHeight = $state(220);
 	let leftPaneInnerEl: HTMLDivElement | null = $state(null);
-	let rightPaneInnerEl: HTMLDivElement | null = $state(null);
 	let removeSidebarResizeListener = () => {};
 	let didInitFileTreeHeight = false;
-	let didInitHistoryHeight = false;
 
 	function maxFileTreeHeight() {
 		const paneHeight = leftPaneInnerEl?.clientHeight ?? 0;
@@ -1852,20 +1908,6 @@
 
 	function resizeFileTree(deltaY: number) {
 		fileTreeHeight = clampFileTreeHeight(fileTreeHeight - deltaY);
-	}
-
-	function maxHistoryPaneHeight() {
-		const paneHeight = rightPaneInnerEl?.clientHeight ?? 0;
-		if (paneHeight <= 0) return 320;
-		return Math.max(MIN_HISTORY_HEIGHT, paneHeight - MIN_PENDING_HEIGHT);
-	}
-
-	function clampHistoryPaneHeight(next: number) {
-		return Math.max(MIN_HISTORY_HEIGHT, Math.min(maxHistoryPaneHeight(), next));
-	}
-
-	function resizeHistoryPane(deltaY: number) {
-		historyPaneHeight = clampHistoryPaneHeight(historyPaneHeight + deltaY);
 	}
 
 	function toggleFilesPane() {
@@ -1959,16 +2001,6 @@
 					didInitFileTreeHeight = true;
 				} else {
 					fileTreeHeight = clampFileTreeHeight(fileTreeHeight);
-				}
-			}
-			if (historyVisible) {
-				const paneHeight = rightPaneInnerEl?.clientHeight ?? 0;
-				const initial = paneHeight > 0 ? Math.floor(paneHeight * 0.34) : 220;
-				if (!didInitHistoryHeight) {
-					historyPaneHeight = clampHistoryPaneHeight(initial);
-					didInitHistoryHeight = true;
-				} else {
-					historyPaneHeight = clampHistoryPaneHeight(historyPaneHeight);
 				}
 			}
 		}
@@ -2324,14 +2356,20 @@
 		</aside>
 		<PanelResizer onResize={resizeLeft} />
 		<main class="center-pane">
-			<TabBar
-				onSwitch={switchTab}
-				onClose={closeTab}
-				onDelete={deleteTab}
-				onRename={renameTabAction}
-				pendingTabs={mergedPendingTabs}
-				onDropFile={handleDropFiles}
-			/>
+			<!-- Align the tab strip over the page column (same geometry as
+			     `.plain-editor-shell`) so the active tab sits on the page. -->
+			<div class="tab-align">
+				<div class="tab-slot">
+					<TabBar
+						onSwitch={switchTab}
+						onClose={closeTab}
+						onDelete={deleteTab}
+						onRename={renameTabAction}
+						pendingTabs={mergedPendingTabs}
+						onDropFile={handleDropFiles}
+					/>
+				</div>
+			</div>
 			{#if docLoaded && activeTabFilePath}
 				{#key activeTabFilePath}
 				<AgentModal
@@ -2355,6 +2393,10 @@
 						if (rounds.length === 0 || !roundId) return;
 						void rejectAgentEdit(roundId);
 					}}
+					onAcceptFeedbackEdits={(roundIds) => {
+						if (roundIds.length > 0) void acceptAgentEdit(roundIds);
+					}}
+					onResolveThread={(threadId, resolved) => void resolveThread(threadId, resolved)}
 				/>
 				{/key}
 			{:else if docLoaded}
@@ -2366,53 +2408,26 @@
 				</div>
 			{/if}
 		</main>
-		<PanelResizer onResize={resizeRight} />
-		<aside class="right-pane" style:width="{rightWidth}px">
-			<div class="right-pane-inner" bind:this={rightPaneInnerEl}>
-				{#if historyVisible}
-					<div class="history-wrap" style:height="{historyPaneHeight}px">
-						<HistoryPane onNewSession={newSession} onWakeUp={docLoaded && activeTabFilePath ? () => submit() : undefined} onCancel={cancelRender} onToggleMuted={toggleMuted}>
-							{#snippet dock()}
-								{#if docLoaded}
-									<AgentDock
-										onSendMessage={(msg, opts) => void submit(msg, opts)}
-									/>
-								{/if}
-							{/snippet}
-						</HistoryPane>
-					</div>
-					<HorizontalPanelResizer onResize={resizeHistoryPane} />
-				{/if}
-				<div
-					class="pending-wrap"
-					class:history-hidden={!historyVisible}
-					class:muted-veil={muted}
-					aria-hidden={muted}
-				>
-					<div class="pending-pane-body">
-					<OutlinePane
-						showOutline={false}
-						showReview={true}
-						onAccept={acceptAgentEdit}
-						onReject={rejectAgentEdit}
-						onRetryWithFeedback={retryRejectedEditWithFeedback}
-						onAcceptRule={acceptProposedRule}
-						onRejectRule={rejectProposedRule}
-						onAcceptHook={acceptProposedHook}
-						onRejectHook={rejectProposedHook}
-						onNavigateToRound={async (tabId, round) => {
-							if (tabId !== getCurrentActiveTab()) await switchTab(tabId);
-						}}
-						onNavigateToComment={async (tabId) => {
-							if (tabId !== getCurrentActiveTab()) await switchTab(tabId);
-						}}
-					/>
-					</div>
-				</div>
-			</div>
-		</aside>
 	</div>
 </div>
+
+{#if docLoaded}
+	<AgentDockShell
+		onNewSession={newSession}
+		onWakeUp={docLoaded && activeTabFilePath ? () => submit() : undefined}
+		onCancel={cancelRender}
+		onToggleMuted={toggleMuted}
+	>
+		{#snippet dock()}
+			<AgentDock onSendMessage={(msg, opts) => void submit(msg, opts)} />
+		{/snippet}
+	</AgentDockShell>
+{/if}
+
+<ToastStack
+	onAccept={(t) => (t.kind === 'rule' ? acceptProposedRule(t.refId) : acceptProposedHook(t.refId))}
+	onDismiss={(t) => (t.kind === 'rule' ? rejectProposedRule(t.refId) : rejectProposedHook(t.refId))}
+/>
 
 <Dialog />
 
@@ -2429,7 +2444,17 @@
 		display: flex;
 		flex-direction: column;
 		height: 100vh;
-		background: var(--bg);
+		/* One continuous canvas behind the whole workspace — the document is an
+		 * elevated page floating on it, and the left sidebar + editor margins
+		 * share this surface so nothing reads as a bolted-on panel. Each theme
+		 * sets `--canvas-bg` to a tone recessed from its elevated page (a cool
+		 * Google-Docs gray in Light); fall back to a derived recess. */
+		--canvas: var(--canvas-bg, color-mix(in srgb, var(--text) 6%, var(--bg)));
+		/* Page + comment-gutter widths — single source of truth; the editor
+		 * grid and the tab-align grid both read these. */
+		--paper-width: 860px;
+		--gutter-width: 280px;
+		background: var(--canvas);
 		color: var(--text);
 		font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
 		font-size: 13px;
@@ -2489,8 +2514,7 @@
 		flex: 1;
 		min-height: 0;
 	}
-	.left-pane-inner,
-	.right-pane-inner {
+	.left-pane-inner {
 		height: 100%;
 		display: flex;
 		flex-direction: column;
@@ -2501,9 +2525,7 @@
 		--sidebar-edge: color-mix(in srgb, var(--border-light) 78%, var(--pane-bg));
 	}
 	.left-pane {
-		border-right: 1px solid var(--sidebar-edge);
-		box-shadow: inset -1px 0 0 color-mix(in srgb, var(--pane-bg) 18%, transparent);
-		background: var(--pane-bg);
+		background: var(--canvas);
 		overflow: hidden;
 		flex-shrink: 0;
 		display: flex;
@@ -2514,7 +2536,7 @@
 		flex: 1 1 auto;
 		min-height: 0;
 		overflow: hidden;
-		background: var(--sidebar-well-a);
+		background: transparent;
 	}
 	.file-tree-panel {
 		flex: 0 0 auto;
@@ -2524,8 +2546,8 @@
 		min-width: 0;
 		display: flex;
 		flex-direction: column;
-		border-top: 1px solid var(--sidebar-edge);
-		background: var(--sidebar-well-b);
+		border-top: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
+		background: transparent;
 	}
 	.file-tree-wrap {
 		flex: 1 1 auto;
@@ -2541,7 +2563,21 @@
 		display: flex;
 		flex-direction: column;
 		min-width: 0;
-		background: var(--bg);
+		background: var(--canvas);
+	}
+	/* Mirrors `.plain-editor-shell`'s columns + centering + horizontal padding
+	 * so the tab strip lands directly over the page column below it. */
+	.tab-align {
+		display: grid;
+		grid-template-columns: 52px minmax(0, var(--paper-width, 720px)) var(--gutter-width, 280px);
+		gap: 18px;
+		justify-content: center;
+		padding: 10px 32px 0;
+		flex-shrink: 0;
+	}
+	.tab-slot {
+		grid-column: 2;
+		min-width: 0;
 	}
 	.empty-editor-state {
 		flex: 1;
@@ -2565,30 +2601,5 @@
 		font-size: 14px;
 		line-height: 1.5;
 		color: var(--text-faint);
-	}
-	.right-pane {
-		border-left: 1px solid var(--sidebar-edge);
-		box-shadow: inset 1px 0 0 color-mix(in srgb, var(--pane-bg) 18%, transparent);
-		background: var(--pane-bg);
-		overflow: hidden;
-		flex-shrink: 0;
-	}
-	.history-wrap {
-		flex: 0 0 auto;
-		min-height: 140px;
-		overflow: hidden;
-	}
-	.pending-wrap {
-		transition: opacity 240ms ease, filter 240ms ease;
-		flex: 1 1 auto;
-		min-height: 0;
-		overflow: hidden;
-		display: flex;
-		flex-direction: column;
-	}
-	.pending-pane-body {
-		flex: 1 1 auto;
-		min-height: 0;
-		overflow: hidden;
 	}
 </style>

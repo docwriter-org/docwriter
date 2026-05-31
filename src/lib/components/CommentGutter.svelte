@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { Editor } from '@tiptap/core';
-	import { Send, Sparkles, Cat } from 'lucide-svelte';
+	import { Send, Sparkles, Cat, Check, X, User } from 'lucide-svelte';
 
 	/** Minimal inline markdown → HTML. Matches the renderer used in
 	 * HistoryPane so assistant_text and comments look the same. Escapes
@@ -18,12 +18,24 @@
 			.replace(/^- (.+)$/gm, '<span class="md-bullet">$1</span>')
 			.replace(/\n/g, '<br>');
 	}
-	import { onDestroy } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
+	import { fly } from 'svelte/transition';
+	import { cubicOut } from 'svelte/easing';
 	import type { CommentThread } from '$lib/types';
 	import { resolveThreadRange } from '$lib/editor/comment-overlay';
+	import { tooltip } from '$lib/actions/tooltip';
+	import type { MaterializedPendingReviewRound } from '$lib/review-rounds';
+	import { summarizeRound } from '$lib/review-diff';
 
 	interface Props {
 		threads: CommentThread[];
+		/** Pending agent-edit rounds for the active tab. Rendered as edit
+		 * cards in the same collision-stacked column as comment threads, each
+		 * anchored next to its in-situ diff. */
+		rounds: MaterializedPendingReviewRound[];
+		/** Document baseline the rounds diff against (reviewBaseline store).
+		 * Needed to locate each round's first changed paragraph. */
+		baseline: string | null;
 		editor: Editor | undefined;
 		tabId: string;
 		openThreadId: string | null;
@@ -34,22 +46,140 @@
 		 * by TiptapEditor to wake the agent so it can respond on the same
 		 * thread. The thread argument is the *post-reply* state. */
 		onReply?: (thread: CommentThread, replyText: string) => void;
+		onAcceptRound: (roundId: string) => void;
+		onRejectRound: (roundId: string) => void;
+		/** Rounds pinned "keep diff visible" (per-thread, via onPinThreadEdits). */
+		pinnedRoundIds: Set<string>;
+		/** Accept every still-pending edit for one feedback thread at once. */
+		onAcceptFeedback: (roundIds: string[]) => void;
+		/** Resolve / reopen a thread (undoable; resolving also drops its edits). */
+		onResolveThread: (threadId: string, resolved: boolean) => void;
+		/** Pin/unpin a whole feedback thread's edits so their diffs stay shown
+		 * even when the card is collapsed. */
+		onPinThreadEdits: (roundIds: string[], pinned: boolean) => void;
+		/** Hover a numbered edit row → flash that edit's diff in the document
+		 * (null on mouse-leave). */
+		onHoverEdit: (roundId: string | null) => void;
+		/** Agent muted: hide the agent's proposal surfaces in the gutter —
+		 * standalone edit cards, the edits grouped inside feedback threads, and
+		 * any agent-authored comment threads — so muted review is truly quiet.
+		 * User-opened comment threads stay. */
+		muted: boolean;
 	}
 	let {
 		threads,
+		rounds,
+		baseline,
 		editor,
 		tabId,
 		openThreadId,
 		onOpen,
 		onClose,
 		onApprove,
-		onReply
+		onReply,
+		onAcceptRound,
+		onRejectRound,
+		pinnedRoundIds,
+		onAcceptFeedback,
+		onPinThreadEdits,
+		onHoverEdit,
+		onResolveThread,
+		muted
 	}: Props = $props();
+
+	/** A short one-line snippet — just enough to tell edits apart in the card.
+	 * The full (possibly large) diff is shown in the editor, not here. */
+	function snippet(s: string, max = 22): string {
+		const t = (s ?? '').replace(/\s+/g, ' ').trim();
+		return t.length > max ? t.slice(0, max - 1) + '…' : t;
+	}
+
+	// ── Group an agent's edits under the feedback thread that triggered them ──
+	// Rounds tagged with `feedbackThreadId` matching an open thread are shown
+	// INSIDE that thread's card (numbered), not as separate edit cards.
+	let openThreadIds = $derived(new Set(threads.filter((t) => !t.resolved).map((t) => t.id)));
+	let roundsByThread = $derived.by(() => {
+		const m = new Map<string, MaterializedPendingReviewRound[]>();
+		for (const r of rounds) {
+			const tid = r.feedbackThreadId;
+			if (!tid || !openThreadIds.has(tid)) continue;
+			const list = m.get(tid);
+			if (list) list.push(r);
+			else m.set(tid, [r]);
+		}
+		return m;
+	});
+	function editsForThread(threadId: string): MaterializedPendingReviewRound[] {
+		// Muted: the agent's proposed edits are hidden from the gutter (and the
+		// inline diff overlay is hidden too), so the review is quiet.
+		if (muted) return [];
+		return roundsByThread.get(threadId) ?? [];
+	}
+	/** A thread the agent opened (first message is the agent's) — hidden in
+	 * mute mode. User-opened threads always show. */
+	function isAgentThread(thread: CommentThread): boolean {
+		return thread.messages[0]?.author === 'agent';
+	}
+
+	// Cards that appear during the initial mount / position pass shouldn't
+	// animate (that would make every tab switch feel laggy). Only cards that
+	// arrive AFTER the gutter has settled get the delayed slide-in — i.e. a
+	// genuinely new agent edit or comment.
+	let cardsReady = $state(false);
+	onMount(() => {
+		const t = setTimeout(() => (cardsReady = true), 700);
+		return () => clearTimeout(t);
+	});
+	/** Card entrance: a delayed fly-in (after the in-doc strike sweep) for
+	 * newly-arrived cards; instant for the initial render. */
+	function cardIn() {
+		return cardsReady
+			? { x: 12, duration: 360, delay: 560, easing: cubicOut }
+			: { duration: 0 };
+	}
 
 	let gutterEl: HTMLDivElement | null = $state(null);
 	let replyDrafts = $state<Record<string, string>>({});
 	let replying = $state<Record<string, boolean>>({});
-	let resolving = $state<Record<string, boolean>>({});
+	/** Threads currently waiting for the agent's response to a just-sent reply.
+	 * Set on send; cleared when the agent posts a new message OR a new edit on
+	 * the thread (see the $effect below), with a timeout safety net. */
+	let awaitingAgent = $state<Record<string, boolean>>({});
+	/** Snapshot of the agent messages + edits a thread had when its reply was
+	 * sent, so we can detect the agent's NEW response and clear the spinner. */
+	const awaitBaseline = new Map<string, { msgIds: Set<string>; roundIds: Set<string> }>();
+	const awaitTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	function clearAwaiting(threadId: string) {
+		if (awaitingAgent[threadId]) awaitingAgent = { ...awaitingAgent, [threadId]: false };
+		awaitBaseline.delete(threadId);
+		const t = awaitTimers.get(threadId);
+		if (t) {
+			clearTimeout(t);
+			awaitTimers.delete(threadId);
+		}
+	}
+	// Clear the waiting indicator as soon as the agent's response lands — a new
+	// agent-authored message in the thread, or a new edit grouped under it.
+	$effect(() => {
+		// Touch reactive inputs so this re-runs when the thread or its edits change.
+		threads;
+		roundsByThread;
+		for (const tid of Object.keys(awaitingAgent)) {
+			if (!awaitingAgent[tid]) continue;
+			const base = awaitBaseline.get(tid);
+			if (!base) continue;
+			const thread = threads.find((t) => t.id === tid);
+			const newAgentMsg = !!thread?.messages.some(
+				(m) => m.author === 'agent' && !base.msgIds.has(m.id)
+			);
+			const newRound = (roundsByThread.get(tid) ?? []).some((r) => !base.roundIds.has(r.id));
+			if (newAgentMsg || newRound) clearAwaiting(tid);
+		}
+	});
+	onDestroy(() => {
+		for (const t of awaitTimers.values()) clearTimeout(t);
+		awaitTimers.clear();
+	});
 
 	/** Per-thread absolute Y offset inside the gutter column. Computed
 	 * from the editor's `coordsAtPos` on the anchored range, then pushed
@@ -57,25 +187,90 @@
 	 * threads whose anchor quote no longer appears in the doc
 	 * (detached — skipped from the gutter entirely). */
 	let stackedPositions = $state<Map<string, number>>(new Map());
+	/** Actual rendered height per card (by id), measured from the DOM after
+	 * each render. The collision stack uses these so an expanded card pushes
+	 * the cards below it by its REAL height, not a rough estimate — otherwise
+	 * the gap below an expanded card feels wrong. Falls back to the estimate
+	 * until a card has been measured once. */
+	let cardHeights = $state<Map<string, number>>(new Map());
 
 	const COLLAPSED_H = 54;
 	const EXPANDED_H_APPROX = 260;
+	const EDIT_COLLAPSED_H = 48;
+	const EDIT_EXPANDED_H_APPROX = 180;
 	const CARD_GAP = 8;
+
+	function cardHeight(
+		kind: 'comment' | 'edit',
+		expanded: boolean,
+		editCount = 0
+	): number {
+		if (kind === 'edit') return expanded ? EDIT_EXPANDED_H_APPROX : EDIT_COLLAPSED_H;
+		let h = expanded ? EXPANDED_H_APPROX : COLLAPSED_H;
+		// A thread with linked edits grows by the numbered edit rows (+ the
+		// Accept-all row) when expanded.
+		if (expanded && editCount > 0) h += editCount * 66 + 38;
+		return h;
+	}
+	function cardHeightFor(
+		id: string,
+		kind: 'comment' | 'edit',
+		expanded: boolean,
+		editCount = 0
+	): number {
+		return cardHeights.get(id) ?? cardHeight(kind, expanded, editCount);
+	}
+
+	let measureQueued = false;
+	/** After a render, read each card's real height; if any changed, restack
+	 * once with the accurate numbers. Converges in one extra pass. */
+	function scheduleMeasure() {
+		if (measureQueued) return;
+		measureQueued = true;
+		requestAnimationFrame(() => {
+			measureQueued = false;
+			if (!gutterEl) return;
+			let changed = false;
+			const next = new Map(cardHeights);
+			gutterEl.querySelectorAll<HTMLElement>('.gutter-card').forEach((el) => {
+				const id = el.dataset.cardId;
+				if (!id) return;
+				const h = el.offsetHeight;
+				if (Math.abs((next.get(id) ?? -1) - h) > 1) {
+					next.set(id, h);
+					changed = true;
+				}
+			});
+			if (changed) {
+				cardHeights = next;
+				recomputePositions();
+			}
+		});
+	}
 
 	function recomputePositions() {
 		if (!editor || !gutterEl) return;
 		const gutterRect = gutterEl.getBoundingClientRect();
-		const entries: Array<{ id: string; top: number; expanded: boolean }> = [];
+		const entries: Array<{
+			id: string;
+			kind: 'comment' | 'edit';
+			top: number;
+			expanded: boolean;
+			editCount: number;
+		}> = [];
 		for (const thread of threads) {
 			if (thread.resolved) continue;
+			if (muted && isAgentThread(thread)) continue;
 			const range = resolveThreadRange(editor, thread);
 			if (!range) continue;
 			try {
 				const coords = editor.view.coordsAtPos(range.from);
 				entries.push({
 					id: thread.id,
+					kind: 'comment',
 					top: coords.top - gutterRect.top,
-					expanded: thread.id === openThreadId
+					expanded: thread.id === openThreadId,
+					editCount: editsForThread(thread.id).length
 				});
 			} catch {
 				// coordsAtPos throws if the view isn't mounted — skip.
@@ -88,12 +283,13 @@
 		let runningBottom = -Infinity;
 		const next = new Map<string, number>();
 		for (const entry of entries) {
-			const h = entry.expanded ? EXPANDED_H_APPROX : COLLAPSED_H;
+			const h = cardHeightFor(entry.id, entry.kind, entry.expanded, entry.editCount);
 			const top = Math.max(entry.top, runningBottom);
 			next.set(entry.id, top);
 			runningBottom = top + h + CARD_GAP;
 		}
 		stackedPositions = next;
+		scheduleMeasure();
 	}
 
 	// Recompute whenever threads, the open thread, or the editor content
@@ -118,6 +314,9 @@
 		// Touch reactive inputs so this effect retracks when they change.
 		threads;
 		openThreadId;
+		rounds;
+		baseline;
+		muted;
 		requestAnimationFrame(() => recomputePositions());
 	});
 
@@ -132,7 +331,9 @@
 
 	let visibleThreads = $derived(
 		threads
-			.filter((t) => !t.resolved && stackedPositions.has(t.id))
+			.filter(
+				(t) => !t.resolved && stackedPositions.has(t.id) && !(muted && isAgentThread(t))
+			)
 			.sort(
 				(a, b) =>
 					(stackedPositions.get(a.id) ?? 0) - (stackedPositions.get(b.id) ?? 0)
@@ -151,6 +352,21 @@
 			});
 			if (!res.ok) throw new Error(await res.text());
 			replyDrafts = { ...replyDrafts, [thread.id]: '' };
+			// Snapshot what the thread had BEFORE the agent responds, so the
+			// $effect can detect the agent's new message/edit and clear the
+			// waiting indicator. Timeout is a safety net if the agent stays
+			// silent (no comment, no edit).
+			awaitBaseline.set(thread.id, {
+				msgIds: new Set(thread.messages.filter((m) => m.author === 'agent').map((m) => m.id)),
+				roundIds: new Set((roundsByThread.get(thread.id) ?? []).map((r) => r.id))
+			});
+			awaitingAgent = { ...awaitingAgent, [thread.id]: true };
+			const prev = awaitTimers.get(thread.id);
+			if (prev) clearTimeout(prev);
+			awaitTimers.set(
+				thread.id,
+				setTimeout(() => clearAwaiting(thread.id), 120000)
+			);
 			// Wake the agent so it can respond on this thread. Pass the
 			// post-reply thread state so the parent has the full transcript
 			// (including the just-posted user message) for the trigger.
@@ -162,21 +378,15 @@
 		}
 	}
 
-	async function toggleResolved(thread: CommentThread) {
-		if (resolving[thread.id]) return;
-		resolving = { ...resolving, [thread.id]: true };
-		try {
-			const res = await fetch('/api/comments', {
-				method: 'PATCH',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ tabId, threadId: thread.id, resolved: !thread.resolved })
-			});
-			if (!res.ok) throw new Error(await res.text());
-			if (!thread.resolved) onClose();
-		} catch (e) {
-			console.error('Failed to toggle resolved:', e);
-		} finally {
-			resolving = { ...resolving, [thread.id]: false };
+	function toggleResolved(thread: CommentThread) {
+		const next = !thread.resolved;
+		// Resolving also drops the thread's pending edits, and the whole action
+		// is applied locally with USER_ORIGIN by the parent so ctrl+z reopens
+		// the thread and brings its edits back in one step.
+		onResolveThread(thread.id, next);
+		if (next) {
+			clearAwaiting(thread.id);
+			onClose();
 		}
 	}
 
@@ -206,7 +416,9 @@
 		<div
 			class="gutter-card"
 			class:expanded={isOpen}
+			data-card-id={thread.id}
 			style:top="{top}px"
+			in:fly={cardIn()}
 			onclick={(e) => {
 				if (isOpen) return;
 				e.stopPropagation();
@@ -214,15 +426,44 @@
 			}}
 		>
 			{#if isOpen}
+				{@const tEdits = editsForThread(thread.id)}
+				{#if tEdits.length > 0}
+					<span
+						class="pin-corner"
+						use:tooltip={tEdits.every((e) => pinnedRoundIds.has(e.id))
+							? 'Diffs stay shown in the document even when this card is collapsed. Turn off to hide them unless the card is open.'
+							: "Keep these edits' diffs shown in the document even when this card is collapsed."}
+					>
+						<input
+							type="checkbox"
+							class="pin-switch"
+							aria-label="Keep diffs shown in document"
+							checked={tEdits.every((e) => pinnedRoundIds.has(e.id))}
+							onclick={(e) => e.stopPropagation()}
+							onchange={(e) =>
+								onPinThreadEdits(
+									tEdits.map((x) => x.id),
+									(e.currentTarget as HTMLInputElement).checked
+								)}
+						/>
+					</span>
+				{/if}
 				<div class="card-messages">
 					{#each thread.messages as message (message.id)}
 						<div class="message" class:from-agent={message.author === 'agent'} class:from-user={message.author === 'user'}>
 							<span class="author">
-								{#if message.author === 'agent'}
-									<Cat size={12} strokeWidth={1.7} />
-								{:else}
-									You
-								{/if}
+								<span
+									class="avatar small"
+									class:avatar-agent={message.author === 'agent'}
+									class:avatar-user={message.author !== 'agent'}
+								>
+									{#if message.author === 'agent'}
+										<Cat size={11} strokeWidth={1.8} />
+									{:else}
+										<User size={11} strokeWidth={1.8} />
+									{/if}
+								</span>
+								<span class="author-name">{message.author === 'agent' ? 'Agent' : 'You'}</span>
 							</span>
 							<span class="timestamp">{formatTimestamp(message.timestamp)}</span>
 							<div class="message-body">{@html renderMarkdown(message.text)}</div>
@@ -238,6 +479,69 @@
 						</div>
 					{/each}
 				</div>
+				{#if awaitingAgent[thread.id]}
+					<div class="awaiting-agent">
+						<span class="awaiting-dots"><span></span><span></span><span></span></span>
+						<span>Thinking…</span>
+					</div>
+				{/if}
+				{@const edits = editsForThread(thread.id)}
+				{#if edits.length > 0}
+					{@const allPinned = edits.every((e) => pinnedRoundIds.has(e.id))}
+					<div class="thread-edits">
+						<div class="thread-edits-head">
+							<span class="edit-kicker">
+								{edits.length} proposed edit{edits.length === 1 ? '' : 's'}
+							</span>
+							{#if edits.length > 1}
+								<button
+									class="accept-all-btn"
+									onclick={() => onAcceptFeedback(edits.filter((e) => !e.stale).map((e) => e.id))}
+								>
+									<Check size={11} /> Accept all
+								</button>
+							{/if}
+						</div>
+						{#each edits as ed, i (ed.id)}
+							<!-- svelte-ignore a11y_no_static_element_interactions -->
+							<div
+								class="thread-edit-row"
+								class:stale={ed.stale}
+								onmouseenter={() => onHoverEdit(ed.id)}
+								onmouseleave={() => onHoverEdit(null)}
+							>
+								<span class="edit-num">{i + 1}</span>
+								<span
+									class="edit-row-summary"
+									title={ed.operation?.type === 'edit'
+										? `${ed.operation.oldString} → ${ed.operation.newString}`
+										: summarizeRound(ed)}
+								>
+									{#if ed.operation?.type === 'edit'}
+										<span class="er-old">{snippet(ed.operation.oldString)}</span>
+										<span class="er-arrow">→</span>
+										<span class="er-new">{snippet(ed.operation.newString)}</span>
+									{:else}
+										{summarizeRound(ed)}
+									{/if}
+								</span>
+								<span class="edit-row-actions">
+									<button class="mini-btn reject" title="Reject this edit" onclick={() => onRejectRound(ed.id)}>
+										<X size={12} />
+									</button>
+									<button
+										class="mini-btn accept"
+										title={ed.stale ? 'Stale — can no longer apply' : 'Accept this edit'}
+										disabled={ed.stale}
+										onclick={() => onAcceptRound(ed.id)}
+									>
+										<Check size={12} />
+									</button>
+								</span>
+							</div>
+						{/each}
+					</div>
+				{/if}
 				<textarea
 					class="reply-input"
 					placeholder="Reply…"
@@ -261,7 +565,6 @@
 					<button
 						class="resolve-link"
 						onclick={() => toggleResolved(thread)}
-						disabled={resolving[thread.id]}
 						title={thread.resolved
 							? 'Re-open this thread (it will appear in the agent prompt again)'
 							: 'Mark this thread done. It stops being inlined into the agent prompt.'}
@@ -281,17 +584,27 @@
 				</div>
 			{:else}
 				<div class="card-collapsed-row">
-					<div class="card-author">
+					<span
+						class="avatar"
+						class:avatar-agent={firstMessageAuthor(thread) === 'agent'}
+						class:avatar-user={firstMessageAuthor(thread) !== 'agent'}
+					>
 						{#if firstMessageAuthor(thread) === 'agent'}
-							<Cat size={12} strokeWidth={1.7} class="author-icon-agent" />
+							<Cat size={12} strokeWidth={1.8} />
 						{:else}
-							<span class="author-label-user">You</span>
+							<User size={12} strokeWidth={1.8} />
 						{/if}
-					</div>
+					</span>
 					<div class="card-preview" title={firstMessageBody(thread)}>
 						{firstMessageBody(thread)}
 					</div>
-					<span class="card-count">{thread.messages.length}</span>
+					{#if editsForThread(thread.id).length > 0}
+						<span class="edit-pill" title="{editsForThread(thread.id).length} proposed edit(s)">
+							<Sparkles size={9} />{editsForThread(thread.id).length}
+						</span>
+					{:else if thread.messages.length > 1}
+						<span class="card-count">{thread.messages.length}</span>
+					{/if}
 				</div>
 			{/if}
 		</div>
@@ -306,11 +619,13 @@
 		 * third grid column in TiptapEditor.svelte. Compromise between
 		 * the original 220px (felt too wide collapsed) and 180px (too
 		 * narrow for an expanded thread with code paths / long URLs). */
-		width: 200px;
-		min-width: 200px;
-		max-width: 200px;
+		width: 280px;
+		min-width: 280px;
+		max-width: 280px;
 		height: 100%;
-		padding: 0 10px 20px;
+		/* Extra bottom room so the lowest card can sit clear of the fixed
+		 * agent dock (AgentDockShell publishes its height as the var). */
+		padding: 0 10px calc(20px + var(--dock-reserved-bottom, 0px));
 		box-sizing: border-box;
 		overflow: visible;
 		font-family: 'Inter', -apple-system, sans-serif;
@@ -320,50 +635,59 @@
 		left: 10px;
 		right: 10px;
 		background: var(--bg-elevated);
-		border: 1px solid color-mix(in srgb, #f59e0b 28%, var(--border-light));
-		border-radius: 8px;
-		padding: 6px 8px;
+		border: 1px solid var(--border-light);
+		border-radius: 10px;
+		padding: 9px 11px;
 		font-size: 12.5px;
 		color: var(--text);
 		cursor: pointer;
-		transition: box-shadow 0.12s, border-color 0.12s;
+		box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+		transition: box-shadow 0.12s ease, border-color 0.12s ease;
 		z-index: 1;
 	}
 	.gutter-card:hover {
-		border-color: color-mix(in srgb, #f59e0b 50%, var(--border-light));
-		box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
+		box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
 	}
 	.gutter-card.expanded {
 		cursor: default;
 		z-index: 2;
-		box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.05);
-		padding: 8px 10px;
-		border-color: color-mix(in srgb, #f59e0b 55%, var(--border-light));
+		box-shadow: 0 10px 30px rgba(0, 0, 0, 0.13), 0 2px 6px rgba(0, 0, 0, 0.05);
+		border-color: color-mix(in srgb, var(--text) 14%, var(--border-light));
+		padding: 13px 14px;
+	}
+	/* Circular avatars carry the only color on the card (Google-Docs style):
+	 * the card itself stays a neutral white sheet. */
+	.avatar {
+		flex-shrink: 0;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 22px;
+		height: 22px;
+		border-radius: 50%;
+	}
+	.avatar.small {
+		width: 18px;
+		height: 18px;
+	}
+	.avatar-agent {
+		background: color-mix(in srgb, var(--accent) 16%, transparent);
+		color: var(--accent);
+	}
+	.avatar-user {
+		background: color-mix(in srgb, #3b82f6 16%, transparent);
+		color: #2563eb;
 	}
 	.card-collapsed-row {
 		display: flex;
 		align-items: center;
-		gap: 8px;
+		gap: 9px;
 		min-width: 0;
-	}
-	.card-author {
-		flex-shrink: 0;
-		display: inline-flex;
-		align-items: center;
-		height: 14px;
-	}
-	:global(.author-icon-agent) {
-		color: #b45309;
-	}
-	.author-label-user {
-		font-size: 11px;
-		font-weight: 600;
-		color: #2563eb;
 	}
 	.card-preview {
 		flex: 1;
 		min-width: 0;
-		font-size: 12px;
+		font-size: 12.5px;
 		color: var(--text);
 		line-height: 1.4;
 		overflow: hidden;
@@ -374,10 +698,11 @@
 		flex-shrink: 0;
 		font-size: 10.5px;
 		font-weight: 600;
-		color: #92400e;
-		background: #fef3c7;
-		padding: 1px 6px;
-		border-radius: 8px;
+		color: var(--text-faint);
+		background: var(--bg-surface);
+		border: 1px solid var(--border-light);
+		padding: 0 6px;
+		border-radius: 9px;
 	}
 	.card-messages {
 		max-height: 260px;
@@ -385,6 +710,42 @@
 		display: flex;
 		flex-direction: column;
 		gap: 8px;
+		/* Room at the top-right for the keep-shown toggle (pin-corner) so it
+		 * doesn't sit on the first message's timestamp. */
+		padding-right: 40px;
+	}
+	/* "Agent is responding…" — shown after sending a reply until the agent
+	 * posts a new message or edit (or the safety timeout fires). */
+	.awaiting-agent {
+		display: flex;
+		align-items: center;
+		gap: 7px;
+		margin-top: 8px;
+		font-size: 11.5px;
+		color: var(--text-faint);
+		font-style: italic;
+	}
+	.awaiting-dots {
+		display: inline-flex;
+		gap: 3px;
+	}
+	.awaiting-dots span {
+		width: 4px;
+		height: 4px;
+		border-radius: 50%;
+		background: var(--accent, #6366f1);
+		opacity: 0.4;
+		animation: awaitingDotBounce 1.2s ease-in-out infinite;
+	}
+	.awaiting-dots span:nth-child(2) {
+		animation-delay: 0.15s;
+	}
+	.awaiting-dots span:nth-child(3) {
+		animation-delay: 0.3s;
+	}
+	@keyframes awaitingDotBounce {
+		0%, 100% { opacity: 0.3; transform: translateY(0); }
+		50% { opacity: 0.9; transform: translateY(-2px); }
 	}
 	/* Per-message: clear author distinction via left-accent + author
 	 * color. No nested box; body sits directly in the card. User is
@@ -404,17 +765,12 @@
 		border-left-color: color-mix(in srgb, #f59e0b 70%, transparent);
 	}
 	.author {
-		font-size: 11px;
-		font-weight: 600;
 		display: inline-flex;
 		align-items: center;
-		height: 14px;
-	}
-	.message.from-user .author {
-		color: #2563eb;
-	}
-	.message.from-agent .author {
-		color: #b45309;
+		gap: 6px;
+		font-size: 11.5px;
+		font-weight: 600;
+		color: var(--text);
 	}
 	.timestamp {
 		font-size: 10.5px;
@@ -539,5 +895,188 @@
 	.send-btn:disabled {
 		opacity: 0.5;
 		cursor: default;
+	}
+
+	.edit-kicker {
+		font-size: 10px;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		color: var(--accent);
+	}
+	.pin-corner {
+		position: absolute;
+		top: 12px;
+		right: 13px;
+		display: inline-flex;
+		align-items: center;
+		z-index: 1;
+	}
+	/* A compact iOS-style switch built from the checkbox. */
+	.pin-switch {
+		appearance: none;
+		-webkit-appearance: none;
+		position: relative;
+		flex-shrink: 0;
+		width: 28px;
+		height: 16px;
+		border-radius: 999px;
+		background: color-mix(in srgb, var(--text) 22%, transparent);
+		cursor: pointer;
+		transition: background 0.15s ease;
+		margin: 0;
+	}
+	.pin-switch::after {
+		content: '';
+		position: absolute;
+		top: 2px;
+		left: 2px;
+		width: 12px;
+		height: 12px;
+		border-radius: 50%;
+		background: #fff;
+		transition: transform 0.15s ease;
+		box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+	}
+	.pin-switch:checked {
+		background: var(--accent);
+	}
+	.pin-switch:checked::after {
+		transform: translateX(12px);
+	}
+	/* ── Edits grouped inside a feedback thread card ──────────────────── */
+	.edit-pill {
+		flex-shrink: 0;
+		display: inline-flex;
+		align-items: center;
+		gap: 3px;
+		font-size: 10px;
+		font-weight: 600;
+		color: var(--accent);
+		background: color-mix(in srgb, var(--accent) 14%, transparent);
+		padding: 1px 6px 1px 5px;
+		border-radius: 8px;
+	}
+	.thread-edits {
+		margin-top: 11px;
+		padding-top: 10px;
+		border-top: 1px solid var(--border-light);
+	}
+	.thread-edits-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+		margin-bottom: 6px;
+	}
+	.er-old {
+		color: #b91c1c;
+		text-decoration: line-through;
+		text-decoration-thickness: 1px;
+	}
+	.er-arrow {
+		color: var(--text-faint);
+		margin: 0 3px;
+	}
+	.er-new {
+		color: #047857;
+	}
+	.thread-edit-row.stale .er-old,
+	.thread-edit-row.stale .er-new {
+		color: var(--text-faint);
+	}
+	.accept-all-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		padding: 3px 9px;
+		font: inherit;
+		font-size: 11px;
+		font-weight: 500;
+		border-radius: 5px;
+		cursor: pointer;
+		background: var(--accent);
+		color: #fff;
+		border: 1px solid var(--accent);
+		white-space: nowrap;
+		flex-shrink: 0;
+	}
+	.accept-all-btn:hover {
+		background: color-mix(in srgb, var(--accent) 88%, black);
+	}
+	.thread-edit-row {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 5px 6px;
+		margin: 0 -6px;
+		border-radius: 6px;
+		cursor: default;
+		transition: background 0.1s ease;
+	}
+	.thread-edit-row:hover {
+		background: color-mix(in srgb, var(--accent) 9%, transparent);
+	}
+	.thread-edit-row + .thread-edit-row {
+		border-top: 1px solid color-mix(in srgb, var(--text) 6%, transparent);
+	}
+	.edit-num {
+		flex-shrink: 0;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 18px;
+		height: 18px;
+		border-radius: 50%;
+		background: color-mix(in srgb, var(--accent) 14%, transparent);
+		color: var(--accent);
+		font-size: 10.5px;
+		font-weight: 600;
+	}
+	.edit-row-summary {
+		flex: 1;
+		min-width: 0;
+		font-size: 12px;
+		color: var(--text);
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.thread-edit-row.stale .edit-row-summary {
+		color: var(--text-faint);
+		text-decoration: line-through;
+	}
+	.edit-row-actions {
+		flex-shrink: 0;
+		display: inline-flex;
+		gap: 4px;
+	}
+	.mini-btn {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 24px;
+		height: 24px;
+		border-radius: 5px;
+		cursor: pointer;
+		border: 1px solid var(--border-light);
+		background: var(--bg-surface);
+		color: var(--text);
+	}
+	.mini-btn.accept {
+		background: var(--accent);
+		border-color: var(--accent);
+		color: #fff;
+	}
+	.mini-btn.accept:hover:not(:disabled) {
+		background: color-mix(in srgb, var(--accent) 88%, black);
+	}
+	.mini-btn.accept:disabled {
+		opacity: 0.45;
+		cursor: default;
+	}
+	.mini-btn.reject:hover {
+		background: var(--bg-hover);
+		border-color: color-mix(in srgb, #ef4444 40%, var(--border-light));
 	}
 </style>

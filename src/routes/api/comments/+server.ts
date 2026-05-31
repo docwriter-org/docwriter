@@ -91,6 +91,13 @@ export const POST: RequestHandler = async ({ request }) => {
 			}
 			const threadId = 'thread_' + cryptoRandomId();
 			const now = Date.now();
+			const messages: CommentMessage[] = [];
+			messages.push({
+				id: 'msg_' + cryptoRandomId(),
+				author: 'user',
+				text: messageText,
+				timestamp: now
+			});
 			const thread: CommentThread = {
 				id: threadId,
 				anchor: {
@@ -98,14 +105,7 @@ export const POST: RequestHandler = async ({ request }) => {
 					occurrenceIndex: 0,
 					...(relStart && relEnd ? { relStart, relEnd } : {})
 				},
-				messages: [
-					{
-						id: 'msg_' + cryptoRandomId(),
-						author: 'user',
-						text: messageText,
-						timestamp: now
-					}
-				],
+				messages,
 				resolved: false,
 				createdAt: now
 			};

@@ -4,7 +4,13 @@ import type { RequestHandler } from './$types';
 import { readUserDoc, readMeta, writeMeta } from '$lib/server/document-io';
 import { isValidTabId } from '$lib/server/document-files';
 import { getTabsState } from '$lib/server/runtime-state';
-import { acceptTabRounds, rejectTabRounds, flushTabMarkdownNow } from '$lib/server/ws-server';
+import {
+	acceptTabRounds,
+	rejectTabRounds,
+	setThreadResolution,
+	flushTabMarkdownNow
+} from '$lib/server/ws-server';
+import { setActiveFeedbackThreadId } from '$lib/server/mcp-doc-tools';
 import { runTabWrite } from '$lib/server/mcp-doc-tools';
 
 function countOccurrences(haystack: string, needle: string): number {
@@ -82,10 +88,14 @@ export const POST: RequestHandler = async ({ request, url }) => {
 		const tabId = resolveTabId(url);
 		const body = await request.json().catch(() => ({}));
 		const roundId = typeof body.roundId === 'string' ? body.roundId : undefined;
+		// Accept a SET of rounds (e.g. all edits for one feedback thread).
+		const roundIds = Array.isArray(body.roundIds)
+			? (body.roundIds.filter((x: unknown) => typeof x === 'string') as string[])
+			: undefined;
 		if (body?.action === 'accept_rounds') {
 			let result;
 			try {
-				result = await acceptTabRounds(tabId, roundId);
+				result = await acceptTabRounds(tabId, roundIds ?? roundId);
 			} catch (e) {
 				if ((e as Error).name === 'StalePendingReviewError') {
 					const stale = e as Error & {
@@ -121,6 +131,13 @@ export const POST: RequestHandler = async ({ request, url }) => {
 			const result = await rejectTabRounds(tabId, roundId);
 			return json({ ok: true, ...result });
 		}
+		if (body?.action === 'set_thread_resolution') {
+			const threadId = typeof body.threadId === 'string' ? body.threadId : '';
+			const resolved = body.resolved === true;
+			if (!threadId) return json({ error: 'threadId required' }, { status: 400 });
+			const result = await setThreadResolution(tabId, threadId, resolved);
+			return json({ ...result });
+		}
 		if (body?.action === 'dev_fake_agent_write') {
 			if (!dev) {
 				return json({ error: 'Not available outside dev mode' }, { status: 404 });
@@ -148,21 +165,31 @@ export const POST: RequestHandler = async ({ request, url }) => {
 				return json({ error: 'Missing oldString/newString' }, { status: 400 });
 			}
 			let failure: string | null = null;
-			const result = await runTabWrite(tabId, 'dev_fake_agent_edit', (currentMd) => {
-				const hits = countOccurrences(currentMd, oldString);
-				if (hits === 0) {
-					failure = 'oldString not found in current document';
-					return null;
-				}
-				if (hits > 1) {
-					failure = `oldString matched ${hits} locations in current document`;
-					return null;
-				}
-				return {
-					operation: { type: 'edit', oldString, newString },
-					afterMd: currentMd.replace(oldString, newString)
-				};
-			});
+			// Dev-only: allow tagging the fake edit with a feedback thread so
+			// the gutter's grouped-card rendering can be exercised locally.
+			const fakeThreadId =
+				typeof body.feedbackThreadId === 'string' ? body.feedbackThreadId : null;
+			if (fakeThreadId) setActiveFeedbackThreadId(fakeThreadId);
+			let result;
+			try {
+				result = await runTabWrite(tabId, 'dev_fake_agent_edit', (currentMd) => {
+					const hits = countOccurrences(currentMd, oldString);
+					if (hits === 0) {
+						failure = 'oldString not found in current document';
+						return null;
+					}
+					if (hits > 1) {
+						failure = `oldString matched ${hits} locations in current document`;
+						return null;
+					}
+					return {
+						operation: { type: 'edit', oldString, newString },
+						afterMd: currentMd.replace(oldString, newString)
+					};
+				});
+			} finally {
+				if (fakeThreadId) setActiveFeedbackThreadId(null);
+			}
 			if ('error' in result) {
 				if (failure) {
 					return json({ error: failure }, { status: 409 });

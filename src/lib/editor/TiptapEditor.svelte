@@ -41,7 +41,8 @@
 		commentThreads,
 		openCommentThreadId,
 		agentSettings,
-		expandedReviewRoundId
+		expandedReviewRoundId,
+		pinnedDiffRounds
 	} from '$lib/stores';
 	import type { Action, Annotation, CommentThread, FeedbackMode } from '$lib/types';
 	import type { MaterializedPendingReviewRound } from '$lib/review-rounds';
@@ -57,12 +58,24 @@
 		 * `getScrollTop()` before tearing the editor down (Accept / Reject /
 		 * file reload) so the user keeps their place across the remount. */
 		initialScrollTop?: number;
-		/** Accept the pending review round tied to the inline diff pill the
-		 * user clicked. The pill carries the same round id as the sidebar. */
+		/** Accept / reject the pending review round whose gutter card the user
+		 * clicked. Wired to acceptAgentEdit / rejectAgentEdit in +page. */
 		onAcceptInlineEdit?: (roundId: string | null) => void;
 		onRejectInlineEdit?: (roundId: string | null) => void;
+		/** Accept every pending edit for one feedback thread at once. */
+		onAcceptFeedbackEdits?: (roundIds: string[]) => void;
+		/** Resolve / reopen a thread (undoable; also drops its pending edits). */
+		onResolveThread?: (threadId: string, resolved: boolean) => void;
 	}
-	let { tabId, onSubmit, initialScrollTop = 0, onAcceptInlineEdit, onRejectInlineEdit }: Props = $props();
+	let {
+		tabId,
+		onSubmit,
+		initialScrollTop = 0,
+		onAcceptInlineEdit,
+		onRejectInlineEdit,
+		onAcceptFeedbackEdits,
+		onResolveThread
+	}: Props = $props();
 
 	let element: HTMLDivElement;
 	let wrapperEl: HTMLDivElement | null = null;
@@ -115,7 +128,7 @@
 	 * `discuss` forces a reply_to_comment call on the user-opened thread.
 	 * Resets to `auto` whenever the
 	 * popup closes so each feedback session starts fresh. */
-	let feedbackMode = $state<FeedbackMode>('auto');
+	let feedbackMode = $state<FeedbackMode>('edit');
 
 	// Comment thread state — mirrors the commentThreads store for local
 	// use in the overlay and the gutter component.
@@ -128,7 +141,23 @@
 	openCommentThreadId.subscribe((v) => {
 		openThreadId = v;
 		syncCommentOverlay();
+		// Opening/closing a feedback thread reveals (or hides) its edits'
+		// diffs inline and (re)numbers them, so refresh the overlay.
+		updateDiff();
 	});
+
+	// Reactive mirrors for the merged gutter — the plain `currentRoundsList`
+	// / `currentBaseline` / `expandedRoundId` vars below feed the diff
+	// overlay imperatively, but CommentGutter needs $state props so its
+	// card list re-renders. Kept in sync inside the same store subscribes.
+	let roundsForGutter = $state<MaterializedPendingReviewRound[]>([]);
+	let baselineForGutter = $state<string | null>(null);
+	let openRoundId = $state<string | null>(null);
+	/** The gutter (and its 200px column) shows when there's anything to
+	 * review — unresolved comment threads OR pending edit rounds. */
+	let hasGutterContent = $derived(
+		threadsForTab.some((t) => !t.resolved) || roundsForGutter.length > 0
+	);
 	let recent: Action[] = $state([]);
 	recentActions.subscribe((v) => (recent = v));
 
@@ -290,7 +319,7 @@
 		feedbackInput = '';
 		feedbackSelectionRange = null;
 		shouldFocusFeedbackInput = false;
-		feedbackMode = 'auto';
+		feedbackMode = 'edit';
 		updateDiff();
 		if (preserveSelection && refocusEditor) {
 			requestAnimationFrame(() => editor?.commands.focus());
@@ -325,22 +354,27 @@
 		threadId: string | null
 	): string {
 		const mode = feedbackMode;
-		const verb = mode === 'discuss' ? 'Discuss' : mode === 'edit' ? 'Rewrite' : 'Address';
-		const tag = `[mode: ${mode}]`;
+		// The agent prompt understands `[mode: edit]` (edit only) and
+		// `[mode: discuss]` (reply only); "comment" maps to discuss.
+		const agentMode = mode === 'comment' ? 'discuss' : 'edit';
+		const verb = mode === 'comment' ? 'Discuss' : 'Rewrite';
+		const tag = `[mode: ${agentMode}]`;
 		const prefix = isCustom
 			? `The user flagged this passage with feedback "${label}"`
 			: `The user flagged this passage as "${label}"`;
 		const threadHint = threadId
-			? ` A thread is already open for this feedback (thread_id="${threadId}"). If you reply, use reply_to_comment with that thread_id. You cannot open new threads.`
+			? mode === 'comment'
+				? ` A thread is open for this feedback (thread_id="${threadId}"). Reply on it with reply_to_comment using that thread_id — do NOT edit the document. You cannot open new threads.`
+				: ` A thread is open recording this feedback (thread_id="${threadId}"). Make your edit_doc call with thread_id="${threadId}" so it attaches to this thread; the edit is your response.`
 			: '';
 		return `${prefix}. ${tag} ${verb} it: "${passage}"${threadHint}`;
 	}
 
-	/** Pre-open a comment thread with the user's feedback as the first
-	 * message, so the transcript in the agent prompt starts from the
-	 * user's voice. Returns the new thread id, or null on failure or when
-	 * the mode is not `discuss` (Auto should not leave a visible thread
-	 * unless the agent actually chooses to comment).
+	/** Open a comment thread with the user's feedback as the first message,
+	 * so the feedback persists on the passage and the agent prompt's
+	 * transcript starts from the user's voice. Returns the new thread id, or
+	 * null on failure. Fires for BOTH modes now (edit = record, comment =
+	 * conversation).
 	 *
 	 * `relPositions` carries the user's actual selection encoded as Yjs
 	 * RelativePositions — when present, the server stores them on the
@@ -353,7 +387,9 @@
 		passage: string,
 		relPositions: { relStart: string; relEnd: string } | null
 	): Promise<string | null> {
-		if (feedbackMode !== 'discuss') return null;
+		// Every feedback now opens a thread so it persists on the passage —
+		// in edit mode as a record, in comment mode as the conversation the
+		// agent replies on.
 		try {
 			const res = await fetch('/api/comments', {
 				method: 'POST',
@@ -405,7 +441,7 @@
 		feedbackMode = modeSnapshot;
 		const threadId = await maybeOpenThreadForFeedback(action.label, text, relSnapshot);
 		const trigger = buildFeedbackTrigger(action.label, text, false, threadId);
-		feedbackMode = 'auto';
+		feedbackMode = 'edit';
 		if (onSubmit) onSubmit(trigger);
 	}
 
@@ -432,7 +468,7 @@
 		feedbackMode = modeSnapshot;
 		const threadId = await maybeOpenThreadForFeedback(fb, text, relSnapshot);
 		const trigger = buildFeedbackTrigger(fb, text, true, threadId);
-		feedbackMode = 'auto';
+		feedbackMode = 'edit';
 		if (onSubmit) onSubmit(trigger);
 	}
 
@@ -526,6 +562,7 @@
 	let currentProposalText: string | null = null;
 	reviewBaseline.subscribe((v) => {
 		currentBaseline = v;
+		baselineForGutter = v;
 		updateDiff();
 	});
 
@@ -549,28 +586,107 @@
 		currentProposalText =
 			v.length > 0 ? (v[v.length - 1].afterMd ?? null) : null;
 		currentRoundsList = v;
+		roundsForGutter = v;
 		hasPendingProposal = v.length > 0;
 		schedulePlainLineSync();
+		updateDiff();
+		// A round appearing/disappearing flips whether its thread should be
+		// highlighted (diff present → suppress the redundant comment highlight).
+		// Deferred inside syncCommentOverlay, so it's safe during this apply.
+		syncCommentOverlay();
+	});
+
+	// Reactive safety net for the in-doc diff. The store subscriptions above
+	// already call updateDiff() imperatively, but the in-doc reveal of a
+	// thread's edits depends on BOTH the pending rounds AND which thread is
+	// open — and a revised edit arriving over WebSocket while a thread is open
+	// must reveal in the document WITHOUT the user closing + reopening the
+	// thread. Re-tracking the reactive inputs here guarantees the overlay
+	// re-applies on any change to them. updateDiff is deferred + deduped, so
+	// the extra calls are cheap and can't loop (it mutates none of these).
+	$effect(() => {
+		// Touch every reactive input updateDiff consumes so this re-runs when
+		// any of them changes.
+		roundsForGutter;
+		openThreadId;
+		baselineForGutter;
+		openRoundId;
+		mutedForGutter;
+		pinnedRoundIds;
 		updateDiff();
 	});
 
 	// Muted mode + which round is "expanded" in the OutlinePane drive a
 	// peek-one-round-at-a-time variant of the overlay. See updateDiff().
 	let isMuted = false;
+	// Reactive mirror for the gutter (which hides agent proposal cards when
+	// muted). The plain `isMuted` feeds updateDiff imperatively.
+	let mutedForGutter = $state(false);
 	let expandedRoundId: string | null = null;
 	agentSettings.subscribe((v) => {
 		const next = v.muted;
+		mutedForGutter = next;
 		if (next !== isMuted) {
 			isMuted = next;
 			updateDiff();
 		}
 	});
 	expandedReviewRoundId.subscribe((v) => {
+		openRoundId = v;
 		if (v !== expandedRoundId) {
 			expandedRoundId = v;
 			updateDiff();
 		}
 	});
+	// Rounds the user pinned "keep diff visible" on — their green proposal
+	// stays revealed regardless of which card is focused. $state mirror feeds
+	// the gutter switches; the plain var feeds updateDiff.
+	let pinnedRoundIds = $state<Set<string>>(new Set());
+	let pinnedRoundsForOverlay: Set<string> = new Set();
+	pinnedDiffRounds.subscribe((v) => {
+		pinnedRoundIds = v;
+		pinnedRoundsForOverlay = v;
+		updateDiff();
+	});
+	// Round whose in-doc diff should pulse — driven by hovering its row in a
+	// feedback thread card. Null = nothing flashing.
+	let flashRoundId: string | null = null;
+	let flashClearTimer: ReturnType<typeof setTimeout> | null = null;
+	/** Set (or clear) the hover-flash target. Always self-expiring: a non-null
+	 * flash auto-clears after a beat so it can NEVER get stuck on. Without this,
+	 * accepting an edit while hovering its row removes the card before
+	 * `onmouseleave` fires, leaving `flashRoundId` pinned — and a later Ctrl+Z
+	 * that resurrects the round makes its diff pulse forever. */
+	function setHoverFlash(roundId: string | null) {
+		if (flashClearTimer) {
+			clearTimeout(flashClearTimer);
+			flashClearTimer = null;
+		}
+		flashRoundId = roundId;
+		updateDiff();
+		if (roundId) {
+			flashClearTimer = setTimeout(() => {
+				flashClearTimer = null;
+				flashRoundId = null;
+				updateDiff();
+			}, 1100);
+		}
+	}
+
+	/** The open feedback thread's edits, in the same order the gutter cards
+	 * number them, so in-doc numbers line up with the card rows. */
+	function openThreadEdits(): MaterializedPendingReviewRound[] {
+		if (!openThreadId) return [];
+		return currentRoundsList.filter((r) => r.feedbackThreadId === openThreadId);
+	}
+	function openThreadEditIds(): string[] {
+		return openThreadEdits().map((r) => r.id);
+	}
+	function openThreadRoundNumbers(): Map<string, number> {
+		const m = new Map<string, number>();
+		openThreadEdits().forEach((r, i) => m.set(r.id, i + 1));
+		return m;
+	}
 
 	/** PM range currently highlighted as "what the user is giving feedback
 	 * on". Set when the feedback popup opens, cleared when it closes.
@@ -669,11 +785,37 @@
 		}
 	}
 
+	let commentOverlayQueued = false;
+	/** Refresh the comment-highlight overlay. ALWAYS deferred to a microtask:
+	 * callers fire from Yjs observers (comment-map / review-array changes), and
+	 * dispatching a PM transaction synchronously inside an observer makes
+	 * y-prosemirror write the OLD doc back into the fragment — clobbering a
+	 * just-applied edit (same hazard documented on `updateDiff`). Accept now
+	 * touches the comments map (auto-resolve), so a synchronous dispatch here
+	 * would clobber the accepted text. Deferring runs it after y-prosemirror
+	 * has reconciled, when the dispatch is a safe no-op for the fragment. */
 	function syncCommentOverlay() {
 		if (!editor) return;
-		setCommentOverlayState(editor, {
-			threads: threadsForTab,
-			openThreadId
+		if (commentOverlayQueued) return;
+		commentOverlayQueued = true;
+		queueMicrotask(() => {
+			commentOverlayQueued = false;
+			if (!editor) return;
+			// A thread with a pending edit is already marked in the doc by the
+			// diff overlay (strikethrough + green insert). Highlighting it too is
+			// redundant double-marking, so we suppress the amber comment highlight
+			// (and its pill) for those — only threads WITHOUT a pending edit get
+			// highlighted, i.e. the user's own text-selection feedback that hasn't
+			// turned into a diff yet. Agent-suggested edits show only the diff.
+			const pendingEditThreadIds = new Set(
+				roundsForGutter
+					.map((r) => r.feedbackThreadId)
+					.filter((id): id is string => typeof id === 'string')
+			);
+			setCommentOverlayState(editor, {
+				threads: threadsForTab.filter((t) => !pendingEditThreadIds.has(t.id)),
+				openThreadId
+			});
 		});
 	}
 
@@ -727,6 +869,19 @@
 				activeFeedbackRange: feedbackSelectionRange,
 				isPlainText: true,
 				allRoundsTiny,
+				// Proposed (green) lines show inline for the focused round, any
+				// the user pinned "keep diff visible", and — when a feedback
+				// thread card is open — all the edits grouped under it. No pill.
+				revealedRoundIds: new Set([
+					...pinnedRoundsForOverlay,
+					...(expandedRoundId ? [expandedRoundId] : []),
+					...openThreadEditIds()
+				]),
+				// When a feedback thread card is open, number its edits 1..N in
+				// the document so each in-doc diff maps to a numbered card row.
+				roundNumbers: openThreadRoundNumbers(),
+				// Pulse the hovered edit's diff so the user can locate it fast.
+				flashRoundId,
 				pendingRounds: pendingRoundsForOverlay
 			});
 		});
@@ -891,36 +1046,18 @@
 		};
 		editorRoot.addEventListener('docwriter:open-thread', handleOpenThread as EventListener);
 
-		// Inline ✓ pill on the diff overlay dispatches this. We just
-		// forward to the parent — the parent owns the round-id state and
-		// the actual /api/document accept call.
-		const handleAcceptPendingEdit = (ev: Event) => {
-			const detail = (ev as CustomEvent<{ roundId?: string | null }>).detail;
-			onAcceptInlineEdit?.(detail?.roundId ?? null);
-		};
-		editorRoot.addEventListener(
-			'docwriter:accept-pending-edit',
-			handleAcceptPendingEdit as EventListener
-		);
-		const handleRejectPendingEdit = (ev: Event) => {
-			const detail = (ev as CustomEvent<{ roundId?: string | null }>).detail;
-			onRejectInlineEdit?.(detail?.roundId ?? null);
-		};
-		editorRoot.addEventListener(
-			'docwriter:reject-pending-edit',
-			handleRejectPendingEdit as EventListener
-		);
-
 		// Mousedown anywhere outside a gutter card collapses the open
-		// thread. Pill clicks stop propagation on mousedown, so window
-		// won't see those; inline-highlight clicks fire handleClick
-		// after this mousedown, so they re-open the matching thread.
+		// thread AND the open edit card. Pill clicks stop propagation on
+		// mousedown, so window won't see those; inline-highlight clicks
+		// fire handleClick after this mousedown, so they re-open the
+		// matching thread.
 		const handleOutsideMousedown = (e: MouseEvent) => {
 			const target = e.target as HTMLElement | null;
 			if (!target) return;
 			if (target.closest?.('.gutter-card')) return;
 			if (target.closest?.('.comment-thread-pill')) return;
 			openCommentThreadId.set(null);
+			expandedReviewRoundId.set(null);
 		};
 		window.addEventListener('mousedown', handleOutsideMousedown);
 
@@ -942,14 +1079,6 @@
 
 		const detachOpenThread = () => {
 			editorRoot.removeEventListener('docwriter:open-thread', handleOpenThread as EventListener);
-			editorRoot.removeEventListener(
-				'docwriter:accept-pending-edit',
-				handleAcceptPendingEdit as EventListener
-			);
-			editorRoot.removeEventListener(
-				'docwriter:reject-pending-edit',
-				handleRejectPendingEdit as EventListener
-			);
 			window.removeEventListener('mousedown', handleOutsideMousedown);
 			window.removeEventListener('mousedown', handleFeedbackOutsideMousedown);
 		};
@@ -989,6 +1118,8 @@
 
 	onDestroy(() => {
 		if (editor) editor.destroy();
+		if (flashClearTimer) clearTimeout(flashClearTimer);
+		flashClearTimer = null;
 		if (plainMetricsRaf) cancelAnimationFrame(plainMetricsRaf);
 		plainMetricsRaf = 0;
 		plainResizeObserver?.disconnect();
@@ -1074,14 +1205,12 @@
 	class="tiptap-wrapper"
 	class:plain-mode-wrapper={true}
 	class:soft-wrap-enabled={softWrap}
-	class:has-comment-gutter={threadsForTab.some((t) => !t.resolved)}
 	style:--font-scale={fontScale}
 	bind:this={wrapperEl}
 >
 	<div
 		class="plain-editor-shell"
 		class:soft-wrap-enabled={softWrap}
-		class:has-comment-gutter={threadsForTab.some((t) => !t.resolved)}
 	>
 		<div
 			class="plain-line-gutter"
@@ -1093,14 +1222,29 @@
 			{/each}
 		</div>
 		<div class="tiptap-editor plain-mode" class:soft-wrap-enabled={softWrap} bind:this={element}></div>
-		{#if threadsForTab.some((t) => !t.resolved)}
+		{#if hasGutterContent}
 			<CommentGutter
 				threads={threadsForTab}
+				rounds={roundsForGutter}
+				baseline={baselineForGutter}
 				editor={editor}
 				tabId={tabId}
 				openThreadId={openThreadId}
 				onOpen={(id) => openCommentThreadId.set(id)}
 				onClose={() => openCommentThreadId.set(null)}
+				onAcceptRound={(roundId) => onAcceptInlineEdit?.(roundId)}
+				onRejectRound={(roundId) => onRejectInlineEdit?.(roundId)}
+				pinnedRoundIds={pinnedRoundIds}
+				onAcceptFeedback={(roundIds) => onAcceptFeedbackEdits?.(roundIds)}
+				onResolveThread={(threadId, resolved) => onResolveThread?.(threadId, resolved)}
+				muted={mutedForGutter}
+				onPinThreadEdits={(roundIds, pinned) =>
+					pinnedDiffRounds.update((s) => {
+						const n = new Set(s);
+						for (const id of roundIds) pinned ? n.add(id) : n.delete(id);
+						return n;
+					})}
+				onHoverEdit={(roundId) => setHoverFlash(roundId)}
 				onApprove={(t, msgId) => {
 					const msg = t.messages.find((m) => m.id === msgId);
 					const suggestion = msg?.proposedEdit;
@@ -1108,8 +1252,8 @@
 						.map((m) => `- [${m.author === 'agent' ? 'agent' : 'user'}] ${m.text}`)
 						.join('\n');
 					const trigger = suggestion
-						? `The user approved the suggestion in comment thread "${t.id}" on this tab. Apply this edit via edit_doc:\n\nold_string: "${suggestion.oldString}"\nnew_string: "${suggestion.newString}"\n\nAnchor passage: "${t.anchor.quote}"\nFull thread:\n${transcript}`
-						: `The user approved comment thread "${t.id}" on this tab. Apply the edit you described via edit_doc.\n\nAnchor passage: "${t.anchor.quote}"\nFull thread:\n${transcript}`;
+						? `The user approved the suggestion in comment thread "${t.id}" on this tab. Apply this edit via edit_doc with thread_id="${t.id}" so it attaches to this thread:\n\nold_string: "${suggestion.oldString}"\nnew_string: "${suggestion.newString}"\n\nAnchor passage: "${t.anchor.quote}"\nFull thread:\n${transcript}`
+						: `The user approved comment thread "${t.id}" on this tab. Apply the edit you described via edit_doc with thread_id="${t.id}" so it attaches to this thread.\n\nAnchor passage: "${t.anchor.quote}"\nFull thread:\n${transcript}`;
 					onSubmit?.(trigger);
 					openCommentThreadId.set(null);
 				}}
@@ -1125,12 +1269,27 @@
 						),
 						`- [user] ${replyText}`
 					].join('\n');
+					// If this thread already carries a pending edit, a reply is
+					// feedback ON that edit — steer the agent to REVISE via
+					// edit_doc (tagged to the thread) rather than chit-chat.
+					const hasPendingEdit = roundsForGutter.some((r) => r.feedbackThreadId === t.id);
+					const instruction = hasPendingEdit
+						? `This thread has a PENDING EDIT and the user's reply is feedback on it. ` +
+							`Propose a REVISED edit with edit_doc(thread_id="${t.id}") that addresses the feedback — ` +
+							`base old_string on the CURRENT document text, not your previous proposal; it supersedes the current edit. ` +
+							`Do NOT reply with conversational text unless the user is purely asking a question and clearly not requesting a change. ` +
+							`You cannot open new threads.`
+						: `Decide whether to reply on the same thread (call reply_to_comment with thread_id="${t.id}") or, ` +
+							`if the user's reply is now a clear edit request, call edit_doc(thread_id="${t.id}") instead — ` +
+							`either way your response stays attached to this thread. You cannot open new threads.`;
 					const trigger =
-						`The user replied on comment thread "${t.id}" on this tab. ` +
-						`Decide whether to reply on the same thread (call reply_to_comment with thread_id "${t.id}") or, ` +
-						`if the user's reply is now a clear edit request, call edit_doc instead. ` +
-						`You cannot open new threads.\n\n` +
-						`Anchor passage: "${t.anchor.quote}"\n` +
+						`The user replied on comment thread thread_id="${t.id}" on this tab. ` +
+						`${instruction}\n\n` +
+						`This thread is anchored to a SPECIFIC passage — the text the user commented on:\n` +
+						`"${t.anchor.quote}"\n` +
+						`If you edit for THIS thread, your edit_doc MUST target this passage (find this exact text and change it there) and pass thread_id="${t.id}". ` +
+						`Do not satisfy this thread by editing a different paragraph or an unrelated \`[[ ]]\` directive. ` +
+						`(If you separately notice \`[[ ]]\` directives elsewhere worth acting on, handle them as their OWN edit_doc calls WITHOUT a thread_id — each gets its own new thread — not under this thread.)\n\n` +
 						`User's latest reply: "${replyText}"\n` +
 						`Full thread (latest reply included):\n${transcript}`;
 					onSubmit?.(trigger);
@@ -1216,25 +1375,18 @@
 			<div class="feedback-mode-row" role="group" aria-label="How the agent should respond">
 				<button
 					class="mode-chip"
-					class:mode-chip-active={feedbackMode === 'auto'}
-					onclick={() => (feedbackMode = 'auto')}
-					title="Let the agent choose between editing and commenting based on tone"
-					type="button"
-				>Auto</button>
-				<button
-					class="mode-chip"
 					class:mode-chip-active={feedbackMode === 'edit'}
 					onclick={() => (feedbackMode = 'edit')}
-					title="Force the agent to edit the passage"
+					title="Opens a thread with your feedback and has the agent propose an edit to the passage."
 					type="button"
 				>Edit</button>
 				<button
 					class="mode-chip"
-					class:mode-chip-active={feedbackMode === 'discuss'}
-					onclick={() => (feedbackMode = 'discuss')}
-					title="Force the agent to open a comment thread instead of editing"
+					class:mode-chip-active={feedbackMode === 'comment'}
+					onclick={() => (feedbackMode = 'comment')}
+					title="Opens a thread with your feedback; the agent replies in the thread and does not edit."
 					type="button"
-				>Discuss</button>
+				>Comment</button>
 			</div>
 			<div class="quick-actions">
 				{#each pinnedActions as action}
@@ -1292,35 +1444,51 @@
 		 * column adds ~180px of breathing room on the right when comments
 		 * exist, so the wrapper itself doesn't need much. Without comments
 		 * we still want a small gap so prose doesn't kiss the right edge. */
-		padding: 48px 12px 48px 32px;
-		background: var(--bg);
-	}
-	.tiptap-wrapper.has-comment-gutter {
-		padding-right: 32px;
+		/* Bottom padding reserves scroll room equal to the floating agent
+		 * dock's height (published as --dock-reserved-bottom) so the lowest
+		 * gutter card can scroll clear of the dock instead of hiding behind
+		 * it. The dock sits bottom-right over this wrapper. */
+		/* Symmetric L/R padding, constant whether or not comments exist — the
+		 * gutter column is always reserved in the grid, so the page never
+		 * shifts when a thread/card appears. */
+		padding: 0 32px calc(48px + var(--dock-reserved-bottom, 0px)) 32px;
+		/* Shared app canvas (defined on .app) — the document is a white sheet
+		 * floating on it; the line-number + comment gutters live on the canvas
+		 * in the margins rather than blending into the page. */
+		background: var(--canvas, color-mix(in srgb, var(--text) 5%, var(--bg)));
 	}
 	.tiptap-wrapper.plain-mode-wrapper {
 		overflow: auto;
 	}
+	/* The page: a white sheet with a soft shadow. Only the editor column gets
+	 * this — the line gutter and comment gutter stay on the canvas. */
+	.tiptap-editor.plain-mode {
+		/* The page is the ELEVATED surface (matches the comment cards) so it
+		 * lifts off the recessed canvas in every theme — in dark themes this
+		 * is lighter than the canvas, not darker. */
+		background: var(--bg-elevated);
+		border: 1px solid var(--border-light);
+		border-radius: 3px;
+		box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 8px 28px rgba(0, 0, 0, 0.05);
+		/* A near-empty doc should still read as a sheet of paper, not a
+		 * one-line box — fill most of the viewport height. Grows past this
+		 * once content is long enough. */
+		min-height: calc(100vh - 150px);
+	}
+	/* Google-Docs-style page: line gutter | a page-width column | the
+	 * comment/edit gutter. The whole group is centered, so the page floats
+	 * like a sheet of paper with the review cards in its right margin. The
+	 * gutter column is reserved ALWAYS (even with no cards) so the page
+	 * doesn't shift left when a review appears — the cards just fill the
+	 * margin that was already there. Keep `--gutter-width` in sync with
+	 * `.comment-gutter` in CommentGutter.svelte. */
 	.plain-editor-shell {
 		display: grid;
-		grid-template-columns: 52px minmax(0, 1fr);
+		grid-template-columns: 52px minmax(0, var(--paper-width, 720px)) var(--gutter-width, 280px);
 		gap: 18px;
-		width: max-content;
-		min-width: 100%;
-		max-width: none;
-		margin: 0 auto;
-		align-items: start;
-	}
-	.plain-editor-shell.has-comment-gutter {
-		/* Third column reserved for the right-side comment gutter so
-		 * thread cards sit in a stable column beside the editor rather
-		 * than floating over the prose. Width matches CommentGutter's
-		 * fixed inner width — keep this and the `.comment-gutter` rule
-		 * in CommentGutter.svelte in sync. */
-		grid-template-columns: 52px minmax(0, 1fr) 200px;
-	}
-	.plain-editor-shell.soft-wrap-enabled {
 		width: 100%;
+		justify-content: center;
+		align-items: start;
 	}
 	.plain-line-gutter {
 		position: relative;
@@ -1333,16 +1501,15 @@
 		 * line numbers down because their `top` values are measured from
 		 * the editor's content top, not from this padding edge. */
 		padding: 0;
-		border-right: 1px solid var(--border-light);
 		color: var(--text-faint);
 		font-family: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
 		font-size: calc(15px * var(--font-scale, 1));
 		line-height: 1.45;
 		user-select: none;
 		pointer-events: none;
-		/* Match prose canvas (--bg). Never mix bg-surface with `transparent`:
-		 * that anchors to opaque black and reads as a muddy stripe on Solarized. */
-		background: var(--bg);
+		/* Sits on the canvas in the left margin (like a page-number column),
+		 * not on the white sheet — so no background and no column rule. */
+		background: transparent;
 	}
 	.plain-line-number {
 		position: absolute;
@@ -1371,6 +1538,11 @@
 	.tiptap-editor.plain-mode :global(.tiptap-content) {
 		max-width: none;
 		margin: 0;
+		/* Page margins live on the inner content (not the column element) so
+		 * the line-number tops — measured relative to .tiptap-content — stay
+		 * aligned. box-sizing keeps width:100% inside the column. */
+		padding: 26px 30px;
+		box-sizing: border-box;
 	}
 	.tiptap-editor.plain-mode.soft-wrap-enabled :global(.tiptap-content) {
 		width: 100%;
@@ -1506,12 +1678,12 @@
 	.tiptap-editor :global(.diff-added) {
 		color: var(--diff-added-color);
 		background: var(--diff-added-bg);
-		animation: diffFadeIn 320ms ease-out both;
+		animation: diffFadeIn 480ms ease-out both;
 	}
 	.tiptap-editor :global(.tiptap-plain p.diff-added-line) {
 		color: var(--diff-added-color);
 		background: var(--diff-added-bg);
-		animation: diffFadeIn 320ms ease-out both;
+		animation: diffFadeIn 480ms ease-out both;
 	}
 	.tiptap-editor :global(.diff-added-line) {
 		display: block;
@@ -1522,6 +1694,24 @@
 		user-select: none;
 		transform-origin: top;
 		animation: diffSlideIn 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
+	}
+	/* Insertion caret: a small pulsing green bar marking where a collapsed,
+	 * purely-additive agent edit will add text — so an edit with nothing
+	 * struck out still signals "more coming here" in the document. */
+	.tiptap-editor :global(.diff-insert-caret) {
+		display: inline-block;
+		width: 2px;
+		height: 1.05em;
+		margin: 0 1px;
+		vertical-align: text-bottom;
+		border-radius: 1px;
+		background: var(--diff-added-color);
+		user-select: none;
+		animation: diffInsertCaretPulse 1.6s ease-in-out infinite;
+	}
+	@keyframes diffInsertCaretPulse {
+		0%, 100% { opacity: 0.3; }
+		50% { opacity: 0.8; }
 	}
 	@keyframes diffSlideIn {
 		0% {
@@ -1656,20 +1846,54 @@
 		display: block;
 		flex: none;
 	}
+	/* Strikethrough drawn as a pseudo-element line that sweeps left → right
+	 * (scaleX 0 → 1, like a pen). It's painted ABOVE any background, so the
+	 * strike still shows when the word also has a comment highlight behind
+	 * it — a `background`-based strike would get covered. */
+	@keyframes strikeSweepX {
+		from {
+			transform: scaleX(0);
+		}
+		to {
+			transform: scaleX(1);
+		}
+	}
 	.tiptap-editor :global(.diff-removed) {
+		position: relative;
 		color: var(--diff-removed-color);
-		text-decoration: line-through;
+		text-decoration: none;
 		--diff-final-opacity: 0.7;
 		opacity: 0.7;
-		animation: diffFadeIn 320ms ease-out both;
+		animation: diffFadeIn 480ms ease-out both;
+	}
+	.tiptap-editor :global(.diff-removed)::after {
+		content: '';
+		position: absolute;
+		left: 0;
+		right: 0;
+		top: 0.58em;
+		height: 1.5px;
+		background: var(--diff-removed-color);
+		transform-origin: left center;
+		animation: strikeSweepX 520ms cubic-bezier(0.33, 0, 0.2, 1) both;
+		pointer-events: none;
 	}
 	.tiptap-editor :global(.tiptap-plain p.diff-removed-line) {
 		color: var(--diff-removed-color);
 		text-decoration: line-through;
 		--diff-final-opacity: 0.72;
 		opacity: 0.72;
-		animation: diffFadeIn 320ms ease-out both;
+		/* Multi-row paragraphs can't sweep a single line cleanly, so they
+		 * redden + draw the strike in gradually instead (still gentle). */
+		animation: removedLineReddenIn 520ms ease-out both;
 		position: relative;
+	}
+	@keyframes removedLineReddenIn {
+		from {
+			color: var(--prose-text);
+			text-decoration-color: transparent;
+			opacity: 0.85;
+		}
 	}
 	/* Word-level modified paragraph: no color or strikethrough — the
 	 * paragraph reads as normal editable text and only the changed tokens
@@ -1680,19 +1904,71 @@
 	.tiptap-editor :global(.diff-modified-line) {
 		position: relative;
 	}
+	/* Number badge floating in the left margin of a changed paragraph, shown
+	 * while its feedback thread card is open — maps each in-doc change to a
+	 * numbered row in the card. */
+	.tiptap-editor :global(.diff-num-badge) {
+		position: absolute;
+		/* Fan out leftward when several badges land on the same line. */
+		left: calc(-1.9em - var(--badge-i, 0) * 1.5em);
+		top: 0.15em;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 1.35em;
+		height: 1.35em;
+		border-radius: 50%;
+		/* Light circle matching the card's numbered rows (.edit-num) — soft
+		 * accent fill + accent text, not a solid dark badge. */
+		background: color-mix(in srgb, var(--accent) 14%, var(--bg));
+		color: var(--accent);
+		font-family: 'Inter', -apple-system, sans-serif;
+		font-size: 0.66em;
+		font-weight: 700;
+		line-height: 1;
+		user-select: none;
+	}
+	/* Hover-flash: pulse a changed paragraph when its row is hovered in the
+	 * thread card, so the user can locate it instantly. */
+	.tiptap-editor :global(.diff-flash) {
+		animation: diff-flash-pulse 0.9s ease-in-out infinite;
+		border-radius: 3px;
+	}
+	@keyframes diff-flash-pulse {
+		0%,
+		100% {
+			background: transparent;
+		}
+		50% {
+			background: color-mix(in srgb, var(--accent) 22%, transparent);
+		}
+	}
 	/* Ghost strikethrough widget for agent removals. The removed text isn't
 	 * in the editor's doc tree (the editor displays the live Y.Doc state),
 	 * so we inject this inline span at the position the text used to occupy. */
 	.tiptap-editor :global(.diff-removed-widget) {
+		position: relative;
 		color: var(--diff-removed-color);
-		background: color-mix(in srgb, var(--diff-removed-color) 12%, transparent);
-		text-decoration: line-through;
+		background-color: color-mix(in srgb, var(--diff-removed-color) 12%, transparent);
+		text-decoration: none;
 		--diff-final-opacity: 0.75;
 		opacity: 0.75;
 		padding: 0 3px;
 		border-radius: 3px;
 		user-select: none;
-		animation: diffFadeIn 320ms ease-out both;
+		animation: diffFadeIn 480ms ease-out both;
+	}
+	.tiptap-editor :global(.diff-removed-widget)::after {
+		content: '';
+		position: absolute;
+		left: 3px;
+		right: 3px;
+		top: 0.58em;
+		height: 1.5px;
+		background: var(--diff-removed-color);
+		transform-origin: left center;
+		animation: strikeSweepX 520ms cubic-bezier(0.33, 0, 0.2, 1) both;
+		pointer-events: none;
 	}
 	/* Tiny-edit variants: when every pending round is small (< ~25 chars
 	 * delta, e.g. a typo fix), drop the solid green/red treatment and use

@@ -342,11 +342,23 @@ if (typeof window !== 'undefined') {
 	showFilesPane.subscribe((v) => window.localStorage.setItem(SHOW_FILES_PANE_KEY, String(v)));
 }
 
+/** Whether the floating agent dock is expanded into a panel (showing the
+ * history log + dock controls) or collapsed to a pill in the bottom-right.
+ * Persisted so it survives reloads. Default collapsed. */
+const DOCK_EXPANDED_KEY = 'docwriter.dockExpanded';
+function readDockExpanded(): boolean {
+	if (typeof window === 'undefined') return false;
+	return window.localStorage.getItem(DOCK_EXPANDED_KEY) === 'true';
+}
+export const dockExpanded = writable<boolean>(readDockExpanded());
+if (typeof window !== 'undefined') {
+	dockExpanded.subscribe((v) => window.localStorage.setItem(DOCK_EXPANDED_KEY, String(v)));
+}
+
 /** Agent behavior settings. Persisted through the server runtime-state
  * layer (SQLite-backed) whenever the user changes them via the settings UI. */
 export const agentSettings = writable<AgentSettings>({
 	agency: 'conservative',
-	trackChanges: true,
 	muted: false
 });
 
@@ -355,3 +367,17 @@ export const agentSettings = writable<AgentSettings>({
  * renders only that round's decorations. Cleared on accept/reject and
  * tab switch. Null otherwise. Has no effect when muted is false. */
 export const expandedReviewRoundId = writable<string | null>(null);
+
+/** Round ids the user has pinned "keep diff visible" on. Their proposed
+ * (green) lines stay revealed in the doc even when the round's gutter card
+ * isn't focused — independent of `expandedReviewRoundId`. Toggled by the
+ * switch on each edit card. */
+export const pinnedDiffRounds = writable<Set<string>>(new Set());
+export function togglePinnedDiffRound(id: string) {
+	pinnedDiffRounds.update((s) => {
+		const n = new Set(s);
+		if (n.has(id)) n.delete(id);
+		else n.add(id);
+		return n;
+	});
+}

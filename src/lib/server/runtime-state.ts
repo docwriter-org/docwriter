@@ -29,7 +29,6 @@ export interface Rule {
 
 export interface AgentSettings {
 	agency: 'conservative' | 'balanced' | 'aggressive';
-	trackChanges: boolean;
 	muted: boolean;
 }
 
@@ -49,7 +48,6 @@ const DEFAULT_TABS: TabsState = { order: [], active: null };
 
 const DEFAULT_AGENT_SETTINGS: AgentSettings = {
 	agency: 'conservative',
-	trackChanges: true,
 	muted: false
 };
 

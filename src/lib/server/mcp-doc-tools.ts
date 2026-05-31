@@ -145,6 +145,18 @@ function currentProposalText(doc: Y.Doc): string {
  * `mutator` receives the current proposal text (latest pending `afterMd`, or
  * the committed live doc if no proposal is pending) and returns the next
  * proposal string, or null to abort. */
+/** Thread id the NEXT review round should attach to. Set transiently by
+ * `edit_doc` for the duration of a single call when the agent passes an
+ * explicit `thread_id` (and restored after), so attachment is per-edit and
+ * intentional — NOT a render-wide default. Null means "no thread": the round
+ * opens its own fresh thread (`createAgentEditThread`). This is what lets a
+ * thread revision and an unrelated directive edit in the same turn land in
+ * different threads. */
+let activeFeedbackThreadId: string | null = null;
+export function setActiveFeedbackThreadId(id: string | null) {
+	activeFeedbackThreadId = id;
+}
+
 export async function runTabWrite(
 	tabId: string,
 	trigger: PendingReviewRound['trigger'],
@@ -171,24 +183,82 @@ export async function runTabWrite(
 				result = { beforeMd, afterMd };
 				return;
 			}
-			const normalizedOperation =
-				operation.type === 'write'
-					? (narrowWriteOperation(beforeMd, afterMd) ?? operation)
-					: operation;
 			doc.transact(() => {
 				const reviewArr = getReviewArray(doc);
+				const threadIdExplicit = activeFeedbackThreadId ?? undefined;
+				// Default op: an explicit edit as given, or a narrowed wholesale
+				// write. `baseForRound` is the text this op is anchored to.
+				let baseForRound = beforeMd;
+				let normalizedOperation =
+					operation.type === 'write'
+						? (narrowWriteOperation(beforeMd, afterMd) ?? operation)
+						: operation;
+
+				// ── Revise-in-place re-base ──────────────────────────────────
+				// When this edit attaches to a thread that ALREADY has pending
+				// rounds, the agent produced `afterMd` on top of those rounds'
+				// text (the proposal it was revising — that's what `read_doc`
+				// and the prompt show). We're about to SUPERSEDE those rounds,
+				// so the agent's `old_string` would no longer match the
+				// committed document: the round would show in the thread card
+				// but fail to render in the doc (stale). Re-derive the operation
+				// against the document WITHOUT this thread's pending rounds, so
+				// it anchors to text that still exists once the old proposal is
+				// withdrawn. `afterMd` is the agent's intended final text, so a
+				// diff from that clean base reconstructs a valid op.
+				const existingRounds = reviewArr.toArray();
+				const supersedes = threadIdExplicit
+					? existingRounds.filter((r) => r.feedbackThreadId === threadIdExplicit)
+					: [];
+				if (supersedes.length > 0) {
+					baseForRound = materializePendingReviewText(
+						serializeYDoc(doc),
+						existingRounds.filter((r) => r.feedbackThreadId !== threadIdExplicit)
+					);
+					if (afterMd !== baseForRound) {
+						normalizedOperation =
+							narrowWriteOperation(baseForRound, afterMd) ??
+							({ type: 'write', content: afterMd } as const);
+					}
+				}
+
+				// No explicit thread → open one so EVERY edit lives under a
+				// thread (the thread is the parent; there are no standalone edit
+				// cards). Anchor an edit to its replaced passage; anchor a
+				// wholesale write to the first non-empty line it replaces.
+				let threadId = threadIdExplicit;
+				if (!threadId) {
+					const anchorQuote =
+						normalizedOperation.type === 'edit'
+							? normalizedOperation.oldString
+							: firstNonEmptyLine(baseForRound);
+					if (anchorQuote) threadId = createAgentEditThread(doc, anchorQuote);
+				}
 				const round: PendingReviewRound = {
 					id: cryptoRandomId(),
 					operation: normalizedOperation,
 					baseHash:
 						normalizedOperation.type === 'write'
-							? reviewTextHash(beforeMd)
+							? reviewTextHash(baseForRound)
 							: undefined,
 					trigger,
+					feedbackThreadId: threadId,
 					timestamp: Date.now(),
-					kind: classifyRoundKind(beforeMd, afterMd),
+					kind: classifyRoundKind(baseForRound, afterMd),
 					stepCount: 1
 				};
+				// Revise-in-place: a new edit made for a feedback thread replaces
+				// any older still-pending edits for that same thread, so the
+				// thread shows one current proposal (and the doc only the latest)
+				// instead of stacking versions.
+				if (round.feedbackThreadId) {
+					const existing = reviewArr.toArray();
+					for (let i = existing.length - 1; i >= 0; i--) {
+						if (existing[i].feedbackThreadId === round.feedbackThreadId) {
+							reviewArr.delete(i, 1);
+						}
+					}
+				}
 				reviewArr.push([round]);
 			}, AGENT_ORIGIN);
 			result = { beforeMd, afterMd };
@@ -204,6 +274,46 @@ function cryptoRandomId(): string {
 	const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
 	if (c?.randomUUID) return c.randomUUID();
 	return 'round-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+}
+
+/** Open a comment thread anchored to the passage an agent edit replaces and
+ * return its id, so a spontaneous edit renders as a thread card (with a
+ * conversation + Resolve) instead of a bare standalone edit card. The anchor
+ * quote is the edit's `oldString`, which `edit_doc` already guaranteed
+ * matches the live text exactly once, so the gutter can position the card and
+ * the client backfills CRDT rel-positions on first render. The single agent
+ * seed message means the thread has no user message yet — so when the edit is
+ * accepted/rejected with no reply, the server auto-resolves it
+ * (`resolveEmptyEditThreads`). Caller runs inside the AGENT_ORIGIN transact;
+ * the comments map isn't tracked by the UndoManager, so this isn't undone. */
+/** First non-empty line of a document — used to anchor a wholesale `write`
+ * round's thread to real text that exists in the doc. */
+function firstNonEmptyLine(text: string): string {
+	for (const line of (text ?? '').split('\n')) {
+		if (line.trim()) return line;
+	}
+	return '';
+}
+
+function createAgentEditThread(doc: Y.Doc, oldString: string): string {
+	const threadId = 'thread_' + cryptoRandomId();
+	const now = Date.now();
+	const thread: CommentThread = {
+		id: threadId,
+		anchor: { quote: oldString, occurrenceIndex: 0 },
+		messages: [
+			{
+				id: 'msg_' + cryptoRandomId(),
+				author: 'agent',
+				text: 'Suggested an edit.',
+				timestamp: now
+			}
+		],
+		resolved: false,
+		createdAt: now
+	};
+	getCommentsMap(doc).set(threadId, thread);
+	return threadId;
 }
 
 // ---- Auto-open-as-tab -----------------------------------------------------
@@ -387,9 +497,15 @@ const editDocTool = tool(
 			.optional()
 			.describe(
 				'When true, replace every occurrence of old_string in a single proposal (useful for renames or consistent term updates). Default false.'
+			),
+		thread_id: z
+			.string()
+			.optional()
+			.describe(
+				'Attach this edit to an existing comment thread. Pass the thread_id when you are REVISING the edit a thread is about (e.g. the user replied with feedback on a pending edit) — the proposal lands inside that thread\'s card and supersedes the thread\'s current pending edit. Omit it for a brand-new, unsolicited edit (the system opens a fresh thread for it automatically).'
 			)
 	},
-	async ({ path, old_string, new_string, replace_all }) => {
+	async ({ path, old_string, new_string, replace_all, thread_id }) => {
 		const replaceAll = replace_all === true;
 		if (isScratchPath(path)) return editScratch(path, old_string, new_string, replaceAll);
 
@@ -397,6 +513,13 @@ const editDocTool = tool(
 		if (!opened.ok) return opened.error;
 		const tabId = opened.tabId;
 
+		// An explicit thread_id on the call wins over the render-level default
+		// (parsed from the triggering message). Restore the prior value after
+		// so a single edit's targeting can't leak into later edits this turn.
+		const priorThreadId = activeFeedbackThreadId;
+		if (typeof thread_id === 'string' && thread_id) {
+			setActiveFeedbackThreadId(thread_id);
+		}
 		let failure: string | null = null;
 		let appliedHits = 0;
 		const result = await runTabWrite(tabId, 'agent_edit_doc', (currentMd) => {
@@ -430,6 +553,11 @@ const editDocTool = tool(
 				afterMd
 			};
 		});
+		// Restore the render-level default so this edit's explicit targeting
+		// doesn't leak into later edit_doc calls in the same turn.
+		if (typeof thread_id === 'string' && thread_id) {
+			setActiveFeedbackThreadId(priorThreadId);
+		}
 		if (failure) return toolError(failure);
 		if ('error' in result) {
 			if (result.error === 'mutator-aborted') {
