@@ -213,6 +213,17 @@
 		return plainTextFromFragment(getYDocForTab(tabId).getXmlFragment('default'));
 	}
 
+	/** Whether a thread anchor still maps to text in the doc — mirrors the
+	 * comment overlay's resolver (full quote, else its first non-empty line,
+	 * so multi-line anchors aren't falsely treated as detached). Used to keep
+	 * detached threads out of the tab count without mutating them. */
+	function anchorPresentInText(quote: string, text: string): boolean {
+		if (!quote) return false;
+		if (text.includes(quote)) return true;
+		const firstLine = quote.split('\n').find((l) => l.trim());
+		return !!firstLine && text.includes(firstLine);
+	}
+
 	function materializedRoundsForTab(
 		tabId: string,
 		rawRounds: PendingReviewRound[]
@@ -359,11 +370,18 @@
 			if (rawRounds.length > 0) {
 				roundsAgg.push({ tabId: id, rounds: materializedRoundsForTab(id, rawRounds) });
 			}
+			// Count only threads still anchored to text that exists. A thread
+			// whose passage was deleted is "detached": it doesn't render in the
+			// gutter, so it must not inflate the tab count either. It isn't
+			// removed — if the text comes back (Ctrl+Z), the thread re-attaches
+			// and counts/renders again.
+			const tabText = currentTabText(id);
 			const threads: CommentThread[] = [];
 			getCommentsMapForTab(id).forEach((t) => {
-				if (!t.resolved && t.messages.some((m) => m.author === 'agent')) {
-					threads.push(t);
-				}
+				if (t.resolved) return;
+				if (!t.messages.some((m) => m.author === 'agent')) return;
+				if (!anchorPresentInText(t.anchor?.quote ?? '', tabText)) return;
+				threads.push(t);
 			});
 			if (threads.length > 0) {
 				threads.sort((a, b) => a.createdAt - b.createdAt);
@@ -1336,6 +1354,7 @@
 			resumeTabSync();
 		}
 	}
+
 
 	/** Accept a single pending round by id (or all rounds if no id is
 	 * given — used by the "Accept all" path). Rounds are independent: the

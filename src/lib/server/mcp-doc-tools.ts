@@ -228,10 +228,15 @@ export async function runTabWrite(
 				// wholesale write to the first non-empty line it replaces.
 				let threadId = threadIdExplicit;
 				if (!threadId) {
-					const anchorQuote =
+					// Anchor to a SINGLE line (the first changed/non-empty line),
+					// never the whole multi-line old_string: a multi-line quote
+					// doesn't match the editor's plain text verbatim, so the
+					// thread card can't be positioned and silently disappears.
+					const anchorQuote = firstNonEmptyLine(
 						normalizedOperation.type === 'edit'
 							? normalizedOperation.oldString
-							: firstNonEmptyLine(baseForRound);
+							: baseForRound
+					);
 					if (anchorQuote) threadId = createAgentEditThread(doc, anchorQuote);
 				}
 				const round: PendingReviewRound = {

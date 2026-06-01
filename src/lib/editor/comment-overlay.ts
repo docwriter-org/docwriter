@@ -179,10 +179,24 @@ function resolveAnchorPMRange(
 
 	// Tier 2: indexOf fallback.
 	const { charPositions, plainText } = buildCharIndex(state.doc);
-	let idx = nthIndexOf(plainText, anchor.quote, anchor.occurrenceIndex);
-	if (idx < 0) idx = nthIndexOf(plainText, anchor.quote, 0);
+	let quote = anchor.quote;
+	let idx = nthIndexOf(plainText, quote, anchor.occurrenceIndex);
+	if (idx < 0) idx = nthIndexOf(plainText, quote, 0);
+	// Multi-line anchors (e.g. an edit thread auto-anchored to a multi-line
+	// `old_string`) often don't match verbatim — the stored quote is markdown
+	// form (with `\n`/escapes) while `plainText` is the editor's plain text.
+	// Fall back to the first non-empty line, which matches reliably and is
+	// enough to position the card. Without this, a multi-line edit's thread
+	// card silently disappears even though its diff renders.
+	if (idx < 0 && quote.includes('\n')) {
+		const firstLine = quote.split('\n').find((l) => l.trim()) ?? '';
+		if (firstLine) {
+			quote = firstLine;
+			idx = nthIndexOf(plainText, quote, 0);
+		}
+	}
 	if (idx < 0) return null;
-	const endOffset = idx + anchor.quote.length - 1;
+	const endOffset = idx + quote.length - 1;
 	if (endOffset >= charPositions.length) return null;
 	const from = charPositions[idx];
 	const to = charPositions[endOffset] + 1;

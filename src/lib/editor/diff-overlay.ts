@@ -430,11 +430,22 @@ export const DiffOverlay = Extension.create({
 										}
 										function flushBlock() {
 											if (!currentBlock) return;
-											currentBlock.insertionPos = resolveParagraphWidgetPos(
-												state.doc.content.size,
-												paragraphs,
-												toDocLine(roundLineIdx)
-											);
+											// When the block REPLACES text (has struck paragraphs),
+											// anchor its green proposal right after the last struck
+											// paragraph — those are already correctly located, so the
+											// green stays next to the red. Only a pure insertion (no
+											// struck paragraphs) needs the line-alignment lookup, which
+											// can otherwise drift to a similar paragraph elsewhere.
+											const removed = currentBlock.removedParagraphIdxs;
+											const lastPara =
+												removed.length > 0 ? paragraphs[removed[removed.length - 1]] : undefined;
+											currentBlock.insertionPos = lastPara
+												? lastPara.pos + lastPara.nodeSize
+												: resolveParagraphWidgetPos(
+														state.doc.content.size,
+														paragraphs,
+														toDocLine(roundLineIdx)
+													);
 											blocks.push(currentBlock);
 											currentBlock = null;
 										}
