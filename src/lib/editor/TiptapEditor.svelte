@@ -3,7 +3,7 @@
 	import { Editor } from '@tiptap/core';
 	import { TextSelection, type Transaction } from '@tiptap/pm/state';
 	import { ySyncPluginKey } from 'y-prosemirror';
-	import { DiffOverlay, setDiffState } from './diff-overlay';
+	import { DiffOverlay, setDiffState, unescapeMarkdown } from './diff-overlay';
 	import {
 		CommentOverlay,
 		setCommentOverlayState,
@@ -29,7 +29,6 @@
 	import { getYDocForTab, whenYDocReadyForTab, waitForTabSync } from '$lib/yjs-doc';
 	import {
 		reviewBaseline,
-		annotations,
 		isRendering,
 		submitCountdown,
 		editorFontScale,
@@ -44,7 +43,7 @@
 		expandedReviewRoundId,
 		pinnedDiffRounds
 	} from '$lib/stores';
-	import type { Action, Annotation, CommentThread, FeedbackMode } from '$lib/types';
+	import type { Action, CommentThread, FeedbackMode } from '$lib/types';
 	import type { MaterializedPendingReviewRound } from '$lib/review-rounds';
 
 	const IDLE_MS = 3_000;
@@ -430,7 +429,6 @@
 		const text = feedbackPopup.text;
 		const modeSnapshot = feedbackMode;
 		const relSnapshot = snapshotFeedbackRelPositions();
-		addFeedbackAnnotation(action.label, text);
 		trackActionUsage(action.label);
 		if (!action.pinned) {
 			recentActions.update((prev) => [action, ...prev.filter((x) => x.id !== action.id)].slice(0, 6));
@@ -451,7 +449,6 @@
 		const fb = feedbackInput.trim();
 		const modeSnapshot = feedbackMode;
 		const relSnapshot = snapshotFeedbackRelPositions();
-		addFeedbackAnnotation(fb, text);
 		// Preserve the full label — CSS truncates long text with an ellipsis
 		// inside the button, and `title={label}` lets the user see the whole
 		// thing on hover. Slicing here used to destroy the original text.
@@ -470,23 +467,6 @@
 		const trigger = buildFeedbackTrigger(fb, text, true, threadId);
 		feedbackMode = 'edit';
 		if (onSubmit) onSubmit(trigger);
-	}
-
-	function addFeedbackAnnotation(comment: string, excerpt: string) {
-		const range = feedbackSelectionRange;
-		if (!range) return;
-		annotations.update((prev) => [
-			{
-				id: 'anno_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-				tabId,
-				excerpt,
-				comment,
-				from: range.from,
-				to: range.to,
-				timestamp: Date.now()
-			},
-			...prev
-		]);
 	}
 
 	function syncPlainLineRows() {
@@ -563,12 +543,6 @@
 	reviewBaseline.subscribe((v) => {
 		currentBaseline = v;
 		baselineForGutter = v;
-		updateDiff();
-	});
-
-	let currentAnnotations: Annotation[] = [];
-	annotations.subscribe((v) => {
-		currentAnnotations = v;
 		updateDiff();
 	});
 
@@ -865,7 +839,6 @@
 			setDiffState(editor, {
 				baseline: baselineForOverlay,
 				proposedText: proposalForOverlay,
-				annotations: currentAnnotations.filter((annotation) => annotation.tabId === tabId),
 				activeFeedbackRange: feedbackSelectionRange,
 				isPlainText: true,
 				allRoundsTiny,
@@ -975,6 +948,12 @@
 			// pass a string `content` here (doing so would wipe the Y.Doc).
 			editorProps: {
 				attributes: { class: 'tiptap-content tiptap-plain' },
+				// The doc fragment can carry markdown escapes that leaked in via
+				// the agent's edit_doc round-trip (`[` → `\[`, hard breaks). Strip
+				// them on copy so pasting elsewhere gives clean text, not stray
+				// backslashes / spurious newlines.
+				clipboardTextSerializer: (slice) =>
+					unescapeMarkdown(slice.content.textBetween(0, slice.content.size, '\n', '\n')),
 				handlePaste: (view, event) => handleEditorPaste(view, event).handled,
 				handleDrop: (view, event) => handleEditorDrop(view, event as DragEvent).handled,
 				handleKeyDown: (_view, event) => {
@@ -1864,19 +1843,27 @@
 		text-decoration: none;
 		--diff-final-opacity: 0.7;
 		opacity: 0.7;
-		animation: diffFadeIn 480ms ease-out both;
+		/* Strike drawn as a repeating background line (not a single absolutely-
+		 * positioned ::after box) so it renders on EVERY row when a removed span
+		 * wraps across lines — the old ::after only covered the first row.
+		 * box-decoration-break: clone repeats the background per line fragment;
+		 * the background-size width sweeps 0→100% left-to-right. */
+		background-image: linear-gradient(var(--diff-removed-color), var(--diff-removed-color));
+		background-repeat: no-repeat;
+		background-position: 0 0.58em;
+		background-size: 100% 1.5px;
+		-webkit-box-decoration-break: clone;
+		box-decoration-break: clone;
+		animation: diffFadeIn 480ms ease-out both,
+			strikeSweepBg 520ms cubic-bezier(0.33, 0, 0.2, 1) both;
 	}
-	.tiptap-editor :global(.diff-removed)::after {
-		content: '';
-		position: absolute;
-		left: 0;
-		right: 0;
-		top: 0.58em;
-		height: 1.5px;
-		background: var(--diff-removed-color);
-		transform-origin: left center;
-		animation: strikeSweepX 520ms cubic-bezier(0.33, 0, 0.2, 1) both;
-		pointer-events: none;
+	@keyframes strikeSweepBg {
+		from {
+			background-size: 0% 1.5px;
+		}
+		to {
+			background-size: 100% 1.5px;
+		}
 	}
 	.tiptap-editor :global(.tiptap-plain p.diff-removed-line) {
 		color: var(--diff-removed-color);
@@ -1989,38 +1976,6 @@
 		color: var(--diff-added-color);
 		background: transparent;
 		border-bottom: 1px dotted color-mix(in srgb, var(--diff-added-color) 60%, transparent);
-	}
-	.tiptap-editor :global(.feedback-annotation) {
-		position: relative;
-		background: color-mix(in srgb, var(--accent) 10%, transparent);
-		border-bottom: 2px solid color-mix(in srgb, var(--accent) 35%, transparent);
-		cursor: help;
-	}
-	.tiptap-editor :global(.feedback-annotation:hover::after) {
-		content: attr(data-feedback-comment);
-		position: absolute;
-		left: 0;
-		bottom: calc(100% + 10px);
-		z-index: 40;
-		display: block;
-		width: max-content;
-		max-width: min(420px, 60vw);
-		padding: 10px 12px;
-		border-radius: 10px;
-		border: 1px solid var(--border-light);
-		background: var(--bg-elevated);
-		box-shadow: 0 12px 28px rgba(0, 0, 0, 0.14), 0 2px 6px rgba(0, 0, 0, 0.08);
-		color: var(--text);
-		font-family: 'Inter', -apple-system, sans-serif;
-		font-size: 12.5px;
-		font-style: normal;
-		font-weight: 500;
-		line-height: 1.45;
-		letter-spacing: 0;
-		white-space: normal;
-		word-break: break-word;
-		overflow-wrap: anywhere;
-		pointer-events: none;
 	}
 	.tiptap-editor :global(.feedback-selection) {
 		background: color-mix(in srgb, var(--accent) 18%, transparent);

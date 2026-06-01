@@ -2,7 +2,6 @@ import { Editor, Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet, type EditorView } from '@tiptap/pm/view';
 import { diffLines, diffWords } from 'diff';
-import type { Annotation } from '$lib/types';
 import { buildReviewDiffPreview, normalizeReviewText } from '$lib/review-diff';
 import type { MaterializedPendingReviewRound } from '$lib/review-rounds';
 import { wordDiff, type DiffPart as WordDiffPart } from '$lib/diff';
@@ -88,7 +87,6 @@ function cachedWordDiff(before: string, after: string): WordDiffPart[] {
 export interface DiffState {
 	baseline: string | null;
 	proposedText?: string | null;
-	annotations?: Annotation[];
 	activeFeedbackRange?: { from: number; to: number } | null;
 	isPlainText?: boolean;
 	/** True when every pending round is classified as `tiny`. Drives a
@@ -116,7 +114,6 @@ const diffKey = new PluginKey<DiffState>('diffOverlay');
 	const INITIAL_STATE: DiffState = {
 	baseline: null,
 	proposedText: null,
-	annotations: [],
 	activeFeedbackRange: null,
 	isPlainText: false,
 	allRoundsTiny: false,
@@ -137,7 +134,7 @@ export function setDiffState(editor: Editor, state: DiffState) {
  * paragraph text, so both must be in the same (unescaped) space; otherwise a
  * line containing `[[ ]]` (or `*`, `_`, etc.) never matches and its diff
  * silently fails to render. */
-function unescapeMarkdown(text: string): string {
+export function unescapeMarkdown(text: string): string {
 	return text.replace(/\\([\\`*_{}[\]()#+\-.!>~|])/g, '$1');
 }
 
@@ -330,7 +327,6 @@ export const DiffOverlay = Extension.create({
 						const {
 							baseline,
 							proposedText,
-							annotations = [],
 							activeFeedbackRange,
 							isPlainText,
 							allRoundsTiny,
@@ -344,11 +340,9 @@ export const DiffOverlay = Extension.create({
 							? 'diff-removed-widget diff-removed-tiny'
 							: 'diff-removed-widget';
 						const removedInlineClass = 'diff-removed';
-						const annotationClass = 'feedback-annotation';
 						const activeFeedbackClass = 'feedback-selection';
 
 						const decorations: Decoration[] = [];
-						applyAnnotationDecorations(state, decorations, annotations, annotationClass);
 						applyActiveFeedbackDecoration(state, decorations, activeFeedbackRange, activeFeedbackClass);
 
 						// Fast path: nothing to decorate. User regions only act as
@@ -721,28 +715,6 @@ export const DiffOverlay = Extension.create({
 		];
 	}
 });
-
-function applyAnnotationDecorations(
-	state: any,
-	decorations: Decoration[],
-	annotations: Annotation[],
-	cls: string
-) {
-	if (!annotations.length) return;
-	const maxPos = state.doc.content.size;
-	for (const annotation of annotations) {
-		const from = Math.max(1, Math.min(annotation.from, maxPos));
-		const to = Math.max(from, Math.min(annotation.to, maxPos));
-		if (to > from) {
-			decorations.push(
-				Decoration.inline(from, to, {
-					class: cls,
-					'data-feedback-comment': annotation.comment
-				})
-			);
-		}
-	}
-}
 
 function applyActiveFeedbackDecoration(
 	state: any,

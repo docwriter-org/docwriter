@@ -4,8 +4,8 @@
 	import { cubicOut } from 'svelte/easing';
 	import { marked } from 'marked';
 	import { FileEdit, User, Bot, Play, CheckCircle, XCircle, Eye, Terminal, Maximize2, X, RotateCcw, MessagesSquare, Cat, Sparkles, BellOff, Bell, ChevronDown } from 'lucide-svelte';
-	import type { HistoryEntry, Annotation } from '$lib/types';
-	import { agentHistory, annotations, isRendering, historyVerbosity, sessionCost, agentSettings, pendingReviewRounds, submitCountdown, type SessionCost } from '$lib/stores';
+	import type { HistoryEntry } from '$lib/types';
+	import { agentHistory, isRendering, historyVerbosity, sessionCost, agentSettings, pendingReviewRounds, submitCountdown, type SessionCost } from '$lib/stores';
 	import type { HistoryVerbosity } from '$lib/stores';
 	import { onMount, onDestroy, type Snippet } from 'svelte';
 	import SessionViewer from './SessionViewer.svelte';
@@ -36,8 +36,6 @@
 	let entries: HistoryEntry[] = $state([]);
 	agentHistory.subscribe((v) => (entries = v));
 
-	let annos: Annotation[] = $state([]);
-	annotations.subscribe((v) => (annos = v));
 
 	let cost = $state<SessionCost>({
 		totalCostUsd: 0,

@@ -95,6 +95,9 @@ function getHocuspocus(): { openDirectConnection: (name: string) => Promise<{ tr
 interface TabWriteResult {
 	beforeMd: string;
 	afterMd: string;
+	/** True when the edit was tossed because its target thread was already
+	 * resolved (no review round created). */
+	discarded?: boolean;
 }
 
 interface RoundMutation {
@@ -181,6 +184,15 @@ export async function runTabWrite(
 			if (afterMd === beforeMd) {
 				// No-op write. Still succeeds, but don't emit a review round.
 				result = { beforeMd, afterMd };
+				return;
+			}
+			// If this edit targets a feedback thread the user already RESOLVED
+			// (e.g. they resolved while the agent was still thinking), the user
+			// is done with it — toss the edit instead of reviving a resolved
+			// thread with a new proposal.
+			const targetThreadId = activeFeedbackThreadId ?? undefined;
+			if (targetThreadId && getCommentsMap(doc).get(targetThreadId)?.resolved) {
+				result = { beforeMd, afterMd: beforeMd, discarded: true };
 				return;
 			}
 			doc.transact(() => {
@@ -570,6 +582,11 @@ const editDocTool = tool(
 				return toolError(`edit_doc aborted without a reason for ${path}.`);
 			}
 			return toolError(`edit_doc failed for ${path}: ${result.error}`);
+		}
+		if (result.discarded) {
+			return toolText(
+				`Edit discarded for ${path}: the user resolved this feedback thread before the edit landed, so it was not applied. Do not retry.`
+			);
 		}
 		return toolText(
 			replaceAll

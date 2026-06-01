@@ -183,15 +183,6 @@ export interface CommentThread {
  *  - `comment`: reply on the thread via `reply_to_comment` — no edit. */
 export type FeedbackMode = 'edit' | 'comment';
 
-export interface Annotation {
-	id: string;
-	tabId: string;
-	excerpt: string;
-	comment: string;
-	from: number;
-	to: number;
-	timestamp: number;
-}
 
 export interface InlineFeedback {
 	text: string;

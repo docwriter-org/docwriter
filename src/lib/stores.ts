@@ -2,7 +2,6 @@ import { writable } from 'svelte/store';
 import type {
 	Rule,
 	Action,
-	Annotation,
 	HistoryEntry,
 	AgentSettings,
 	ProposedRule,
@@ -115,7 +114,6 @@ export const pendingPlanProposals = writable<PendingPlanProposal[]>([]);
 // ── UI state ──────────────────────────────────────────────────────────
 
 export const isRendering = writable(false);
-export const annotations = writable<Annotation[]>([]);
 export const showHistory = writable(true);
 
 /** Seconds remaining until the editor auto-submits after user stops typing.

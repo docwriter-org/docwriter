@@ -1033,7 +1033,11 @@ export const POST: RequestHandler = async ({ request }) => {
 									text: anyMsg.text,
 									priority: anyMsg.priority
 								});
-							} else if (anyMsg.subtype === 'task_started' && !anyMsg.skip_transcript) {
+							} else if (anyMsg.subtype === 'task_started') {
+								// Always surface the start — otherwise (when the SDK
+								// marks it skip_transcript) the user sees "Subagent
+								// completed" with no matching "started", which reads
+								// as the work appearing from nowhere.
 								send('task_event', {
 									taskId: anyMsg.task_id,
 									phase: 'started',
@@ -1190,15 +1194,15 @@ export const POST: RequestHandler = async ({ request }) => {
 					// — otherwise a `.docwriter/agent/` dir gets created on
 					// every render even when the agent never writes scratch.
 					//
-					// Edit→thread attachment is now per-edit and EXPLICIT: the
-					// agent passes `thread_id` to `edit_doc` to attach a revision
-					// to a thread, and omits it for a fresh edit (the server opens
-					// a new thread for that one). We deliberately do NOT auto-tag
-					// every edit in the render with a single thread id — otherwise
-					// a directive edit made in the same turn as a thread reply
-					// would be wrongly stapled to that thread. Reset to null so no
-					// stale default leaks in from a prior render.
-					setActiveFeedbackThreadId(null);
+					// When this render was triggered by feedback/reply on a thread
+					// (the trigger carries `thread_id="…"`), make that thread the
+					// default for any edit the agent proposes, so its edit attaches
+					// to the user's feedback thread instead of spawning a separate
+					// one. The agent can still override per-edit via edit_doc's
+					// `thread_id` arg. A spontaneous wake-up has no `thread_id`, so
+					// this is null there and each edit opens its own thread.
+					const feedbackThreadId = message.match(/thread_id="([^"]+)"/)?.[1] ?? null;
+					setActiveFeedbackThreadId(feedbackThreadId);
 					try {
 					const firstOutcome = await runQueryRound(prompt, images);
 					if (

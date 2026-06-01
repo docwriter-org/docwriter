@@ -85,7 +85,6 @@
 		proposedHooks,
 		pendingUserQuestions,
 		pendingPlanProposals,
-		annotations,
 		isRendering,
 		agentHistory,
 		pushHistory,
@@ -242,9 +241,6 @@
 		syncAllTabsState();
 	}
 
-	function clearFeedbackAnnotationsForTab(tabId: string) {
-		annotations.update((list) => list.filter((annotation) => annotation.tabId !== tabId));
-	}
 
 	let currentActiveTabId = $state<string | null>(null);
 	activeTab.subscribe((value) => {
@@ -825,7 +821,7 @@
 		// rounds stream to the browser over Hocuspocus sync, so by the
 		// time `result` fires the Y.Doc already has the new rounds. Diffing
 		// against this snapshot lets us count rounds added this render
-		// (for the zero-edit message and feedback-annotation cleanup).
+		// (for the zero-edit message).
 		const priorRoundIdsByTab = new Map<string, Set<string>>();
 		for (const id of getCurrentTabList()) {
 			const rounds = getReviewArrayForTab(id).toArray();
@@ -1054,7 +1050,6 @@
 							const added = rounds.filter((r) => !priorIds.has(r.id));
 							if (added.length > 0) {
 								anyRoundAdded = true;
-								clearFeedbackAnnotationsForTab(id);
 							}
 						}
 						if (!anyRoundAdded) {
@@ -1416,7 +1411,6 @@
 				if (!op.newString) continue;
 				editorRef?.flashAcceptedRange(op.newString);
 			}
-			clearFeedbackAnnotationsForTab(tabId);
 			const acceptedMsg =
 				acceptedCount === rounds.length
 					? `Accepted all ${rounds.length} agent edit${rounds.length === 1 ? '' : 's'}`
@@ -1763,7 +1757,6 @@
 			pendingPlanProposals.set([]);
 			recentActions.set([]);
 			actionUsageCounts.set({});
-			annotations.set([]);
 			pushHistory({ type: 'user_action', timestamp: Date.now(), description: 'Started new session' });
 		} catch (e) {
 			console.error('New session failed:', e);
