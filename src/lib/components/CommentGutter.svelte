@@ -18,9 +18,15 @@
 			.replace(/^- (.+)$/gm, '<span class="md-bullet">$1</span>')
 			.replace(/\n/g, '<br>');
 	}
-	import { onDestroy } from 'svelte';
+	import { onDestroy, tick } from 'svelte';
 	import type { CommentThread } from '$lib/types';
 	import { resolveThreadRange } from '$lib/editor/comment-overlay';
+
+	/** Svelte action: auto-focus element on mount so dictation tools
+	 * (Wispr Flow, macOS Dictation, etc.) type directly into it. */
+	function autofocus(node: HTMLElement) {
+		void tick().then(() => node.focus());
+	}
 
 	interface Props {
 		threads: CommentThread[];
@@ -240,8 +246,9 @@
 				</div>
 				<textarea
 					class="reply-input"
-					placeholder="Reply…"
+					placeholder="Reply (or dictate)…"
 					rows="2"
+					use:autofocus
 					value={replyDrafts[thread.id] ?? ''}
 					oninput={(e) => {
 						replyDrafts = {
@@ -250,7 +257,7 @@
 						};
 					}}
 					onkeydown={(e) => {
-						if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+						if (e.key === 'Enter' && !e.shiftKey) {
 							e.preventDefault();
 							void sendReply(thread);
 						}

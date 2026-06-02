@@ -602,6 +602,9 @@
 		} else {
 			await createTab(entry.path);
 		}
+		if (typeof window !== 'undefined' && window.matchMedia('(max-width: 700px)').matches) {
+			showFilesPane.set(false);
+		}
 	}
 
 	/** Reconcile open tabs after a FileTree rename. */
@@ -2247,7 +2250,11 @@
 	}
 </script>
 
-<div class="app">
+<div
+	class="app"
+	class:file-pane-open={filesVisible}
+	class:has-active-tab={!!activeTabFilePath}
+>
 	<header class="header">
 		<div class="header-left">
 			<span class="logo" aria-hidden="true">
@@ -2597,5 +2604,53 @@
 		flex: 1 1 auto;
 		min-height: 0;
 		overflow: hidden;
+	}
+
+	@media (max-width: 700px) {
+		.header {
+			padding: 10px 12px;
+			gap: 8px;
+		}
+		.header-left {
+			min-width: 0;
+		}
+		.header-right {
+			flex: 0 0 auto;
+		}
+		.body {
+			position: relative;
+			overflow: hidden;
+		}
+		.app.has-active-tab .center-pane {
+			width: 100%;
+			flex: 1 1 auto;
+		}
+		.app.has-active-tab .left-pane {
+			position: absolute;
+			inset: 0 auto 0 0;
+			width: min(320px, 86vw) !important;
+			max-width: 86vw;
+			z-index: 50;
+			transform: translateX(-100%);
+			transition: transform 180ms ease;
+			box-shadow: 10px 0 28px rgba(15, 23, 42, 0.14);
+		}
+		.app.has-active-tab.file-pane-open .left-pane {
+			transform: translateX(0);
+		}
+		.app.has-active-tab.file-pane-open .body::after {
+			content: '';
+			position: absolute;
+			inset: 0 0 0 min(320px, 86vw);
+			z-index: 45;
+			background: rgba(255, 255, 255, 0.72);
+			backdrop-filter: blur(1px);
+		}
+		.app.has-active-tab .right-pane {
+			display: none;
+		}
+		.app.has-active-tab :global(.resizer) {
+			display: none;
+		}
 	}
 </style>
