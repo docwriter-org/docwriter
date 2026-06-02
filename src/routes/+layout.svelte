@@ -4,6 +4,32 @@
 	let { children } = $props();
 </script>
 
+<svelte:head>
+	<title>DocWriter</title>
+	<meta
+		name="description"
+		content="AI-assisted writing editor for turning inline draft notes into reviewable edits."
+	/>
+	<meta property="og:type" content="website" />
+	<meta property="og:site_name" content="DocWriter" />
+	<meta property="og:title" content="DocWriter" />
+	<meta
+		property="og:description"
+		content="Turn inline draft notes into agent edits with square-bracket instructions."
+	/>
+	<meta property="og:url" content="https://docwriter.org/" />
+	<meta property="og:image" content="https://docwriter.org/social-card.png" />
+	<meta property="og:image:width" content="1200" />
+	<meta property="og:image:height" content="630" />
+	<meta name="twitter:card" content="summary_large_image" />
+	<meta name="twitter:title" content="DocWriter" />
+	<meta
+		name="twitter:description"
+		content="Turn inline draft notes into agent edits with square-bracket instructions."
+	/>
+	<meta name="twitter:image" content="https://docwriter.org/social-card.png" />
+</svelte:head>
+
 {@render children()}
 <ClerkUserButton />
 

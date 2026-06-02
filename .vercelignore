@@ -1,0 +1,10 @@
+.claude
+.claude/**
+.docwriter
+.docwriter/**
+.svelte-kit
+.svelte-kit/**
+.vercel/output
+.vercel/output/**
+social-card.html
+social-card-app*.png

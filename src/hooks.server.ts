@@ -43,6 +43,7 @@ function isStaticAsset(pathname: string): boolean {
 		pathname.startsWith('/_app/') ||
 		pathname.startsWith('/pdfjs/') ||
 		pathname === '/favicon.svg' ||
+		pathname === '/social-card.png' ||
 		pathname === '/robots.txt'
 	);
 }

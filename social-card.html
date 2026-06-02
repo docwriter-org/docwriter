@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<title>DocWriter social card</title>
+	<style>
+		:root {
+			--ink: #14151f;
+			--muted: #667085;
+			--paper: #fffdf8;
+			--panel: #ffffff;
+			--line: #e5e7eb;
+			--purple: #6d28d9;
+			--purple-dark: #3f2a8c;
+			--purple-soft: #f1e9ff;
+			--teal: #0f766e;
+			--teal-soft: #dff7ef;
+			--gold: #f6d365;
+			--coral: #fb7185;
+		}
+
+		* {
+			box-sizing: border-box;
+		}
+
+		body {
+			margin: 0;
+			width: 1200px;
+			height: 630px;
+			overflow: hidden;
+			font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+			color: var(--ink);
+			background:
+				linear-gradient(90deg, rgba(20, 21, 31, 0.035) 1px, transparent 1px) 0 0 / 48px 48px,
+				linear-gradient(180deg, #f8fafc 0%, #edf2f4 100%);
+		}
+
+		.scene {
+			position: relative;
+			width: 1200px;
+			height: 630px;
+			padding: 38px 48px;
+		}
+
+		.glow {
+			position: absolute;
+			inset: 0;
+			background:
+				radial-gradient(circle at 18% 18%, rgba(109, 40, 217, 0.20), transparent 28%),
+				radial-gradient(circle at 82% 20%, rgba(15, 118, 110, 0.18), transparent 30%),
+				radial-gradient(circle at 72% 92%, rgba(246, 211, 101, 0.25), transparent 26%);
+		}
+
+		.header {
+			position: relative;
+			z-index: 3;
+			display: flex;
+			align-items: center;
+			justify-content: flex-start;
+			margin-bottom: 22px;
+		}
+
+		.brand {
+			display: flex;
+			align-items: center;
+			font-size: 28px;
+			font-weight: 850;
+			letter-spacing: 0;
+		}
+
+		.stage {
+			position: relative;
+			z-index: 2;
+			display: grid;
+			grid-template-columns: 1fr 360px;
+			gap: 28px;
+			height: 492px;
+		}
+
+		.document {
+			position: relative;
+			overflow: hidden;
+			width: auto;
+			height: 100%;
+			border: 1px solid rgba(20, 21, 31, 0.10);
+			border-radius: 22px;
+			background: var(--paper);
+			box-shadow:
+				0 34px 90px rgba(20, 21, 31, 0.18),
+				0 1px 0 rgba(255, 255, 255, 0.9) inset;
+		}
+
+		.document::before {
+			content: "";
+			position: absolute;
+			inset: 0;
+			background:
+				linear-gradient(90deg, rgba(109, 40, 217, 0.05) 1px, transparent 1px) 0 0 / 58px 58px,
+				linear-gradient(180deg, rgba(255, 255, 255, 0.65), transparent 36%);
+			pointer-events: none;
+		}
+
+		.doc-body {
+			position: relative;
+			z-index: 1;
+			padding: 54px 54px 44px;
+		}
+
+		.kicker {
+			margin-bottom: 13px;
+			color: var(--purple);
+			font-size: 14px;
+			font-weight: 820;
+			letter-spacing: 0;
+			text-transform: uppercase;
+		}
+
+		h1 {
+			margin: 0 0 20px;
+			max-width: 650px;
+			font-size: 43px;
+			line-height: 1.04;
+			font-weight: 900;
+			letter-spacing: 0;
+		}
+
+		.copy {
+			max-width: 650px;
+			color: #344054;
+			font-size: 21px;
+			line-height: 1.42;
+		}
+
+		.copy p {
+			margin: 0 0 18px;
+		}
+
+		.directive {
+			position: relative;
+			display: inline-block;
+			margin-top: 2px;
+			padding: 12px 15px 13px;
+			border: 2px solid rgba(109, 40, 217, 0.25);
+			border-radius: 14px;
+			color: var(--purple-dark);
+			background: #f7f1ff;
+			font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+			font-size: 28px;
+			line-height: 1.18;
+			font-weight: 850;
+			box-shadow: 0 18px 38px rgba(109, 40, 217, 0.18);
+		}
+
+		.directive::after {
+			content: none;
+		}
+
+		.agent {
+			position: relative;
+			padding: 24px;
+			border: 1px solid rgba(20, 21, 31, 0.10);
+			border-radius: 22px;
+			background: rgba(255, 255, 255, 0.86);
+			box-shadow: 0 34px 90px rgba(20, 21, 31, 0.14);
+			backdrop-filter: blur(16px);
+		}
+
+		.agent h2 {
+			margin: 0 0 18px;
+			font-size: 28px;
+			line-height: 1;
+			font-weight: 880;
+			letter-spacing: 0;
+		}
+
+		.agent-step {
+			margin-bottom: 14px;
+			padding: 15px;
+			border: 1px solid var(--line);
+			border-radius: 14px;
+			background: white;
+		}
+
+		.step-label {
+			margin-bottom: 8px;
+			color: var(--muted);
+			font-size: 12px;
+			font-weight: 820;
+			letter-spacing: 0;
+			text-transform: uppercase;
+		}
+
+		.step-text {
+			color: #1f2937;
+			font-size: 17px;
+			line-height: 1.32;
+			font-weight: 760;
+		}
+
+		.tool-chain {
+			display: flex;
+			align-items: center;
+			gap: 8px;
+			margin-top: 12px;
+			color: #475467;
+			font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+			font-size: 13px;
+		}
+
+		.tool {
+			padding: 7px 8px;
+			border-radius: 8px;
+			background: #f2f4f7;
+			font-weight: 700;
+		}
+
+		.suggestion {
+			padding: 16px;
+			border-radius: 14px;
+			background: var(--teal-soft);
+			color: #134e4a;
+			font-size: 18px;
+			line-height: 1.33;
+			font-weight: 740;
+		}
+
+		.actions {
+			display: grid;
+			grid-template-columns: 1fr 1fr;
+			gap: 12px;
+			margin-top: 16px;
+		}
+
+		.action {
+			height: 42px;
+			display: grid;
+			place-items: center;
+			border-radius: 12px;
+			font-size: 15px;
+			font-weight: 830;
+		}
+
+		.action.primary {
+			background: var(--ink);
+			color: white;
+			box-shadow: 0 12px 24px rgba(20, 21, 31, 0.18);
+		}
+
+		.action.secondary {
+			border: 1px solid #d0d5dd;
+			background: white;
+			color: #344054;
+		}
+
+	</style>
+</head>
+<body>
+	<main class="scene">
+		<div class="glow"></div>
+		<header class="header">
+			<div class="brand">
+				<div>DocWriter</div>
+			</div>
+		</header>
+
+		<section class="stage" aria-label="DocWriter social card">
+			<article class="document">
+				<div class="doc-body">
+					<div class="kicker">Write in the document</div>
+					<h1>Turn margin notes into agent edits</h1>
+					<div class="copy">
+						<p>Keep the instruction beside the sentence, paragraph, or section you want changed.</p>
+						<p><span class="directive">[[ tighten this paragraph ]]</span></p>
+						<p>DocWriter reads the surrounding draft and returns a reviewable edit in place.</p>
+					</div>
+				</div>
+			</article>
+
+			<aside class="agent">
+				<h2>Agent draft</h2>
+				<div class="agent-step">
+					<div class="step-label">Instruction found</div>
+					<div class="step-text">tighten this paragraph</div>
+					<div class="tool-chain">
+						<span class="tool">read_doc</span>
+						<span>-&gt;</span>
+						<span class="tool">edit_doc</span>
+					</div>
+				</div>
+				<div class="agent-step">
+					<div class="step-label">Suggested replacement</div>
+					<div class="suggestion">Keep the note in the draft. Let the agent rewrite the exact passage. Accept the edit when it works.</div>
+				</div>
+				<div class="actions">
+					<div class="action primary">Accept</div>
+					<div class="action secondary">Reject</div>
+				</div>
+			</aside>
+
+		</section>
+	</main>
+</body>
+</html>
