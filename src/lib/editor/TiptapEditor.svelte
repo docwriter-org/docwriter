@@ -772,6 +772,11 @@
 		return 'user-edit';
 	}
 
+	function buildD3FeedbackTrigger(code: string): string {
+		const payload = JSON.stringify({ language: 'd3', code }, null, 2);
+		return `The user wants feedback on their D3 diagram. Review the D3 code in this JSON payload and provide constructive feedback on the visualization: suggest improvements to the data representation, layout, colors, labels, accessibility, and code quality. If you see clear improvements, propose an edit_doc call with the improved code.\n\n${payload}`;
+	}
+
 	/**
 	 * Update policy: the server is authoritative for persistence (Hocuspocus
 	 * persists every WebSocket update), so this component doesn't HTTP-
@@ -877,8 +882,7 @@
 		const handleD3Feedback = (e: Event) => {
 			const detail = (e as CustomEvent<{ code: string }>).detail;
 			if (!detail?.code || !onSubmit) return;
-			const trigger = `The user wants feedback on their D3 diagram. Review the D3 code below and provide constructive feedback on the visualization — suggest improvements to the data representation, layout, colors, labels, accessibility, and code quality. If you see clear improvements, propose an edit_doc call with the improved code.\n\n\`\`\`d3\n${detail.code}\n\`\`\``;
-			onSubmit(trigger);
+			onSubmit(buildD3FeedbackTrigger(detail.code));
 		};
 		editorRoot.addEventListener('d3-feedback', handleD3Feedback);
 

@@ -43,6 +43,15 @@ function nodeText(node: PMNode): string {
 	return text;
 }
 
+function hashString(value: string): string {
+	let hash = 2166136261;
+	for (let i = 0; i < value.length; i += 1) {
+		hash ^= value.charCodeAt(i);
+		hash = Math.imul(hash, 16777619);
+	}
+	return (hash >>> 0).toString(36);
+}
+
 /** Walk the doc and collect fenced D3 code blocks. A block starts with
  * a paragraph whose text matches /^\s*```d3\s*$/ and ends with the next
  * paragraph matching /^\s*```\s*$/. Everything in between is the code. */
@@ -67,7 +76,7 @@ function scanD3Blocks(doc: PMNode): D3Block[] {
 					out.push({
 						code,
 						insertAt: childEnd,
-						key: `d3:${blockIndex}:${code.length}`
+						key: `d3:${blockIndex}:${hashString(code)}`
 					});
 					blockIndex += 1;
 				}
@@ -83,11 +92,17 @@ function scanD3Blocks(doc: PMNode): D3Block[] {
 }
 
 const D3_CDN = 'https://d3js.org/d3.v7.min.js';
+const widgetCleanup = new WeakMap<HTMLElement, () => void>();
+
+function scriptString(value: string): string {
+	return JSON.stringify(value).replace(/<\//g, '<\\/');
+}
 
 /** Build the srcdoc HTML for the D3 iframe. The user's D3 code runs
  * inside a <script> that has `d3` available globally. The SVG or canvas
  * output is expected to be appended to `document.body` or `#chart`. */
 function buildSrcdoc(code: string): string {
+	const userCode = scriptString(code);
 	return `<!DOCTYPE html>
 <html>
 <head>
@@ -102,21 +117,47 @@ function buildSrcdoc(code: string): string {
 <div id="chart"></div>
 <script src="${D3_CDN}"><\/script>
 <script>
-try {
-  const svg = d3.select("#chart").append("svg");
-  const chart = d3.select("#chart");
-  ${code}
-  // Auto-resize: notify parent of content height
-  requestAnimationFrame(() => {
-    const h = document.body.scrollHeight;
+let resizeRaf = 0;
+const resize = () => {
+  cancelAnimationFrame(resizeRaf);
+  resizeRaf = requestAnimationFrame(() => {
+    const chartEl = document.getElementById('chart');
+    const h = Math.max(
+      document.documentElement.scrollHeight,
+      document.body.scrollHeight,
+      chartEl ? chartEl.scrollHeight : 0
+    );
     window.parent.postMessage({ type: 'd3-resize', height: h }, '*');
   });
-} catch (e) {
+};
+
+const chartRoot = document.getElementById('chart');
+if ('ResizeObserver' in window) {
+  const resizeObserver = new ResizeObserver(resize);
+  resizeObserver.observe(document.documentElement);
+  resizeObserver.observe(document.body);
+  if (chartRoot) resizeObserver.observe(chartRoot);
+}
+window.addEventListener('load', resize);
+
+const showError = (e) => {
   const errDiv = document.createElement('div');
   errDiv.style.cssText = 'color:#ef4444;font:13px/1.4 monospace;padding:12px;white-space:pre-wrap;';
-  errDiv.textContent = 'D3 Error: ' + e.message;
+  errDiv.textContent = 'D3 Error: ' + (e && e.message ? e.message : String(e));
   document.body.replaceChildren(errDiv);
-  window.parent.postMessage({ type: 'd3-resize', height: document.body.scrollHeight }, '*');
+  resize();
+};
+
+try {
+  if (!window.d3) throw new Error('D3 failed to load');
+  Object.defineProperties(window, {
+    chart: { value: d3.select(chartRoot), configurable: true },
+    container: { value: chartRoot, configurable: true }
+  });
+  new Function(${userCode} + '\\n//# sourceURL=docwriter-d3-block.js').call(window);
+  resize();
+} catch (e) {
+  showError(e);
 }
 <\/script>
 </body>
@@ -180,24 +221,17 @@ function renderD3Widget(block: D3Block): HTMLElement {
 		}
 	};
 	window.addEventListener('message', resizeHandler);
-
-	// Cleanup when the widget is removed from the DOM
-	const observer = new MutationObserver(() => {
-		if (!wrap.isConnected) {
-			window.removeEventListener('message', resizeHandler);
-			observer.disconnect();
-		}
-	});
-	// Observe the parent (once attached) for child removal
-	requestAnimationFrame(() => {
-		if (wrap.parentElement) {
-			observer.observe(wrap.parentElement, { childList: true });
-		}
-	});
+	widgetCleanup.set(wrap, () => window.removeEventListener('message', resizeHandler));
 
 	iframeWrap.appendChild(iframe);
 	wrap.appendChild(iframeWrap);
 	return wrap;
+}
+
+function destroyD3Widget(node: Node): void {
+	if (!(node instanceof HTMLElement)) return;
+	widgetCleanup.get(node)?.();
+	widgetCleanup.delete(node);
 }
 
 function buildDecorations(state: D3OverlayState, doc: PMNode): DecorationSet {
@@ -208,7 +242,8 @@ function buildDecorations(state: D3OverlayState, doc: PMNode): DecorationSet {
 			Decoration.widget(block.insertAt, () => renderD3Widget(block), {
 				side: 1,
 				key: block.key,
-				ignoreSelection: true
+				ignoreSelection: true,
+				destroy: destroyD3Widget
 			})
 		);
 	}
