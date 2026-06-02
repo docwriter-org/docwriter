@@ -30,6 +30,7 @@
 	},
 	"devDependencies": {
 		"@sveltejs/adapter-node": "^5.5.4",
+		"@sveltejs/adapter-vercel": "^6.3.3",
 		"@sveltejs/kit": "^2.50.2",
 		"@sveltejs/vite-plugin-svelte": "^6.2.4",
 		"@types/better-sqlite3": "^7.6.13",
@@ -45,6 +46,9 @@
 	"dependencies": {
 		"@anthropic-ai/claude-agent-sdk": "^0.2.92",
 		"@anthropic-ai/sdk": "^0.81.0",
+		"@clerk/backend": "^3.4.14",
+		"@clerk/clerk-js": "^6.13.0",
+		"@clerk/shared": "^4.14.0",
 		"@hocuspocus/provider": "^3.4.4",
 		"@hocuspocus/server": "^3.4.4",
 		"@tiptap/core": "^3.22.3",

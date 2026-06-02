@@ -1,0 +1,5 @@
+{
+	"buildCommand": "DOCWRITER_ADAPTER=vercel npm run build",
+	"installCommand": "npm install",
+	"framework": "sveltekit"
+}

@@ -1,8 +1,11 @@
 <script lang="ts">
+	import ClerkUserButton from '$lib/components/ClerkUserButton.svelte';
+
 	let { children } = $props();
 </script>
 
 {@render children()}
+<ClerkUserButton />
 
 <style>
 	/* Global hover tooltip element, owned by src/lib/actions/tooltip.ts.
