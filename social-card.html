@@ -267,21 +267,21 @@
 		<section class="stage" aria-label="DocWriter social card">
 			<article class="document">
 				<div class="doc-body">
-					<div class="kicker">Write in the document</div>
-					<h1>Turn margin notes into agent edits</h1>
+					<div class="kicker">Inline agent instructions</div>
+					<h1>Ask for edits where the context lives</h1>
 					<div class="copy">
-						<p>Keep the instruction beside the sentence, paragraph, or section you want changed.</p>
-						<p><span class="directive">[[ tighten this paragraph ]]</span></p>
-						<p>DocWriter reads the surrounding draft and returns a reviewable edit in place.</p>
+						<p>Drop a command beside any passage and DocWriter uses the surrounding draft to make the change.</p>
+						<p><span class="directive">[[ make this argument sharper ]]</span></p>
+						<p>Write, steer, and accept agent edits without leaving the page.</p>
 					</div>
 				</div>
 			</article>
 
 			<aside class="agent">
-				<h2>Agent draft</h2>
+				<h2>Agent edit</h2>
 				<div class="agent-step">
 					<div class="step-label">Instruction found</div>
-					<div class="step-text">tighten this paragraph</div>
+					<div class="step-text">make this argument sharper</div>
 					<div class="tool-chain">
 						<span class="tool">read_doc</span>
 						<span>-&gt;</span>
@@ -290,7 +290,7 @@
 				</div>
 				<div class="agent-step">
 					<div class="step-label">Suggested replacement</div>
-					<div class="suggestion">Keep the note in the draft. Let the agent rewrite the exact passage. Accept the edit when it works.</div>
+					<div class="suggestion">The draft becomes the interface: context, instruction, and review stay together.</div>
 				</div>
 				<div class="actions">
 					<div class="action primary">Accept</div>
