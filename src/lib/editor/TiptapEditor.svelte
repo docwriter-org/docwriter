@@ -1882,7 +1882,7 @@
 		white-space: pre-wrap;
 	}
 	.feedback-input[data-empty='true']::before {
-		content: "What's wrong with this?";
+		content: "Type or dictate feedback…";
 		color: var(--text-faint);
 		pointer-events: none;
 	}
