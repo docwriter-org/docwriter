@@ -49,7 +49,7 @@ function isStaticAsset(pathname: string): boolean {
 }
 
 function isPublicRoute(pathname: string): boolean {
-	return pathname === '/sign-in' || isStaticAsset(pathname);
+	return pathname === '/sign-in' || pathname === '/welcome' || pathname === '/api/waitlist' || isStaticAsset(pathname);
 }
 
 function acceptsHtml(request: Request): boolean {
@@ -176,6 +176,10 @@ export const handle: Handle = async ({ event, resolve }) => {
 	if (!requestState.isAuthenticated) {
 		if (event.url.pathname.startsWith('/api/') && !acceptsHtml(event.request)) {
 			return Response.json({ error: 'Unauthorized' }, { status: 401 });
+		}
+		// Root path → landing page; other paths → sign-in with redirect.
+		if (event.url.pathname === '/') {
+			return Response.redirect(new URL('/welcome', event.url.origin), 303);
 		}
 		const signInUrl = new URL('/sign-in', event.url.origin);
 		signInUrl.searchParams.set('redirect_url', event.url.href);
