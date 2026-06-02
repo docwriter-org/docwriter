@@ -16,6 +16,7 @@
 	import AgentModal from '$lib/components/AgentModal.svelte';
 	import Dialog from '$lib/components/Dialog.svelte';
 	import AgentSettingsPanel from '$lib/components/AgentSettingsPanel.svelte';
+	import AnthropicTokenPanel from '$lib/components/AnthropicTokenPanel.svelte';
 	import HooksPanel from '$lib/components/HooksPanel.svelte';
 	import { themes, applyTheme } from '$lib/themes';
 	import { unifiedLineDiff } from '$lib/diff';
@@ -1753,6 +1754,7 @@
 					}))
 				},
 				{ kind: 'panel', label: 'Agent behavior', panelKey: 'agentSettings' },
+				{ kind: 'panel', label: 'Anthropic API key', panelKey: 'anthropicToken' },
 				{
 					kind: 'submenu',
 					label: 'Theme',
@@ -2255,6 +2257,7 @@
 			<MenuBar
 				{menus}
 				panels={{
+					anthropicToken: anthropicTokenSnippet,
 					references: referencesPanelSnippet,
 					rules: rulesPanelSnippet,
 					agentSettings: agentSettingsSnippet,
@@ -2293,6 +2296,10 @@
 
 	{#snippet agentSettingsSnippet()}
 		<AgentSettingsPanel onSettingsChange={persistAgentSettings} />
+	{/snippet}
+
+	{#snippet anthropicTokenSnippet()}
+		<AnthropicTokenPanel onSaved={loadAvailableModels} />
 	{/snippet}
 
 	{#snippet hooksPanelSnippet()}

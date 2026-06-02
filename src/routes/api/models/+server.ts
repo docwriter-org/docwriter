@@ -1,6 +1,7 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import Anthropic from '@anthropic-ai/sdk';
+import { getAnthropicApiKey } from '$lib/server/anthropic-token';
 
 /** One selectable model in the Settings → Model menu. `id` is the full Claude
  * API model ID (e.g. `claude-opus-4-8`) sent straight to `query()`. */
@@ -27,15 +28,18 @@ function defaultModelFor(models: ModelOption[]): string {
 
 // Module-scope cache: the model catalog changes rarely, so we fetch it once per
 // server process and reuse it across requests.
-let cache: { models: ModelOption[]; defaultModel: string } | null = null;
+let cache: { apiKey: string | null; models: ModelOption[]; defaultModel: string } | null = null;
 
-export const GET: RequestHandler = async () => {
-	if (cache) return json(cache);
+export const GET: RequestHandler = async ({ cookies }) => {
+	const apiKey = getAnthropicApiKey(cookies);
+	if (cache && cache.apiKey === apiKey) {
+		return json({ models: cache.models, defaultModel: cache.defaultModel });
+	}
 
 	try {
 		// `new Anthropic()` throws synchronously if no API key is configured, and
 		// `models.list()` rejects on auth/network failure — both land in catch.
-		const client = new Anthropic();
+		const client = new Anthropic(apiKey ? { apiKey } : undefined);
 		const collected: Array<{ id: string; label: string; created: number }> = [];
 		for await (const m of client.models.list({ limit: 1000 })) {
 			if (!m.id.startsWith('claude-')) continue;
@@ -50,8 +54,8 @@ export const GET: RequestHandler = async () => {
 		// Newest-first. The API already returns this order, but sort defensively.
 		collected.sort((a, b) => b.created - a.created);
 		const models = collected.map(({ id, label }) => ({ id, label }));
-		cache = { models, defaultModel: defaultModelFor(models) };
-		return json(cache);
+		cache = { apiKey, models, defaultModel: defaultModelFor(models) };
+		return json({ models: cache.models, defaultModel: cache.defaultModel });
 	} catch {
 		// Don't cache the fallback — a later request may succeed once auth/network
 		// recovers.

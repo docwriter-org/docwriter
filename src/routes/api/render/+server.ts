@@ -35,6 +35,7 @@ import {
 	WRITE_DOC_TOOL_NAME,
 	REPLY_TO_COMMENT_TOOL_NAME
 } from '$lib/server/mcp-doc-tools';
+import { getAnthropicApiKey } from '$lib/server/anthropic-token';
 
 /** Read the live authoritative markdown for a tab, including any pending
  * review rounds materialized on top. Prefers the Hocuspocus in-memory
@@ -715,7 +716,7 @@ function buildHooks(
 	return out as Partial<Record<HookEvent | 'PreToolUse', HookEntry[]>>;
 }
 
-export const POST: RequestHandler = async ({ request }) => {
+export const POST: RequestHandler = async ({ request, cookies }) => {
 	try {
 		const body = await request.json();
 		const { userMessage, model, warmup, tab, planMode, images } = body as {
@@ -781,6 +782,7 @@ export const POST: RequestHandler = async ({ request }) => {
 
 		const abortController = new AbortController();
 		request.signal.addEventListener('abort', () => abortController.abort());
+		const anthropicApiKey = getAnthropicApiKey(cookies);
 
 		const stream = new ReadableStream({
 			async start(controller) {
@@ -851,6 +853,9 @@ export const POST: RequestHandler = async ({ request }) => {
 							includePartialMessages: true,
 							agentProgressSummaries: true,
 							effort: 'low',
+							...(anthropicApiKey
+								? { env: { ...process.env, ANTHROPIC_API_KEY: anthropicApiKey } }
+								: {}),
 							abortController,
 							hooks,
 							canUseTool: async (toolName: string, toolInput: any) => {
