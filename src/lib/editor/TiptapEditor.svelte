@@ -20,6 +20,7 @@
 		type FindState
 	} from './find-overlay';
 	import { MediaOverlay } from './media-overlay';
+	import { D3Overlay } from './d3-overlay';
 	import { handleEditorPaste, handleEditorDrop } from './media-paste';
 	import FindBar from '$lib/components/FindBar.svelte';
 	import PreviewButton from '$lib/components/PreviewButton.svelte';
@@ -814,7 +815,8 @@
 				CommentOverlay,
 				CelebrationOverlay,
 				FindOverlay,
-				MediaOverlay
+				MediaOverlay,
+				D3Overlay
 			],
 			// Collaboration provides initial content from the Y.Doc; do NOT
 			// pass a string `content` here (doing so would wipe the Y.Doc).
@@ -869,6 +871,17 @@
 		}
 
 		const editorRoot = editor.view.dom;
+
+		// D3 diagram feedback: when user clicks "Get Feedback" on a D3
+		// widget, fire the agent with the D3 code for review.
+		const handleD3Feedback = (e: Event) => {
+			const detail = (e as CustomEvent<{ code: string }>).detail;
+			if (!detail?.code || !onSubmit) return;
+			const trigger = `The user wants feedback on their D3 diagram. Review the D3 code below and provide constructive feedback on the visualization — suggest improvements to the data representation, layout, colors, labels, accessibility, and code quality. If you see clear improvements, propose an edit_doc call with the improved code.\n\n\`\`\`d3\n${detail.code}\n\`\`\``;
+			onSubmit(trigger);
+		};
+		editorRoot.addEventListener('d3-feedback', handleD3Feedback);
+
 		const handlePointerDown = () => {
 			pointerSelecting = true;
 			shouldFocusFeedbackInput = false;
@@ -950,6 +963,7 @@
 				'docwriter:reject-pending-edit',
 				handleRejectPendingEdit as EventListener
 			);
+			editorRoot.removeEventListener('d3-feedback', handleD3Feedback);
 			window.removeEventListener('mousedown', handleOutsideMousedown);
 			window.removeEventListener('mousedown', handleFeedbackOutsideMousedown);
 		};
@@ -2252,5 +2266,56 @@
 	@keyframes media-tooltip-in {
 		from { opacity: 0; transform: translateY(-3px); }
 		to { opacity: 1; transform: translateY(0); }
+	}
+
+	/* ── D3 diagram widget ──────────────────────────────────────────── */
+	:global(.d3-widget) {
+		display: block;
+		margin: 6px 0 12px;
+		user-select: none;
+		max-width: 680px;
+		border: 1px solid var(--border-light);
+		border-radius: 6px;
+		overflow: hidden;
+		animation: media-fade-in 240ms ease-out both;
+	}
+	:global(.d3-widget-toolbar) {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: 6px 10px;
+		background: var(--bg-elevated);
+		border-bottom: 1px solid var(--border-light);
+		font-family: 'Inter', -apple-system, sans-serif;
+	}
+	:global(.d3-widget-label) {
+		font-size: 11px;
+		font-weight: 600;
+		color: var(--text-muted);
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+	}
+	:global(.d3-widget-feedback-btn) {
+		padding: 3px 10px;
+		border: 1px solid var(--border-light);
+		border-radius: 4px;
+		background: var(--bg-surface);
+		color: var(--text-muted);
+		font-family: 'Inter', -apple-system, sans-serif;
+		font-size: 11px;
+		font-weight: 500;
+		cursor: pointer;
+		transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+	}
+	:global(.d3-widget-feedback-btn:hover) {
+		background: var(--bg-hover);
+		color: var(--text);
+		border-color: color-mix(in srgb, var(--accent) 40%, var(--border-light));
+	}
+	:global(.d3-widget-iframe-wrap) {
+		background: white;
+	}
+	:global(.d3-widget-iframe) {
+		display: block;
 	}
 </style>
