@@ -82,6 +82,15 @@
 	let idleTimer: ReturnType<typeof setTimeout> | null = null;
 	let countdownInterval: ReturnType<typeof setInterval> | null = null;
 	let idleDeadline = 0;
+	/** Plain-text snapshot of the doc as it was when the current editing burst
+	 * began (before the first keystroke). When the idle timer fires we compare
+	 * against it: if the net result is identical (e.g. typed a char then
+	 * deleted it), there's nothing new for the agent to see, so we skip the
+	 * auto-submit instead of waking it for a no-op. */
+	let idleBaselineText: string | null = null;
+	function docPlainText(doc: { textBetween: (a: number, b: number, c: string, d: string) => string; content: { size: number } }): string {
+		return doc.textBetween(0, doc.content.size, '\n', '\n');
+	}
 	let plainMetricsRaf = 0;
 	let plainResizeObserver: ResizeObserver | null = null;
 
@@ -517,6 +526,7 @@
 	 * the countdown from their last keystroke doesn't fire unexpectedly. */
 	export function cancelIdleTimer(): void {
 		if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+		idleBaselineText = null;
 		clearCountdown();
 	}
 
@@ -886,44 +896,43 @@
 		if (idleTimer) clearTimeout(idleTimer);
 		startCountdown();
 		idleTimer = setTimeout(() => {
+			idleTimer = null;
 			clearCountdown();
-			if (onSubmit) onSubmit();
+			// Skip the auto-submit if this editing burst netted no change (e.g.
+			// space then backspace) — the agent already has this exact text.
+			const current = editor ? docPlainText(editor.state.doc) : null;
+			const unchanged = idleBaselineText !== null && current === idleBaselineText;
+			idleBaselineText = null;
+			if (!unchanged && onSubmit) onSubmit();
 		}, IDLE_MS);
 	}
 
-	type UpdateKind = 'yjs-remote' | 'user-edit';
-
-	function classifyUpdate(transaction: Transaction): UpdateKind {
-		const syncMeta = transaction.getMeta(ySyncPluginKey);
-		if (syncMeta !== undefined) return 'yjs-remote';
-		return 'user-edit';
-	}
-
 	/**
-	 * Update policy: the server is authoritative for persistence (Hocuspocus
-	 * persists every WebSocket update), so this component doesn't HTTP-
-	 * autosave. It only decides whether each PM transaction should restart
-	 * the auto-submit idle timer:
-	 * ┌─────────────┬────────────┐
-	 * │    Kind     │ Idle timer │
-	 * ├─────────────┼────────────┤
-	 * │ yjs-remote  │ skip       │
-	 * ├─────────────┼────────────┤
-	 * │ user-edit   │ restart    │
-	 * └─────────────┴────────────┘
+	 * Decide whether a PM transaction should restart the auto-submit idle
+	 * timer. Only the user's own text edits count. We skip:
+	 *   - remote Yjs syncs (`ySyncPluginKey` meta) — another client / the agent;
+	 *   - meta-only transactions (`!docChanged`: overlay decoration refreshes,
+	 *     setMeta, selection moves) — these fire constantly while edits/threads
+	 *     are on screen and would otherwise keep resetting the countdown so it
+	 *     never reaches 0.
+	 * (The server is authoritative for persistence — Hocuspocus persists every
+	 * update — so this component doesn't HTTP-autosave; it only drives the timer.)
 	 */
 	function onEditorUpdate({ transaction }: { transaction: Transaction }) {
 		if (!editor) return;
 		schedulePlainLineSync();
-		const kind = classifyUpdate(transaction);
-		if (kind === 'yjs-remote') return;
-		if (kind === 'user-edit') {
-			restartIdleCountdown();
-			// A user edit means they're writing, not reading comments. Collapse
-			// any expanded thread so the margin card doesn't stay in their
-			// peripheral vision. They can re-open via the pill or gutter card.
-			if (openThreadId) openCommentThreadId.set(null);
-		}
+		const isUserEdit =
+			transaction.docChanged && transaction.getMeta(ySyncPluginKey) === undefined;
+		if (!isUserEdit) return;
+		// Burst start (no countdown running): snapshot the doc as it was BEFORE
+		// this keystroke, so the timer can tell whether the burst netted any
+		// real change.
+		if (idleTimer === null) idleBaselineText = docPlainText(transaction.before);
+		restartIdleCountdown();
+		// The user is writing, not reading comments. Collapse any expanded
+		// thread so its margin card doesn't sit in their peripheral vision;
+		// they can re-open it via the pill or gutter card.
+		if (openThreadId) openCommentThreadId.set(null);
 	}
 
 	onMount(async () => {
