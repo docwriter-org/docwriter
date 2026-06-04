@@ -20,6 +20,7 @@
 		type FindState
 	} from './find-overlay';
 	import { MediaOverlay } from './media-overlay';
+	import { D3Overlay } from './d3-overlay';
 	import { handleEditorPaste, handleEditorDrop } from './media-paste';
 	import FindBar from '$lib/components/FindBar.svelte';
 	import PreviewButton from '$lib/components/PreviewButton.svelte';
@@ -490,6 +491,9 @@
 		const paragraphs = Array.from(
 			contentEl.querySelectorAll(':scope > p')
 		) as HTMLElement[];
+		const visibleParagraphs = paragraphs
+			.map((paragraph, index) => ({ paragraph, index }))
+			.filter(({ paragraph }) => !paragraph.classList.contains('d3-code-line-hidden'));
 		const contentRect = contentEl.getBoundingClientRect();
 		if (paragraphs.length === 0) {
 			plainLineRows = [{ label: '1', top: 0 }];
@@ -503,7 +507,7 @@
 		// breaks the moment any block-level chrome between paragraphs
 		// adds height the gutter doesn't know about.
 		const contentTop = contentRect.top;
-		plainLineRows = paragraphs.map((paragraph, index) => {
+		plainLineRows = visibleParagraphs.map(({ paragraph, index }) => {
 			const rect = paragraph.getBoundingClientRect();
 			return { label: String(index + 1), top: Math.max(0, rect.top - contentTop) };
 		});
@@ -951,7 +955,8 @@
 				CommentOverlay,
 				CelebrationOverlay,
 				FindOverlay,
-				MediaOverlay
+				MediaOverlay,
+				D3Overlay
 			],
 			// Collaboration provides initial content from the Y.Doc; do NOT
 			// pass a string `content` here (doing so would wipe the Y.Doc).
@@ -1012,6 +1017,10 @@
 		}
 
 		const editorRoot = editor.view.dom;
+
+		const handleD3CodeVisibilityChanged = () => schedulePlainLineSync();
+		editorRoot.addEventListener('d3-code-visibility-changed', handleD3CodeVisibilityChanged);
+
 		const handlePointerDown = () => {
 			pointerSelecting = true;
 			shouldFocusFeedbackInput = false;
@@ -1067,6 +1076,7 @@
 
 		const detachOpenThread = () => {
 			editorRoot.removeEventListener('docwriter:open-thread', handleOpenThread as EventListener);
+			editorRoot.removeEventListener('d3-code-visibility-changed', handleD3CodeVisibilityChanged);
 			window.removeEventListener('mousedown', handleOutsideMousedown);
 			window.removeEventListener('mousedown', handleFeedbackOutsideMousedown);
 		};
@@ -2436,6 +2446,84 @@
 	@keyframes media-fade-in {
 		from { opacity: 0; transform: translateY(-2px); }
 		to { opacity: 1; transform: translateY(0); }
+	}
+
+	/* D3 diagram widgets. Rendered by src/lib/editor/d3-overlay.ts as block
+	 * widget decorations, so these need top-level global selectors. */
+	.tiptap-editor :global(.d3-code-fence) {
+		color: var(--text-muted);
+	}
+	.tiptap-editor :global(.tiptap-plain p.d3-code-line) {
+		margin: 0;
+	}
+	.tiptap-editor :global(.tiptap-plain p.d3-code-line-hidden) {
+		display: none;
+	}
+	.tiptap-editor :global(.tiptap-plain p.d3-code-line-expanded) {
+		animation: d3-source-reveal 90ms ease-out both;
+	}
+	@keyframes d3-source-reveal {
+		from { opacity: 0; transform: translateY(-1px); }
+		to { opacity: 1; transform: translateY(0); }
+	}
+	:global(.d3-code-toggle) {
+		display: inline-flex;
+		align-items: center;
+		margin: 1px 0 2px;
+		font-family: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+		font-size: calc(12px * var(--font-scale, 1));
+		line-height: 1.45;
+		user-select: none;
+	}
+	:global(.d3-code-toggle-btn) {
+		padding: 0;
+		border: 0;
+		background: transparent;
+		color: var(--text-faint);
+		font: inherit;
+		cursor: pointer;
+		text-decoration: underline;
+		text-decoration-color: transparent;
+		text-underline-offset: 3px;
+		transition: color 120ms ease, text-decoration-color 120ms ease;
+	}
+	:global(.d3-code-toggle-btn:hover) {
+		color: var(--text-muted);
+		text-decoration-color: color-mix(in srgb, var(--text-muted) 45%, transparent);
+	}
+	:global(.d3-widget) {
+		display: block;
+		margin: 6px 0 12px;
+		user-select: none;
+		max-width: 680px;
+		border: 1px solid var(--border-light);
+		border-radius: 6px;
+		overflow: hidden;
+		animation: media-fade-in 240ms ease-out both;
+	}
+	:global(.d3-widget-toolbar) {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 10px;
+		padding: 6px 10px;
+		background: var(--bg-elevated);
+		border-bottom: 1px solid var(--border-light);
+		font-family: 'Inter', -apple-system, sans-serif;
+	}
+	:global(.d3-widget-label) {
+		min-width: 0;
+		font-size: 11px;
+		font-weight: 600;
+		color: var(--text-muted);
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+	}
+	:global(.d3-widget-iframe-wrap) {
+		background: white;
+	}
+	:global(.d3-widget-iframe) {
+		display: block;
 	}
 	/* Inline URL mark — classic web-link affordance: accent color + solid
 	 * underline. Plain-text editor philosophy says don't mutate the
