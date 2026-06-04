@@ -146,6 +146,27 @@
 		{ id: 'conv', label: 'Conversation', tokens: conversationTokens, color: 'var(--ctx-color-conv)' }
 	]);
 
+	// Cursor-following tooltip for the context bar. Native `title` is too
+	// slow to surface and looks out of place; this shows the bucket's label,
+	// token estimate, and share instantly under the pointer.
+	let barWrapEl = $state<HTMLDivElement>();
+	let hoveredBar = $state<
+		{ label: string; tokens: number; color: string; pct: number; x: number } | null
+	>(null);
+	function showBarTip(bucket: ContextBucket, pct: number, e: MouseEvent) {
+		const rect = barWrapEl?.getBoundingClientRect();
+		if (!rect) return;
+		// Clamp x so the (centered) tooltip stays within the bar's width.
+		const x = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+		hoveredBar = {
+			label: bucket.label,
+			tokens: bucket.tokens,
+			color: bucket.color,
+			pct: Math.round(pct),
+			x
+		};
+	}
+
 	async function fetchRules() {
 		try {
 			const res = await fetch('/api/document');
@@ -526,19 +547,30 @@
 						~{fmtTokens(totalContextTokens)} / {fmtTokens(CONTEXT_BUDGET)} Tokens
 					</span>
 				</div>
-				<div class="context-bar" role="img" aria-label="Context bucket breakdown">
-					{#each contextBuckets as bucket (bucket.id)}
-						{@const pct = totalContextTokens > 0 ? (bucket.tokens / CONTEXT_BUDGET) * 100 : 0}
-						{#if pct > 0}
-							<div
-								class="context-bar-segment"
-								style:flex-basis="{pct}%"
-								style:background={bucket.color}
-								title="{bucket.label}: {fmtTokens(bucket.tokens)} tokens"
-							></div>
-						{/if}
-					{/each}
-					<div class="context-bar-rest"></div>
+				<div class="context-bar-wrap" bind:this={barWrapEl}>
+					<div class="context-bar" role="img" aria-label="Context bucket breakdown">
+						{#each contextBuckets as bucket (bucket.id)}
+							{@const pct = totalContextTokens > 0 ? (bucket.tokens / CONTEXT_BUDGET) * 100 : 0}
+							{#if pct > 0}
+								<div
+									class="context-bar-segment"
+									style:flex-basis="{pct}%"
+									style:background={bucket.color}
+									role="presentation"
+									onmouseenter={(e) => showBarTip(bucket, pct, e)}
+									onmousemove={(e) => showBarTip(bucket, pct, e)}
+									onmouseleave={() => (hoveredBar = null)}
+								></div>
+							{/if}
+						{/each}
+						<div class="context-bar-rest"></div>
+					</div>
+					{#if hoveredBar}
+						<div class="context-bar-tip" style:left="{hoveredBar.x}px">
+							<span class="context-bar-tip-dot" style:background={hoveredBar.color}></span>
+							{hoveredBar.label} · {fmtTokens(hoveredBar.tokens)} · {hoveredBar.pct}%
+						</div>
+					{/if}
 				</div>
 				<div class="context-legend">
 					{#each contextBuckets as bucket (bucket.id)}
@@ -970,6 +1002,10 @@
 		font-family: ui-monospace, monospace;
 		font-variant-numeric: tabular-nums;
 	}
+	.context-bar-wrap {
+		position: relative;
+		margin-bottom: 12px;
+	}
 	.context-bar {
 		display: flex;
 		width: 100%;
@@ -977,7 +1013,6 @@
 		border-radius: 999px;
 		overflow: hidden;
 		background: var(--bg-surface);
-		margin-bottom: 12px;
 		gap: 2px;
 		padding: 0;
 	}
@@ -985,6 +1020,41 @@
 		height: 100%;
 		min-width: 6px;
 		flex-grow: 0;
+		flex-shrink: 0;
+		cursor: default;
+	}
+	.context-bar-tip {
+		position: absolute;
+		bottom: calc(100% + 6px);
+		transform: translateX(-50%);
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		white-space: nowrap;
+		padding: 4px 8px;
+		border-radius: 6px;
+		background: var(--text-primary, #1f2430);
+		color: var(--bg-base, #fff);
+		font-size: 11px;
+		font-weight: 500;
+		line-height: 1.2;
+		pointer-events: none;
+		box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+		z-index: 5;
+	}
+	.context-bar-tip::after {
+		content: '';
+		position: absolute;
+		top: 100%;
+		left: 50%;
+		transform: translateX(-50%);
+		border: 4px solid transparent;
+		border-top-color: var(--text-primary, #1f2430);
+	}
+	.context-bar-tip-dot {
+		width: 8px;
+		height: 8px;
+		border-radius: 2px;
 		flex-shrink: 0;
 	}
 	.context-bar-rest {

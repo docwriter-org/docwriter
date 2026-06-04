@@ -758,10 +758,17 @@
 		const planMode = opts?.planMode ?? false;
 		const images = opts?.images ?? [];
 		if (rendering || submitInFlight) {
-			// Skippable triggers (accepted-edits auto-wake, implicit
-			// wakeup) get dropped at queue time when there's already
-			// something queued — the queued message implies the same
-			// review pass.
+			// An implicit "review the docs" wakeup carries no specific intent,
+			// so while the agent is already busy it's always redundant — the
+			// in-flight render is itself a review pass. Drop it outright rather
+			// than queuing it; otherwise each finished render dequeues one and
+			// the next keystroke queues another, a never-ending treadmill of
+			// re-reviews. An implicit wakeup only fires when the agent is idle
+			// (handled below), in which case it runs immediately, never queued.
+			if (isImplicitWakeupTrigger(trigger)) return;
+			// The accepted-edits auto-wake carries real state ("the user
+			// accepted your edits"), so we keep one queued — but collapse
+			// duplicates when there's already something behind it.
 			if (isSkippableWhenQueued(trigger) && queuedSubmissions.length > 0) return;
 			queuedSubmissions = [...queuedSubmissions, { trigger, planMode }];
 			queuedSubmissionCount.set(queuedSubmissions.length);
