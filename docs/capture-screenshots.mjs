@@ -295,6 +295,43 @@ async function closeMenu(page) {
 	await sleep(200);
 }
 
+/** Wait until the agent is idle (neither the expanded wake-up button nor the
+ * collapsed pill carries the .awake class). Waking while busy is dropped, so
+ * scenarios call this before clicking the wake-up button. Best-effort: gives
+ * up quietly after the timeout. */
+async function waitForAgentIdle(page, timeout = 30_000) {
+	try {
+		await page.waitForFunction(
+			() => !document.querySelector('.header-agent-btn.awake, .dock-agent-btn.awake'),
+			{ timeout }
+		);
+	} catch {
+		/* fall through and try waking anyway */
+	}
+}
+
+/** Expand or collapse the floating agent dock. The dock and the in-situ
+ * review gutter both hug the right edge, so for review/thread shots we
+ * collapse the dock to a pill (unobstructing the gutter cards), and we
+ * expand it only when the dock itself is the subject (interface overview,
+ * chat popover, transcript) or to reach the wake-up button. */
+async function setDockExpanded(page, expanded) {
+	if (expanded) {
+		// Collapsed pill is .dock-agent-btn; clicking it expands the panel.
+		const pill = page.locator('.dock-agent-btn').first();
+		if (await pill.count()) {
+			await pill.click().catch(() => undefined);
+			await sleep(350);
+		}
+	} else {
+		const collapse = page.locator('[aria-label="Collapse dock"]').first();
+		if (await collapse.count()) {
+			await collapse.click().catch(() => undefined);
+			await sleep(350);
+		}
+	}
+}
+
 /** Inject a transparent overlay with labeled bounding boxes on top of
  * the live DocWriter UI, so the captured screenshot can call out the
  * major interface regions by name. Pairs with `clearAnnotations`. */
@@ -308,8 +345,7 @@ async function annotateInterface(page) {
 			{ selector: '.file-tree',           label: 'File tree',            anchor: 'bl' },
 			{ selector: '.outline-pane',        label: 'Outline / TOC',        anchor: 'tl' },
 			{ selector: '.tiptap-content',      label: 'Editor',               anchor: 'bl' },
-			{ selector: '.history-pane',        label: 'History pane',         anchor: 'tr' },
-			{ selector: '.pending-wrap',        label: 'Pending agent edits',  anchor: 'tl' },
+			{ selector: '.history-pane',        label: 'Agent dock',           anchor: 'tr' },
 			{ selector: '.header-agent-btn',    label: 'Wake-up button',       anchor: 'bl' }
 		];
 		const overlay = document.createElement('div');
@@ -480,6 +516,12 @@ async function captureIntroGif(browser, httpPort, ffmpegPath) {
 		viewport: { width: 1200, height: 780 },
 		recordVideo: { dir: videoDir, size: { width: 1200, height: 780 } }
 	});
+	// Expand the dock here too so the agent pill exposes .header-agent-btn
+	// (with its .awake toggle) and the live history log streams in-frame.
+	await gifContext.addInitScript(() => {
+		localStorage.setItem('docwriter.dockExpanded', 'true');
+		localStorage.setItem('docwriter.showFilesPane', 'true');
+	});
 	const page = await gifContext.newPage();
 	try {
 		await page.goto(`http://127.0.0.1:${httpPort}`, { waitUntil: 'domcontentloaded' });
@@ -539,19 +581,24 @@ async function captureIntroGif(browser, httpPort, ffmpegPath) {
 			await page.keyboard.type(chunk, { delay: 38 });
 		}
 
-		const pending = page.locator('.pending-card.round-card').first();
+		const pending = page.locator('.gutter-card').first();
 		try {
 			await pending.waitFor({ state: 'visible', timeout: AGENT_TIMEOUT_MS });
 		} catch {
 			console.log('  pending review never appeared in GIF window');
 			return;
 		}
-		// Brief pause so the viewer can see the review card before accept.
+		// Let the viewer see the agent working in the dock for a beat, then
+		// collapse it (so it doesn't cover the gutter) and expand the card to
+		// reveal the proposed edit before accepting.
+		await sleep(1200);
+		await setDockExpanded(page, false);
+		await pending.click().catch(() => undefined);
 		await sleep(1500);
 
-		// Click Accept on the pending review so the GIF ends with the
+		// Click Accept on the proposed edit so the GIF ends with the
 		// suggestion landing in the document.
-		const acceptBtn = page.locator('.pending-card.round-card .btn-accept').first();
+		const acceptBtn = page.locator('.gutter-card.expanded .mini-btn.accept').first();
 		if (await acceptBtn.count()) {
 			await acceptBtn.click();
 			await sleep(1800);
@@ -602,7 +649,12 @@ async function captureIntroGif(browser, httpPort, ffmpegPath) {
 
 async function captureTranscript(page) {
 	console.log('capturing transcript viewer screenshots...');
-	const transcriptBtn = page.locator('button:has-text("Transcript")').first();
+	// The transcript opener lives in the expanded dock's history-pane header,
+	// so re-expand the dock (review shots above collapsed it).
+	await setDockExpanded(page, true);
+	// The transcript opener is an icon button (no visible text) with an
+	// aria-label.
+	const transcriptBtn = page.locator('[aria-label="Transcript"]').first();
 	if (!(await transcriptBtn.count())) {
 		console.log('  Transcript button not found; skipping');
 		return;
@@ -611,9 +663,8 @@ async function captureTranscript(page) {
 	await sleep(1500);
 	await shot(page, 'transcript-overview.png');
 
-	// Try to expand the first row that has an "expand" affordance to
-	// show what input/output looks like for a single tool call.
-	const expandBtn = page.locator('button:has-text("expand")').first();
+	// Expand all tool calls so the detail shot shows tool input/output.
+	const expandBtn = page.locator('.expand-all-btn').first();
 	if (await expandBtn.count()) {
 		await expandBtn.click().catch(() => undefined);
 		await sleep(700);
@@ -625,8 +676,12 @@ async function captureTranscript(page) {
 
 async function captureCommentThread(page) {
 	console.log('capturing comment thread...');
+	// Close any open thread/popup so the feedback popup opens cleanly for the
+	// new selection.
+	await page.keyboard.press('Escape');
+	await sleep(200);
 	// Triple-click a paragraph to open the inline-feedback popup, switch
-	// to Discuss mode, type a question, submit. The agent posts a comment.
+	// to Comment mode, type a question, submit. The agent posts a comment.
 	const paragraph = page
 		.locator('.tiptap-content p', { hasText: /third paragraph/ })
 		.first();
@@ -636,7 +691,9 @@ async function captureCommentThread(page) {
 	}
 	await paragraph.click({ clickCount: 3 });
 	await sleep(700);
-	const discussChip = page.locator('.mode-chip', { hasText: /^Discuss$/ }).first();
+	// Feedback popup modes are "Edit" (propose an edit) and "Comment" (reply
+	// in a thread, no edit). For a comment thread we want "Comment".
+	const discussChip = page.locator('.mode-chip', { hasText: /^Comment$/ }).first();
 	if (await discussChip.count()) await discussChip.click();
 	await sleep(200);
 	const input = page.locator('.feedback-popup [contenteditable], .feedback-popup textarea').first();
@@ -650,31 +707,59 @@ async function captureCommentThread(page) {
 	if (await goBtn.count()) await goBtn.click();
 	await sleep(2500);
 
-	// Wait for a comment thread to appear in the gutter / margin.
-	const commentMarker = page.locator('.comment-gutter, [class*="comment"]').first();
+	// Target THIS comment thread specifically by its question text — an
+	// earlier scenario may have left an unrelated edit card in the gutter,
+	// and `.gutter-card` `.first()` would grab that instead.
+	const commentCard = page
+		.locator('.gutter-card', { hasText: /close the essay/i })
+		.first();
 	try {
-		await commentMarker.waitFor({ state: 'visible', timeout: AGENT_TIMEOUT_MS });
+		await commentCard.waitFor({ state: 'visible', timeout: AGENT_TIMEOUT_MS });
 	} catch {
 		console.log('  comment thread did not appear in time; skipping');
 		return;
 	}
-	// If there's an indicator, click it to expand the thread inline.
-	await commentMarker.click().catch(() => undefined);
+	// Keep the dock collapsed so it doesn't cover the gutter, then expand the
+	// thread card so its messages render.
+	await setDockExpanded(page, false);
+	await commentCard.click().catch(() => undefined);
+	// Wait for the agent's reply to land in this thread so the shot shows a
+	// real conversation, not just the user's question.
+	try {
+		await commentCard
+			.locator('.message.from-agent')
+			.first()
+			.waitFor({ state: 'visible', timeout: AGENT_TIMEOUT_MS });
+	} catch {
+		console.log('  agent reply not seen in thread; capturing anyway');
+	}
 	await sleep(1200);
 	await shot(page, 'comment-thread.png');
+
+	// Resolve this thread so the next scenario (agent edit) starts with a
+	// clean gutter — one card, no ambiguity about which to capture.
+	const resolveBtn = commentCard.locator('.resolve-link').first();
+	if (await resolveBtn.count()) {
+		await resolveBtn.click().catch(() => undefined);
+		await sleep(600);
+	}
 }
 
 async function captureBlogResearch(page) {
 	console.log('capturing blog-research scenario...');
 	await openFile(page, 'blog-post.md');
+	await setDockExpanded(page, false);
 	await sleep(800);
 	await shot(page, 'blog-post-open.png');
 
 	console.log('  waking agent (web search may take a couple minutes)...');
+	// Expand the dock to reach the wake-up button.
+	await setDockExpanded(page, true);
+	await waitForAgentIdle(page);
 	const agentPill = page.locator('.header-agent-btn').first();
 	await agentPill.click();
 
-	const pending = page.locator('.pending-card.round-card').first();
+	const pending = page.locator('.gutter-card').first();
 	try {
 		await pending.waitFor({ state: 'visible', timeout: AGENT_TIMEOUT_MS });
 	} catch {
@@ -690,6 +775,10 @@ async function captureBlogResearch(page) {
 	} catch {
 		console.log('  agent still working at timeout; capturing anyway');
 	}
+	// Collapse the dock and expand the gutter card so the footnote edit is
+	// visible (and unobstructed) in the shot.
+	await setDockExpanded(page, false);
+	await pending.click().catch(() => undefined);
 	await sleep(1500);
 	await shot(page, 'blog-pending-edit.png');
 }
@@ -742,6 +831,8 @@ async function captureLatex(page, context, fixtureDir, httpPort) {
 	// Wake the agent. The .tex file contains the injected directive; the
 	// agent's auto-handle behavior will pick it up.
 	console.log('  waking agent (this can take a minute for a TikZ figure)...');
+	await setDockExpanded(page, true);
+	await waitForAgentIdle(page);
 	const agentPill = page.locator('.header-agent-btn').first();
 	await agentPill.click();
 
@@ -778,7 +869,7 @@ async function captureLatex(page, context, fixtureDir, httpPort) {
 		{ delay: 35 }
 	);
 
-	const pendingCard = page.locator('.pending-card.round-card').first();
+	const pendingCard = page.locator('.gutter-card').first();
 	try {
 		await pendingCard.waitFor({ state: 'visible', timeout: AGENT_TIMEOUT_MS });
 	} catch {
@@ -798,18 +889,31 @@ async function captureLatex(page, context, fixtureDir, httpPort) {
 	} catch {
 		console.log('  agent still working at timeout; capturing anyway');
 	}
+	// Collapse the dock and expand the gutter card so the proposed edit is
+	// visible (and unobstructed) in the shot — and so the accept loop below
+	// can reach the gutter's Accept buttons.
+	await setDockExpanded(page, false);
+	await page.locator('.gutter-card').first().click().catch(() => undefined);
 	await sleep(1500);
 	await shot(page, 'overleaf-pending-edit.png');
 
-	// Accept all pending reviews in FIFO order. Only the oldest card has
-	// an Accept button visible at any time, so this loop walks through
-	// them. Pending content only reaches disk after acceptance (the disk
-	// flush writes the base text, not pending-review overlays).
-	console.log('  accepting pending reviews so changes land on disk...');
-	for (let i = 0; i < 10; i++) {
-		const acceptBtn = page.locator('.pending-card.round-card .btn-accept').first();
+	// Accept every proposed edit so the changes land on disk. Each gutter
+	// card must be expanded for its Accept buttons to mount; expand a
+	// collapsed card, accept one edit, and repeat until none remain.
+	// Pending content only reaches disk after acceptance (the disk flush
+	// writes the base text, not pending-review overlays).
+	console.log('  accepting proposed edits so changes land on disk...');
+	for (let i = 0; i < 12; i++) {
+		const collapsed = page.locator('.gutter-card:not(.expanded)').first();
+		if (await collapsed.count()) {
+			await collapsed.click().catch(() => undefined);
+			await sleep(400);
+		}
+		const acceptBtn = page
+			.locator('.gutter-card.expanded .mini-btn.accept:not([disabled])')
+			.first();
 		if ((await acceptBtn.count()) === 0) break;
-		await acceptBtn.click();
+		await acceptBtn.click().catch(() => undefined);
 		await sleep(1500);
 	}
 
@@ -853,8 +957,12 @@ async function captureAgentDriven(page) {
 
 	// essay.md should still be open from the structural pass. The seed
 	// contains a [[ ... ]] directive; we just need to wake the agent so
-	// it picks the directive up. The agent pill on the history pane
-	// header triggers a wake-up directly.
+	// it picks the directive up. Expand the dock first (the comment
+	// scenario above left it collapsed) so the wake-up button is mounted.
+	await setDockExpanded(page, true);
+	// A prior scenario may still be finishing; waking the agent while it's
+	// busy is a no-op (the implicit wake-up is dropped), so wait for idle.
+	await waitForAgentIdle(page);
 	const agentPill = page.locator('.header-agent-btn').first();
 	if (!(await agentPill.count())) {
 		console.log('  agent pill not found, skipping');
@@ -863,8 +971,9 @@ async function captureAgentDriven(page) {
 	await agentPill.click();
 	await sleep(500);
 
-	// Wait for the pending review card to appear in the outline pane.
-	const pendingCard = page.locator('.pending-card.round-card').first();
+	// Wait for the agent's edit to land as a card in the margin gutter
+	// (the in-situ review surface; the old right-pane review list is gone).
+	const pendingCard = page.locator('.gutter-card').first();
 	try {
 		await pendingCard.waitFor({ state: 'visible', timeout: AGENT_TIMEOUT_MS });
 	} catch {
@@ -872,7 +981,11 @@ async function captureAgentDriven(page) {
 		console.log('  (check that Claude credentials are available)');
 		return;
 	}
-	await sleep(800);
+	// Collapse the dock so it doesn't cover the gutter card, then expand the
+	// card so the proposed-edit rows and Accept/Reject are visible.
+	await setDockExpanded(page, false);
+	await page.locator('.gutter-card').first().click().catch(() => undefined);
+	await sleep(1000);
 	await shot(page, 'quickstart-pending-edit.png');
 	await shot(page, 'reviewing-edits-pending.png');
 }
@@ -908,6 +1021,14 @@ async function main() {
 		console.log('launching chromium...');
 		browser = await chromium.launch();
 		const context = await browser.newContext({ viewport: VIEWPORT });
+		// The agent dock defaults to a collapsed pill; expand it before any
+		// page loads so the wake-up button (.header-agent-btn), the chat
+		// trigger (.dock-message-btn) and the history pane (.history-pane)
+		// are all mounted for the captures and annotations.
+		await context.addInitScript(() => {
+			localStorage.setItem('docwriter.dockExpanded', 'true');
+			localStorage.setItem('docwriter.showFilesPane', 'true');
+		});
 		context.__httpPort = httpPort;
 		const page = await context.newPage();
 
@@ -915,9 +1036,11 @@ async function main() {
 		if (!SKIP_STRUCTURAL) {
 			await captureStructural(page);
 			if (!SKIP_AGENT) {
-				await captureAgentDriven(page);
-				// Comment thread (uses inline-feedback Discuss mode).
+				// Comment thread FIRST, in a clean single-thread state — it
+				// resolves its own thread at the end so the edit scenario
+				// below also starts clean (one gutter card, unambiguous).
 				await captureCommentThread(page);
+				await captureAgentDriven(page);
 				// Transcript viewer (needs prior agent activity to be
 				// interesting, so it runs after the agent has done work).
 				await captureTranscript(page);
