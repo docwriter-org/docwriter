@@ -25,9 +25,9 @@ import { serializeYDoc, seedYDoc, SYSTEM_ORIGIN } from '$lib/shared/ydoc-codec';
  * we treat a newer mtime as "externally edited". */
 const EXTERNAL_EDIT_SKEW_MS = 2_000;
 
-/** Hydrate a fresh Y.Doc from SQLite. Caller is responsible for constructing
- * any UndoManager BEFORE calling this so replayed transactions fire through
- * it with their original origin. */
+/** Hydrate a fresh Y.Doc from SQLite by replaying its update log. Each update
+ * is applied with its original origin (preserved per row) so any origin-aware
+ * observer sees the same origins it would live. */
 export function replayUpdatesInto(ydoc: Y.Doc, tabId: string): void {
 	const db = getDb();
 	let rows = db
@@ -129,6 +129,14 @@ const FLUSH_TICK_MS = 500;
 const dirtyTabs = new Set<string>();
 let flushTimer: NodeJS.Timeout | null = null;
 let resolveLiveDoc: ((tabId: string) => Y.Doc | null) | null = null;
+/** Last committed markdown we wrote to each tab's file. Lets writeTabFile skip
+ * a no-op rewrite: a pending review round (agent proposal) marks the tab dirty
+ * but does NOT change the committed fragment, so its serialization is
+ * identical. Rewriting anyway would bump the file mtime and trip the CLI
+ * file-watcher → a `reload` event → a full tab remount that closes the open
+ * comment thread and drops the in-doc diff reveal. Skipping identical writes
+ * avoids that churn entirely. */
+const lastWrittenContent = new Map<string, string>();
 
 export function setLiveDocResolver(resolver: (tabId: string) => Y.Doc | null) {
 	resolveLiveDoc = resolver;
@@ -157,9 +165,14 @@ function runFlushTick() {
 
 function writeTabFile(tabId: string, ydoc: Y.Doc) {
 	const content = serializeYDoc(ydoc);
+	// Skip no-op rewrites: a pending review round dirties the tab without
+	// changing the committed text, and rewriting would bump mtime → CLI
+	// watcher reload → tab remount → the open comment thread closes.
+	if (lastWrittenContent.get(tabId) === content) return;
 	const path = tabFile(tabId);
 	mkdirSync(dirname(path), { recursive: true });
 	writeFileSync(path, content);
+	lastWrittenContent.set(tabId, content);
 }
 
 /** Synchronously flush one tab. Clears its pending dirty flag. */
@@ -181,5 +194,6 @@ export function clearDirty(tabId: string) {
  * resurrect the old content. */
 export function purgeTabUpdates(tabId: string) {
 	dirtyTabs.delete(tabId);
+	lastWrittenContent.delete(tabId);
 	getDb().prepare(`DELETE FROM yjs_updates WHERE tab_id = ?`).run(tabId);
 }

@@ -59,6 +59,11 @@ export interface PendingReviewRound {
 	afterMd?: string;
 	/** User-facing prompt or trigger that produced this round. */
 	trigger?: string;
+	/** Comment thread this edit was made in response to, if any. Set when the
+	 * edit was produced during a render triggered by feedback on a thread, so
+	 * the gutter can group an agent's edits under that feedback's card
+	 * (numbered 1, 2, 3…) instead of showing them as loose, separate cards. */
+	feedbackThreadId?: string;
 	timestamp: number;
 	/** Heuristic classification of this round's size, computed at write
 	 * time via a char-count threshold. `tiny` edits (e.g. a typo fix,
@@ -171,22 +176,13 @@ export interface CommentThread {
 	createdAt: number;
 }
 
-/** Routing hint carried from the feedback popup to the agent prompt.
- *  - `auto`: agent decides reply-on-thread vs. edit based on tone.
- *  - `edit`: force an `edit_doc` call (no `reply_to_comment`).
- *  - `discuss`: force a `reply_to_comment` call on the user-opened
- *    thread for this feedback (agents cannot open new threads). */
-export type FeedbackMode = 'auto' | 'edit' | 'discuss';
+/** Routing hint carried from the feedback popup to the agent prompt. Both
+ * modes open a comment thread on the passage (the feedback always persists
+ * as a thread); the mode decides how the agent responds:
+ *  - `edit`: propose an `edit_doc` change (no `reply_to_comment`).
+ *  - `comment`: reply on the thread via `reply_to_comment` — no edit. */
+export type FeedbackMode = 'edit' | 'comment';
 
-export interface Annotation {
-	id: string;
-	tabId: string;
-	excerpt: string;
-	comment: string;
-	from: number;
-	to: number;
-	timestamp: number;
-}
 
 export interface InlineFeedback {
 	text: string;
@@ -283,15 +279,12 @@ export type HistoryEntry =
  *    the current "default to NO edits" posture; `balanced` makes one focused
  *    improvement per round when there's clearly something to do; `aggressive`
  *    proactively rewrites for clarity, tightness, and flow.
- *  - `trackChanges`: when true (default), agent edits land behind the
- *    green/red diff overlay with an Accept/Reject card. When false, the
- *    agent's changes merge silently into the doc — no review step, no
- *    overlay. Ctrl+Z still works because agent ops are then applied with
- *    the default origin (user undo stack).
+ *
+ * Agent edits are ALWAYS tracked: they land behind the green/red diff overlay
+ * as Accept/Reject review rounds. There is no "merge silently" mode.
  */
 export interface AgentSettings {
 	agency: 'conservative' | 'balanced' | 'aggressive';
-	trackChanges: boolean;
 	/** When true, agent edits still land in the pending-review array, but the
 	 * editor's inline diff overlay stays hidden until the user clicks a
 	 * pending card — at which point only that round's decorations render.

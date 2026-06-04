@@ -7,7 +7,7 @@
 	}
 	let { onSettingsChange }: Props = $props();
 
-	let settings: AgentSettings = $state({ agency: 'conservative', trackChanges: true, muted: false });
+	let settings: AgentSettings = $state({ agency: 'conservative', muted: false });
 	agentSettings.subscribe((v) => (settings = v));
 
 	function updateSettings(patch: Partial<AgentSettings>) {
@@ -58,25 +58,6 @@
 		<div class="setting-detail">{autonomyDescription[settings.agency]}</div>
 	</div>
 
-	<div class="settings-section">
-		<label class="toggle-row">
-			<input
-				type="checkbox"
-				checked={settings.trackChanges}
-				onchange={(e) => updateSettings({ trackChanges: e.currentTarget.checked })}
-			/>
-			<span class="toggle-text">
-				<span class="setting-label">Review before applying</span>
-				<span class="setting-hint">
-					{#if settings.trackChanges}
-						Every edit the agent makes is highlighted as a green/red diff. You accept or reject each round before it becomes part of your draft.
-					{:else}
-						The agent's edits merge straight into your draft — no diff, no Accept/Reject step. Your own typing is still undoable with Ctrl-Z, but agent edits land directly in the document.
-					{/if}
-				</span>
-			</span>
-		</label>
-	</div>
 </div>
 
 <style>
@@ -163,25 +144,5 @@
 		background: var(--bg-elevated);
 		color: var(--accent);
 		box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
-	}
-	.toggle-row {
-		display: flex;
-		gap: 10px;
-		align-items: flex-start;
-		cursor: pointer;
-	}
-	.toggle-row input[type="checkbox"] {
-		margin: 3px 0 0;
-		cursor: pointer;
-		width: 14px;
-		height: 14px;
-		flex-shrink: 0;
-	}
-	.toggle-text {
-		flex: 1;
-		min-width: 0;
-	}
-	.toggle-text .setting-hint {
-		margin-bottom: 0;
 	}
 </style>

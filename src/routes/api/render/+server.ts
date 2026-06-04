@@ -33,7 +33,8 @@ import {
 	EDIT_DOC_TOOL_NAME,
 	READ_DOC_TOOL_NAME,
 	WRITE_DOC_TOOL_NAME,
-	REPLY_TO_COMMENT_TOOL_NAME
+	REPLY_TO_COMMENT_TOOL_NAME,
+	setActiveFeedbackThreadId
 } from '$lib/server/mcp-doc-tools';
 
 /** Read the live authoritative markdown for a tab, including any pending
@@ -75,6 +76,34 @@ function readLiveTabCommentThreads(tabId: string): CommentThread[] {
 	try {
 		replayUpdatesInto(ydoc, tabId);
 		return readCommentThreads(ydoc);
+	} finally {
+		ydoc.destroy();
+	}
+}
+
+/** Which comment threads on a tab currently carry a pending edit (a review
+ * round tagged with that thread's id). Lets the prompt flag those threads so
+ * the agent knows a reply there is feedback on an edit it should *revise*,
+ * not a discussion to chat back on. */
+function readLiveTabPendingEditThreadIds(tabId: string): Set<string> {
+	const holder = globalThis as unknown as {
+		__docwriterWsServer?: {
+			hocuspocus?: { documents?: { get(name: string): unknown } };
+		};
+	};
+	const hp = holder.__docwriterWsServer?.hocuspocus;
+	const liveDoc = hp?.documents?.get(tabId) as Y.Doc | undefined;
+	const collect = (doc: Y.Doc) =>
+		new Set(
+			readReviewRounds(doc)
+				.map((r) => r.feedbackThreadId)
+				.filter((id): id is string => typeof id === 'string')
+		);
+	if (liveDoc) return collect(liveDoc);
+	const ydoc = new Y.Doc();
+	try {
+		replayUpdatesInto(ydoc, tabId);
+		return collect(ydoc);
 	} finally {
 		ydoc.destroy();
 	}
@@ -185,7 +214,7 @@ function buildImplicitWakeupMessage(
 
 	lines.push(
 		'',
-		'Read other files or use other tools first if that helps you resolve these correctly. For open tabs, use `read_doc`, `edit_doc`, and `write_doc` instead of the built-in file tools.'
+		'Resolve a directive by replacing its `[[ ... ]]` / `(( ... )) `/ `<< ... >>` marker with the written-out result via `edit_doc` (no `thread_id` — each directive edit opens its own review thread). Read other files or use other tools first if that helps you resolve these correctly. For open tabs, use `read_doc`, `edit_doc`, and `write_doc` instead of the built-in file tools.'
 	);
 	return lines.join('\n');
 }
@@ -233,6 +262,9 @@ interface TabPromptInfo {
 	currentMd: string;
 	lastSeenMd: string | null;
 	commentThreads: CommentThread[];
+	/** Thread ids that currently carry a pending edit (review round). A reply
+	 * on one of these is feedback on an edit to revise, not a chat. */
+	pendingEditThreadIds: string[];
 }
 
 interface QueryRoundOutcome {
@@ -271,7 +303,7 @@ Every file is treated as raw text — including \`.md\` / \`.markdown\`. The edi
 ## How to edit
 
 - For **any workspace file** — whether it's currently an open tab or not — use \`edit_doc\` / \`write_doc\` / \`read_doc\` (NOT the built-in Edit / Write). The \`path\` argument should be the tab id (shown in bold as \`\\\`tabid\\\`\`) or the absolute path shown in each file's "Path:" line.
-- \`edit_doc({ path, old_string, new_string, replace_all? })\` replaces \`old_string\` with \`new_string\`. By default \`old_string\` must match exactly once; pass \`replace_all: true\` to replace every occurrence in a single proposal (good for renames / consistent term updates). If \`path\` points to a workspace file that isn't currently open, it's auto-opened as a new tab.
+- \`edit_doc({ path, old_string, new_string, replace_all?, thread_id? })\` replaces \`old_string\` with \`new_string\`. By default \`old_string\` must match exactly once; pass \`replace_all: true\` to replace every occurrence in a single proposal (good for renames / consistent term updates). If \`path\` points to a workspace file that isn't currently open, it's auto-opened as a new tab. Pass \`thread_id\` when you're **revising the edit a comment thread is about** (the user replied with feedback on a pending edit) — your new proposal lands inside that thread's card and supersedes its current pending edit. Omit \`thread_id\` for a fresh, unsolicited edit; the system opens a thread for it automatically. Base \`old_string\` on the CURRENT document text (what \`read_doc\` returns), never on your own earlier proposal.
 - \`write_doc({ path, content })\` replaces the full content. If the file doesn't exist, write_doc creates it and opens it as a new tab (no review round for brand-new files). If the file exists, the write lands as a pending review proposal.
 - \`read_doc(path)\` returns the current content of any workspace file. For an open tab, it's review-aware: the newest pending proposal if one exists, otherwise the committed content. For a workspace file that isn't currently a tab, it just reads the file from disk. Use it freely on any path the user mentions — don't pre-check whether the file is open.
 - Each \`edit_doc\` / \`write_doc\` call on an existing file creates or updates a reviewable proposal round in the outline. The live document changes only when the user accepts that proposal.
@@ -305,6 +337,8 @@ Do NOT reply WHEN:
 - You're just narrating what you already edited. Review cards speak for themselves.
 - There's no relevant existing thread. You cannot create one.
 
+**The thread already has a pending edit (flagged "has a pending edit" in the Open threads list).** This is the common case and it has a strong default: the user opened/replied on this thread to react to an edit you proposed. Their reply is almost always feedback to act on — "not punchy", "too long", "try again", "more X", "still not right", "do it", "go ahead". In all of these, call \`edit_doc\` with this thread's \`thread_id\` to propose a REVISED edit that addresses the feedback (it supersedes the current one). Do NOT reply with conversational text like "Glad that landed!" or "resolve when you're ready" — that is not a substantive response to feedback on an edit. Reply on a pending-edit thread ONLY when the user is purely asking a question they expect a worded answer to ("why did you cut that?", "what's the difference?") and is clearly NOT requesting a change. When the feedback is contradictory or you genuinely can't tell what change they want, prefer \`AskUserQuestion\` over a chit-chat reply.
+
 Mode override: the user can attach an explicit routing hint to a feedback message — **[mode: auto|edit|discuss]**. When you see \`[mode: edit]\`, do NOT call \`reply_to_comment\`; call \`edit_doc\`. When you see \`[mode: discuss]\`, do NOT call \`edit_doc\`; reply on the user's thread for that feedback via \`reply_to_comment\`. When you see \`[mode: auto]\` or no mode tag, use your judgment per the rules above: if the feedback can be resolved with a concrete edit, edit only; if the user is asking for judgment or discussion AND a thread exists, reply only. Do not combine \`edit_doc\` and \`reply_to_comment\` for the same feedback unless the user explicitly asks for both.
 
 When replying:
@@ -314,7 +348,7 @@ When replying:
 - If you want to sketch a concrete edit for the user to approve, pass \`proposed_edit\` — the UI turns it into an "Approve & propose edit" button.
 - Always pass the existing thread's \`thread_id\`. Open thread transcripts are listed under each tab.
 
-When the same user message carries both a clear directive AND ambient uncertainty ("rewrite this — actually, idk, what do you think?"), lean toward replying first (if there's a thread) and offering the edit in \`proposed_edit\`. Cheap to apply later, costly to rewrite past prose the user isn't sure they want rewritten.
+When the same user message carries both a clear directive AND ambient uncertainty ("rewrite this — actually, idk, what do you think?"), lean toward replying first (if there's a thread) and offering the edit in \`proposed_edit\`. Cheap to apply later, costly to rewrite past prose the user isn't sure they want rewritten. (This does NOT apply when the thread already has a pending edit — there, feedback means revise the edit, per the rule above.)
 
 ## What you can read vs. what you can write
 
@@ -422,18 +456,29 @@ No tab content is inlined in the per-turn prompt — only diffs since your last 
  * turn. read_doc-on-demand is one extra tool round-trip when the agent
  * needs the file, but most edits start from a diff anyway.
  */
-/** Render a tab's open comment threads as a lightweight stub block.
- * Only thread IDs and anchor quotes are inlined — no message content.
- * The agent calls `list_threads(path)` to read the actual conversations
- * on demand, keeping the recurring prompt lean regardless of thread count. */
-function renderCommentThreadsBlock(threads: CommentThread[]): string {
+/** Render a tab's open comment threads as a lightweight stub block. Each
+ * thread shows the EXACT passage the user commented on (its anchor quote) so
+ * the agent knows precisely where to edit — a comment is usually a request to
+ * revise that quoted passage. Message content is not inlined; the agent calls
+ * `list_threads(path)` to read the conversation, keeping the prompt lean. */
+function renderCommentThreadsBlock(
+	threads: CommentThread[],
+	pendingEditThreadIds: string[] = []
+): string {
 	const open = threads.filter((t) => !t.resolved);
 	if (open.length === 0) return '';
-	const lines: string[] = ['', `Open threads (${open.length}):`];
+	const pending = new Set(pendingEditThreadIds);
+	const lines: string[] = [
+		'',
+		`Open threads (${open.length}) — each is a passage the user commented on. The comment is usually a REQUEST to revise that exact passage. To act on one, call \`edit_doc(thread_id="…")\` and edit the quoted text itself — NOT a different part of the document, and not an unrelated \`[[ ]]\` directive. Call \`list_threads("<tabId>")\` for the full conversation before acting.`
+	];
 	for (const thread of open) {
-		const quote = thread.anchor.quote.replace(/\n+/g, ' ').slice(0, 100);
-		const ellipsis = thread.anchor.quote.length > 100 ? '…' : '';
-		lines.push(`- \`${thread.id}\` on "${quote}${ellipsis}"`);
+		const quote = thread.anchor.quote.replace(/\n+/g, ' ').slice(0, 120);
+		const ellipsis = thread.anchor.quote.length > 120 ? '…' : '';
+		const editNote = pending.has(thread.id)
+			? ' — **has a pending edit.** A reply here is feedback on that edit: call `edit_doc` with `thread_id` set to this id to propose a REVISED edit of the quoted passage (it supersedes the current one). Do not reply with chit-chat unless the user is only asking a question.'
+			: '';
+		lines.push(`- \`${thread.id}\` — user commented on this passage: "${quote}${ellipsis}"${editNote}`);
 	}
 	return '\n' + lines.join('\n');
 }
@@ -520,13 +565,13 @@ function buildMultiTabPrompt(
 	const tabSections = tabs.length === 0
 		? 'No files are open as tabs. Use `Read` / `Glob` / `Grep` to explore the workspace; use `edit_doc({ path, ... })` to edit, or `write_doc({ path, ... })` to create a file (the path argument is the workspace-relative path).'
 		: tabs
-				.map(({ tabId, currentMd, lastSeenMd, commentThreads }) => {
+				.map(({ tabId, currentMd, lastSeenMd, commentThreads, pendingEditThreadIds }) => {
 					const isActive = tabId === activeTabId;
 					const hasLastSeen = lastSeenMd !== null;
 					const hasDiff = hasLastSeen && lastSeenMd !== currentMd;
 					const activeNote = isActive ? ' [active]' : '';
 					const header = `### \`${tabId}\`${activeNote}\n\nPath: \`${tabId}\``;
-					const threadBlock = renderCommentThreadsBlock(commentThreads);
+					const threadBlock = renderCommentThreadsBlock(commentThreads, pendingEditThreadIds);
 
 					if (!hasLastSeen) {
 						return `${header}\n\nNew — call \`read_doc("${tabId}")\` to read it.${threadBlock}`;
@@ -751,7 +796,8 @@ export const POST: RequestHandler = async ({ request }) => {
 			tabId: id,
 			currentMd: readLiveTabMarkdown(id),
 			lastSeenMd: kvGet(lastSeenKey(id)),
-			commentThreads: readLiveTabCommentThreads(id)
+			commentThreads: readLiveTabCommentThreads(id),
+			pendingEditThreadIds: [...readLiveTabPendingEditThreadIds(id)]
 		}));
 
 		const currentSessionId = getSessionId();
@@ -987,7 +1033,11 @@ export const POST: RequestHandler = async ({ request }) => {
 									text: anyMsg.text,
 									priority: anyMsg.priority
 								});
-							} else if (anyMsg.subtype === 'task_started' && !anyMsg.skip_transcript) {
+							} else if (anyMsg.subtype === 'task_started') {
+								// Always surface the start — otherwise (when the SDK
+								// marks it skip_transcript) the user sees "Subagent
+								// completed" with no matching "started", which reads
+								// as the work appearing from nowhere.
 								send('task_event', {
 									taskId: anyMsg.task_id,
 									phase: 'started',
@@ -1143,6 +1193,17 @@ export const POST: RequestHandler = async ({ request }) => {
 					// on the first scratch write). No render-start mkdir here
 					// — otherwise a `.docwriter/agent/` dir gets created on
 					// every render even when the agent never writes scratch.
+					//
+					// When this render was triggered by feedback/reply on a thread
+					// (the trigger carries `thread_id="…"`), make that thread the
+					// default for any edit the agent proposes, so its edit attaches
+					// to the user's feedback thread instead of spawning a separate
+					// one. The agent can still override per-edit via edit_doc's
+					// `thread_id` arg. A spontaneous wake-up has no `thread_id`, so
+					// this is null there and each edit opens its own thread.
+					const feedbackThreadId = message.match(/thread_id="([^"]+)"/)?.[1] ?? null;
+					setActiveFeedbackThreadId(feedbackThreadId);
+					try {
 					const firstOutcome = await runQueryRound(prompt, images);
 					if (
 						isImplicitWakeup &&
@@ -1155,7 +1216,8 @@ export const POST: RequestHandler = async ({ request }) => {
 								tabId: id,
 								currentMd: readLiveTabMarkdown(id),
 								lastSeenMd: kvGet(lastSeenKey(id)),
-								commentThreads: readLiveTabCommentThreads(id)
+								commentThreads: readLiveTabCommentThreads(id),
+								pendingEditThreadIds: [...readLiveTabPendingEditThreadIds(id)]
 							})),
 							[
 								'You just ended without proposing an edit, but the active tab still contains inline directives (`[[ ... ]]`, `(( ... ))`, or `<< ... >>`).',
@@ -1166,6 +1228,9 @@ export const POST: RequestHandler = async ({ request }) => {
 						);
 						send('directive_retry', {});
 						await runQueryRound(retryPrompt);
+					}
+					} finally {
+						setActiveFeedbackThreadId(null);
 					}
 				} catch (err) {
 					// Plan-mode aborts the controller from canUseTool once we've

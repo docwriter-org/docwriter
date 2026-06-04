@@ -3,9 +3,9 @@
 	import { flip } from 'svelte/animate';
 	import { cubicOut } from 'svelte/easing';
 	import { marked } from 'marked';
-	import { FileEdit, User, Bot, Play, CheckCircle, XCircle, Eye, Terminal, Maximize2, X, RotateCcw, MessagesSquare, Cat, Sparkles, BellOff, Bell } from 'lucide-svelte';
-	import type { HistoryEntry, Annotation } from '$lib/types';
-	import { agentHistory, annotations, isRendering, historyVerbosity, sessionCost, agentSettings, pendingReviewRounds, submitCountdown, type SessionCost } from '$lib/stores';
+	import { FileEdit, User, Bot, Play, CheckCircle, XCircle, Eye, Terminal, Maximize2, X, RotateCcw, MessagesSquare, Cat, Sparkles, BellOff, Bell, ChevronDown } from 'lucide-svelte';
+	import type { HistoryEntry } from '$lib/types';
+	import { agentHistory, isRendering, historyVerbosity, sessionCost, agentSettings, pendingReviewRounds, submitCountdown, type SessionCost } from '$lib/stores';
 	import type { HistoryVerbosity } from '$lib/stores';
 	import { onMount, onDestroy, type Snippet } from 'svelte';
 	import SessionViewer from './SessionViewer.svelte';
@@ -22,10 +22,13 @@
 		 * in the pending-review array but the editor's inline diff overlay
 		 * stays hidden until the user clicks a pending card. */
 		onToggleMuted?: () => void;
+		/** When provided, a chevron-down button is shown that collapses the
+		 * floating dock back to its pill (AgentDockShell). */
+		onCollapse?: () => void;
 		/** Optional slot for the remaining action buttons (Send, etc.). */
 		dock?: Snippet;
 	}
-	let { onNewSession, onWakeUp, onCancel, onToggleMuted, dock }: Props = $props();
+	let { onNewSession, onWakeUp, onCancel, onToggleMuted, onCollapse, dock }: Props = $props();
 
 	let pendingCount = $state(0);
 	pendingReviewRounds.subscribe((v) => (pendingCount = v.length));
@@ -33,8 +36,6 @@
 	let entries: HistoryEntry[] = $state([]);
 	agentHistory.subscribe((v) => (entries = v));
 
-	let annos: Annotation[] = $state([]);
-	annotations.subscribe((v) => (annos = v));
 
 	let cost = $state<SessionCost>({
 		totalCostUsd: 0,
@@ -52,10 +53,8 @@
 	// after the last user keystroke). 0 = no countdown active.
 	let countdown = $state(0);
 	submitCountdown.subscribe((v) => (countdown = v));
-	let silent = $state(false);
 	let muted = $state(false);
 	agentSettings.subscribe((v) => {
-		silent = !v.trackChanges;
 		muted = v.muted;
 	});
 
@@ -289,7 +288,6 @@
 				<button
 					class="header-agent-btn header-pill-btn"
 					class:awake={rendering}
-					class:silent
 					class:pending={!rendering && pendingCount > 0}
 					onclick={rendering ? onCancel : onWakeUp}
 					disabled={rendering ? !onCancel : !onWakeUp}
@@ -298,7 +296,7 @@
 					<span class="mascot-face" aria-hidden="true">
 						<Cat size={13} strokeWidth={1.8} />
 					</span>
-					<span class="header-label" class:silent>Agent</span>
+					<span class="header-label">Agent</span>
 					<span class="header-status" aria-hidden="true">
 						{#if rendering}
 							<span class="bounce-dots"><span>.</span><span>.</span><span>.</span></span>
@@ -347,6 +345,16 @@
 					<RotateCcw size={12} />
 					<span>Restart</span>
 				</button>
+				{#if onCollapse}
+					<button
+						class="header-pill-btn icon-only"
+						onclick={onCollapse}
+						aria-label="Collapse dock"
+						use:tooltip={'Collapse the agent dock to a pill.'}
+					>
+						<ChevronDown size={12} />
+					</button>
+				{/if}
 			</div>
 		{/if}
 	</div>
@@ -668,9 +676,6 @@
 		text-transform: uppercase;
 		color: var(--text-faint);
 		flex: 0 0 auto;
-	}
-	.header-label.silent {
-		color: #b45309;
 	}
 	/* Status indicator — `zzz` while idle, bouncing dots while rendering.
 	 * Sits adjacent to the "Agent" label since it describes the agent's

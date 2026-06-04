@@ -50,22 +50,10 @@
 	let active = $state<string | null>(null);
 	activeTab.subscribe((v) => (active = v));
 
-	/** Visual order: pending (non-active) tabs float to sit immediately after
-	 * the active tab so they're always visible without scrolling. The
-	 * underlying store order is never mutated — this is display-only. */
-	let displayList = $derived.by(() => {
-		if (!pendingTabs || pendingTabs.size === 0) return tabList;
-		const pendingIds = new Set(
-			[...(pendingTabs.entries())].filter(([, n]) => n > 0).map(([id]) => id)
-		);
-		// Keep active tab in its natural position; pull other pending tabs out.
-		const base = tabList.filter((id) => !pendingIds.has(id) || id === active);
-		const floaters = tabList.filter((id) => pendingIds.has(id) && id !== active);
-		if (floaters.length === 0) return tabList;
-		// Insert floaters immediately after the active tab (or at front if no active).
-		const insertAt = active ? base.indexOf(active) + 1 : 0;
-		return [...base.slice(0, insertAt), ...floaters, ...base.slice(insertAt)];
-	});
+	/** Tabs keep their natural (creation) order — switching tabs only changes
+	 * which one is active, it doesn't reshuffle positions. A pending tab is
+	 * surfaced by its dot in place, not by floating it to the front. */
+	let displayList = $derived(tabList);
 
 	// Inline rename
 	let renamingId = $state<string | null>(null);
@@ -288,15 +276,16 @@
 		position: relative;
 		display: flex;
 		align-items: flex-end;
-		gap: 1px;
-		padding: 6px 10px 0;
-		background: var(--pane-bg);
+		gap: 2px;
+		padding: 0;
+		/* Sits on the app canvas; the active tab is a white page-tab that
+		 * connects to the document sheet directly below it. */
+		background: transparent;
 		overflow-x: auto;
 		overflow-y: hidden;
 		scrollbar-width: thin;
-		min-height: 34px;
+		min-height: 30px;
 		flex-shrink: 0;
-		border-bottom: 1px solid var(--border-light);
 	}
 	.tab {
 		position: relative;
@@ -325,8 +314,9 @@
 		background: var(--bg);
 		color: var(--text);
 		border-color: var(--border-light);
-		border-bottom-color: var(--bg); /* blends into editor */
+		border-bottom-color: var(--bg); /* connects into the page sheet below */
 		font-weight: 500;
+		box-shadow: 0 -1px 3px rgba(0, 0, 0, 0.04);
 	}
 	.tab-name {
 		overflow: hidden;
