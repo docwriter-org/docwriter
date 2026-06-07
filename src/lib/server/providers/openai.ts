@@ -48,8 +48,9 @@ function buildAgentTools(defs: ToolDefinition[]): any[] {
 			name: def.name,
 			description: def.description,
 			parameters: def.inputSchema,
-			execute: async (_ctx: any, args: any) => {
-				const result = await def.execute(args);
+			strict: false,
+			execute: async (input: any) => {
+				const result = await def.execute(input);
 				const text = result.content.map((c) => c.text).join('\n');
 				if (result.isError) throw new Error(text);
 				return text;

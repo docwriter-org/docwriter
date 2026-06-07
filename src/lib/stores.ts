@@ -304,9 +304,21 @@ export function setSelectedModel(id: string) {
 export function setSelectedProvider(id: string) {
 	selectedProvider.set(id);
 	if (typeof window !== 'undefined') window.localStorage.setItem(SELECTED_PROVIDER_KEY, id);
+	loadAvailableModels().then(() => {
+		let models: ModelOption[] = [];
+		availableModels.subscribe((v) => (models = v))();
+		const forProvider = models.filter((m) => m.provider === id);
+		if (forProvider.length > 0) {
+			let current = '';
+			selectedModel.subscribe((v) => (current = v))();
+			if (!forProvider.some((m) => m.id === current)) {
+				setSelectedModel(forProvider[0].id);
+			}
+		}
+	});
 }
 
-/** Fetch the live model list from `/api/models`. Optionally filter by provider. */
+/** Fetch the live model list from `/api/models`. */
 export async function loadAvailableModels(providerId?: string) {
 	if (typeof window === 'undefined') return;
 	try {
@@ -316,7 +328,16 @@ export async function loadAvailableModels(providerId?: string) {
 		const res = await fetch(url);
 		if (!res.ok) return;
 		const data = (await res.json()) as { models?: ModelOption[]; defaultModel?: string };
-		if (data.models?.length) availableModels.set(data.models);
+		if (data.models?.length) {
+			if (providerId) {
+				let existing: ModelOption[] = [];
+				availableModels.subscribe((v) => (existing = v))();
+				const otherProviders = existing.filter((m) => m.provider !== providerId);
+				availableModels.set([...otherProviders, ...data.models]);
+			} else {
+				availableModels.set(data.models);
+			}
+		}
 		if (!storedModel && data.defaultModel) selectedModel.set(data.defaultModel);
 	} catch {
 		// Keep the fallback list / current selection.
