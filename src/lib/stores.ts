@@ -271,7 +271,8 @@ export const AVAILABLE_PROVIDERS: ProviderOption[] = [
 	{ id: 'claude', label: 'Claude' },
 	{ id: 'openai', label: 'OpenAI' },
 	{ id: 'cursor', label: 'Cursor' },
-	{ id: 'pi', label: 'Pi' }
+	{ id: 'pi', label: 'Pi' },
+	{ id: 'opencode', label: 'OpenCode' }
 ];
 
 /** Newest-first static list, shown immediately on load and used as the

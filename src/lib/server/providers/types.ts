@@ -10,7 +10,7 @@
 
 // ── Provider identification ─────────────────────────────────────────────────
 
-export type ProviderId = 'claude' | 'openai' | 'cursor' | 'pi';
+export type ProviderId = 'claude' | 'openai' | 'cursor' | 'pi' | 'opencode';
 
 export interface ProviderModelOption {
 	id: string;
