@@ -269,7 +269,7 @@ export type ModelOption = { id: string; label: string; provider?: string };
 export type ProviderOption = { id: string; label: string };
 export const AVAILABLE_PROVIDERS: ProviderOption[] = [
 	{ id: 'claude', label: 'Claude' },
-	{ id: 'openai', label: 'OpenAI Codex' },
+	{ id: 'openai', label: 'OpenAI' },
 	{ id: 'cursor', label: 'Cursor' }
 ];
 
