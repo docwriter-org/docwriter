@@ -18,6 +18,7 @@ let sdkLoaded = false;
 let Agent: any = null;
 let run: any = null;
 let tool: any = null;
+let MemorySession: any = null;
 
 async function loadSdk() {
 	if (sdkLoaded) return;
@@ -26,6 +27,8 @@ async function loadSdk() {
 		Agent = sdk.Agent;
 		run = sdk.run;
 		tool = sdk.tool;
+		const core = await import('@openai/agents-core');
+		MemorySession = core.MemorySession;
 		sdkLoaded = true;
 	} catch (err) {
 		throw new Error(
@@ -61,6 +64,7 @@ function buildAgentTools(defs: ToolDefinition[]): any[] {
 
 export class OpenAIAgentsProvider implements AgentProvider {
 	readonly id = 'openai' as const;
+	private session: any = null;
 
 	async *query(
 		options: ProviderQueryOptions,
@@ -84,7 +88,14 @@ export class OpenAIAgentsProvider implements AgentProvider {
 			tools: agentTools
 		});
 
-		const streamResult = await run(agent, options.prompt, { stream: true });
+		if (!this.session) {
+			this.session = new MemorySession();
+		}
+
+		const streamResult = await run(agent, options.prompt, {
+			stream: true,
+			session: this.session
+		});
 
 		if (streamResult.id) {
 			yield { type: 'session', sessionId: streamResult.id };
