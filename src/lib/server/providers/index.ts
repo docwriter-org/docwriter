@@ -19,6 +19,10 @@ async function createProvider(id: ProviderId): Promise<AgentProvider> {
 			const { OpenAIAgentsProvider } = await import('./openai');
 			return new OpenAIAgentsProvider();
 		}
+		case 'pi': {
+			const { PiProvider } = await import('./pi');
+			return new PiProvider();
+		}
 		default:
 			throw new Error(`Unknown provider: ${id}`);
 	}
@@ -34,7 +38,7 @@ export async function getProvider(id: ProviderId = 'claude'): Promise<AgentProvi
 
 export async function listAllModels(): Promise<ProviderModelOption[]> {
 	const all: ProviderModelOption[] = [];
-	for (const id of ['claude', 'openai', 'cursor'] as ProviderId[]) {
+	for (const id of ['claude', 'openai', 'cursor', 'pi'] as ProviderId[]) {
 		try {
 			const p = await getProvider(id);
 			const models = await p.listModels();

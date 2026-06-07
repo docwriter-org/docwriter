@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import type { RequestHandler } from './$types';
 import { getSessionId, getLastSystemPrompt } from '$lib/server/runtime-state';
+import { kvGet, dbGetConversationEvents } from '$lib/server/db-writes';
 
 let _getSessionMessages: ((id: string, opts: any) => Promise<any>) | null = null;
 async function loadGetSessionMessages() {
@@ -19,48 +20,40 @@ async function loadGetSessionMessages() {
 	}
 }
 
-/** Encode a filesystem path the same way the Claude SDK does when creating its
- * `~/.claude/projects/<encoded>/<sessionId>.jsonl` file layout. */
 function encodeProjectPath(absPath: string): string {
 	return absPath.replace(/[^a-zA-Z0-9]/g, '-');
 }
 
-/**
- * Return the raw JSONL entries for the current agent session.
- *
- * The Claude SDK stores a full transcript of every session at
- *   ~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl
- *
- * We read that file directly rather than going through the SDK's
- * `getSessionMessages` wrapper, which applies its own filtering and limit
- * and can silently truncate a long conversation. The raw JSONL has all
- * message types the SDK writes: user, assistant, system, ai-title, etc.
- * The SessionViewer component filters down to the relevant conversation
- * entries on the client side.
- *
- * Falls back to `getSessionMessages` when the JSONL file can't be found
- * (e.g. very first session before any messages have been written).
- */
 export const GET: RequestHandler = async () => {
 	const systemPrompt = getLastSystemPrompt();
-
 	const sessionId = getSessionId();
-	if (!sessionId) return json({ sessionId: null, raw: [], messages: [], systemPrompt });
+	const provider = kvGet('provider') || 'claude';
 
-	// Try the direct JSONL path first.
+	if (!sessionId) return json({ sessionId: null, raw: [], messages: [], systemPrompt, provider });
+
+	// Non-Claude providers: load from the conversation_events DB table.
+	if (provider !== 'claude') {
+		const events = dbGetConversationEvents(sessionId);
+		const raw = events.map((e) => {
+			try { return JSON.parse(e.data); } catch { return null; }
+		}).filter(Boolean);
+		return json({ sessionId, raw, messages: [], systemPrompt, provider });
+	}
+
+	// Claude: try the direct JSONL path first.
 	const encodedCwd = encodeProjectPath(process.cwd());
 	const jsonlPath = join(homedir(), '.claude', 'projects', encodedCwd, `${sessionId}.jsonl`);
 
 	if (existsSync(jsonlPath)) {
 		try {
 			const raw = await readJsonlFile(jsonlPath);
-			return json({ sessionId, raw, systemPrompt });
+			return json({ sessionId, raw, systemPrompt, provider });
 		} catch (e) {
 			console.error('[history] raw JSONL read failed:', e);
 		}
 	}
 
-	// Fallback: SDK wrapper (returns formatted messages, not raw entries).
+	// Fallback: SDK wrapper.
 	try {
 		const getSessionMessages = await loadGetSessionMessages();
 		if (getSessionMessages) {
@@ -68,12 +61,22 @@ export const GET: RequestHandler = async () => {
 				dir: process.cwd(),
 				limit: 500
 			});
-			return json({ sessionId, raw: [], messages, systemPrompt });
+			return json({ sessionId, raw: [], messages, systemPrompt, provider });
 		}
 	} catch (e) {
 		console.error('[history] getSessionMessages failed:', e);
 	}
-	return json({ sessionId, raw: [], messages: [], systemPrompt });
+
+	// Final fallback: check conversation_events anyway (maybe provider was switched)
+	const events = dbGetConversationEvents(sessionId);
+	if (events.length > 0) {
+		const raw = events.map((e) => {
+			try { return JSON.parse(e.data); } catch { return null; }
+		}).filter(Boolean);
+		return json({ sessionId, raw, messages: [], systemPrompt, provider });
+	}
+
+	return json({ sessionId, raw: [], messages: [], systemPrompt, provider });
 };
 
 function readJsonlFile(filePath: string): Promise<unknown[]> {

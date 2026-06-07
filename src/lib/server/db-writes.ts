@@ -158,6 +158,48 @@ export function kvSet(key: string, value: string) {
 	}
 }
 
+export function dbAppendConversationEvent(
+	session: string,
+	provider: string,
+	event: string,
+	data: string
+) {
+	try {
+		getDb()
+			.prepare(
+				'INSERT INTO conversation_events (session, provider, event, data, created) VALUES (?, ?, ?, ?, ?)'
+			)
+			.run(session, provider, event, data, Date.now());
+	} catch (err) {
+		logDbError('appendConversationEvent', err);
+	}
+}
+
+export function dbGetConversationEvents(
+	session: string
+): Array<{ event: string; data: string; created: number }> {
+	try {
+		return getDb()
+			.prepare(
+				'SELECT event, data, created FROM conversation_events WHERE session = ? ORDER BY id ASC'
+			)
+			.all(session) as Array<{ event: string; data: string; created: number }>;
+	} catch (err) {
+		logDbError('getConversationEvents', err);
+		return [];
+	}
+}
+
+export function dbClearConversationEvents(session: string) {
+	try {
+		getDb()
+			.prepare('DELETE FROM conversation_events WHERE session = ?')
+			.run(session);
+	} catch (err) {
+		logDbError('clearConversationEvents', err);
+	}
+}
+
 export function dbReplaceHooks(hooks: Hook[]) {
 	try {
 		const db = getDb();

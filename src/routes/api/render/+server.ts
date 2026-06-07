@@ -19,7 +19,7 @@ import {
 import { runHookCommand, type HookRunEmitter } from '$lib/server/hook-runner';
 import { getSessionId, setSessionId, setLastSystemPrompt, getTabsState } from '$lib/server/runtime-state';
 import { readMeta } from '$lib/server/document-io';
-import { kvGet, kvSet } from '$lib/server/db-writes';
+import { kvGet, kvSet, dbAppendConversationEvent } from '$lib/server/db-writes';
 import { serializeYDoc, readReviewRounds, readCommentThreads } from '$lib/shared/ydoc-codec';
 import type { CommentThread } from '$lib/types';
 import { replayUpdatesInto } from '$lib/server/ydoc-persistence';
@@ -687,6 +687,7 @@ export const POST: RequestHandler = async ({ request }) => {
 			provider?: string;
 		};
 		const providerId = (providerIdRaw || 'claude') as ProviderId;
+		kvSet('provider', providerId);
 
 		const allTabIds = getTabsState().order;
 		// `active` is nullable: the user can message the agent with zero tabs
@@ -749,12 +750,23 @@ export const POST: RequestHandler = async ({ request }) => {
 				const encoder = new TextEncoder();
 				const renderStart = Date.now();
 
+				const persistableEvents = new Set([
+					'assistant_text', 'assistant_thinking', 'tool_call_start',
+					'tool_call', 'tool_result', 'cost', 'session', 'error',
+					'rule_proposal', 'hook_proposal'
+				]);
+
 				function send(event: string, data: unknown) {
+					const payload = { ...(data as object), _elapsed: Date.now() - renderStart };
 					controller.enqueue(
 						encoder.encode(
-							`event: ${event}\ndata: ${JSON.stringify({ ...(data as object), _elapsed: Date.now() - renderStart })}\n\n`
+							`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`
 						)
 					);
+					if (providerId !== 'claude' && persistableEvents.has(event)) {
+						const sid = getSessionId() || `${providerId}_${renderStart}`;
+						dbAppendConversationEvent(sid, providerId, event, JSON.stringify(payload));
+					}
 				}
 
 				const hooks = buildHooks((entry) => send('hook_run', entry));
@@ -887,6 +899,13 @@ export const POST: RequestHandler = async ({ request }) => {
 						}
 
 						return { usedDocMutationTool };
+					}
+
+					if (providerId !== 'claude' && userMessage) {
+						const sid = getSessionId() || `${providerId}_${renderStart}`;
+						dbAppendConversationEvent(sid, providerId, 'user_message', JSON.stringify({
+							type: 'user_message', text: userMessage, timestamp: renderStart
+						}));
 					}
 
 					const feedbackThreadId = message.match(/thread_id="([^"]+)"/)?.[1] ?? null;

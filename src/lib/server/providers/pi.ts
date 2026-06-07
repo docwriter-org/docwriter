@@ -1,0 +1,258 @@
+/**
+ * Pi coding agent SDK provider adapter.
+ *
+ * Uses @earendil-works/pi-coding-agent with createAgentSession() +
+ * session.prompt() + session.subscribe(). Tools are registered via
+ * defineTool() with typebox schemas. The SDK handles the agent loop,
+ * tool calling, and streaming events natively.
+ */
+import type {
+	AgentProvider,
+	ProviderEvent,
+	ProviderModelOption,
+	ProviderQueryOptions,
+	ToolDefinition
+} from './types';
+import { buildToolDefinitions } from './tool-handlers';
+
+let sdkLoaded = false;
+let createAgentSession: any = null;
+let defineTool: any = null;
+let SessionManager: any = null;
+let AuthStorage: any = null;
+let ModelRegistry: any = null;
+let getModel: any = null;
+let Type: any = null;
+
+async function loadSdk() {
+	if (sdkLoaded) return;
+	try {
+		const sdk = await import('@earendil-works/pi-coding-agent');
+		createAgentSession = sdk.createAgentSession;
+		defineTool = sdk.defineTool;
+		SessionManager = sdk.SessionManager;
+		AuthStorage = sdk.AuthStorage;
+		ModelRegistry = sdk.ModelRegistry;
+
+		const ai = await import('@earendil-works/pi-ai');
+		getModel = ai.getModel;
+
+		const tb = await import('@sinclair/typebox');
+		Type = tb.Type;
+
+		sdkLoaded = true;
+	} catch (err) {
+		throw new Error(
+			'@earendil-works/pi-coding-agent is not installed. Run: npm install @earendil-works/pi-coding-agent @earendil-works/pi-ai @sinclair/typebox\n' +
+			(err as Error).message
+		);
+	}
+}
+
+const FALLBACK_MODELS: ProviderModelOption[] = [
+	{ id: 'claude-opus-4-5', label: 'Claude Opus 4.5 (Pi)', provider: 'pi' },
+	{ id: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5 (Pi)', provider: 'pi' },
+	{ id: 'gpt-4o', label: 'GPT-4o (Pi)', provider: 'pi' },
+	{ id: 'deepseek-r1', label: 'DeepSeek R1 (Pi)', provider: 'pi' }
+];
+
+function jsonSchemaToTypebox(schema: any): any {
+	if (!schema || schema.type !== 'object') return Type.Object({});
+	const props: Record<string, any> = {};
+	for (const [key, val] of Object.entries(schema.properties ?? {})) {
+		const s = val as any;
+		const desc = s.description ? { description: s.description } : {};
+		switch (s.type) {
+			case 'string':
+				props[key] = Type.String(desc);
+				break;
+			case 'boolean':
+				props[key] = Type.Boolean(desc);
+				break;
+			case 'number':
+			case 'integer':
+				props[key] = Type.Number(desc);
+				break;
+			case 'object':
+				props[key] = jsonSchemaToTypebox(s);
+				break;
+			default:
+				props[key] = Type.String(desc);
+		}
+		if (!schema.required?.includes(key)) {
+			props[key] = Type.Optional(props[key]);
+		}
+	}
+	return Type.Object(props);
+}
+
+function buildPiTools(defs: ToolDefinition[]): any[] {
+	return defs.map((def) =>
+		defineTool({
+			name: def.name,
+			label: def.name,
+			description: def.description,
+			parameters: jsonSchemaToTypebox(def.inputSchema),
+			execute: async (_toolCallId: string, params: any) => {
+				const result = await def.execute(params);
+				return {
+					content: result.content,
+					details: {}
+				};
+			}
+		})
+	);
+}
+
+export class PiProvider implements AgentProvider {
+	readonly id = 'pi' as const;
+	private session: any = null;
+
+	async *query(
+		options: ProviderQueryOptions,
+		tools: ToolDefinition[]
+	): AsyncIterable<ProviderEvent> {
+		await loadSdk();
+
+		const allTools = tools.length > 0 ? tools : buildToolDefinitions();
+		const piTools = buildPiTools(allTools);
+
+		const authStorage = AuthStorage.create();
+		const modelRegistry = ModelRegistry.create(authStorage);
+
+		const sessionOpts: any = {
+			sessionManager: SessionManager.inMemory(),
+			authStorage,
+			modelRegistry,
+			customTools: piTools,
+			noTools: 'builtin'
+		};
+
+		if (options.model) {
+			try {
+				const [provider, modelId] = options.model.includes('/')
+					? options.model.split('/', 2)
+					: ['anthropic', options.model];
+				sessionOpts.model = getModel(provider, modelId);
+			} catch {
+				// Fall through to default model
+			}
+		}
+
+		const { session } = await createAgentSession(sessionOpts);
+		this.session = session;
+
+		if (session.sessionId) {
+			yield { type: 'session', sessionId: session.sessionId };
+		}
+
+		const events: ProviderEvent[] = [];
+		let resolveWait: (() => void) | null = null;
+		let done = false;
+
+		const unsubscribe = session.subscribe((event: any) => {
+			switch (event.type) {
+				case 'message_update': {
+					const ame = event.assistantMessageEvent;
+					if (ame?.type === 'text_delta' && ame.delta) {
+						events.push({ type: 'assistant_text', text: ame.delta });
+					} else if (ame?.type === 'thinking_delta' && ame.delta) {
+						events.push({ type: 'assistant_thinking', text: ame.delta });
+					}
+					break;
+				}
+				case 'tool_execution_start': {
+					const callId = event.toolCallId || `pi_tool_${Date.now()}`;
+					events.push({ type: 'tool_call_start', tool_name: event.toolName, tool_use_id: callId });
+					events.push({
+						type: 'tool_call',
+						tool_name: event.toolName,
+						tool_use_id: callId,
+						input: event.args ?? {}
+					});
+
+					if (event.toolName === 'propose_rule') {
+						events.push({
+							type: 'rule_proposal',
+							text: typeof event.args?.text === 'string' ? event.args.text : '',
+							reason: typeof event.args?.reason === 'string' ? event.args.reason : undefined
+						});
+					} else if (event.toolName === 'propose_hook') {
+						events.push({
+							type: 'hook_proposal',
+							event: typeof event.args?.event === 'string' ? event.args.event : 'PostToolUse',
+							matcher: typeof event.args?.matcher === 'string' ? event.args.matcher : undefined,
+							command: typeof event.args?.command === 'string' ? event.args.command : '',
+							reason: typeof event.args?.reason === 'string' ? event.args.reason : undefined
+						});
+					}
+					break;
+				}
+				case 'tool_execution_end': {
+					const callId = event.toolCallId || `pi_tool_${Date.now()}`;
+					const text = event.result?.content
+						?.map((c: any) => c.text)
+						.join('\n') ?? '';
+					events.push({
+						type: 'tool_result',
+						tool_use_id: callId,
+						is_error: !!event.isError,
+						text
+					});
+					break;
+				}
+				case 'agent_end':
+					done = true;
+					break;
+			}
+			if (resolveWait) resolveWait();
+		});
+
+		const fullPrompt = options.systemPrompt
+			? `${options.systemPrompt}\n\n${options.prompt}`
+			: options.prompt;
+
+		const promptPromise = session.prompt(fullPrompt).catch(() => {
+			done = true;
+			if (resolveWait) resolveWait();
+		});
+
+		while (!done) {
+			if (events.length === 0) {
+				await new Promise<void>((r) => { resolveWait = r; });
+				resolveWait = null;
+			}
+			while (events.length > 0) {
+				yield events.shift()!;
+			}
+		}
+		// Drain remaining events
+		while (events.length > 0) {
+			yield events.shift()!;
+		}
+
+		unsubscribe();
+		await promptPromise;
+		session.dispose();
+		this.session = null;
+	}
+
+	async listModels(): Promise<ProviderModelOption[]> {
+		try {
+			await loadSdk();
+			const authStorage = AuthStorage.create();
+			const registry = ModelRegistry.create(authStorage);
+			const available = await registry.getAvailable();
+			if (available?.length > 0) {
+				return available.slice(0, 10).map((m: any) => ({
+					id: m.id || m.name,
+					label: m.label || m.name || m.id,
+					provider: 'pi' as const
+				}));
+			}
+		} catch {
+			// Fall through to defaults
+		}
+		return FALLBACK_MODELS;
+	}
+}
