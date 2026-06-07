@@ -26,9 +26,15 @@ async function loadSdk() {
 }
 
 const FALLBACK_MODELS: ProviderModelOption[] = [
-	{ id: 'anthropic/claude-sonnet-4-5-20250929', label: 'Claude Sonnet 4.5 (OpenCode)', provider: 'opencode' },
-	{ id: 'openai/gpt-4o', label: 'GPT-4o (OpenCode)', provider: 'opencode' },
-	{ id: 'anthropic/claude-haiku-3-5-20241022', label: 'Claude Haiku 3.5 (OpenCode)', provider: 'opencode' }
+	{ id: 'anthropic/claude-sonnet-4-5-20250929', label: 'Claude Sonnet 4.5', provider: 'opencode' },
+	{ id: 'anthropic/claude-opus-4-5-20250918', label: 'Claude Opus 4.5', provider: 'opencode' },
+	{ id: 'anthropic/claude-haiku-3-5-20241022', label: 'Claude Haiku 3.5', provider: 'opencode' },
+	{ id: 'openai/gpt-4o', label: 'GPT-4o', provider: 'opencode' },
+	{ id: 'openai/gpt-4o-mini', label: 'GPT-4o Mini', provider: 'opencode' },
+	{ id: 'openai/o4-mini', label: 'o4-mini', provider: 'opencode' },
+	{ id: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash', provider: 'opencode' },
+	{ id: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro', provider: 'opencode' },
+	{ id: 'deepseek/deepseek-r1', label: 'DeepSeek R1', provider: 'opencode' }
 ];
 
 let daemonInstance: { client: any; server: { url: string; close(): void } } | null = null;

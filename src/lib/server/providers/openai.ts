@@ -39,10 +39,14 @@ async function loadSdk() {
 }
 
 const FALLBACK_MODELS: ProviderModelOption[] = [
-	{ id: 'gpt-5.5', label: 'GPT-5.5', provider: 'openai' },
+	{ id: 'gpt-4o', label: 'GPT-4o', provider: 'openai' },
+	{ id: 'gpt-4o-mini', label: 'GPT-4o Mini', provider: 'openai' },
 	{ id: 'gpt-4.1', label: 'GPT-4.1', provider: 'openai' },
+	{ id: 'gpt-4.1-mini', label: 'GPT-4.1 Mini', provider: 'openai' },
+	{ id: 'gpt-4.1-nano', label: 'GPT-4.1 Nano', provider: 'openai' },
 	{ id: 'o4-mini', label: 'o4-mini', provider: 'openai' },
-	{ id: 'gpt-4o', label: 'GPT-4o', provider: 'openai' }
+	{ id: 'o3', label: 'o3', provider: 'openai' },
+	{ id: 'o3-mini', label: 'o3-mini', provider: 'openai' }
 ];
 
 function buildAgentTools(defs: ToolDefinition[]): any[] {

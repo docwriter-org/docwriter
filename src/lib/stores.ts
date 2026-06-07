@@ -303,6 +303,15 @@ export function setSelectedModel(id: string) {
 	if (typeof window !== 'undefined') window.localStorage.setItem(SELECTED_MODEL_KEY, id);
 }
 
+export function setCustomModel(id: string, provider: string) {
+	let existing: ModelOption[] = [];
+	availableModels.subscribe((v) => (existing = v))();
+	if (!existing.some((m) => m.id === id)) {
+		availableModels.set([...existing, { id, label: id, provider }]);
+	}
+	setSelectedModel(id);
+}
+
 export function setSelectedProvider(id: string) {
 	selectedProvider.set(id);
 	if (typeof window !== 'undefined') window.localStorage.setItem(SELECTED_PROVIDER_KEY, id);

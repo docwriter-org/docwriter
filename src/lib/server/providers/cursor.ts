@@ -31,9 +31,11 @@ async function loadCursorSdk() {
 }
 
 const FALLBACK_MODELS: ProviderModelOption[] = [
-	{ id: 'composer-2.5', label: 'Composer 2.5', provider: 'cursor' },
-	{ id: 'composer-2', label: 'Composer 2', provider: 'cursor' },
-	{ id: 'gpt-5.5', label: 'GPT-5.5', provider: 'cursor' }
+	{ id: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5', provider: 'cursor' },
+	{ id: 'gpt-4o', label: 'GPT-4o', provider: 'cursor' },
+	{ id: 'gpt-4o-mini', label: 'GPT-4o Mini', provider: 'cursor' },
+	{ id: 'claude-haiku-3-5', label: 'Claude Haiku 3.5', provider: 'cursor' },
+	{ id: 'cursor-small', label: 'Cursor Small', provider: 'cursor' }
 ];
 
 function buildCustomTools(

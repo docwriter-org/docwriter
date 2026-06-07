@@ -91,6 +91,7 @@
 		nextHistoryKey,
 		selectedModel,
 		setSelectedModel,
+		setCustomModel,
 		selectedProvider,
 		setSelectedProvider,
 		AVAILABLE_PROVIDERS,
@@ -1861,12 +1862,24 @@
 				{
 					kind: 'submenu',
 					label: 'Model',
-					items: (providerModels.length > 0 ? providerModels : modelOptions).map((m) => ({
-						kind: 'action' as const,
-						label: m.label,
-						checked: model === m.id,
-						onClick: () => setSelectedModel(m.id)
-					}))
+					items: [
+						...(providerModels.length > 0 ? providerModels : modelOptions).map((m) => ({
+							kind: 'action' as const,
+							label: m.label,
+							checked: model === m.id,
+							onClick: () => setSelectedModel(m.id)
+						})),
+						{ kind: 'divider' as const },
+						{
+							kind: 'action' as const,
+							label: 'Custom model…',
+							checked: false,
+							onClick: () => {
+								const id = window.prompt('Enter model ID (e.g. gpt-4o, claude-sonnet-4-5, ollama/llama3.1):');
+								if (id?.trim()) setCustomModel(id.trim(), currentProvider);
+							}
+						}
+					]
 				},
 				{ kind: 'panel', label: 'Agent behavior', panelKey: 'agentSettings' },
 				{
