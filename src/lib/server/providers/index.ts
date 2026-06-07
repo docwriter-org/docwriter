@@ -16,8 +16,8 @@ async function createProvider(id: ProviderId): Promise<AgentProvider> {
 			return new CursorProvider();
 		}
 		case 'openai': {
-			const { CodexProvider } = await import('./codex');
-			return new CodexProvider();
+			const { OpenAIAgentsProvider } = await import('./openai');
+			return new OpenAIAgentsProvider();
 		}
 		default:
 			throw new Error(`Unknown provider: ${id}`);

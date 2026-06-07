@@ -48,7 +48,7 @@
 		"@cursor/sdk": "^1.0.18",
 		"@hocuspocus/provider": "^3.4.4",
 		"@hocuspocus/server": "^3.4.4",
-		"@openai/codex-sdk": "^0.137.0",
+		"@openai/agents": "^0.11.6",
 		"@tiptap/core": "^3.22.3",
 		"@tiptap/extension-collaboration": "^3.22.3",
 		"@tiptap/extension-document": "^3.22.4",
