@@ -5,8 +5,19 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import type { RequestHandler } from './$types';
-import { getSessionMessages } from '@anthropic-ai/claude-agent-sdk';
 import { getSessionId, getLastSystemPrompt } from '$lib/server/runtime-state';
+
+let _getSessionMessages: ((id: string, opts: any) => Promise<any>) | null = null;
+async function loadGetSessionMessages() {
+	if (_getSessionMessages) return _getSessionMessages;
+	try {
+		const sdk = await import('@anthropic-ai/claude-agent-sdk');
+		_getSessionMessages = sdk.getSessionMessages;
+		return _getSessionMessages;
+	} catch {
+		return null;
+	}
+}
 
 /** Encode a filesystem path the same way the Claude SDK does when creating its
  * `~/.claude/projects/<encoded>/<sessionId>.jsonl` file layout. */
@@ -51,15 +62,18 @@ export const GET: RequestHandler = async () => {
 
 	// Fallback: SDK wrapper (returns formatted messages, not raw entries).
 	try {
-		const messages = await getSessionMessages(sessionId, {
-			dir: process.cwd(),
-			limit: 500
-		});
-		return json({ sessionId, raw: [], messages, systemPrompt });
+		const getSessionMessages = await loadGetSessionMessages();
+		if (getSessionMessages) {
+			const messages = await getSessionMessages(sessionId, {
+				dir: process.cwd(),
+				limit: 500
+			});
+			return json({ sessionId, raw: [], messages, systemPrompt });
+		}
 	} catch (e) {
 		console.error('[history] getSessionMessages failed:', e);
-		return json({ sessionId, raw: [], messages: [], systemPrompt });
 	}
+	return json({ sessionId, raw: [], messages: [], systemPrompt });
 };
 
 function readJsonlFile(filePath: string): Promise<unknown[]> {

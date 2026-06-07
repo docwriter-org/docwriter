@@ -91,6 +91,9 @@
 		nextHistoryKey,
 		selectedModel,
 		setSelectedModel,
+		selectedProvider,
+		setSelectedProvider,
+		AVAILABLE_PROVIDERS,
 		availableModels,
 		loadAvailableModels,
 		type ModelOption,
@@ -838,6 +841,8 @@
 		try {
 			let model = 'opus';
 			selectedModel.subscribe((v) => (model = v))();
+			let provider = 'claude';
+			selectedProvider.subscribe((v) => (provider = v))();
 
 			const tabId = getCurrentActiveTab();
 			const res = await fetch('/api/render', {
@@ -848,7 +853,8 @@
 					model,
 					planMode,
 					tab: tabId,
-					images: images.length > 0 ? images : undefined
+					images: images.length > 0 ? images : undefined,
+					provider
 				}),
 				signal: currentAbort.signal
 			});
@@ -1781,8 +1787,16 @@
 	let model = $state('opus');
 	selectedModel.subscribe((v) => (model = v));
 
+	let currentProvider = $state('claude');
+	selectedProvider.subscribe((v) => (currentProvider = v));
+
 	let modelOptions = $state<ModelOption[]>([]);
 	availableModels.subscribe((v) => (modelOptions = v));
+
+	/** Models filtered to the currently selected provider. */
+	const providerModels = $derived(
+		modelOptions.filter((m) => !m.provider || m.provider === currentProvider)
+	);
 
 	let themeName = $state('light');
 	selectedTheme.subscribe((v) => (themeName = v));
@@ -1833,8 +1847,21 @@
 			items: [
 				{
 					kind: 'submenu',
+					label: 'Provider',
+					items: AVAILABLE_PROVIDERS.map((p) => ({
+						kind: 'action' as const,
+						label: p.label,
+						checked: currentProvider === p.id,
+						onClick: () => {
+							setSelectedProvider(p.id);
+							loadAvailableModels(p.id);
+						}
+					}))
+				},
+				{
+					kind: 'submenu',
 					label: 'Model',
-					items: modelOptions.map((m) => ({
+					items: (providerModels.length > 0 ? providerModels : modelOptions).map((m) => ({
 						kind: 'action' as const,
 						label: m.label,
 						checked: model === m.id,
