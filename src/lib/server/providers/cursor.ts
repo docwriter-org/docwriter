@@ -31,6 +31,7 @@ async function loadCursorSdk() {
 }
 
 const FALLBACK_MODELS: ProviderModelOption[] = [
+	{ id: 'composer-2.5', label: 'Composer 2.5', provider: 'cursor' },
 	{ id: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5', provider: 'cursor' },
 	{ id: 'gpt-4o', label: 'GPT-4o', provider: 'cursor' },
 	{ id: 'gpt-4o-mini', label: 'GPT-4o Mini', provider: 'cursor' },
