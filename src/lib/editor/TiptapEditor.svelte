@@ -1486,7 +1486,7 @@
 	 * `.comment-gutter` in CommentGutter.svelte. */
 	.plain-editor-shell {
 		display: grid;
-		grid-template-columns: 52px minmax(0, var(--paper-width, 720px)) var(--gutter-width, 280px);
+		grid-template-columns: 52px minmax(0, var(--paper-width, 720px)) var(--gutter-width, 240px);
 		gap: 18px;
 		width: 100%;
 		justify-content: center;

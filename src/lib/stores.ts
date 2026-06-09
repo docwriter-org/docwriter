@@ -340,6 +340,17 @@ if (typeof window !== 'undefined') {
 	showFilesPane.subscribe((v) => window.localStorage.setItem(SHOW_FILES_PANE_KEY, String(v)));
 }
 
+const SHOW_SIDEBAR_KEY = 'docwriter.showSidebar';
+function readShowSidebar(): boolean {
+	if (typeof window === 'undefined') return true;
+	const raw = window.localStorage.getItem(SHOW_SIDEBAR_KEY);
+	return raw === null ? true : raw !== 'false';
+}
+export const showSidebar = writable<boolean>(readShowSidebar());
+if (typeof window !== 'undefined') {
+	showSidebar.subscribe((v) => window.localStorage.setItem(SHOW_SIDEBAR_KEY, String(v)));
+}
+
 /** Whether the floating agent dock is expanded into a panel (showing the
  * history log + dock controls) or collapsed to a pill in the bottom-right.
  * Persisted so it survives reloads. Default collapsed. */
