@@ -244,12 +244,16 @@ export async function runTabWrite(
 					// never the whole multi-line old_string: a multi-line quote
 					// doesn't match the editor's plain text verbatim, so the
 					// thread card can't be positioned and silently disappears.
-					const anchorQuote = firstNonEmptyLine(
-						normalizedOperation.type === 'edit'
-							? normalizedOperation.oldString
-							: baseForRound
-					);
-					if (anchorQuote) threadId = createAgentEditThread(doc, anchorQuote);
+					const fullOldStr = normalizedOperation.type === 'edit'
+						? normalizedOperation.oldString
+						: baseForRound;
+					const anchorQuote = firstNonEmptyLine(fullOldStr);
+					if (anchorQuote) {
+						const occIdx = computeAnchorOccurrenceIndex(
+							baseForRound, anchorQuote, fullOldStr
+						);
+						threadId = createAgentEditThread(doc, anchorQuote, occIdx);
+					}
 				}
 				const round: PendingReviewRound = {
 					id: cryptoRandomId(),
@@ -312,12 +316,32 @@ function firstNonEmptyLine(text: string): string {
 	return '';
 }
 
-function createAgentEditThread(doc: Y.Doc, oldString: string): string {
+function computeAnchorOccurrenceIndex(
+	docText: string,
+	anchorQuote: string,
+	fullOldString: string
+): number {
+	const editPos = docText.indexOf(fullOldString);
+	if (editPos < 0) return 0;
+	const offsetInOld = fullOldString.indexOf(anchorQuote);
+	if (offsetInOld < 0) return 0;
+	const anchorAbsPos = editPos + offsetInOld;
+	let count = 0;
+	let searchFrom = 0;
+	while (true) {
+		const found = docText.indexOf(anchorQuote, searchFrom);
+		if (found < 0 || found >= anchorAbsPos) return count;
+		count++;
+		searchFrom = found + anchorQuote.length;
+	}
+}
+
+function createAgentEditThread(doc: Y.Doc, oldString: string, occurrenceIndex: number): string {
 	const threadId = 'thread_' + cryptoRandomId();
 	const now = Date.now();
 	const thread: CommentThread = {
 		id: threadId,
-		anchor: { quote: oldString, occurrenceIndex: 0 },
+		anchor: { quote: oldString, occurrenceIndex },
 		messages: [
 			{
 				id: 'msg_' + cryptoRandomId(),
