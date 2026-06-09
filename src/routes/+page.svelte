@@ -1939,10 +1939,6 @@
 		fileTreeHeight = clampFileTreeHeight(fileTreeHeight - deltaY);
 	}
 
-	function toggleFilesPane() {
-		showFilesPane.set(!filesVisible);
-	}
-
 	function toggleSidebar() {
 		showSidebar.set(!sidebarVisible);
 	}

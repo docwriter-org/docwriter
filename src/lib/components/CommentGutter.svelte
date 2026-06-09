@@ -615,10 +615,10 @@
 	.comment-gutter {
 		position: relative;
 		flex-shrink: 0;
-		/* Keep in sync with `--gutter-width` in +page.svelte. */
-		width: 240px;
-		min-width: 240px;
-		max-width: 240px;
+		/* Reads `--gutter-width` from +page.svelte. */
+		width: var(--gutter-width, 240px);
+		min-width: var(--gutter-width, 240px);
+		max-width: var(--gutter-width, 240px);
 		height: 100%;
 		/* Extra bottom room so the lowest card can sit clear of the fixed
 		 * agent dock (AgentDockShell publishes its height as the var). */
