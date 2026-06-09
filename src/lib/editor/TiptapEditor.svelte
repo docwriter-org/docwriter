@@ -143,6 +143,7 @@
 	// use in the overlay and the gutter component.
 	let threadsForTab: CommentThread[] = $state([]);
 	let openThreadId = $state<string | null>(null);
+	let newAwaitingThreadId = $state<string | null>(null);
 	commentThreads.subscribe((v) => {
 		threadsForTab = v;
 		syncCommentOverlay();
@@ -448,6 +449,7 @@
 		// it to `auto`, but we want to honor what the user picked.
 		feedbackMode = modeSnapshot;
 		const threadId = await maybeOpenThreadForFeedback(action.label, text, relSnapshot);
+		if (threadId) newAwaitingThreadId = threadId;
 		const trigger = buildFeedbackTrigger(action.label, text, false, threadId);
 		feedbackMode = 'edit';
 		if (onSubmit) onSubmit(trigger);
@@ -474,6 +476,7 @@
 		closeFeedbackPopup();
 		feedbackMode = modeSnapshot;
 		const threadId = await maybeOpenThreadForFeedback(fb, text, relSnapshot);
+		if (threadId) newAwaitingThreadId = threadId;
 		const trigger = buildFeedbackTrigger(fb, text, true, threadId);
 		feedbackMode = 'edit';
 		if (onSubmit) onSubmit(trigger);
@@ -1228,6 +1231,7 @@
 				editor={editor}
 				tabId={tabId}
 				openThreadId={openThreadId}
+				{newAwaitingThreadId}
 				onOpen={(id) => openCommentThreadId.set(id)}
 				onClose={() => openCommentThreadId.set(null)}
 				onAcceptRound={(roundId) => onAcceptInlineEdit?.(roundId)}

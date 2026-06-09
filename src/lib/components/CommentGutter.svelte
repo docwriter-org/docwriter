@@ -65,6 +65,10 @@
 		 * any agent-authored comment threads — so muted review is truly quiet.
 		 * User-opened comment threads stay. */
 		muted: boolean;
+		/** Thread id just created by the user's feedback action. When set,
+		 * CommentGutter marks it as awaiting the agent's response so the
+		 * "Thinking…" indicator appears immediately. */
+		newAwaitingThreadId?: string | null;
 	}
 	let {
 		threads,
@@ -84,7 +88,8 @@
 		onPinThreadEdits,
 		onHoverEdit,
 		onResolveThread,
-		muted
+		muted,
+		newAwaitingThreadId
 	}: Props = $props();
 
 	/** A short one-line snippet — just enough to tell edits apart in the card.
@@ -175,6 +180,22 @@
 			const newRound = (roundsByThread.get(tid) ?? []).some((r) => !base.roundIds.has(r.id));
 			if (newAgentMsg || newRound) clearAwaiting(tid);
 		}
+	});
+	$effect(() => {
+		const tid = newAwaitingThreadId;
+		if (!tid) return;
+		if (awaitingAgent[tid]) return;
+		const thread = threads.find((t) => t.id === tid);
+		awaitBaseline.set(tid, {
+			msgIds: new Set(
+				(thread?.messages ?? []).filter((m) => m.author === 'agent').map((m) => m.id)
+			),
+			roundIds: new Set((roundsByThread.get(tid) ?? []).map((r) => r.id))
+		});
+		awaitingAgent = { ...awaitingAgent, [tid]: true };
+		const prev = awaitTimers.get(tid);
+		if (prev) clearTimeout(prev);
+		awaitTimers.set(tid, setTimeout(() => clearAwaiting(tid), 120000));
 	});
 	onDestroy(() => {
 		for (const t of awaitTimers.values()) clearTimeout(t);
