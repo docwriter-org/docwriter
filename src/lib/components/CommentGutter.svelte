@@ -615,13 +615,10 @@
 	.comment-gutter {
 		position: relative;
 		flex-shrink: 0;
-		/* Keep in sync with `.plain-editor-shell.has-comment-gutter`'s
-		 * third grid column in TiptapEditor.svelte. Compromise between
-		 * the original 220px (felt too wide collapsed) and 180px (too
-		 * narrow for an expanded thread with code paths / long URLs). */
-		width: 280px;
-		min-width: 280px;
-		max-width: 280px;
+		/* Keep in sync with `--gutter-width` in +page.svelte. */
+		width: 240px;
+		min-width: 240px;
+		max-width: 240px;
 		height: 100%;
 		/* Extra bottom room so the lowest card can sit clear of the fixed
 		 * agent dock (AgentDockShell publishes its height as the var). */

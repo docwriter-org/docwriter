@@ -100,6 +100,7 @@
 		editorSoftWrap,
 		historyVerbosity,
 		showFilesPane,
+		showSidebar,
 		agentSettings,
 		expandedReviewRoundId,
 		tabs,
@@ -1790,6 +1791,9 @@
 	let filesVisible = $state(true);
 	showFilesPane.subscribe((v) => (filesVisible = v));
 
+	let sidebarVisible = $state(true);
+	showSidebar.subscribe((v) => (sidebarVisible = v));
+
 	// Mirror of agentSettings.muted for class binding on the right pane.
 	// When true, everything in the right sidebar except the agent dock
 	// gets a translucent veil so the user isn't distracted by inflight
@@ -1892,6 +1896,12 @@
 				},
 				{
 					kind: 'action',
+					label: 'Sidebar',
+					checked: sidebarVisible,
+					onClick: () => showSidebar.set(!sidebarVisible)
+				},
+				{
+					kind: 'action',
 					label: 'Files pane',
 					checked: filesVisible,
 					onClick: () => showFilesPane.set(!filesVisible)
@@ -1902,7 +1912,7 @@
 	]);
 
 	// Pane widths (resizable)
-	let leftWidth = $state(260);
+	let leftWidth = $state(240);
 	const MIN_PANE_WIDTH = 180;
 	const MAX_PANE_WIDTH = 560;
 	function resizeLeft(delta: number) {
@@ -1931,6 +1941,10 @@
 
 	function toggleFilesPane() {
 		showFilesPane.set(!filesVisible);
+	}
+
+	function toggleSidebar() {
+		showSidebar.set(!sidebarVisible);
 	}
 
 	let docLoaded = $state(false);
@@ -2317,16 +2331,16 @@
 			<button
 				class="header-toggle"
 				type="button"
-				onclick={toggleFilesPane}
-				aria-pressed={filesVisible}
-				title={filesVisible ? 'Hide files pane' : 'Show files pane'}
+				onclick={toggleSidebar}
+				aria-pressed={sidebarVisible}
+				title={sidebarVisible ? 'Hide sidebar' : 'Show sidebar'}
 			>
-				{#if filesVisible}
+				{#if sidebarVisible}
 					<PanelLeftClose size={15} />
 				{:else}
 					<PanelLeftOpen size={15} />
 				{/if}
-				<span>Files</span>
+				<span>Sidebar</span>
 			</button>
 		</div>
 	</header>
@@ -2351,6 +2365,7 @@
 	{/snippet}
 
 	<div class="body">
+		{#if sidebarVisible}
 		<aside class="left-pane" style:width="{leftWidth}px">
 			<div class="left-pane-inner" bind:this={leftPaneInnerEl}>
 				<div class="outline-wrap">
@@ -2374,6 +2389,7 @@
 			</div>
 		</aside>
 		<PanelResizer onResize={resizeLeft} />
+		{/if}
 		<main class="center-pane">
 			<!-- Align the tab strip over the page column (same geometry as
 			     `.plain-editor-shell`) so the active tab sits on the page. -->
@@ -2471,8 +2487,8 @@
 		--canvas: var(--canvas-bg, color-mix(in srgb, var(--text) 6%, var(--bg)));
 		/* Page + comment-gutter widths — single source of truth; the editor
 		 * grid and the tab-align grid both read these. */
-		--paper-width: 860px;
-		--gutter-width: 280px;
+		--paper-width: 900px;
+		--gutter-width: 240px;
 		background: var(--canvas);
 		color: var(--text);
 		font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -2588,7 +2604,7 @@
 	 * so the tab strip lands directly over the page column below it. */
 	.tab-align {
 		display: grid;
-		grid-template-columns: 52px minmax(0, var(--paper-width, 720px)) var(--gutter-width, 280px);
+		grid-template-columns: 52px minmax(0, var(--paper-width, 720px)) var(--gutter-width, 240px);
 		gap: 18px;
 		justify-content: center;
 		padding: 10px 32px 0;
