@@ -59,7 +59,10 @@ const TOOL_LOOP_SCHEMA = {
 				type: 'object',
 				properties: {
 					name: { type: 'string' },
-					input: { type: 'object', additionalProperties: true }
+					// JSON-encoded arguments. Strict structured outputs forbid
+					// open-ended objects (additionalProperties:true), so the tool
+					// input travels as a string and is parsed on this side.
+					input: { type: 'string', description: 'JSON-encoded object of tool arguments.' }
 				},
 				required: ['name', 'input'],
 				additionalProperties: false
@@ -70,7 +73,21 @@ const TOOL_LOOP_SCHEMA = {
 	additionalProperties: false
 } as const;
 
-type ToolCallRequest = { name: string; input: Record<string, unknown> };
+type ToolCallRequest = { name: string; input: unknown };
+
+/** Tool input arrives as a JSON-encoded string (strict-schema requirement). */
+function parseToolInput(raw: unknown): Record<string, unknown> {
+	if (raw && typeof raw === 'object') return raw as Record<string, unknown>;
+	if (typeof raw === 'string') {
+		try {
+			const parsed = JSON.parse(raw);
+			if (parsed && typeof parsed === 'object') return parsed as Record<string, unknown>;
+		} catch {
+			// fall through to empty
+		}
+	}
+	return {};
+}
 type ToolLoopOutput = {
 	assistant_text?: string;
 	tool_calls?: ToolCallRequest[];
@@ -143,21 +160,21 @@ function buildToolResultPrompt(results: Array<Record<string, unknown>>): string 
 	].join('\n');
 }
 
-function emitProposalEvents(call: ToolCallRequest): ProviderEvent[] {
-	if (call.name === 'propose_rule') {
+function emitProposalEvents(name: string, input: Record<string, unknown>): ProviderEvent[] {
+	if (name === 'propose_rule') {
 		return [{
 			type: 'rule_proposal',
-			text: typeof call.input.text === 'string' ? call.input.text : '',
-			reason: typeof call.input.reason === 'string' ? call.input.reason : undefined
+			text: typeof input.text === 'string' ? input.text : '',
+			reason: typeof input.reason === 'string' ? input.reason : undefined
 		}];
 	}
-	if (call.name === 'propose_hook') {
+	if (name === 'propose_hook') {
 		return [{
 			type: 'hook_proposal',
-			event: typeof call.input.event === 'string' ? call.input.event : 'PostToolUse',
-			matcher: typeof call.input.matcher === 'string' ? call.input.matcher : undefined,
-			command: typeof call.input.command === 'string' ? call.input.command : '',
-			reason: typeof call.input.reason === 'string' ? call.input.reason : undefined
+			event: typeof input.event === 'string' ? input.event : 'PostToolUse',
+			matcher: typeof input.matcher === 'string' ? input.matcher : undefined,
+			command: typeof input.command === 'string' ? input.command : '',
+			reason: typeof input.reason === 'string' ? input.reason : undefined
 		}];
 	}
 	return [];
@@ -213,8 +230,10 @@ export class CodexProvider implements AgentProvider {
 		await loadSdk();
 		if (!this.client) {
 			if (!Codex) throw new Error('Codex SDK failed to load.');
+			// Separate from the OpenAI provider: Codex uses CODEX_API_KEY, or
+			// (when unset) the Codex CLI's own login at ~/.codex/auth.json.
 			this.client = new Codex({
-				apiKey: process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY || undefined
+				apiKey: process.env.CODEX_API_KEY || undefined
 			});
 		}
 		return this.client;
@@ -314,10 +333,10 @@ export class CodexProvider implements AgentProvider {
 					const call = calls[i];
 					const toolUseId = `codex_tool_${round + 1}_${i + 1}`;
 					const toolDef = toolMap.get(call.name);
-					const originalInput = call.input && typeof call.input === 'object' ? call.input : {};
+					const originalInput = parseToolInput(call.input);
 					yield { type: 'tool_call_start', tool_name: call.name, tool_use_id: toolUseId };
 					yield { type: 'tool_call', tool_name: call.name, tool_use_id: toolUseId, input: originalInput };
-					for (const event of emitProposalEvents({ ...call, input: originalInput })) yield event;
+					for (const event of emitProposalEvents(call.name, originalInput)) yield event;
 
 					if (!toolDef) {
 						const text = `Tool "${call.name}" is not available in this DocWriter mode.`;

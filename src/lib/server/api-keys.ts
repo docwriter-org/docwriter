@@ -45,8 +45,8 @@ export const PROVIDER_KEYS: ProviderKeySpec[] = [
 		id: 'openai',
 		label: 'OpenAI',
 		envVar: 'OPENAI_API_KEY',
-		required: false,
-		altAuthNote: 'Falls back to your Codex CLI login (`~/.codex/auth.json`) if no key is set.'
+		required: true,
+		altAuthNote: 'Uses the OpenAI API directly. For your ChatGPT/Codex login instead, use the Codex provider.'
 	},
 	{
 		id: 'codex',
@@ -147,7 +147,9 @@ export function getKeyStatus(): ProviderKeyStatus[] {
 		let usable = present;
 		let source: ProviderKeyStatus['source'] = present ? 'env' : null;
 		if (!usable) {
-			if ((spec.id === 'openai' || spec.id === 'codex') && hasCodexLogin()) {
+			// Only the Codex provider falls back to the Codex CLI login; the
+			// OpenAI provider uses the OpenAI API directly (needs OPENAI_API_KEY).
+			if (spec.id === 'codex' && hasCodexLogin()) {
 				usable = true;
 				source = 'login';
 			} else if (spec.id === 'claude' && hasClaudeLogin()) {

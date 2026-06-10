@@ -1,9 +1,9 @@
 /**
  * OpenAI Agents SDK provider adapter.
  *
- * Uses @openai/agents with Agent + run() + streaming. Tools are registered
- * as FunctionTools on the Agent. The SDK handles the agent loop, tool
- * calling, and streaming events natively.
+ * Uses @openai/agents with Agent + run() + streaming against the standard
+ * OpenAI API. Requires OPENAI_API_KEY. The ChatGPT/Codex login path lives in
+ * the separate `codex` provider (codex.ts) — this provider is pure agents-SDK.
  */
 import type {
 	AgentProvider,
@@ -13,9 +13,6 @@ import type {
 	ToolDefinition
 } from './types';
 import { buildToolDefinitions } from './tool-handlers';
-import { readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 let sdkLoaded = false;
@@ -23,51 +20,6 @@ let Agent: any = null;
 let run: any = null;
 let tool: any = null;
 let MemorySession: any = null;
-let codexAuthApplied = false;
-
-/**
- * If there's no explicit OPENAI_API_KEY, fall back to the Codex CLI's
- * ChatGPT login (`~/.codex/auth.json`, auth_mode: "chatgpt"). That file
- * holds an OAuth access token (not an API key) which Codex uses against
- * the ChatGPT backend, billing the user's ChatGPT subscription instead
- * of API credits. We point the agents SDK's OpenAI client at that same
- * backend with the bearer token + account-id header.
- *
- * Returns true if Codex auth was applied. Note: no token-refresh handling
- * yet — when the access_token expires the user must re-run `codex login`.
- */
-async function applyCodexAuthIfAvailable(sdk: any): Promise<boolean> {
-	if (codexAuthApplied) return true;
-	// An explicit API key always wins.
-	if (process.env.OPENAI_API_KEY || process.env.OPENAI_ADMIN_KEY) return false;
-
-	let auth: any;
-	try {
-		auth = JSON.parse(readFileSync(join(homedir(), '.codex', 'auth.json'), 'utf8'));
-	} catch {
-		return false; // No Codex login present.
-	}
-
-	const tokens = auth?.tokens;
-	if (auth?.auth_mode !== 'chatgpt' || !tokens?.access_token) return false;
-
-	const { default: OpenAI } = await import('openai');
-	const client = new OpenAI({
-		apiKey: tokens.access_token,
-		baseURL: 'https://chatgpt.com/backend-api/codex',
-		defaultHeaders: {
-			...(tokens.account_id ? { 'chatgpt-account-id': tokens.account_id } : {}),
-			'OpenAI-Beta': 'responses=experimental',
-			originator: 'codex_cli_ts'
-		}
-	});
-
-	sdk.setDefaultOpenAIClient(client);
-	// The ChatGPT codex backend only speaks the Responses API.
-	sdk.setOpenAIAPI('responses');
-	codexAuthApplied = true;
-	return true;
-}
 
 async function loadSdk() {
 	if (sdkLoaded) return;
@@ -78,7 +30,6 @@ async function loadSdk() {
 		tool = sdk.tool;
 		const core = await import('@openai/agents-core');
 		MemorySession = core.MemorySession;
-		await applyCodexAuthIfAvailable(sdk);
 		sdkLoaded = true;
 	} catch (err) {
 		throw new Error(
@@ -162,10 +113,7 @@ export class OpenAIAgentsProvider implements AgentProvider {
 			name: 'docwriter',
 			model,
 			instructions,
-			tools: agentTools,
-			// The ChatGPT codex backend rejects stored responses
-			// ("Store must be set to false"); the public API defaults to true.
-			...(codexAuthApplied ? { modelSettings: { store: false } } : {})
+			tools: agentTools
 		});
 
 		if (!this.session) {
