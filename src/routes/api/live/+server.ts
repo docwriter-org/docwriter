@@ -8,6 +8,9 @@
  *   reload  — re-read workspace files (sent when --watch detects a change)
  */
 import type { RequestHandler } from './$types';
+import { resolve } from 'node:path';
+import { isOwnFlushEcho } from '$lib/server/ydoc-persistence';
+import { WORKSPACE_ROOT } from '$lib/server/document-files';
 
 const encoder = new TextEncoder();
 
@@ -60,6 +63,19 @@ export const POST: RequestHandler = async ({ request }) => {
 		/* ignore */
 	}
 	const event = typeof body.event === 'string' ? body.event : 'reload';
+	// The CLI watcher can't tell external edits from the server's own
+	// debounced Y.Doc → markdown flushes (typing produces one every second).
+	// If the changed file holds exactly what we last wrote, it's our own
+	// flush echoing back — broadcasting it would remount the editor while
+	// the user types. Drop it.
+	if (
+		event === 'reload' &&
+		typeof body.file === 'string' &&
+		body.file &&
+		isOwnFlushEcho(resolve(WORKSPACE_ROOT, body.file))
+	) {
+		return new Response('ok');
+	}
 	const data = JSON.stringify(body);
 	for (const ctrl of clients) push(ctrl, `event: ${event}\ndata: ${data}\n\n`);
 	return new Response('ok');

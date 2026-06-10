@@ -280,8 +280,11 @@ if (watchFlag) {
 	// Debounce: coalesce rapid saves into a single reload after 150 ms.
 	let debounce = null;
 
+	// Server-managed state (.docwriter/*) must never trigger reloads — the
+	// server writes there on every keystroke/settings change. Note fs.watch
+	// filenames are RELATIVE to the workspace root, so anchor with (^|sep).
 	const IGNORE_RE =
-		/[/\\]\.docwriter[/\\]agent\.md$|[/\\]\.git[/\\]|node_modules[/\\]|\.svelte-kit[/\\]/;
+		/(^|[/\\])\.docwriter[/\\]|(^|[/\\])\.git[/\\]|node_modules[/\\]|\.svelte-kit[/\\]/;
 
 	const WATCH_EXTS = new Set(['.md', '.txt', '.json', '.yaml', '.yml']);
 
