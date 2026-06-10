@@ -71,6 +71,20 @@ const MIGRATIONS: Array<{ version: number; sql: string }> = [
 		// site — renaming removes the footgun entirely. Brand-new DBs still
 		// run v1 first (creating the old column), then immediately v2 (rename).
 		sql: `ALTER TABLE yjs_updates RENAME COLUMN "update" TO payload;`
+	},
+	{
+		version: 3,
+		sql: `
+			CREATE TABLE IF NOT EXISTS conversation_events (
+				id        INTEGER PRIMARY KEY AUTOINCREMENT,
+				session   TEXT NOT NULL,
+				provider  TEXT NOT NULL,
+				event     TEXT NOT NULL,
+				data      TEXT NOT NULL,
+				created   INTEGER NOT NULL
+			);
+			CREATE INDEX IF NOT EXISTS conv_events_session ON conversation_events(session);
+		`
 	}
 ];
 

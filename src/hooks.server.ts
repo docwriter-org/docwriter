@@ -11,6 +11,12 @@ import { getRules, getSessionId, setSessionId } from '$lib/server/runtime-state'
 import { syncRulesToClaudeMemory } from '$lib/server/claude-memory';
 import { installBundledSkills } from '$lib/server/skills-install';
 import { createWsServer } from '$lib/server/ws-server';
+import { loadGlobalKeys } from '$lib/server/api-keys';
+
+// Load ~/.docwriter/keys.env into process.env (without overriding real env /
+// repo .env) so provider API keys are available cross-workspace and in the
+// built server. Runs before any render path reads process.env.<KEY>.
+loadGlobalKeys();
 
 // A fresh UUID per server process. Clients compare this against the one they
 // last synced with; a mismatch means they're talking to a different server

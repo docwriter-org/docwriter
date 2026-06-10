@@ -1,5 +1,6 @@
 import * as Y from 'yjs';
 import { HocuspocusProvider } from '@hocuspocus/provider';
+import { env } from '$env/dynamic/public';
 import { COMMENTS_MAP_NAME, FRAGMENT_NAME, REVIEW_ARRAY_NAME, USER_ORIGIN } from '$lib/shared/ydoc-codec';
 import type { CommentThread, PendingReviewRound } from './types';
 
@@ -23,7 +24,10 @@ interface TabDoc {
 }
 
 function wsUrl(): string {
-	const port = import.meta.env.PUBLIC_DOCWRITER_WS_PORT || '3001';
+	// Runtime (not build-time) env: the CLI picks a free WS port per instance
+	// and passes it via PUBLIC_DOCWRITER_WS_PORT, so the value can't be baked
+	// into the bundle at build time.
+	const port = env.PUBLIC_DOCWRITER_WS_PORT || '3001';
 	return `ws://${location.hostname}:${port}`;
 }
 

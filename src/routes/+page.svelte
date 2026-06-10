@@ -19,6 +19,8 @@
 	import Dialog from '$lib/components/Dialog.svelte';
 	import AgentSettingsPanel from '$lib/components/AgentSettingsPanel.svelte';
 	import HooksPanel from '$lib/components/HooksPanel.svelte';
+	import ApiKeysPanel from '$lib/components/ApiKeysPanel.svelte';
+	import CustomModelDialog from '$lib/components/CustomModelDialog.svelte';
 	import { themes, applyTheme } from '$lib/themes';
 	import { unifiedLineDiff } from '$lib/diff';
 	import { materializePendingReviewRounds } from '$lib/review-rounds';
@@ -91,6 +93,10 @@
 		nextHistoryKey,
 		selectedModel,
 		setSelectedModel,
+		setCustomModel,
+		selectedProvider,
+		setSelectedProvider,
+		AVAILABLE_PROVIDERS,
 		availableModels,
 		loadAvailableModels,
 		type ModelOption,
@@ -236,7 +242,11 @@
 		pendingReviewRounds.set(rounds);
 		reviewBaseline.set(rounds.length > 0 ? rounds[0].beforeMd : null);
 		const nextPending = new Map(pendingReviewTabs);
-		if (rawRounds.length > 0) nextPending.set(tabId, rawRounds.length);
+		// Stale rounds (no longer match the doc) render no diff — don't let them
+		// pulse the tab dot. They stay in the array and re-activate if the text
+		// returns; see refreshPendingReviewTabs.
+		const actionable = rounds.filter((r) => !r.stale).length;
+		if (actionable > 0) nextPending.set(tabId, actionable);
 		else nextPending.delete(tabId);
 		pendingReviewTabs = nextPending;
 		syncAllTabsState();
@@ -278,8 +288,15 @@
 	function refreshPendingReviewTabs(tabIds: string[]) {
 		const pending = new Map<string, number>();
 		for (const id of tabIds) {
-			const arr = getReviewArrayForTab(id);
-			if (arr.length > 0) pending.set(id, arr.length);
+			const raw = getReviewArrayForTab(id).toArray();
+			if (raw.length === 0) continue;
+			// Count only actionable rounds. A stale round (its old_string no
+			// longer matches the doc, e.g. superseded by later edits) renders
+			// no diff and can't be reviewed — counting it would pulse the tab
+			// dot with nothing to act on. Like detached comments, it stays in
+			// the array (re-activates if the text returns) but doesn't nag.
+			const actionable = materializedRoundsForTab(id, raw).filter((r) => !r.stale).length;
+			if (actionable > 0) pending.set(id, actionable);
 		}
 		pendingReviewTabs = pending;
 	}
@@ -839,6 +856,8 @@
 		try {
 			let model = 'opus';
 			selectedModel.subscribe((v) => (model = v))();
+			let provider = 'claude';
+			selectedProvider.subscribe((v) => (provider = v))();
 
 			const tabId = getCurrentActiveTab();
 			const res = await fetch('/api/render', {
@@ -849,7 +868,8 @@
 					model,
 					planMode,
 					tab: tabId,
-					images: images.length > 0 ? images : undefined
+					images: images.length > 0 ? images : undefined,
+					provider
 				}),
 				signal: currentAbort.signal
 			});
@@ -892,6 +912,20 @@
 						});
 					} else if (event === 'tool_call') {
 						agentHistory.update((h) => {
+							// Match the pending start entry by tool_use_id (the
+							// tool_call_start pushed it). Fall back to the last
+							// same-named entry only if no id match — avoids
+							// attaching input to the wrong card when the same
+							// tool is called repeatedly (common with edit_doc).
+							const targetId = parsed.tool_use_id;
+							if (targetId) {
+								for (let i = h.length - 1; i >= 0; i--) {
+									const e = h[i];
+									if (e.type === 'tool_call' && e.tool_use_id === targetId) {
+										return [...h.slice(0, i), { ...e, input: parsed.input }, ...h.slice(i + 1)];
+									}
+								}
+							}
 							const last = h[h.length - 1];
 							if (last && last.type === 'tool_call' && last.tool_name === parsed.tool_name) {
 								return [...h.slice(0, -1), { ...last, input: parsed.input, tool_use_id: parsed.tool_use_id ?? last.tool_use_id }];
@@ -1782,8 +1816,19 @@
 	let model = $state('opus');
 	selectedModel.subscribe((v) => (model = v));
 
+	let currentProvider = $state('claude');
+	selectedProvider.subscribe((v) => (currentProvider = v));
+
 	let modelOptions = $state<ModelOption[]>([]);
 	availableModels.subscribe((v) => (modelOptions = v));
+
+	/** Models filtered to the currently selected provider. */
+	const providerModels = $derived(
+		modelOptions.filter((m) => !m.provider || m.provider === currentProvider)
+	);
+
+	/** Custom-model dialog (replaces the old window.prompt). */
+	let customModelOpen = $state(false);
 
 	let themeName = $state('light');
 	selectedTheme.subscribe((v) => (themeName = v));
@@ -1837,14 +1882,34 @@
 			items: [
 				{
 					kind: 'submenu',
-					label: 'Model',
-					items: modelOptions.map((m) => ({
+					label: 'Provider',
+					items: AVAILABLE_PROVIDERS.map((p) => ({
 						kind: 'action' as const,
-						label: m.label,
-						checked: model === m.id,
-						onClick: () => setSelectedModel(m.id)
+						label: p.label,
+						checked: currentProvider === p.id,
+						onClick: () => setSelectedProvider(p.id)
 					}))
 				},
+				{
+					kind: 'submenu',
+					label: 'Model',
+					items: [
+						...(providerModels.length > 0 ? providerModels : modelOptions).map((m) => ({
+							kind: 'action' as const,
+							label: m.label,
+							checked: model === m.id,
+							onClick: () => setSelectedModel(m.id)
+						})),
+						{ kind: 'divider' as const },
+						{
+							kind: 'action' as const,
+							label: 'Custom model…',
+							checked: false,
+							onClick: () => (customModelOpen = true)
+						}
+					]
+				},
+				{ kind: 'panel', label: 'API keys', panelKey: 'apiKeys' },
 				{ kind: 'panel', label: 'Agent behavior', panelKey: 'agentSettings' },
 				{
 					kind: 'submenu',
@@ -2319,7 +2384,8 @@
 					references: referencesPanelSnippet,
 					rules: rulesPanelSnippet,
 					agentSettings: agentSettingsSnippet,
-					hooks: hooksPanelSnippet
+					hooks: hooksPanelSnippet,
+					apiKeys: apiKeysPanelSnippet
 				}}
 			/>
 		</div>
@@ -2358,6 +2424,10 @@
 
 	{#snippet hooksPanelSnippet()}
 		<HooksPanel />
+	{/snippet}
+
+	{#snippet apiKeysPanelSnippet()}
+		<ApiKeysPanel />
 	{/snippet}
 
 	<div class="body">
@@ -2461,6 +2531,17 @@
 />
 
 <Dialog />
+
+<CustomModelDialog
+	open={customModelOpen}
+	provider={currentProvider}
+	suggestions={providerModels.map((m) => m.id)}
+	onClose={() => (customModelOpen = false)}
+	onSubmit={(id) => {
+		setCustomModel(id, currentProvider);
+		customModelOpen = false;
+	}}
+/>
 
 <style>
 	/* ── Typography ──

@@ -137,6 +137,10 @@ let resolveLiveDoc: ((tabId: string) => Y.Doc | null) | null = null;
  * comment thread and drops the in-doc diff reveal. Skipping identical writes
  * avoids that churn entirely. */
 const lastWrittenContent = new Map<string, string>();
+/** Same content, keyed by absolute file path — lets the /api/live watcher
+ * endpoint ask "is this change just an echo of our own flush?" without
+ * needing the file-path → tabId inverse mapping. */
+const lastWrittenByPath = new Map<string, string>();
 
 export function setLiveDocResolver(resolver: (tabId: string) => Y.Doc | null) {
 	resolveLiveDoc = resolver;
@@ -173,6 +177,22 @@ function writeTabFile(tabId: string, ydoc: Y.Doc) {
 	mkdirSync(dirname(path), { recursive: true });
 	writeFileSync(path, content);
 	lastWrittenContent.set(tabId, content);
+	lastWrittenByPath.set(path, content);
+}
+
+/** True if the file at `absPath` currently holds exactly what the server
+ * itself last flushed there — i.e. a file-watcher event for it is an echo of
+ * our own debounced Y.Doc → markdown write, not an external edit. Typing
+ * flushes every second, so without this check `--watch` reload-loops while
+ * the user types. */
+export function isOwnFlushEcho(absPath: string): boolean {
+	const written = lastWrittenByPath.get(absPath);
+	if (written === undefined) return false;
+	try {
+		return readFileSync(absPath, 'utf-8') === written;
+	} catch {
+		return false;
+	}
 }
 
 /** Synchronously flush one tab. Clears its pending dirty flag. */
@@ -195,5 +215,6 @@ export function clearDirty(tabId: string) {
 export function purgeTabUpdates(tabId: string) {
 	dirtyTabs.delete(tabId);
 	lastWrittenContent.delete(tabId);
+	lastWrittenByPath.delete(tabFile(tabId));
 	getDb().prepare(`DELETE FROM yjs_updates WHERE tab_id = ?`).run(tabId);
 }

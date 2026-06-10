@@ -1,11 +1,10 @@
 import { error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { query, createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
-import type { HookCallback, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
-import type { ImageBlockParam } from '@anthropic-ai/sdk/resources';
-import { z } from 'zod';
 import { normalize, resolve } from 'path';
 import * as Y from 'yjs';
+import { getProvider } from '$lib/server/providers';
+import type { ProviderId, ProviderEvent } from '$lib/server/providers/types';
+import { buildToolDefinitions, TOOL_NAMES } from '$lib/server/providers/tool-handlers';
 import {
 	AGENT_SCRATCH_DIR,
 	isValidTabId,
@@ -20,7 +19,7 @@ import {
 import { runHookCommand, type HookRunEmitter } from '$lib/server/hook-runner';
 import { getSessionId, setSessionId, setLastSystemPrompt, getTabsState } from '$lib/server/runtime-state';
 import { readMeta } from '$lib/server/document-io';
-import { kvGet, kvSet } from '$lib/server/db-writes';
+import { kvGet, kvSet, dbAppendConversationEvent } from '$lib/server/db-writes';
 import { serializeYDoc, readReviewRounds, readCommentThreads } from '$lib/shared/ydoc-codec';
 import type { CommentThread } from '$lib/types';
 import { replayUpdatesInto } from '$lib/server/ydoc-persistence';
@@ -29,7 +28,6 @@ import { unifiedLineDiff } from '$lib/diff';
 import { listStyleReferences } from '$lib/server/references';
 import { materializePendingReviewText } from '$lib/review-rounds';
 import {
-	docToolsMcp,
 	EDIT_DOC_TOOL_NAME,
 	READ_DOC_TOOL_NAME,
 	WRITE_DOC_TOOL_NAME,
@@ -117,27 +115,6 @@ const WORKSPACE_ROOT = resolve(process.env.DOCWRITER_ROOT || process.cwd());
 interface ImageAttachmentPayload {
 	mediaType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
 	data: string;
-}
-
-/** Build an async-iterable prompt that carries both text and base64 images
- * as a multi-part user message, required by the Claude SDK when attaching
- * images to a `query()` call. */
-async function* buildImagePrompt(
-	textPrompt: string,
-	images: ImageAttachmentPayload[]
-): AsyncGenerator<SDKUserMessage> {
-	const imageBlocks: ImageBlockParam[] = images.map((img) => ({
-		type: 'image',
-		source: { type: 'base64', media_type: img.mediaType, data: img.data }
-	}));
-	yield {
-		type: 'user',
-		message: {
-			role: 'user',
-			content: [{ type: 'text', text: textPrompt }, ...imageBlocks]
-		},
-		parent_tool_use_id: null
-	};
 }
 
 // Keys for the rule / refs / agency snapshots used to diff per-turn updates.
@@ -615,70 +592,6 @@ function buildMultiTabPrompt(
 	return sections.join('\n\n');
 }
 
-/**
- * In-process MCP server exposing the `propose_rule` tool. The agent calls it
- * to suggest a writing rule; the tool itself just ACKs — the real side-effect
- * happens in the stream handler, which detects the tool invocation and emits
- * a dedicated `rule_proposal` SSE event so the client can render an
- * Accept/Reject card in the OutlinePane.
- */
-const docwriterMcp = createSdkMcpServer({
-	name: 'docwriter',
-	version: '0.0.1',
-	tools: [
-		tool(
-			'propose_rule',
-			'Propose a writing rule for the user to review. Use sparingly — only when you have evidence of a consistent pattern in the user\'s writing or edits. The user will Accept or Reject.',
-			{
-				text: z
-					.string()
-					.describe('The rule, written as a short imperative: "Never use em-dashes", "Prefer active voice".'),
-				reason: z
-					.string()
-					.optional()
-					.describe('One sentence explaining the pattern you observed.')
-			},
-			async () => ({
-				content: [{ type: 'text', text: 'Rule proposal sent to the user for review.' }]
-			})
-		),
-		tool(
-			'propose_hook',
-			'Propose a shell hook for the user to review before it gets added to the workspace. Use when the user asks for an automation (e.g. "run pdflatex after every edit", "open preview on accept") — DO NOT edit .docwriter/hooks.json directly, propose the hook instead so the user can Accept/Reject.',
-			{
-				event: z
-					.enum([
-						'PreToolUse',
-						'PostToolUse',
-						'PostToolUseFailure',
-						'UserPromptSubmit',
-						'Stop',
-						'SubagentStop',
-						'SessionStart',
-						'SessionEnd',
-						'Notification'
-					])
-					.describe(
-						'When the hook fires. Stop = end of agent turn (use for build tools like pdflatex/pandoc/lint — DocWriter edits go through edit_doc/write_doc MCP tools, not the built-in Edit/Write tools, so PostToolUse with Edit|Write matcher will never fire). PostToolUse = after any tool call; pair with a matcher regex if you need per-tool granularity. PreToolUse = before a tool call. PostToolUseFailure = when a tool errors. UserPromptSubmit = when the user sends a message. SubagentStop = a subagent finished. SessionStart/End = session boundaries. Notification = permission/idle messages.'
-					),
-				matcher: z
-					.string()
-					.optional()
-					.describe('Regex over the tool name (e.g. "Edit|Write"). Omit or empty to match every tool.'),
-				command: z
-					.string()
-					.describe('The shell command. Use {{file}} for the edited file path and {{tool}} for the tool name.'),
-				reason: z
-					.string()
-					.optional()
-					.describe('One sentence explaining what this hook does / why the user would want it.')
-			},
-			async () => ({
-				content: [{ type: 'text', text: 'Hook proposal sent to the user for review.' }]
-			})
-		)
-	]
-});
 
 /** Names the SDK will give the tools in stream events. SDK MCP tools are
  * namespaced as `mcp__<serverName>__<toolName>`. */
@@ -704,6 +617,7 @@ const EXIT_PLAN_MODE_TOOL_NAME = 'ExitPlanMode';
  * SDK default; keeps slow runaway commands from blocking the agent. */
 const USER_HOOK_TIMEOUT_SEC = 60;
 
+type HookCallback = (input: any) => Promise<any>;
 type HookEntry = { matcher: string; hooks: HookCallback[]; timeout?: number };
 
 /** Build the hook map for this render. Only user-defined shell hooks
@@ -716,7 +630,7 @@ function buildHooks(
 ): Partial<Record<HookEvent | 'PreToolUse', HookEntry[]>> {
 	const userHooks = readHooks().hooks.filter((h) => h.enabled !== false);
 
-	function buildUserHookCallback(hook: Hook): HookCallback {
+	function buildUserHookCallback(hook: Hook): (input: any) => Promise<any> {
 		return async (input) => {
 			const toolInput = (input as any).tool_input;
 			const toolName: string = (input as any).tool_name || '';
@@ -763,14 +677,26 @@ function buildHooks(
 export const POST: RequestHandler = async ({ request }) => {
 	try {
 		const body = await request.json();
-		const { userMessage, model, warmup, tab, planMode, images } = body as {
+		const { userMessage, model, warmup, tab, planMode, images, provider: providerIdRaw } = body as {
 			userMessage?: string;
 			model?: string;
 			warmup?: boolean;
 			tab?: string;
 			planMode?: boolean;
 			images?: ImageAttachmentPayload[];
+			provider?: string;
 		};
+		const providerId = (providerIdRaw || 'claude') as ProviderId;
+		// Switching providers invalidates the persisted session id: each
+		// provider mints ids in its own format (Claude wants a UUID, OpenAI
+		// uses `openai-…`, etc.) and can't resume another's. Clear it so the
+		// new provider starts a fresh session instead of trying to --resume a
+		// foreign id (which errors).
+		const prevProvider = kvGet('provider');
+		if (prevProvider && prevProvider !== providerId) {
+			setSessionId('');
+		}
+		kvSet('provider', providerId);
 
 		const allTabIds = getTabsState().order;
 		// `active` is nullable: the user can message the agent with zero tabs
@@ -833,374 +759,178 @@ export const POST: RequestHandler = async ({ request }) => {
 				const encoder = new TextEncoder();
 				const renderStart = Date.now();
 
+				const persistableEvents = new Set([
+					'assistant_text', 'assistant_thinking', 'tool_call_start',
+					'tool_call', 'tool_result', 'cost', 'session', 'error',
+					'rule_proposal', 'hook_proposal'
+				]);
+
 				function send(event: string, data: unknown) {
+					const payload = { ...(data as object), _elapsed: Date.now() - renderStart };
 					controller.enqueue(
 						encoder.encode(
-							`event: ${event}\ndata: ${JSON.stringify({ ...(data as object), _elapsed: Date.now() - renderStart })}\n\n`
+							`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`
 						)
 					);
+					if (providerId !== 'claude' && persistableEvents.has(event)) {
+						// Only persist once the session id is established (the
+						// provider yields `session` first, and the handler sets it
+						// before send()). Using a throwaway fallback id would split
+						// events into a bucket /api/history never reads.
+						const sid = getSessionId();
+						if (sid) {
+							dbAppendConversationEvent(sid, providerId, event, JSON.stringify(payload));
+						}
+					}
 				}
 
 				const hooks = buildHooks((entry) => send('hook_run', entry));
 
 				try {
-					// Resolve the model: per-request > CLI default > nothing (SDK picks).
 					const resolvedModel =
 						model || process.env.DOCWRITER_DEFAULT_MODEL || undefined;
 
-					function buildQueryOptions(): any {
-						// In the SDK's permission evaluation, `allowedTools` acts
-						// as an allowlist that bypasses `permissionMode: 'plan'` —
-						// any tool listed is approved regardless of the mode. So
-						// we have to withhold the mutation tools ourselves while
-						// in plan mode; otherwise the agent skips ExitPlanMode
-						// and edits directly.
-						// https://code.claude.com/docs/en/agent-sdk/permissions
-						const planAllowedTools = [
-							'Read',
-							'Glob',
-							'Grep',
-							'WebSearch',
-							'WebFetch',
-							'Agent',
-							ASK_USER_TOOL_NAME,
-							EXIT_PLAN_MODE_TOOL_NAME,
-							READ_DOC_TOOL_NAME,
-							REPLY_TO_COMMENT_TOOL_NAME
-						];
-						const fullAllowedTools = [
-							'Read',
-							'Bash',
-							'Glob',
-							'Grep',
-							'WebSearch',
-							'WebFetch',
-							'Agent',
-							PROPOSE_RULE_TOOL_NAME,
-							PROPOSE_HOOK_TOOL_NAME,
-							ASK_USER_TOOL_NAME,
-							EXIT_PLAN_MODE_TOOL_NAME,
-							EDIT_DOC_TOOL_NAME,
-							READ_DOC_TOOL_NAME,
-							WRITE_DOC_TOOL_NAME,
-							REPLY_TO_COMMENT_TOOL_NAME
-						];
-						return {
-							allowedTools: warmup
-								? ['Read', 'Glob', 'WebSearch', 'WebFetch']
-								: planMode
-									? planAllowedTools
-									: fullAllowedTools,
-							mcpServers: { docwriter: docwriterMcp, 'docwriter-doc': docToolsMcp },
-							settingSources: ['user', 'project'],
-							permissionMode: planMode ? 'plan' : 'acceptEdits',
-							includePartialMessages: true,
-							agentProgressSummaries: true,
-							effort: 'low',
-							abortController,
-							hooks,
-							canUseTool: async (toolName: string, toolInput: any) => {
-								if (toolName === EXIT_PLAN_MODE_TOOL_NAME) {
-									const plan = typeof toolInput?.plan === 'string' ? toolInput.plan : '';
-									const planId =
-										'plan_' +
-										Date.now().toString(36) +
-										Math.random().toString(36).slice(2, 6);
-									send('plan_proposed', {
-										id: planId,
-										plan: plan.trim(),
-										originalMessage: userMessage ?? ''
-									});
-									// Stop the run here so the agent doesn't proceed to
-									// execute. The user's "Run it" fires a fresh query
-									// with permissionMode back to the default.
-									abortController.abort();
-									return {
-										behavior: 'deny' as const,
-										message:
-											'Plan sent to the user for review. Stop — do not execute. The user will re-run without plan mode if they approve.'
-									};
+					const provider = await getProvider(providerId);
+					const tools = buildToolDefinitions();
+
+					// Mutation tool names (both Claude SDK namespaced and bare)
+					const mutationToolNames = new Set([
+						EDIT_DOC_TOOL_NAME, WRITE_DOC_TOOL_NAME,
+						'edit_doc', 'write_doc'
+					]);
+
+					// canUseTool logic (provider-agnostic permission checks)
+					const canUseTool = async (toolName: string, toolInput: any) => {
+						if (toolName === 'ExitPlanMode') {
+							const plan = typeof toolInput?.plan === 'string' ? toolInput.plan : '';
+							const planId =
+								'plan_' +
+								Date.now().toString(36) +
+								Math.random().toString(36).slice(2, 6);
+							send('plan_proposed', {
+								id: planId,
+								plan: plan.trim(),
+								originalMessage: userMessage ?? ''
+							});
+							abortController.abort();
+							return {
+								behavior: 'deny' as const,
+								message: 'Plan sent to the user for review. Stop — do not execute.'
+							};
+						}
+						if (!warmup) {
+							if (toolName === 'Read') {
+								const matched = findReferencedOpenTabPath(toolInput?.file_path, openTabPaths);
+								if (matched) {
+									return { behavior: 'deny' as const, message: 'Open tab files must be read with `read_doc(path)`.' };
 								}
-							if (!warmup) {
-								if (toolName === 'Read') {
-									const filePath =
-										typeof toolInput?.file_path === 'string' ? toolInput.file_path : '';
-									const matched = findReferencedOpenTabPath(
-										toolInput?.file_path,
-										openTabPaths
-									);
-									if (matched) {
-										return {
-											behavior: 'deny' as const,
-											message:
-												'Open tab files must be read with `read_doc(path)` so you see the review-aware content instead of reading the file directly.'
-										};
-									}
+							}
+							if (toolName === 'Glob' || toolName === 'Grep') {
+								const matched = findReferencedOpenTabPath(toolInput?.path, openTabPaths);
+								if (matched) {
+									return { behavior: 'deny' as const, message: 'Use `read_doc(path)` for open tab files.' };
 								}
-									if (toolName === 'Glob' || toolName === 'Grep') {
-										const matched = findReferencedOpenTabPath(
-											toolInput?.path,
-											openTabPaths
-										);
-										if (matched) {
-											return {
-												behavior: 'deny' as const,
-												message:
-													'Open tab files should not be targeted through built-in search tools. Use `read_doc(path)` for the tab itself and use Glob/Grep elsewhere in the workspace.'
-											};
-										}
-									}
-									if (toolName === 'Bash') {
-										const matched = findOpenTabPathInCommand(
-											toolInput?.command,
-											openTabPaths
-										);
-										if (matched) {
-											return {
-												behavior: 'deny' as const,
-												message:
-													'Open tab files must be accessed through `read_doc`, `edit_doc`, or `write_doc`, not through Bash commands.'
-											};
-										}
-									}
-									if (toolName === 'Edit' || toolName === 'Write') {
-										const target =
-											typeof toolInput?.file_path === 'string' ? toolInput.file_path : '';
-										const underScratch =
-											target === AGENT_SCRATCH_DIR ||
-											target.startsWith(AGENT_SCRATCH_DIR + '/') ||
-											target.includes('.docwriter/agent/scratch/');
-										if (!underScratch) {
-											return {
-												behavior: 'deny' as const,
-												message:
-													'Built-in Edit / Write are restricted to your scratch directory (`' +
-													AGENT_SCRATCH_DIR +
-													'/`). For any workspace file, use `edit_doc` or `write_doc` instead — they route through the review system and auto-open the file as a tab if needed.'
-											};
-										}
-									}
+							}
+							if (toolName === 'Bash') {
+								const matched = findOpenTabPathInCommand(toolInput?.command, openTabPaths);
+								if (matched) {
+									return { behavior: 'deny' as const, message: 'Open tab files must be accessed through `read_doc`, `edit_doc`, or `write_doc`.' };
 								}
-								if (toolName !== ASK_USER_TOOL_NAME) {
-									return { behavior: 'allow' as const, updatedInput: toolInput };
+							}
+							if (toolName === 'Edit' || toolName === 'Write') {
+								const target = typeof toolInput?.file_path === 'string' ? toolInput.file_path : '';
+								const underScratch = target === AGENT_SCRATCH_DIR || target.startsWith(AGENT_SCRATCH_DIR + '/') || target.includes('.docwriter/agent/scratch/');
+								if (!underScratch) {
+									return { behavior: 'deny' as const, message: 'Built-in Edit / Write are restricted to your scratch directory. Use `edit_doc` or `write_doc` instead.' };
 								}
-								const id =
-									'q_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-								const questions = toolInput?.questions ?? [];
-								send('user_question', { id, questions });
-								const answers = await new Promise<string[]>((resolve) => {
-									registerPendingAskUser(id, resolve, 15 * 60_000);
-								});
-								return {
-									behavior: 'allow' as const,
-									updatedInput: { ...toolInput, answers }
-								};
-							},
-							...(resolvedModel ? { model: resolvedModel } : {}),
-							...(getSessionId() || currentSessionId ? { resume: getSessionId() || currentSessionId } : {}),
-							...(systemPromptBlock ? { systemPrompt: systemPromptBlock } : {})
-						};
-					}
+							}
+						}
+						if (toolName === 'AskUserQuestion') {
+							const id = 'q_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+							const questions = toolInput?.questions ?? [];
+							send('user_question', { id, questions });
+							const answers = await new Promise<string[]>((resolve) => {
+								registerPendingAskUser(id, resolve, 15 * 60_000);
+							});
+							return { behavior: 'allow' as const, updatedInput: { ...toolInput, answers } };
+						}
+						return { behavior: 'allow' as const, updatedInput: toolInput };
+					};
+
+					// Build allowed tools list based on mode
+					const planAllowedTools = [
+						'Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch', 'Agent',
+						'AskUserQuestion', 'ExitPlanMode',
+						READ_DOC_TOOL_NAME, REPLY_TO_COMMENT_TOOL_NAME,
+						'read_doc', 'reply_to_comment', 'list_threads'
+					];
+					const fullAllowedTools = [
+						'Read', 'Bash', 'Glob', 'Grep', 'WebSearch', 'WebFetch', 'Agent',
+						'mcp__docwriter__propose_rule', 'mcp__docwriter__propose_hook',
+						'AskUserQuestion', 'ExitPlanMode',
+						EDIT_DOC_TOOL_NAME, READ_DOC_TOOL_NAME, WRITE_DOC_TOOL_NAME, REPLY_TO_COMMENT_TOOL_NAME,
+						'edit_doc', 'read_doc', 'write_doc', 'reply_to_comment', 'list_threads',
+						'propose_rule', 'propose_hook'
+					];
+					const allowedTools = warmup
+						? ['Read', 'Glob', 'WebSearch', 'WebFetch']
+						: planMode
+							? planAllowedTools
+							: fullAllowedTools;
+
+					// Persist the user's message into the transcript exactly once,
+					// the moment the session id is known (see the session handler
+					// below). Non-Claude providers only — Claude logs it in its
+					// own JSONL transcript.
+					let userMsgPersisted = false;
 
 					async function runQueryRound(
 						roundPrompt: string,
 						roundImages?: ImageAttachmentPayload[]
 					): Promise<QueryRoundOutcome> {
-						let currentToolName = '';
-						let currentToolId = '';
-						let toolInputAccum = '';
 						let usedDocMutationTool = false;
-						const promptArg =
-							roundImages && roundImages.length > 0
-								? buildImagePrompt(roundPrompt, roundImages)
-								: roundPrompt;
-						for await (const msg of query({ prompt: promptArg, options: buildQueryOptions() })) {
-						if (msg.type === 'system' && msg.session_id) {
-							setSessionId(msg.session_id);
-							send('session', { sessionId: msg.session_id });
-						}
 
-						if (msg.type === 'system') {
-							const anyMsg = msg as any;
-							if (anyMsg.subtype === 'status') {
-								send('sdk_status', {
-									status: anyMsg.status,
-									compactResult: anyMsg.compact_result,
-									error: anyMsg.compact_error
-								});
-							} else if (anyMsg.subtype === 'notification') {
-								send('sdk_notification', {
-									text: anyMsg.text,
-									priority: anyMsg.priority
-								});
-							} else if (anyMsg.subtype === 'task_started') {
-								// Always surface the start — otherwise (when the SDK
-								// marks it skip_transcript) the user sees "Subagent
-								// completed" with no matching "started", which reads
-								// as the work appearing from nowhere.
-								send('task_event', {
-									taskId: anyMsg.task_id,
-									phase: 'started',
-									description: anyMsg.description,
-									taskType: anyMsg.task_type
-								});
-							} else if (anyMsg.subtype === 'task_progress') {
-								send('task_event', {
-									taskId: anyMsg.task_id,
-									phase: 'progress',
-									description: anyMsg.description,
-									summary: anyMsg.summary,
-									lastToolName: anyMsg.last_tool_name
-								});
-							} else if (anyMsg.subtype === 'task_updated') {
-								send('task_event', {
-									taskId: anyMsg.task_id,
-									phase: 'updated',
-									description: anyMsg.patch?.description,
-									summary: anyMsg.patch?.error,
-									taskType: anyMsg.patch?.status
-								});
-							} else if (anyMsg.subtype === 'task_notification' && !anyMsg.skip_transcript) {
-								send('task_event', {
-									taskId: anyMsg.task_id,
-									phase: anyMsg.status,
-									summary: anyMsg.summary
-								});
+						for await (const event of provider.query({
+							prompt: roundPrompt,
+							systemPrompt: systemPromptBlock,
+							model: resolvedModel,
+							sessionId: getSessionId() || currentSessionId || undefined,
+							planMode: !!planMode,
+							warmup: !!warmup,
+							allowedTools,
+							canUseTool,
+							abortSignal: abortController.signal,
+							images: roundImages,
+							effort: 'low',
+							hooks
+						}, tools)) {
+							// Track mutation tool usage
+							if (event.type === 'tool_call_start' && mutationToolNames.has(event.tool_name)) {
+								usedDocMutationTool = true;
 							}
-						}
-
-						if (msg.type === 'tool_progress') {
-							const anyMsg = msg as any;
-							send('tool_progress', {
-								tool_name: anyMsg.tool_name,
-								elapsedSeconds: anyMsg.elapsed_time_seconds,
-								taskId: anyMsg.task_id
-							});
-						}
-
-						// SDK `result` message carries per-round cost + usage.
-						// See https://code.claude.com/docs/en/agent-sdk/cost-tracking
-						if (msg.type === 'result') {
-							const anyMsg = msg as any;
-							send('cost', {
-								totalCostUsd: anyMsg.total_cost_usd,
-								durationMs: anyMsg.duration_ms,
-								durationApiMs: anyMsg.duration_api_ms,
-								numTurns: anyMsg.num_turns,
-								usage: anyMsg.usage,
-								subtype: anyMsg.subtype
-							});
-						}
-
-						if (msg.type === 'user') {
-							// The SDK surfaces each MCP tool's response as a user
-							// message whose `content` contains one or more
-							// `tool_result` blocks. Relay those to the browser so
-							// the Agent History pane can show the tool's actual
-							// output — especially the `isError` path, which is
-							// otherwise invisible: the user sees "edit_doc was
-							// called with args X" but has no way to tell the
-							// call actually failed with "old_string not found".
-							const anyMsg = msg as any;
-							const content = anyMsg?.message?.content;
-							if (Array.isArray(content)) {
-								for (const block of content) {
-									if (block?.type !== 'tool_result') continue;
-									let text = '';
-									if (typeof block.content === 'string') {
-										text = block.content;
-									} else if (Array.isArray(block.content)) {
-										text = block.content
-											.map((c: any) => (typeof c?.text === 'string' ? c.text : ''))
-											.filter(Boolean)
-											.join('\n');
-									}
-									send('tool_result', {
-										tool_use_id: block.tool_use_id,
-										is_error: !!block.is_error,
-										text
-									});
+							if (event.type === 'tool_call' && mutationToolNames.has(event.tool_name)) {
+								usedDocMutationTool = true;
+							}
+							// Forward session IDs to runtime state. The session event
+							// arrives first, so this is also where we log the user
+							// message — under the now-established session id, so it
+							// lands in the same bucket /api/history reads back.
+							if (event.type === 'session') {
+								setSessionId(event.sessionId);
+								if (providerId !== 'claude' && userMessage && !userMsgPersisted) {
+									userMsgPersisted = true;
+									dbAppendConversationEvent(event.sessionId, providerId, 'user_message', JSON.stringify({
+										type: 'user_message', text: userMessage, timestamp: renderStart
+									}));
 								}
 							}
+							// Forward the event as-is to the SSE stream
+							send(event.type, event);
 						}
 
-						if (msg.type === 'stream_event') {
-							const event = msg.event;
-							if (event.type === 'content_block_start' && event.content_block.type === 'tool_use') {
-								currentToolName = event.content_block.name;
-								currentToolId = event.content_block.id;
-								toolInputAccum = '';
-								if (
-									currentToolName === EDIT_DOC_TOOL_NAME ||
-									currentToolName === WRITE_DOC_TOOL_NAME
-								) {
-									usedDocMutationTool = true;
-								}
-								// Skip the generic tool_call_start for propose_* tools
-								// and ExitPlanMode — they emit their own dedicated
-								// events (rule_proposal / hook_proposal / plan_proposed)
-								// so we don't want them cluttering the agent log.
-								if (
-									currentToolName !== PROPOSE_RULE_TOOL_NAME &&
-									currentToolName !== PROPOSE_HOOK_TOOL_NAME &&
-									currentToolName !== EXIT_PLAN_MODE_TOOL_NAME
-								) {
-									send('tool_call_start', { tool_name: currentToolName, tool_use_id: currentToolId });
-								}
-							} else if (event.type === 'content_block_delta') {
-								if (event.delta.type === 'text_delta') {
-									send('assistant_text', { text: event.delta.text });
-								} else if (event.delta.type === 'thinking_delta') {
-									send('assistant_thinking', { text: event.delta.thinking });
-								} else if (event.delta.type === 'input_json_delta') {
-									toolInputAccum += event.delta.partial_json;
-								}
-							} else if (event.type === 'content_block_stop') {
-								if (currentToolName) {
-									let parsedInput: Record<string, unknown> = {};
-									try { parsedInput = JSON.parse(toolInputAccum); } catch { /* ignore */ }
-									if (currentToolName === PROPOSE_RULE_TOOL_NAME) {
-										send('rule_proposal', {
-											text: typeof parsedInput.text === 'string' ? parsedInput.text : '',
-											reason: typeof parsedInput.reason === 'string' ? parsedInput.reason : undefined
-										});
-									} else if (currentToolName === PROPOSE_HOOK_TOOL_NAME) {
-										const ev = parsedInput.event;
-										const valid = HOOK_EVENTS.includes(ev as HookEvent) ? (ev as HookEvent) : 'PostToolUse';
-										send('hook_proposal', {
-											event: valid,
-											matcher: typeof parsedInput.matcher === 'string' ? parsedInput.matcher : undefined,
-											command: typeof parsedInput.command === 'string' ? parsedInput.command : '',
-											reason: typeof parsedInput.reason === 'string' ? parsedInput.reason : undefined
-										});
-									} else if (currentToolName === EXIT_PLAN_MODE_TOOL_NAME) {
-										// plan_proposed already went out from canUseTool
-										// — don't double-log the tool call.
-									} else {
-										send('tool_call', { tool_name: currentToolName, tool_use_id: currentToolId, input: parsedInput });
-									}
-									currentToolName = '';
-									currentToolId = '';
-									toolInputAccum = '';
-								}
-							}
-						}
-					}
 						return { usedDocMutationTool };
 					}
 
-					// Scratch workspace is created lazily (by `mcp-doc-tools`
-					// on the first scratch write). No render-start mkdir here
-					// — otherwise a `.docwriter/agent/` dir gets created on
-					// every render even when the agent never writes scratch.
-					//
-					// When this render was triggered by feedback/reply on a thread
-					// (the trigger carries `thread_id="…"`), make that thread the
-					// default for any edit the agent proposes, so its edit attaches
-					// to the user's feedback thread instead of spawning a separate
-					// one. The agent can still override per-edit via edit_doc's
-					// `thread_id` arg. A spontaneous wake-up has no `thread_id`, so
-					// this is null there and each edit opens its own thread.
 					const feedbackThreadId = message.match(/thread_id="([^"]+)"/)?.[1] ?? null;
 					setActiveFeedbackThreadId(feedbackThreadId);
 					try {
@@ -1220,10 +950,10 @@ export const POST: RequestHandler = async ({ request }) => {
 								pendingEditThreadIds: [...readLiveTabPendingEditThreadIds(id)]
 							})),
 							[
-								'You just ended without proposing an edit, but the active tab still contains inline directives (`[[ ... ]]`, `(( ... ))`, or `<< ... >>`).',
+								'You just ended without proposing an edit, but the active tab still contains inline directives.',
 								'Handle one active-tab directive now if it is feasible.',
 								'You may still read other files or use other tools first if needed.',
-								'Do not end this retry without either calling `edit_doc` or `write_doc` on a directive-bearing open tab, or sending a brief plain-text explanation of why the directive cannot be completed yet.'
+								'Do not end this retry without either calling `edit_doc` or `write_doc`, or sending a brief explanation of why the directive cannot be completed yet.'
 							].join('\n')
 						);
 						send('directive_retry', {});

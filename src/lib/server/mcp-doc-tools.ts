@@ -47,20 +47,20 @@ import { resolveWorkspacePath } from './workspace-path';
 import { getTabsState, setTabsState } from './runtime-state';
 import { writeTextAtomic } from './file-utils';
 
-function toolError(message: string): CallToolResult {
+export function toolError(message: string): CallToolResult {
 	return {
 		isError: true,
 		content: [{ type: 'text', text: message }]
 	};
 }
 
-function toolText(message: string): CallToolResult {
+export function toolText(message: string): CallToolResult {
 	return {
 		content: [{ type: 'text', text: message }]
 	};
 }
 
-function countOccurrences(haystack: string, needle: string): number {
+export function countOccurrences(haystack: string, needle: string): number {
 	if (!needle) return 0;
 	let count = 0;
 	let idx = 0;
@@ -77,7 +77,7 @@ function countOccurrences(haystack: string, needle: string): number {
  * method on the inner `Hocuspocus`, not the `Server` wrapper. Returns null
  * if it isn't up (development-time misconfiguration, not a tool-call
  * runtime condition). */
-function getHocuspocus(): { openDirectConnection: (name: string) => Promise<{ transact: (cb: (doc: Document) => void | Promise<void>) => Promise<void>; disconnect: () => Promise<void> }> } | null {
+export function getHocuspocus(): { openDirectConnection: (name: string) => Promise<{ transact: (cb: (doc: Document) => void | Promise<void>) => Promise<void>; disconnect: () => Promise<void> }> } | null {
 	const holder = globalThis as unknown as { __docwriterWsServer?: unknown };
 	const server = holder.__docwriterWsServer as
 		| {
@@ -140,7 +140,7 @@ function narrowWriteOperation(
 	};
 }
 
-function currentProposalText(doc: Y.Doc): string {
+export function currentProposalText(doc: Y.Doc): string {
 	return materializePendingReviewText(serializeYDoc(doc), readReviewRounds(doc));
 }
 
@@ -290,7 +290,7 @@ export async function runTabWrite(
 	return result ?? { error: 'DirectConnection.transact returned with no result' };
 }
 
-function cryptoRandomId(): string {
+export function cryptoRandomId(): string {
 	// Node 22+ has globalThis.crypto per Web Crypto API.
 	const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
 	if (c?.randomUUID) return c.randomUUID();
@@ -362,7 +362,7 @@ function createAgentEditThread(doc: Y.Doc, oldString: string, occurrenceIndex: n
 /** Convert a user-supplied `path` (absolute or relative) into a workspace-
  * relative tabId, validating it and ensuring it doesn't escape the workspace
  * root. Returns null if the path can't be made into a valid tabId. */
-function pathToTabId(path: string): string | null {
+export function pathToTabId(path: string): string | null {
 	let candidate: string;
 	if (isAbsolute(path)) {
 		const rel = relative(WORKSPACE_ROOT, path);
@@ -388,7 +388,7 @@ type EnsureTabResult =
  *    an error.
  *  - Invalid path / escapes sandbox / unsupported shape → error.
  */
-function ensureWorkspaceTabOpen(
+export function ensureWorkspaceTabOpen(
 	path: string,
 	opts: { createIfMissing: boolean }
 ): EnsureTabResult {
@@ -458,7 +458,7 @@ function ensureWorkspaceTabOpen(
 
 // ---- Scratch-path helpers -------------------------------------------------
 
-function readScratch(path: string): CallToolResult {
+export function readScratch(path: string): CallToolResult {
 	try {
 		const content = readFileSync(path, 'utf8');
 		return { content: [{ type: 'text', text: content }] };
@@ -467,7 +467,7 @@ function readScratch(path: string): CallToolResult {
 	}
 }
 
-function writeScratch(path: string, content: string): CallToolResult {
+export function writeScratch(path: string, content: string): CallToolResult {
 	try {
 		mkdirSync(dirname(path), { recursive: true });
 		writeFileSync(path, content, 'utf8');
@@ -477,7 +477,7 @@ function writeScratch(path: string, content: string): CallToolResult {
 	}
 }
 
-function editScratch(
+export function editScratch(
 	path: string,
 	oldString: string,
 	newString: string,
@@ -727,7 +727,7 @@ const writeDocTool = tool(
 /** Write a comment thread (new or reply) onto a tab's Y.Map('comments').
  * Runs inside a DirectConnection transaction so the update streams to all
  * connected browsers via Hocuspocus and persists through `yjs_updates`. */
-async function runCommentWrite(
+export async function runCommentWrite(
 	tabId: string,
 	mutator: (doc: Y.Doc) => { ok: true } | { ok: false; error: string }
 ): Promise<{ ok: true } | { ok: false; error: string }> {

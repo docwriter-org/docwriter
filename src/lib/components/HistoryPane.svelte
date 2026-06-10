@@ -140,7 +140,14 @@
 		if (e.type === 'assistant_text') return e.text.trim() !== '';
 		if (e.type === 'hook_run') return true;
 		if (e.type === 'tool_call') {
-			return /^(Edit|Write)$/.test(e.tool_name);
+			// Keep actual document mutations: the built-in Edit/Write tools and
+			// DocWriter's edit_doc / write_doc (bare for OpenAI/Cursor, or
+			// mcp__docwriter-doc__-prefixed for the Claude SDK). read_doc and
+			// other lookups stay hidden as intermediate noise.
+			return (
+				/^(Edit|Write)$/.test(e.tool_name) ||
+				/(?:^|__)(edit_doc|write_doc)$/.test(e.tool_name)
+			);
 		}
 		if (e.type === 'task') return e.phase === 'completed' || e.phase === 'failed' || e.phase === 'stopped';
 		// Surface compaction events even in minimal — they signal context
@@ -332,7 +339,7 @@
 					class="header-pill-btn icon-only"
 					onclick={() => (transcriptOpen = true)}
 					aria-label="Transcript"
-					use:tooltip={'Open the session transcript. Shows every user message, Claude response, tool call, and result in this session, with filters and search.'}
+					use:tooltip={'Open the session transcript. Shows every user message, agent response, tool call, and result in this session, with filters and search.'}
 				>
 					<MessagesSquare size={12} />
 				</button>
