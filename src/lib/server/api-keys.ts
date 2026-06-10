@@ -55,7 +55,15 @@ export const PROVIDER_KEYS: ProviderKeySpec[] = [
 		required: false,
 		altAuthNote: 'Falls back to your Codex CLI login (`~/.codex/auth.json`) if no key is set.'
 	},
-	{ id: 'cursor', label: 'Cursor', envVar: 'CURSOR_API_KEY', required: true }
+	{ id: 'cursor', label: 'Cursor', envVar: 'CURSOR_API_KEY', required: true },
+	{
+		id: 'pi',
+		label: 'Pi (Together)',
+		envVar: 'TOGETHER_API_KEY',
+		required: false,
+		altAuthNote:
+			'Pi routes models to many inference providers; it reuses ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY if set. Set TOGETHER_API_KEY for Together-served models (e.g. Kimi K2.6).'
+	}
 ];
 
 /** Parse a dotenv-style `KEY=VALUE` file. Ignores blanks and `#` comments. */

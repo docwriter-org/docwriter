@@ -51,6 +51,7 @@ async function loadSdk() {
 }
 
 const FALLBACK_MODELS: ProviderModelOption[] = [
+	{ id: 'together/moonshotai/Kimi-K2.6', label: 'Kimi K2.6 (Together)', provider: 'pi' },
 	{ id: 'anthropic/claude-sonnet-4-5', label: 'Claude Sonnet 4.5', provider: 'pi' },
 	{ id: 'anthropic/claude-opus-4-5', label: 'Claude Opus 4.5', provider: 'pi' },
 	{ id: 'anthropic/claude-haiku-3-5', label: 'Claude Haiku 3.5', provider: 'pi' },
@@ -141,10 +142,18 @@ export class PiProvider implements AgentProvider {
 
 		if (options.model) {
 			try {
-				const [provider, modelId] = options.model.includes('/')
-					? options.model.split('/', 2)
-					: ['anthropic', options.model];
-				sessionOpts.model = getModel(provider, modelId);
+				// Split at the FIRST slash only: the remainder is the model id,
+				// which may itself contain slashes (e.g. together/moonshotai/Kimi-K2.6
+				// is the `together` provider serving model `moonshotai/Kimi-K2.6`).
+				const slash = options.model.indexOf('/');
+				const [provider, modelId] =
+					slash === -1
+						? ['anthropic', options.model]
+						: [options.model.slice(0, slash), options.model.slice(slash + 1)];
+				const resolved = getModel(provider, modelId);
+				// getModel is permissive for unknown ids (returns a stub with no id);
+				// only use it if the lookup actually hit a real model.
+				if (resolved?.id) sessionOpts.model = resolved;
 			} catch {
 				// Fall through to default model
 			}
