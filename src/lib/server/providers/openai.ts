@@ -39,6 +39,7 @@ async function loadSdk() {
 }
 
 const FALLBACK_MODELS: ProviderModelOption[] = [
+	{ id: 'codex-mini', label: 'Codex Mini', provider: 'openai' },
 	{ id: 'gpt-4o', label: 'GPT-4o', provider: 'openai' },
 	{ id: 'gpt-4o-mini', label: 'GPT-4o Mini', provider: 'openai' },
 	{ id: 'gpt-4.1', label: 'GPT-4.1', provider: 'openai' },
