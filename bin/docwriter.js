@@ -188,6 +188,11 @@ async function getFreePort(preferred) {
 const port = isNaN(portArg) || !portArg ? await getFreePort() : portArg;
 const origin = `http://${hostArg === '0.0.0.0' ? 'localhost' : hostArg}:${port}`;
 
+// The Y.Doc sync WebSocket server needs its own port. Prefer 3001 but fall
+// back to any free port (e.g. when another docwriter / dev server instance
+// already holds it). An explicit DOCWRITER_WS_PORT env var wins.
+const wsPort = parseInt(process.env.DOCWRITER_WS_PORT ?? '', 10) || (await getFreePort(3001));
+
 const hasApiKey = !!(apiKey || process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_CODE_OAUTH_TOKEN);
 const authLabel = hasApiKey ? 'api key' : 'claude.ai subscription';
 
@@ -212,6 +217,11 @@ function spawnServer() {
 			PORT: String(port),
 			HOST: hostArg,
 			ORIGIN: origin,
+			// Same value twice: the server binds DOCWRITER_WS_PORT, and the
+			// browser reads PUBLIC_DOCWRITER_WS_PORT via $env/dynamic/public
+			// to know where to connect.
+			DOCWRITER_WS_PORT: String(wsPort),
+			PUBLIC_DOCWRITER_WS_PORT: String(wsPort),
 			// Auth: --api-key overrides the env var (or inherits it if not passed).
 			...(apiKey ? { ANTHROPIC_API_KEY: apiKey } : {}),
 			// CLI model default; render endpoint reads this as fallback.
