@@ -13,12 +13,61 @@ import type {
 	ToolDefinition
 } from './types';
 import { buildToolDefinitions } from './tool-handlers';
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 let sdkLoaded = false;
 let Agent: any = null;
 let run: any = null;
 let tool: any = null;
 let MemorySession: any = null;
+let codexAuthApplied = false;
+
+/**
+ * If there's no explicit OPENAI_API_KEY, fall back to the Codex CLI's
+ * ChatGPT login (`~/.codex/auth.json`, auth_mode: "chatgpt"). That file
+ * holds an OAuth access token (not an API key) which Codex uses against
+ * the ChatGPT backend, billing the user's ChatGPT subscription instead
+ * of API credits. We point the agents SDK's OpenAI client at that same
+ * backend with the bearer token + account-id header.
+ *
+ * Returns true if Codex auth was applied. Note: no token-refresh handling
+ * yet — when the access_token expires the user must re-run `codex login`.
+ */
+async function applyCodexAuthIfAvailable(sdk: any): Promise<boolean> {
+	if (codexAuthApplied) return true;
+	// An explicit API key always wins.
+	if (process.env.OPENAI_API_KEY || process.env.OPENAI_ADMIN_KEY) return false;
+
+	let auth: any;
+	try {
+		auth = JSON.parse(readFileSync(join(homedir(), '.codex', 'auth.json'), 'utf8'));
+	} catch {
+		return false; // No Codex login present.
+	}
+
+	const tokens = auth?.tokens;
+	if (auth?.auth_mode !== 'chatgpt' || !tokens?.access_token) return false;
+
+	const { default: OpenAI } = await import('openai');
+	const client = new OpenAI({
+		apiKey: tokens.access_token,
+		baseURL: 'https://chatgpt.com/backend-api/codex',
+		defaultHeaders: {
+			...(tokens.account_id ? { 'chatgpt-account-id': tokens.account_id } : {}),
+			'OpenAI-Beta': 'responses=experimental',
+			originator: 'codex_cli_ts'
+		}
+	});
+
+	sdk.setDefaultOpenAIClient(client);
+	// The ChatGPT codex backend only speaks the Responses API.
+	sdk.setOpenAIAPI('responses');
+	codexAuthApplied = true;
+	return true;
+}
 
 async function loadSdk() {
 	if (sdkLoaded) return;
@@ -29,6 +78,7 @@ async function loadSdk() {
 		tool = sdk.tool;
 		const core = await import('@openai/agents-core');
 		MemorySession = core.MemorySession;
+		await applyCodexAuthIfAvailable(sdk);
 		sdkLoaded = true;
 	} catch (err) {
 		throw new Error(
@@ -38,28 +88,38 @@ async function loadSdk() {
 	}
 }
 
+// Current OpenAI frontier + reasoning models (newest first), per
+// developers.openai.com/api/docs/models as of 2026-06.
 const FALLBACK_MODELS: ProviderModelOption[] = [
 	{ id: 'codex-mini', label: 'Codex Mini', provider: 'openai' },
-	{ id: 'gpt-4o', label: 'GPT-4o', provider: 'openai' },
-	{ id: 'gpt-4o-mini', label: 'GPT-4o Mini', provider: 'openai' },
-	{ id: 'gpt-4.1', label: 'GPT-4.1', provider: 'openai' },
-	{ id: 'gpt-4.1-mini', label: 'GPT-4.1 Mini', provider: 'openai' },
-	{ id: 'gpt-4.1-nano', label: 'GPT-4.1 Nano', provider: 'openai' },
-	{ id: 'o4-mini', label: 'o4-mini', provider: 'openai' },
+	{ id: 'gpt-5.5', label: 'GPT-5.5', provider: 'openai' },
+	{ id: 'gpt-5.5-pro', label: 'GPT-5.5 Pro', provider: 'openai' },
+	{ id: 'gpt-5.4', label: 'GPT-5.4', provider: 'openai' },
+	{ id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini', provider: 'openai' },
+	{ id: 'gpt-5.4-nano', label: 'GPT-5.4 Nano', provider: 'openai' },
+	{ id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex', provider: 'openai' },
+	{ id: 'gpt-5.2', label: 'GPT-5.2', provider: 'openai' },
 	{ id: 'o3', label: 'o3', provider: 'openai' },
-	{ id: 'o3-mini', label: 'o3-mini', provider: 'openai' }
+	{ id: 'gpt-4.1', label: 'GPT-4.1', provider: 'openai' }
 ];
 
-function buildAgentTools(defs: ToolDefinition[]): any[] {
+/** Called after each tool finishes, with the SDK call_id for correlation. */
+type ToolResultSink = (callId: string, name: string, text: string, isError: boolean) => void;
+
+function buildAgentTools(defs: ToolDefinition[], onResult: ToolResultSink): any[] {
 	return defs.map((def) =>
 		tool({
 			name: def.name,
 			description: def.description,
 			parameters: def.inputSchema,
 			strict: false,
-			execute: async (input: any) => {
+			// The SDK passes (input, runContext, details); details.toolCall.call_id
+			// lets us correlate the result back to the streamed tool_call.
+			execute: async (input: any, _ctx?: any, details?: any) => {
+				const callId = details?.toolCall?.call_id ?? details?.toolCall?.id ?? '';
 				const result = await def.execute(input);
 				const text = result.content.map((c) => c.text).join('\n');
+				onResult(callId, def.name, text, !!result.isError);
 				if (result.isError) throw new Error(text);
 				return text;
 			}
@@ -70,6 +130,11 @@ function buildAgentTools(defs: ToolDefinition[]): any[] {
 export class OpenAIAgentsProvider implements AgentProvider {
 	readonly id = 'openai' as const;
 	private session: any = null;
+	// Stable across renders for this provider instance so the persisted
+	// transcript (conversation_events) accumulates under one session id and
+	// `/api/history` can read it back. The SDK's StreamedRunResult has no
+	// usable id of its own.
+	private sessionId: string | null = null;
 
 	async *query(
 		options: ProviderQueryOptions,
@@ -78,9 +143,16 @@ export class OpenAIAgentsProvider implements AgentProvider {
 		await loadSdk();
 
 		const allTools = tools.length > 0 ? tools : buildToolDefinitions();
-		const agentTools = buildAgentTools(allTools);
 
-		const model = options.model || 'gpt-4o';
+		// Tool results aren't echoed in the raw model stream, so the execute
+		// wrapper pushes them here; the event loop drains the queue and yields
+		// them with the SDK call_id so the client can correlate to the call.
+		const resultQueue: ProviderEvent[] = [];
+		const agentTools = buildAgentTools(allTools, (callId, _name, text, isError) => {
+			resultQueue.push({ type: 'tool_result', tool_use_id: callId, is_error: isError, text });
+		});
+
+		const model = options.model || 'gpt-5.5';
 
 		const instructions = options.systemPrompt
 			? options.systemPrompt
@@ -90,101 +162,100 @@ export class OpenAIAgentsProvider implements AgentProvider {
 			name: 'docwriter',
 			model,
 			instructions,
-			tools: agentTools
+			tools: agentTools,
+			// The ChatGPT codex backend rejects stored responses
+			// ("Store must be set to false"); the public API defaults to true.
+			...(codexAuthApplied ? { modelSettings: { store: false } } : {})
 		});
 
 		if (!this.session) {
 			this.session = new MemorySession();
 		}
 
+		// Establish/reuse a stable session id and surface it BEFORE streaming so
+		// the render endpoint persists every event under the same id the viewer
+		// later reads. Prefer a resumed id from runtime state if one was passed.
+		if (!this.sessionId) {
+			this.sessionId = options.sessionId || `openai-${randomUUID()}`;
+		}
+		yield { type: 'session', sessionId: this.sessionId };
+
 		const streamResult = await run(agent, options.prompt, {
 			stream: true,
-			session: this.session
+			session: this.session,
+			// SDK default is 10; a read→edit→verify writing loop blows past that.
+			maxTurns: 50
 		});
 
-		if (streamResult.id) {
-			yield { type: 'session', sessionId: streamResult.id };
-		}
-
-		let toolCallCounter = 0;
+		// On the ChatGPT/Codex backend the SDK never delivers the high-level
+		// `run_item_stream_event`s — only `raw_model_stream_event`s wrapping the
+		// OpenAI Responses SSE event (in `data.event`). So we derive tool calls,
+		// assistant text, and reasoning from the raw stream directly. This also
+		// works on the public OpenAI API, which streams the same raw events.
+		const started = new Set<string>(); // call_ids we've emitted tool_call_start for
+		const completed = new Set<string>(); // call_ids we've emitted tool_call for
 
 		for await (const event of streamResult) {
-			if (event.type === 'run_item_stream_event') {
-				const item = event.item;
-				const name = event.name;
+			// Flush any tool results produced since the last event.
+			while (resultQueue.length) yield resultQueue.shift()!;
 
-				if (item.type === 'message_output_item') {
-					const content = item.rawItem?.content;
-					if (Array.isArray(content)) {
-						for (const block of content) {
-							if (block.type === 'output_text' && block.text) {
-								yield { type: 'assistant_text', text: block.text };
-							}
-						}
+			if (event.type !== 'raw_model_stream_event') continue;
+			const inner = (event as any).data?.event; // the OpenAI Responses SSE event
+			const t = inner?.type;
+			if (!t) continue;
+
+			if (t === 'response.output_text.delta' && inner.delta) {
+				yield { type: 'assistant_text', text: inner.delta };
+			} else if (
+				(t === 'response.reasoning_summary_text.delta' || t === 'response.reasoning_text.delta') &&
+				inner.delta
+			) {
+				yield { type: 'assistant_thinking', text: inner.delta };
+			} else if (t === 'response.output_item.added' && inner.item?.type === 'function_call') {
+				const ci = inner.item;
+				const callId = ci.call_id || ci.id;
+				if (callId && !started.has(callId)) {
+					started.add(callId);
+					yield { type: 'tool_call_start', tool_name: ci.name ?? 'unknown', tool_use_id: callId };
+				}
+			} else if (t === 'response.output_item.done' && inner.item?.type === 'function_call') {
+				const ci = inner.item;
+				const callId = ci.call_id || ci.id;
+				const toolName = ci.name ?? 'unknown';
+				let input: Record<string, unknown> = {};
+				try {
+					input = typeof ci.arguments === 'string' ? JSON.parse(ci.arguments || '{}') : ci.arguments || {};
+				} catch { /* malformed args — leave empty */ }
+
+				if (callId && !started.has(callId)) {
+					started.add(callId);
+					yield { type: 'tool_call_start', tool_name: toolName, tool_use_id: callId };
+				}
+				if (callId && !completed.has(callId)) {
+					completed.add(callId);
+					yield { type: 'tool_call', tool_name: toolName, tool_use_id: callId, input };
+
+					if (toolName === 'propose_rule') {
+						yield {
+							type: 'rule_proposal',
+							text: typeof input.text === 'string' ? input.text : '',
+							reason: typeof input.reason === 'string' ? input.reason : undefined
+						};
+					} else if (toolName === 'propose_hook') {
+						yield {
+							type: 'hook_proposal',
+							event: typeof input.event === 'string' ? input.event : 'PostToolUse',
+							matcher: typeof input.matcher === 'string' ? input.matcher : undefined,
+							command: typeof input.command === 'string' ? input.command : '',
+							reason: typeof input.reason === 'string' ? input.reason : undefined
+						};
 					}
-				}
-
-				if (item.type === 'tool_call_item') {
-					const callId = item.rawItem?.call_id || item.rawItem?.id || `oai_tool_${++toolCallCounter}`;
-					const toolName = item.rawItem?.name || 'unknown';
-					let toolInput: Record<string, unknown> = {};
-					try {
-						const rawArgs = item.rawItem?.arguments;
-						toolInput = typeof rawArgs === 'string' ? JSON.parse(rawArgs) : (rawArgs || {});
-					} catch { /* ignore */ }
-
-					if (name === 'tool_called') {
-						yield { type: 'tool_call_start', tool_name: toolName, tool_use_id: callId };
-						yield { type: 'tool_call', tool_name: toolName, tool_use_id: callId, input: toolInput };
-
-						if (toolName === 'propose_rule') {
-							yield {
-								type: 'rule_proposal',
-								text: typeof toolInput.text === 'string' ? toolInput.text : '',
-								reason: typeof toolInput.reason === 'string' ? toolInput.reason : undefined
-							};
-						} else if (toolName === 'propose_hook') {
-							yield {
-								type: 'hook_proposal',
-								event: typeof toolInput.event === 'string' ? toolInput.event : 'PostToolUse',
-								matcher: typeof toolInput.matcher === 'string' ? toolInput.matcher : undefined,
-								command: typeof toolInput.command === 'string' ? toolInput.command : '',
-								reason: typeof toolInput.reason === 'string' ? toolInput.reason : undefined
-							};
-						}
-					}
-				}
-
-				if (item.type === 'tool_call_output_item') {
-					const callId = item.rawItem?.call_id || `oai_tool_${toolCallCounter}`;
-					const output = item.rawItem?.output;
-					const text = typeof output === 'string' ? output : JSON.stringify(output ?? '');
-					yield {
-						type: 'tool_result',
-						tool_use_id: callId,
-						is_error: false,
-						text
-					};
-				}
-
-				if (item.type === 'reasoning_item') {
-					const text = item.rawItem?.summary
-						?? (Array.isArray(item.rawItem?.content)
-							? item.rawItem.content.map((c: any) => c.text ?? '').join('')
-							: '');
-					if (text) {
-						yield { type: 'assistant_thinking', text };
-					}
-				}
-			}
-
-			if (event.type === 'raw_model_stream_event') {
-				const data = event.data;
-				if (data?.type === 'response.output_text.delta' && data.delta) {
-					yield { type: 'assistant_text', text: data.delta };
 				}
 			}
 		}
+
+		// Drain any results that landed after the final stream event.
+		while (resultQueue.length) yield resultQueue.shift()!;
 
 		// Emit cost/usage info from the final result
 		try {

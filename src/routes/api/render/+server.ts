@@ -687,6 +687,15 @@ export const POST: RequestHandler = async ({ request }) => {
 			provider?: string;
 		};
 		const providerId = (providerIdRaw || 'claude') as ProviderId;
+		// Switching providers invalidates the persisted session id: each
+		// provider mints ids in its own format (Claude wants a UUID, OpenAI
+		// uses `openai-…`, etc.) and can't resume another's. Clear it so the
+		// new provider starts a fresh session instead of trying to --resume a
+		// foreign id (which errors).
+		const prevProvider = kvGet('provider');
+		if (prevProvider && prevProvider !== providerId) {
+			setSessionId('');
+		}
 		kvSet('provider', providerId);
 
 		const allTabIds = getTabsState().order;
@@ -764,8 +773,14 @@ export const POST: RequestHandler = async ({ request }) => {
 						)
 					);
 					if (providerId !== 'claude' && persistableEvents.has(event)) {
-						const sid = getSessionId() || `${providerId}_${renderStart}`;
-						dbAppendConversationEvent(sid, providerId, event, JSON.stringify(payload));
+						// Only persist once the session id is established (the
+						// provider yields `session` first, and the handler sets it
+						// before send()). Using a throwaway fallback id would split
+						// events into a bucket /api/history never reads.
+						const sid = getSessionId();
+						if (sid) {
+							dbAppendConversationEvent(sid, providerId, event, JSON.stringify(payload));
+						}
 					}
 				}
 
@@ -863,6 +878,12 @@ export const POST: RequestHandler = async ({ request }) => {
 							? planAllowedTools
 							: fullAllowedTools;
 
+					// Persist the user's message into the transcript exactly once,
+					// the moment the session id is known (see the session handler
+					// below). Non-Claude providers only — Claude logs it in its
+					// own JSONL transcript.
+					let userMsgPersisted = false;
+
 					async function runQueryRound(
 						roundPrompt: string,
 						roundImages?: ImageAttachmentPayload[]
@@ -890,22 +911,24 @@ export const POST: RequestHandler = async ({ request }) => {
 							if (event.type === 'tool_call' && mutationToolNames.has(event.tool_name)) {
 								usedDocMutationTool = true;
 							}
-							// Forward session IDs to runtime state
+							// Forward session IDs to runtime state. The session event
+							// arrives first, so this is also where we log the user
+							// message — under the now-established session id, so it
+							// lands in the same bucket /api/history reads back.
 							if (event.type === 'session') {
 								setSessionId(event.sessionId);
+								if (providerId !== 'claude' && userMessage && !userMsgPersisted) {
+									userMsgPersisted = true;
+									dbAppendConversationEvent(event.sessionId, providerId, 'user_message', JSON.stringify({
+										type: 'user_message', text: userMessage, timestamp: renderStart
+									}));
+								}
 							}
 							// Forward the event as-is to the SSE stream
 							send(event.type, event);
 						}
 
 						return { usedDocMutationTool };
-					}
-
-					if (providerId !== 'claude' && userMessage) {
-						const sid = getSessionId() || `${providerId}_${renderStart}`;
-						dbAppendConversationEvent(sid, providerId, 'user_message', JSON.stringify({
-							type: 'user_message', text: userMessage, timestamp: renderStart
-						}));
 					}
 
 					const feedbackThreadId = message.match(/thread_id="([^"]+)"/)?.[1] ?? null;

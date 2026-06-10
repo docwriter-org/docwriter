@@ -60,6 +60,16 @@
 
 	let events = $state<SessionEvent[]>([]);
 	let sessionId = $state('');
+	// Label for assistant rows / filter — reflects the provider that produced
+	// this session, not a hardcoded "Claude".
+	const PROVIDER_LABELS: Record<string, string> = {
+		claude: 'Claude',
+		openai: 'OpenAI',
+		codex: 'Codex',
+		cursor: 'Cursor',
+		pi: 'Pi'
+	};
+	let assistantLabel = $state('Assistant');
 	let systemPrompt = $state<string | null>(null);
 	let systemPromptOpen = $state(false);
 	let loading = $state(true);
@@ -227,7 +237,17 @@
 			// Fall back to the SDK-wrapped `messages` array if raw is absent.
 			const raw: unknown[] = data.raw ?? [];
 			const messages: unknown[] = data.messages ?? [];
-			const parsed = raw.length > 0 ? parseRaw(raw) : parseMessages(messages);
+			const provider = (data.provider ?? 'claude') as string;
+			assistantLabel = PROVIDER_LABELS[provider] ?? 'Assistant';
+			// Non-Claude providers persist DocWriter's own SSE event payloads
+			// (type: 'tool_call' | 'assistant_text' | …) rather than the Claude
+			// SDK's JSONL message shape, so they need their own parser.
+			const parsed =
+				provider !== 'claude'
+					? parseProviderEvents(raw)
+					: raw.length > 0
+						? parseRaw(raw)
+						: parseMessages(messages);
 			events = pairToolResults(parsed);
 		} catch (e) {
 			error = String(e);
@@ -235,6 +255,64 @@
 			loading = false;
 		}
 	});
+
+	/** Parse DocWriter's own SSE event payloads (persisted in conversation_events
+	 * for non-Claude providers). Streamed assistant_text / thinking arrive as many
+	 * one-token deltas, so consecutive runs are coalesced into a single event. */
+	function parseProviderEvents(entries: unknown[]): SessionEvent[] {
+		const evs: SessionEvent[] = [];
+		// Accumulator for the current run of text/thinking deltas.
+		let acc: SessionEvent | null = null;
+		const flush = () => {
+			if (acc && (acc.text ?? '').trim()) evs.push(acc);
+			acc = null;
+		};
+
+		for (const entry of entries) {
+			const e = entry as Record<string, unknown>;
+			const t = e.type as string;
+			const ts = '';
+
+			if (t === 'assistant_text' || t === 'assistant_thinking') {
+				const kind: EventKind = t === 'assistant_thinking' ? 'thinking' : 'assistant_text';
+				const delta = typeof e.text === 'string' ? e.text : '';
+				if (acc && acc.kind === kind) {
+					acc.text = (acc.text ?? '') + delta;
+				} else {
+					flush();
+					acc = { kind, ts, text: delta };
+				}
+				continue;
+			}
+
+			// Any non-text event ends the current text run.
+			flush();
+
+			if (t === 'user_message') {
+				const text = typeof e.text === 'string' ? e.text : '';
+				if (text.trim()) evs.push({ kind: 'user', ts, text });
+			} else if (t === 'tool_call') {
+				evs.push({
+					kind: 'tool_use',
+					ts,
+					name: (e.tool_name as string) ?? 'unknown',
+					toolId: (e.tool_use_id as string) ?? '',
+					inputJson: JSON.stringify(e.input ?? {}, null, 2)
+				});
+			} else if (t === 'tool_result') {
+				evs.push({
+					kind: 'tool_result',
+					ts,
+					toolId: (e.tool_use_id as string) ?? '',
+					text: typeof e.text === 'string' ? e.text : '',
+					isError: !!e.is_error
+				});
+			}
+			// session / cost / error / tool_call_start / *_proposal: not shown here.
+		}
+		flush();
+		return evs;
+	}
 
 	/** Parse raw JSONL entries directly from the transcript file.
 	 * Each entry has `type` ('user'|'assistant'|'system'|…), `message`, `timestamp`. */
@@ -501,7 +579,7 @@
 							class:active={filter === f}
 							onclick={() => (filter = f)}
 						>
-							{f === 'assistant' ? 'Claude' : f === 'tools' ? 'Tools' : f.charAt(0).toUpperCase() + f.slice(1)}
+							{f === 'assistant' ? assistantLabel : f === 'tools' ? 'Tools' : f.charAt(0).toUpperCase() + f.slice(1)}
 						</button>
 					{/each}
 				</div>
@@ -672,7 +750,7 @@
 								{@const preview = textPreview(ev.text)}
 								<div class="card asst-card">
 									<button class="card-header collapsible" onclick={() => toggleExpand(i)}>
-										<span class="role-badge asst-badge">Claude</span>
+										<span class="role-badge asst-badge">{assistantLabel}</span>
 										{#if !isOpen && preview}
 											<span class="msg-preview">{preview}</span>
 										{:else}

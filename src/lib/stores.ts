@@ -1,4 +1,4 @@
-import { writable } from 'svelte/store';
+import { get, writable } from 'svelte/store';
 import type {
 	Rule,
 	Action,
@@ -270,9 +270,9 @@ export type ProviderOption = { id: string; label: string };
 export const AVAILABLE_PROVIDERS: ProviderOption[] = [
 	{ id: 'claude', label: 'Claude' },
 	{ id: 'openai', label: 'OpenAI' },
+	{ id: 'codex', label: 'Codex' },
 	{ id: 'cursor', label: 'Cursor' },
-	{ id: 'pi', label: 'Pi' },
-	{ id: 'opencode', label: 'OpenCode' }
+	{ id: 'pi', label: 'Pi' }
 ];
 
 /** Newest-first static list, shown immediately on load and used as the
@@ -285,48 +285,175 @@ export const FALLBACK_MODELS: ModelOption[] = [
 	{ id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', provider: 'claude' },
 	{ id: 'claude-opus-4-5', label: 'Claude Opus 4.5', provider: 'claude' },
 	{ id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5', provider: 'claude' },
-	{ id: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5', provider: 'claude' }
+	{ id: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5', provider: 'claude' },
+	{ id: 'gpt-5.5', label: 'GPT-5.5', provider: 'openai' },
+	{ id: 'gpt-5.5-pro', label: 'GPT-5.5 Pro', provider: 'openai' },
+	{ id: 'gpt-5.4', label: 'GPT-5.4', provider: 'openai' },
+	{ id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini', provider: 'openai' },
+	{ id: 'gpt-5.4-nano', label: 'GPT-5.4 Nano', provider: 'openai' },
+	{ id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex', provider: 'openai' },
+	{ id: 'gpt-5.2', label: 'GPT-5.2', provider: 'openai' },
+	{ id: 'o3', label: 'o3', provider: 'openai' },
+	{ id: 'gpt-4.1', label: 'GPT-4.1', provider: 'openai' },
+	{ id: 'gpt-5.5', label: 'GPT-5.5', provider: 'codex' },
+	{ id: 'gpt-5.4', label: 'GPT-5.4', provider: 'codex' },
+	{ id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini', provider: 'codex' },
+	{ id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex', provider: 'codex' },
+	{ id: 'gpt-5.2', label: 'GPT-5.2', provider: 'codex' },
+	{ id: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5', provider: 'cursor' },
+	{ id: 'gpt-4o', label: 'GPT-4o', provider: 'cursor' },
+	{ id: 'gpt-4o-mini', label: 'GPT-4o Mini', provider: 'cursor' },
+	{ id: 'claude-haiku-3-5', label: 'Claude Haiku 3.5', provider: 'cursor' },
+	{ id: 'cursor-small', label: 'Cursor Small', provider: 'cursor' },
+	{ id: 'anthropic/claude-sonnet-4-5', label: 'Claude Sonnet 4.5', provider: 'pi' },
+	{ id: 'anthropic/claude-opus-4-5', label: 'Claude Opus 4.5', provider: 'pi' },
+	{ id: 'anthropic/claude-haiku-3-5', label: 'Claude Haiku 3.5', provider: 'pi' },
+	{ id: 'openai/gpt-4o', label: 'GPT-4o', provider: 'pi' },
+	{ id: 'openai/gpt-4o-mini', label: 'GPT-4o Mini', provider: 'pi' },
+	{ id: 'openai/o4-mini', label: 'o4-mini', provider: 'pi' },
+	{ id: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash', provider: 'pi' },
+	{ id: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro', provider: 'pi' },
+	{ id: 'deepseek/deepseek-r1', label: 'DeepSeek R1', provider: 'pi' },
+	{ id: 'ollama/llama3.1', label: 'Llama 3.1 (Ollama)', provider: 'pi' },
+	{ id: 'ollama/qwen3', label: 'Qwen 3 (Ollama)', provider: 'pi' }
 ];
-
-/** Live model catalog populated by `loadAvailableModels()`. */
-export const availableModels = writable<ModelOption[]>(FALLBACK_MODELS);
 
 const SELECTED_MODEL_KEY = 'docwriter.selectedModel';
 const SELECTED_PROVIDER_KEY = 'docwriter.selectedProvider';
+const SELECTED_MODELS_BY_PROVIDER_KEY = 'docwriter.selectedModelsByProvider';
 const storedModel = typeof window === 'undefined' ? null : window.localStorage.getItem(SELECTED_MODEL_KEY);
 const storedProvider = typeof window === 'undefined' ? null : window.localStorage.getItem(SELECTED_PROVIDER_KEY);
-export const selectedModel = writable<string>(storedModel ?? 'opus');
-export const selectedProvider = writable<string>(storedProvider ?? 'claude');
+// Validate the persisted provider against the current list — a removed
+// provider (e.g. a previously-selected 'opencode') must not stick around.
+const validProvider =
+	storedProvider && AVAILABLE_PROVIDERS.some((p) => p.id === storedProvider)
+		? storedProvider
+		: 'claude';
+
+function readSelectedModelsByProvider(): Record<string, string> {
+	if (typeof window === 'undefined') return {};
+	let parsed: unknown = null;
+	try {
+		parsed = JSON.parse(window.localStorage.getItem(SELECTED_MODELS_BY_PROVIDER_KEY) ?? '{}');
+	} catch {
+		parsed = null;
+	}
+
+	const out: Record<string, string> = {};
+	if (parsed && typeof parsed === 'object') {
+		for (const [provider, model] of Object.entries(parsed)) {
+			if (
+				AVAILABLE_PROVIDERS.some((p) => p.id === provider) &&
+				typeof model === 'string' &&
+				model.trim()
+			) {
+				out[provider] = model.trim();
+			}
+		}
+	}
+
+	// Migrate the legacy single-model preference into the provider it was
+	// saved with. If no provider was saved, old installs only had Claude.
+	const legacyProvider =
+		storedProvider && AVAILABLE_PROVIDERS.some((p) => p.id === storedProvider)
+			? storedProvider
+			: storedProvider
+				? null
+				: 'claude';
+	if (storedModel?.trim() && legacyProvider && !out[legacyProvider]) {
+		out[legacyProvider] = storedModel.trim();
+	}
+	return out;
+}
+
+let selectedModelsByProvider = readSelectedModelsByProvider();
+
+function modelKey(model: ModelOption): string {
+	return `${model.provider ?? ''}:${model.id}`;
+}
+
+function addStoredSelections(models: ModelOption[]): ModelOption[] {
+	const next = [...models];
+	const seen = new Set(next.map(modelKey));
+	for (const [provider, id] of Object.entries(selectedModelsByProvider)) {
+		if (!AVAILABLE_PROVIDERS.some((p) => p.id === provider)) continue;
+		const option = { id, label: id, provider };
+		const key = modelKey(option);
+		if (!seen.has(key)) {
+			seen.add(key);
+			next.push(option);
+		}
+	}
+	return next;
+}
+
+function fallbackModelForProvider(provider: string): string {
+	const providerModels = FALLBACK_MODELS.filter((m) => m.provider === provider || !m.provider);
+	return providerModels.find((m) => m.id.includes('opus'))?.id ?? providerModels[0]?.id ?? 'opus';
+}
+
+function defaultModelForProvider(provider: string, models: ModelOption[]): string {
+	const providerModels = models.filter((m) => !m.provider || m.provider === provider);
+	if (provider === 'claude') {
+		return providerModels.find((m) => m.id.includes('opus'))?.id ?? providerModels[0]?.id ?? 'opus';
+	}
+	return providerModels[0]?.id ?? fallbackModelForProvider(provider);
+}
+
+function persistProviderModel(provider: string, id: string) {
+	selectedModelsByProvider = { ...selectedModelsByProvider, [provider]: id };
+	if (typeof window === 'undefined') return;
+	window.localStorage.setItem(
+		SELECTED_MODELS_BY_PROVIDER_KEY,
+		JSON.stringify(selectedModelsByProvider)
+	);
+	// Keep the old key populated for backward compatibility with older builds.
+	window.localStorage.setItem(SELECTED_MODEL_KEY, id);
+}
+
+/** Live model catalog populated by `loadAvailableModels()`. */
+export const availableModels = writable<ModelOption[]>(addStoredSelections(FALLBACK_MODELS));
+
+const initialModel =
+	selectedModelsByProvider[validProvider] ?? fallbackModelForProvider(validProvider);
+export const selectedModel = writable<string>(initialModel);
+export const selectedProvider = writable<string>(validProvider);
 
 export function setSelectedModel(id: string) {
 	selectedModel.set(id);
-	if (typeof window !== 'undefined') window.localStorage.setItem(SELECTED_MODEL_KEY, id);
+	persistProviderModel(get(selectedProvider), id);
 }
 
 export function setCustomModel(id: string, provider: string) {
 	let existing: ModelOption[] = [];
 	availableModels.subscribe((v) => (existing = v))();
-	if (!existing.some((m) => m.id === id)) {
+	if (!existing.some((m) => m.id === id && m.provider === provider)) {
 		availableModels.set([...existing, { id, label: id, provider }]);
 	}
-	setSelectedModel(id);
+	persistProviderModel(provider, id);
+	selectedModel.set(id);
 }
 
 export function setSelectedProvider(id: string) {
+	if (!AVAILABLE_PROVIDERS.some((p) => p.id === id)) return;
 	selectedProvider.set(id);
 	if (typeof window !== 'undefined') window.localStorage.setItem(SELECTED_PROVIDER_KEY, id);
-	loadAvailableModels().then(() => {
-		let models: ModelOption[] = [];
-		availableModels.subscribe((v) => (models = v))();
-		const forProvider = models.filter((m) => m.provider === id);
-		if (forProvider.length > 0) {
-			let current = '';
-			selectedModel.subscribe((v) => (current = v))();
-			if (!forProvider.some((m) => m.id === current)) {
-				setSelectedModel(forProvider[0].id);
-			}
-		}
+	loadAvailableModels(id).then(() => {
+		if (get(selectedProvider) === id) selectModelForProvider(id);
 	});
+}
+
+function selectModelForProvider(provider: string) {
+	const preferred = selectedModelsByProvider[provider];
+	if (preferred) {
+		selectedModel.set(preferred);
+		persistProviderModel(provider, preferred);
+		availableModels.update(addStoredSelections);
+		return;
+	}
+	const next = defaultModelForProvider(provider, get(availableModels));
+	selectedModel.set(next);
+	persistProviderModel(provider, next);
 }
 
 /** Fetch the live model list from `/api/models`. */
@@ -341,15 +468,14 @@ export async function loadAvailableModels(providerId?: string) {
 		const data = (await res.json()) as { models?: ModelOption[]; defaultModel?: string };
 		if (data.models?.length) {
 			if (providerId) {
-				let existing: ModelOption[] = [];
-				availableModels.subscribe((v) => (existing = v))();
+				const existing = get(availableModels);
 				const otherProviders = existing.filter((m) => m.provider !== providerId);
-				availableModels.set([...otherProviders, ...data.models]);
+				availableModels.set(addStoredSelections([...otherProviders, ...data.models]));
 			} else {
-				availableModels.set(data.models);
+				availableModels.set(addStoredSelections(data.models));
 			}
 		}
-		if (!storedModel && data.defaultModel) selectedModel.set(data.defaultModel);
+		selectModelForProvider(providerId ?? get(selectedProvider));
 	} catch {
 		// Keep the fallback list / current selection.
 	}

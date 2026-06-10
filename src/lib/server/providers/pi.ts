@@ -14,6 +14,7 @@ import type {
 	ToolDefinition
 } from './types';
 import { buildToolDefinitions } from './tool-handlers';
+import { randomUUID } from 'node:crypto';
 
 let sdkLoaded = false;
 let createAgentSession: any = null;
@@ -114,6 +115,9 @@ function buildPiTools(defs: ToolDefinition[]): any[] {
 export class PiProvider implements AgentProvider {
 	readonly id = 'pi' as const;
 	private session: any = null;
+	// Stable across renders so the transcript accumulates under one session id
+	// (Pi mints a fresh session.sessionId each render).
+	private sessionId: string | null = null;
 
 	async *query(
 		options: ProviderQueryOptions,
@@ -149,13 +153,18 @@ export class PiProvider implements AgentProvider {
 		const { session } = await createAgentSession(sessionOpts);
 		this.session = session;
 
-		if (session.sessionId) {
-			yield { type: 'session', sessionId: session.sessionId };
+		if (!this.sessionId) {
+			this.sessionId = options.sessionId || `pi-${randomUUID()}`;
 		}
+		yield { type: 'session', sessionId: this.sessionId };
 
 		const events: ProviderEvent[] = [];
 		let resolveWait: (() => void) | null = null;
 		let done = false;
+		// Correlate tool start/end without wall-clock fallbacks (Date.now()
+		// differs between the two events, breaking tool_use_id matching).
+		let toolCounter = 0;
+		const lastCallIdByTool = new Map<string, string>();
 
 		const unsubscribe = session.subscribe((event: any) => {
 			switch (event.type) {
@@ -169,7 +178,8 @@ export class PiProvider implements AgentProvider {
 					break;
 				}
 				case 'tool_execution_start': {
-					const callId = event.toolCallId || `pi_tool_${Date.now()}`;
+					const callId = event.toolCallId || `pi_tool_${++toolCounter}`;
+					lastCallIdByTool.set(event.toolName, callId);
 					events.push({ type: 'tool_call_start', tool_name: event.toolName, tool_use_id: callId });
 					events.push({
 						type: 'tool_call',
@@ -196,7 +206,7 @@ export class PiProvider implements AgentProvider {
 					break;
 				}
 				case 'tool_execution_end': {
-					const callId = event.toolCallId || `pi_tool_${Date.now()}`;
+					const callId = event.toolCallId || lastCallIdByTool.get(event.toolName) || `pi_tool_${toolCounter}`;
 					const text = event.result?.content
 						?.map((c: any) => c.text)
 						.join('\n') ?? '';
@@ -219,7 +229,9 @@ export class PiProvider implements AgentProvider {
 			? `${options.systemPrompt}\n\n${options.prompt}`
 			: options.prompt;
 
-		const promptPromise = session.prompt(fullPrompt).catch(() => {
+		let promptError: Error | null = null;
+		const promptPromise = session.prompt(fullPrompt).catch((err: unknown) => {
+			promptError = err instanceof Error ? err : new Error(String(err));
 			done = true;
 			if (resolveWait) resolveWait();
 		});
@@ -242,6 +254,9 @@ export class PiProvider implements AgentProvider {
 		await promptPromise;
 		session.dispose();
 		this.session = null;
+		// Surface a prompt failure (e.g. missing API key) so the render endpoint
+		// emits an `error` event instead of completing as a silent no-op.
+		if (promptError) throw promptError;
 	}
 
 	async listModels(): Promise<ProviderModelOption[]> {
