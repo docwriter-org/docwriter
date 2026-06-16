@@ -275,7 +275,7 @@
 				</a>
 			</div>
 			<div class="try-row">
-				<div class="install-block disabled"><span class="install-label">DocWriter GitHub</span> <span class="install-note">(private repo)</span></div>
+				<div class="install-block disabled"><span class="install-label">DocWriter GitHub</span> <span class="install-note">(coming soon!)</span></div>
 			</div>
 		</div>
 	</section>
