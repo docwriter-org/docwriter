@@ -225,6 +225,28 @@
 		</p>
 	</section>
 
+	<section class="artifacts">
+		<h2>Skills &amp; artifacts</h2>
+		<p class="artifacts-intro">
+			DocWriter uses <strong>skills</strong> to encode writing practices the agent should follow.
+			We are building open artifacts around the harness; more are on the way.
+		</p>
+		<div class="artifacts-list">
+			<div class="artifact-card">
+				<div class="artifact-top">
+					<h3>
+						<a href="https://github.com/shreyashankar/plain-writing-skill" target="_blank" rel="noopener">Plain writing</a>
+					</h3>
+					<span class="artifact-status">In progress</span>
+				</div>
+				<p>
+					A writing skill that teaches agents to use simple words, complete sentences, and no filler.
+					It revises its own output and can show a diff of what changed. We are integrating it into DocWriter as a built-in skill.
+				</p>
+			</div>
+		</div>
+	</section>
+
 	<section class="research">
 		<h2>Research directions</h2>
 		<p class="research-intro">What are the research problems? Writing is different from coding&mdash;it is more personal, more taste-driven, and harder to evaluate mechanically. That means we need new harnesses, interfaces, evals, and good practices built specifically for writing with AI.</p>
@@ -400,6 +422,28 @@
 	.about p { margin: 0 0 14px; font-size: 15px; line-height: 1.7; color: #444; }
 	.about p:last-child { margin-bottom: 0; }
 	.about code { font-family: 'Geist Mono', 'SFMono-Regular', Consolas, monospace; font-size: 13px; background: rgba(109,40,217,0.06); padding: 1px 5px; border-radius: 3px; color: #6d28d9; }
+
+	/* Skills & artifacts */
+	.artifacts { max-width: 640px; margin: 56px auto 0; padding: 0 24px; }
+	.artifacts h2 { font-family: 'Lora', Georgia, serif; font-size: 23px; font-weight: 600; margin: 0 0 8px; }
+	.artifacts-intro { margin: 0 0 20px; font-size: 15px; line-height: 1.7; color: #444; }
+	.artifacts-list { display: grid; grid-template-columns: 1fr; gap: 14px; }
+	.artifact-card { padding: 18px 20px; border: 1px solid #e8e5de; border-radius: 8px; background: #fff; }
+	.artifact-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
+	.artifact-card h3 { margin: 0; font-family: 'Lora', Georgia, serif; font-size: 15px; font-weight: 600; }
+	.artifact-card h3 a { color: #1a1a1a; text-decoration: none; }
+	.artifact-card h3 a:hover { color: #003262; }
+	.artifact-card p { margin: 0; font-size: 14.5px; line-height: 1.65; color: #555; }
+	.artifact-status {
+		flex-shrink: 0;
+		font-size: 11px;
+		font-weight: 500;
+		padding: 2px 8px;
+		border-radius: 999px;
+		background: rgba(109,40,217,0.08);
+		color: #6d28d9;
+		border: 1px solid rgba(109,40,217,0.15);
+	}
 
 	/* Research */
 	.research { max-width: 640px; margin: 56px auto 0; padding: 0 24px; }
