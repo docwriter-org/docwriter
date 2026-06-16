@@ -1,8 +1,0 @@
-# Cloudflare CLI scope for docwriter.org.
-# Auth: npx wrangler login  (or CLOUDFLARE_API_TOKEN)
-name = "docwriter-org"
-compatibility_date = "2024-09-23"
-
-# Set after adding docwriter.org to this Cloudflare account:
-# CLOUDFLARE_ZONE_ID from Dashboard → docwriter.org → Overview → Zone ID
-# routes = [{ pattern = "docwriter.org", custom_domain = true }]
