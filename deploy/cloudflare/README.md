@@ -15,6 +15,13 @@ LANDING_DEPLOY=1 npm run dev
 
 Vercel should deploy **only** the `landing` branch (`vercel.json` disables `main`).
 
+Never merge `landing` into `main`. To pull editor fixes into the landing branch:
+
+```bash
+git checkout landing
+git merge main
+```
+
 ## Cloudflare: add the domain before transferring
 
 If you see **“Gaining account must first add the domain as a website”**:

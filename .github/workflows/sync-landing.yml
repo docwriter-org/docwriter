@@ -1,10 +1,10 @@
 # Merge main into landing so the marketing branch stays current.
-# Only landing deploys to Vercel; main stays the editor CLI.
+# This workflow lives on the landing branch only (not main).
 name: Sync landing branch
 
 on:
-  push:
-    branches: [main]
+  schedule:
+    - cron: '0 6 * * *'
   workflow_dispatch:
 
 permissions:
@@ -21,10 +21,6 @@ jobs:
       - name: Merge main into landing
         run: |
           git fetch origin main landing
-          if ! git show-ref --verify --quiet refs/heads/landing; then
-            echo "landing branch does not exist yet — skip"
-            exit 0
-          fi
           git checkout landing
           git merge origin/main -m "chore: merge main into landing"
           git push origin landing
