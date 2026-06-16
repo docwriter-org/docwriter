@@ -12,6 +12,7 @@ import { syncRulesToClaudeMemory } from '$lib/server/claude-memory';
 import { installBundledSkills } from '$lib/server/skills-install';
 import { createWsServer } from '$lib/server/ws-server';
 import { loadGlobalKeys } from '$lib/server/api-keys';
+import { maybeHandleClerkAuth } from '$lib/server/clerk-auth';
 
 const isLandingDeploy = process.env.LANDING_DEPLOY === '1';
 
@@ -82,5 +83,9 @@ if (!isLandingDeploy) {
 	}
 }
 
-// Pass-through handle (no per-request modifications needed here).
-export const handle: Handle = async ({ event, resolve }) => resolve(event);
+// Pass-through handle unless Clerk auth intercepts the request.
+export const handle: Handle = async ({ event, resolve }) => {
+	const clerkResponse = await maybeHandleClerkAuth(event, resolve);
+	if (clerkResponse) return clerkResponse;
+	return resolve(event);
+};

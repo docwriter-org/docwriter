@@ -95,8 +95,7 @@
 	<nav class="nav">
 		<span class="logo">DocWriter</span>
 		<div class="nav-right">
-			<a href="https://github.com/shreyashankar/docwriter" class="nav-link" target="_blank" rel="noopener">GitHub</a>
-			<a href="/sign-in" class="nav-link">Sign in</a>
+			<a href="/sign-in" class="nav-link">User study login</a>
 		</div>
 	</nav>
 
