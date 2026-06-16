@@ -225,28 +225,6 @@
 		</p>
 	</section>
 
-	<section class="artifacts">
-		<h2>Skills &amp; artifacts</h2>
-		<p class="artifacts-intro">
-			DocWriter uses <strong>skills</strong> to encode writing practices the agent should follow.
-			We are building open artifacts around the harness; more are on the way.
-		</p>
-		<div class="artifacts-list">
-			<div class="artifact-card">
-				<div class="artifact-top">
-					<h3>
-						<a href="https://github.com/shreyashankar/plain-writing-skill" target="_blank" rel="noopener">Plain writing</a>
-					</h3>
-					<span class="artifact-status">In progress</span>
-				</div>
-				<p>
-					A writing skill that teaches agents to use simple words, complete sentences, and no filler.
-					It revises its own output and can show a diff of what changed. We are integrating it into DocWriter as a built-in skill.
-				</p>
-			</div>
-		</div>
-	</section>
-
 	<section class="research">
 		<h2>Research directions</h2>
 		<p class="research-intro">What are the research problems? Writing is different from coding&mdash;it is more personal, more taste-driven, and harder to evaluate mechanically. That means we need new harnesses, interfaces, evals, and good practices built specifically for writing with AI.</p>
@@ -268,10 +246,24 @@
 
 	<section class="start">
 		<h2>Try it</h2>
-		<p>DocWriter runs locally. Install it with npm and open it in any folder with your writing files.</p>
-		<div class="install-block disabled"><code>npx docwriter</code> <span class="coming-soon">(coming soon!)</span></div>
+		<div class="try-grid">
+			<div class="try-card">
+				<h3>DocWriter</h3>
+				<p>Runs locally. Open any folder with your writing files and start collaborating with the agent.</p>
+				<div class="install-block disabled"><code>npx docwriter</code> <span class="coming-soon">(coming soon!)</span></div>
+			</div>
+			<div class="try-card">
+				<h3>Plain writing skill</h3>
+				<p>
+					Teaches agents to write in a plain style: simple words, complete sentences, no filler.
+					It can revise its own output and show a diff of what changed.
+				</p>
+				<a href="https://github.com/shreyashankar/plain-writing-skill" class="try-link" target="_blank" rel="noopener">github.com/shreyashankar/plain-writing-skill</a>
+			</div>
+		</div>
+		<p class="try-footnote">More open-source harness artifacts coming soon.</p>
 		<div class="start-links">
-			<a href="https://github.com/shreyashankar/docwriter" class="start-link" target="_blank" rel="noopener">GitHub</a>
+			<a href="https://github.com/shreyashankar/docwriter" class="start-link" target="_blank" rel="noopener">DocWriter on GitHub</a>
 		</div>
 	</section>
 
@@ -423,28 +415,6 @@
 	.about p:last-child { margin-bottom: 0; }
 	.about code { font-family: 'Geist Mono', 'SFMono-Regular', Consolas, monospace; font-size: 13px; background: rgba(109,40,217,0.06); padding: 1px 5px; border-radius: 3px; color: #6d28d9; }
 
-	/* Skills & artifacts */
-	.artifacts { max-width: 640px; margin: 56px auto 0; padding: 0 24px; }
-	.artifacts h2 { font-family: 'Lora', Georgia, serif; font-size: 23px; font-weight: 600; margin: 0 0 8px; }
-	.artifacts-intro { margin: 0 0 20px; font-size: 15px; line-height: 1.7; color: #444; }
-	.artifacts-list { display: grid; grid-template-columns: 1fr; gap: 14px; }
-	.artifact-card { padding: 18px 20px; border: 1px solid #e8e5de; border-radius: 8px; background: #fff; }
-	.artifact-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
-	.artifact-card h3 { margin: 0; font-family: 'Lora', Georgia, serif; font-size: 15px; font-weight: 600; }
-	.artifact-card h3 a { color: #1a1a1a; text-decoration: none; }
-	.artifact-card h3 a:hover { color: #003262; }
-	.artifact-card p { margin: 0; font-size: 14.5px; line-height: 1.65; color: #555; }
-	.artifact-status {
-		flex-shrink: 0;
-		font-size: 11px;
-		font-weight: 500;
-		padding: 2px 8px;
-		border-radius: 999px;
-		background: rgba(109,40,217,0.08);
-		color: #6d28d9;
-		border: 1px solid rgba(109,40,217,0.15);
-	}
-
 	/* Research */
 	.research { max-width: 640px; margin: 56px auto 0; padding: 0 24px; }
 	.research h2 { font-family: 'Lora', Georgia, serif; font-size: 23px; font-weight: 600; margin: 0 0 8px; }
@@ -456,10 +426,17 @@
 	.research-card a { color: #003262; text-decoration: none; font-weight: 500; }
 	.research-card a:hover { text-decoration: underline; }
 
-	.start { max-width: 620px; margin: 56px auto 0; padding: 0 24px; text-align: center; }
-	.start h2 { font-family: 'Lora', Georgia, serif; font-size: 23px; font-weight: 600; margin: 0 0 6px; }
-	.start p { margin: 0 0 18px; font-size: 15px; line-height: 1.6; color: #555; }
-	.install-block { display: inline-block; padding: 12px 28px; background: #1a1a1a; border-radius: 8px; margin-bottom: 14px; }
+	.start { max-width: 640px; margin: 56px auto 0; padding: 0 24px; text-align: center; }
+	.start h2 { font-family: 'Lora', Georgia, serif; font-size: 23px; font-weight: 600; margin: 0 0 20px; }
+	.try-grid { display: grid; grid-template-columns: 1fr; gap: 14px; text-align: left; margin-bottom: 16px; }
+	.try-card { padding: 18px 20px; border: 1px solid #e8e5de; border-radius: 8px; background: #fff; }
+	.try-card h3 { margin: 0 0 8px; font-family: 'Lora', Georgia, serif; font-size: 15px; font-weight: 600; }
+	.try-card p { margin: 0 0 12px; font-size: 14.5px; line-height: 1.65; color: #555; }
+	.try-card p:last-child { margin-bottom: 0; }
+	.try-link { font-size: 13px; font-weight: 500; color: #003262; text-decoration: none; }
+	.try-link:hover { text-decoration: underline; }
+	.try-footnote { margin: 0 0 14px; font-size: 13px; line-height: 1.55; color: #888; font-style: italic; }
+	.install-block { display: inline-block; padding: 10px 20px; background: #1a1a1a; border-radius: 8px; }
 	.install-block.disabled { opacity: 0.5; cursor: not-allowed; }
 	.install-block code { font-family: 'Geist Mono', 'SFMono-Regular', Consolas, monospace; font-size: 15px; color: #e0e0e0; }
 	.coming-soon { font-size: 13px; color: #999; font-style: italic; margin-left: 8px; }
