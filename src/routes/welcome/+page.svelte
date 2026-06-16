@@ -235,7 +235,7 @@
 			</div>
 			<div class="research-card">
 				<h3>Human steering of long-horizon tasks</h3>
-				<p>Writing a paper or book takes many rounds of editing over months. It is not obvious how to let writers steer agents in real time, keep quality consistent as documents grow, or enforce rules across hundreds of edits&mdash;let alone how to present changes without overwhelming the writer.</p>
+				<p>Writing a paper or book takes many rounds of editing over months. It is not obvious how to let writers steer agents in real time over long horizons, keep quality consistent as documents grow, or enforce rules across hundreds of edits&hellip;let alone how to present changes without overwhelming the writer.</p>
 			</div>
 			<div class="research-card">
 				<h3>Characterizing slopwords and good practices</h3>
