@@ -239,7 +239,7 @@
 			</div>
 			<div class="research-card">
 				<h3>Characterizing slopwords and good practices</h3>
-				<p>Everyone complains about AI &ldquo;slop,&rdquo; but we lack good ways to characterize it. The patterns shift every time a new model comes out. Startups like <a href="https://www.pangram.com/" target="_blank" rel="noopener">Pangram Labs</a> sell closed detection products. We want to build open source frameworks that researchers and writers can use to identify slopwords and track how they change over time.</p>
+				<p>Everyone complains about AI &ldquo;slop,&rdquo; but we lack good ways to characterize it and monitor it over time, especially as new models come out. While startups like <a href="https://www.pangram.com/" target="_blank" rel="noopener">Pangram Labs</a> sell useful slop detection products, we want to build open source frameworks that researchers and writers can use to identify slopwords and track how they change over time.</p>
 			</div>
 		</div>
 	</section>
