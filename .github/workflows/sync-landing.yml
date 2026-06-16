@@ -1,23 +1,24 @@
-# Merge main into landing so the marketing branch stays current.
-# This workflow lives on the landing branch only (not main).
+# Merge main into landing when the editor CLI changes.
+# Pushing landing triggers the Vercel production deploy workflow.
 name: Sync landing branch
 
 on:
-  schedule:
-    - cron: '0 6 * * *'
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  merge-main-into-landing:
+  sync:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Merge main into landing
         run: |
           git fetch origin main landing
