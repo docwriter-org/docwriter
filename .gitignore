@@ -48,3 +48,4 @@ vite.config.ts.timestamp-*
 # bug-hunting scratch scripts
 scratch-*.ts
 scratch-*.mjs
+dw-*.mjs
