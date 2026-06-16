@@ -1,6 +1,14 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { fade, fly } from 'svelte/transition';
+	import type { PageData } from './$types';
+
+	interface Props {
+		data: PageData;
+	}
+	let { data }: Props = $props();
+
+	let plainWritingStars = $state<number | null>(data.plainWritingStars);
 
 	let mounted = $state(false);
 	let phase = $state(0);
@@ -18,6 +26,17 @@
 
 	onMount(() => {
 		mounted = true;
+		fetch('https://api.github.com/repos/shreyashankar/plain-writing-skill', {
+			headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'docwriter-landing' }
+		})
+			.then((res) => (res.ok ? res.json() : null))
+			.then((body) => {
+				if (body && typeof body.stargazers_count === 'number') {
+					plainWritingStars = body.stargazers_count;
+				}
+			})
+			.catch(() => {});
+
 		let timer: ReturnType<typeof setTimeout>;
 		let typeInterval: ReturnType<typeof setInterval>;
 
@@ -249,7 +268,12 @@
 		<div class="try-buttons">
 			<div class="try-row">
 				<div class="install-block disabled"><code>npx docwriter</code> <span class="install-note">(coming soon!)</span></div>
-				<a href="https://github.com/shreyashankar/plain-writing-skill" class="install-block" target="_blank" rel="noopener"><span class="install-label">Plain writing skill</span></a>
+				<a href="https://github.com/shreyashankar/plain-writing-skill" class="install-block" target="_blank" rel="noopener">
+					<span class="install-label">Plain writing skill</span>
+					{#if plainWritingStars !== null}
+						<span class="install-stars" aria-label="{plainWritingStars} GitHub stars">★ {plainWritingStars.toLocaleString()}</span>
+					{/if}
+				</a>
 			</div>
 			<div class="try-row">
 				<div class="install-block disabled"><span class="install-label">DocWriter GitHub</span> <span class="install-note">(private repo)</span></div>
@@ -431,6 +455,7 @@
 	.install-block.disabled { opacity: 0.45; cursor: not-allowed; }
 	.install-block code { font-family: 'Geist Mono', 'SFMono-Regular', Consolas, monospace; font-size: 14px; color: #e0e0e0; }
 	.install-label { font-size: 14px; font-weight: 500; color: #e0e0e0; }
+	.install-stars { margin-left: 8px; font-size: 13px; font-weight: 500; color: #f4bf4f; }
 	.install-note { font-size: 13px; color: #999; font-style: italic; margin-left: 6px; }
 
 	.involved { max-width: 640px; margin: 56px auto 0; padding: 0 24px; }
