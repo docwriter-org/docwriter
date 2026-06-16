@@ -247,9 +247,13 @@
 	<section class="start">
 		<h2>Try it</h2>
 		<div class="try-buttons">
-			<div class="install-block disabled"><code>npx docwriter</code> <span class="install-note">(coming soon!)</span></div>
-			<a href="https://github.com/shreyashankar/plain-writing-skill" class="install-block" target="_blank" rel="noopener"><span class="install-label">Plain writing skill</span></a>
-			<div class="install-block disabled"><span class="install-label">DocWriter GitHub</span> <span class="install-note">(private repo)</span></div>
+			<div class="try-row">
+				<div class="install-block disabled"><code>npx docwriter</code> <span class="install-note">(coming soon!)</span></div>
+				<a href="https://github.com/shreyashankar/plain-writing-skill" class="install-block" target="_blank" rel="noopener"><span class="install-label">Plain writing skill</span></a>
+			</div>
+			<div class="try-row">
+				<div class="install-block disabled"><span class="install-label">DocWriter GitHub</span> <span class="install-note">(private repo)</span></div>
+			</div>
 		</div>
 	</section>
 
@@ -412,9 +416,10 @@
 	.research-card a { color: #003262; text-decoration: none; font-weight: 500; }
 	.research-card a:hover { text-decoration: underline; }
 
-	.start { max-width: 640px; margin: 56px auto 0; padding: 0 24px; }
+	.start { max-width: 640px; margin: 56px auto 0; padding: 0 24px; text-align: center; }
 	.start h2 { font-family: 'Lora', Georgia, serif; font-size: 23px; font-weight: 600; margin: 0 0 18px; }
-	.try-buttons { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+	.try-buttons { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+	.try-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
 	.install-block {
 		display: inline-block;
 		padding: 12px 22px;
@@ -443,5 +448,8 @@
 		.demo-body { grid-template-columns: 1fr; }
 		.demo-left { display: none; }
 		.demo-right { display: none; }
+	}
+	@media (max-width: 520px) {
+		.try-row { flex-direction: column; align-items: center; }
 	}
 </style>
