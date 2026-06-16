@@ -248,8 +248,8 @@
 		<h2>Try it</h2>
 		<div class="try-buttons">
 			<div class="install-block disabled"><code>npx docwriter</code> <span class="install-note">(coming soon!)</span></div>
-			<a href="https://github.com/shreyashankar/plain-writing-skill" class="install-block" target="_blank" rel="noopener"><code>github.com/shreyashankar/plain-writing-skill</code></a>
-			<div class="install-block disabled"><code>github.com/shreyashankar/docwriter</code> <span class="install-note">(private repo)</span></div>
+			<a href="https://github.com/shreyashankar/plain-writing-skill" class="install-block" target="_blank" rel="noopener"><span class="install-label">Plain writing skill</span></a>
+			<div class="install-block disabled"><span class="install-label">DocWriter GitHub</span> <span class="install-note">(private repo)</span></div>
 		</div>
 	</section>
 
@@ -425,6 +425,7 @@
 	}
 	.install-block.disabled { opacity: 0.45; cursor: not-allowed; }
 	.install-block code { font-family: 'Geist Mono', 'SFMono-Regular', Consolas, monospace; font-size: 14px; color: #e0e0e0; }
+	.install-label { font-size: 14px; font-weight: 500; color: #e0e0e0; }
 	.install-note { font-size: 13px; color: #999; font-style: italic; margin-left: 6px; }
 
 	.involved { max-width: 640px; margin: 56px auto 0; padding: 0 24px; }
