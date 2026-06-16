@@ -246,32 +246,21 @@
 
 	<section class="start">
 		<h2>Try it</h2>
-		<p class="start-lead">DocWriter runs locally. It ships with writing skills today; more harness artifacts are on the way.</p>
-		<div class="try-panel">
-			<div class="try-row">
-				<div class="try-copy">
-					<span class="try-kind">Editor</span>
-					<h3>DocWriter</h3>
-					<p>Open any folder with your writing files and collaborate with the agent in place.</p>
-				</div>
-				<div class="try-action">
-					<code class="try-cmd">npx docwriter</code>
-					<span class="try-badge muted">Coming soon</span>
-				</div>
+		<div class="try-grid">
+			<div class="try-card">
+				<h3>DocWriter</h3>
+				<p>Local editor with a built-in writing agent. Open a folder with your files and write.</p>
 			</div>
-			<div class="try-divider" aria-hidden="true"></div>
-			<div class="try-row">
-				<div class="try-copy">
-					<span class="try-kind">Writing skill</span>
-					<h3>Plain writing</h3>
-					<p>Teaches agents to use simple words, complete sentences, and no filler. It can revise its own output and show a diff of what changed.</p>
-				</div>
-				<div class="try-action">
-					<span class="try-badge live">Included</span>
-				</div>
+			<div class="try-card">
+				<h3>Plain writing skill</h3>
+				<p>Rules for the agent: simple words, complete sentences, no filler. It can show a diff when it revises text.</p>
 			</div>
 		</div>
-		<a href="https://github.com/shreyashankar/docwriter" class="start-link" target="_blank" rel="noopener">DocWriter on GitHub</a>
+		<div class="try-buttons">
+			<div class="install-block disabled"><code>npx docwriter</code> <span class="coming-soon">(coming soon!)</span></div>
+			<div class="install-block disabled"><code>more harness artifacts</code> <span class="coming-soon">(coming soon!)</span></div>
+		</div>
+		<a href="https://github.com/shreyashankar/docwriter" class="start-link" target="_blank" rel="noopener">GitHub</a>
 	</section>
 
 	<section class="involved">
@@ -434,75 +423,23 @@
 	.research-card a:hover { text-decoration: underline; }
 
 	.start { max-width: 640px; margin: 56px auto 0; padding: 0 24px; }
-	.start h2 { font-family: 'Lora', Georgia, serif; font-size: 23px; font-weight: 600; margin: 0 0 8px; }
-	.start-lead { margin: 0 0 18px; font-size: 15px; line-height: 1.7; color: #444; }
-	.try-panel {
-		border: 1px solid #e8e5de;
-		border-radius: 10px;
-		background: #fff;
-		overflow: hidden;
-		box-shadow: 0 2px 12px rgba(0,0,0,0.03);
-	}
-	.try-row {
-		display: flex;
-		align-items: flex-start;
-		justify-content: space-between;
-		gap: 20px;
-		padding: 20px 22px;
-	}
-	.try-copy { flex: 1; min-width: 0; }
-	.try-kind {
-		display: block;
-		font-size: 10px;
-		font-weight: 600;
-		letter-spacing: 0.06em;
-		text-transform: uppercase;
-		color: #999;
-		margin-bottom: 4px;
-	}
-	.try-copy h3 {
-		margin: 0 0 6px;
-		font-family: 'Lora', Georgia, serif;
-		font-size: 17px;
-		font-weight: 600;
-		color: #1a1a1a;
-	}
-	.try-copy p { margin: 0; font-size: 14.5px; line-height: 1.65; color: #555; }
-	.try-action {
-		flex-shrink: 0;
-		display: flex;
-		flex-direction: column;
-		align-items: flex-end;
-		gap: 8px;
-		padding-top: 14px;
-	}
-	.try-cmd {
-		font-family: 'Geist Mono', 'SFMono-Regular', Consolas, monospace;
-		font-size: 12.5px;
-		padding: 8px 12px;
-		border-radius: 6px;
-		background: #f3f1ec;
-		color: #444;
-		border: 1px solid #e8e5de;
-	}
-	.try-badge {
-		font-size: 11px;
-		font-weight: 600;
-		padding: 4px 10px;
-		border-radius: 999px;
-		white-space: nowrap;
-	}
-	.try-badge.muted { background: #f3f1ec; color: #888; border: 1px solid #e8e5de; }
-	.try-badge.live { background: rgba(5,150,105,0.1); color: #047857; border: 1px solid rgba(5,150,105,0.2); }
-	.try-divider { height: 1px; background: #ece9e2; }
-	.start-link {
+	.start h2 { font-family: 'Lora', Georgia, serif; font-size: 23px; font-weight: 600; margin: 0 0 16px; }
+	.try-grid { display: grid; grid-template-columns: 1fr; gap: 14px; margin-bottom: 20px; }
+	.try-card { padding: 18px 20px; border: 1px solid #e8e5de; border-radius: 8px; background: #fff; }
+	.try-card h3 { margin: 0 0 6px; font-family: 'Lora', Georgia, serif; font-size: 15px; font-weight: 600; }
+	.try-card p { margin: 0; font-size: 14.5px; line-height: 1.65; color: #555; }
+	.try-buttons { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
+	.install-block {
 		display: inline-block;
-		margin-top: 16px;
-		font-size: 14px;
-		font-weight: 500;
-		color: #003262;
+		padding: 12px 22px;
+		background: #1a1a1a;
+		border-radius: 8px;
 		text-decoration: none;
 	}
+	.install-block.disabled { opacity: 0.45; cursor: not-allowed; }
+	.install-block code { font-family: 'Geist Mono', 'SFMono-Regular', Consolas, monospace; font-size: 14px; color: #e0e0e0; }
+	.coming-soon { font-size: 13px; color: #999; font-style: italic; margin-left: 6px; }
+	.start-link { font-size: 14px; font-weight: 500; color: #003262; text-decoration: none; }
 	.start-link:hover { text-decoration: underline; }
 
 	.involved { max-width: 640px; margin: 56px auto 0; padding: 0 24px; }
@@ -520,7 +457,5 @@
 		.demo-body { grid-template-columns: 1fr; }
 		.demo-left { display: none; }
 		.demo-right { display: none; }
-		.try-row { flex-direction: column; gap: 12px; }
-		.try-action { align-items: flex-start; padding-top: 0; }
 	}
 </style>
