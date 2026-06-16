@@ -248,8 +248,8 @@
 		<h2>Try it</h2>
 		<div class="try-buttons">
 			<div class="install-block disabled"><code>npx docwriter</code> <span class="install-note">(coming soon!)</span></div>
-			<div class="install-block disabled"><code>plain-writing skill</code> <span class="install-note">(private repo)</span></div>
-			<a href="https://github.com/shreyashankar/docwriter" class="install-block" target="_blank" rel="noopener"><code>github.com/shreyashankar/docwriter</code></a>
+			<a href="https://github.com/shreyashankar/plain-writing-skill" class="install-block" target="_blank" rel="noopener"><code>github.com/shreyashankar/plain-writing-skill</code></a>
+			<div class="install-block disabled"><code>github.com/shreyashankar/docwriter</code> <span class="install-note">(private repo)</span></div>
 		</div>
 	</section>
 
