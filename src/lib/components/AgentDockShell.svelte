@@ -20,7 +20,23 @@
 	dockExpanded.subscribe((v) => (expanded = v));
 
 	let rendering = $state(false);
-	isRendering.subscribe((v) => (rendering = v));
+	let nudge = $state(false);
+	let lastIdleAt = Date.now();
+	const NUDGE_COOLDOWN_MS = 60_000;
+
+	isRendering.subscribe((v) => {
+		const wasIdle = !rendering;
+		rendering = v;
+		if (v && wasIdle && !expanded) {
+			const idleFor = Date.now() - lastIdleAt;
+			if (idleFor >= NUDGE_COOLDOWN_MS) {
+				nudge = true;
+				setTimeout(() => (nudge = false), 1200);
+			}
+		}
+		if (!v) lastIdleAt = Date.now();
+	});
+
 	let countdown = $state(0);
 	submitCountdown.subscribe((v) => (countdown = v));
 	// Badge = messages the user has queued while a render is in flight, NOT
@@ -87,6 +103,7 @@
 				<button
 					class="dock-agent-btn"
 					class:awake={rendering}
+					class:nudge
 					onclick={() => dockExpanded.set(true)}
 					use:tooltip={'Open the agent dock'}
 				>
@@ -156,13 +173,30 @@
 		cursor: pointer;
 		white-space: nowrap;
 		position: relative;
-		transition: box-shadow 0.12s ease, border-color 0.12s ease;
+		transition: transform 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease, background 0.3s ease;
 	}
 	.dock-agent-btn:hover {
 		box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18), 0 2px 6px rgba(0, 0, 0, 0.08);
 	}
 	.dock-agent-btn.awake {
 		border-color: transparent;
+		background: var(--accent-bg);
+		box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14), 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+		animation: dock-glow 2s ease-in-out infinite;
+	}
+	.dock-agent-btn.nudge {
+		animation: dock-nudge 1s cubic-bezier(0.22, 1, 0.36, 1), dock-glow 2s ease-in-out 1s infinite;
+	}
+	@keyframes dock-nudge {
+		0% { transform: scale(1); }
+		15% { transform: scale(1.35); }
+		40% { transform: scale(1.1); }
+		60% { transform: scale(1.2); }
+		100% { transform: scale(1); }
+	}
+	@keyframes dock-glow {
+		0%, 100% { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14), 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+		50% { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14), 0 0 0 6px color-mix(in srgb, var(--accent) 15%, transparent), 0 0 20px color-mix(in srgb, var(--accent) 20%, transparent); }
 	}
 	.dock-label {
 		font-size: 11px;
@@ -173,6 +207,9 @@
 	}
 	.dock-agent-btn:hover .dock-label {
 		color: var(--text);
+	}
+	.dock-agent-btn.awake .dock-label {
+		color: var(--accent);
 	}
 	.mascot-face {
 		display: inline-flex;

@@ -11,6 +11,7 @@
 	import ToastStack from '$lib/components/ToastStack.svelte';
 	import { pushToast, dismissToast, toastQueue, type ToastSpec } from '$lib/toasts';
 	import RulesPanel from '$lib/components/RulesPanel.svelte';
+	import RulesPillBar from '$lib/components/RulesPillBar.svelte';
 	import ReferencesPanel from '$lib/components/ReferencesPanel.svelte';
 	import PanelResizer from '$lib/components/PanelResizer.svelte';
 	import HorizontalPanelResizer from '$lib/components/HorizontalPanelResizer.svelte';
@@ -1938,7 +1939,6 @@
 					onClick: () => editorSoftWrap.update((v) => !v)
 				},
 				{ kind: 'panel', label: 'Writing references', panelKey: 'references' },
-				{ kind: 'panel', label: 'Writing rules', panelKey: 'rules' },
 				{ kind: 'panel', label: 'Hooks', panelKey: 'hooks' },
 				{ kind: 'divider' },
 				{
@@ -2430,6 +2430,10 @@
 		<ApiKeysPanel />
 	{/snippet}
 
+	<div class="toolbar">
+		<RulesPillBar onSubmit={(trigger) => void submit(trigger)} />
+	</div>
+
 	<div class="body">
 		{#if sidebarVisible}
 		<aside class="left-pane" style:width="{leftWidth}px">
@@ -2621,6 +2625,14 @@
 	/* Submit button, mascot, and settings popover styles moved to
 	 * src/lib/components/AgentDock.svelte. */
 
+	.toolbar {
+		display: flex;
+		align-items: center;
+		padding: 4px 16px;
+		border-bottom: 1px solid var(--border-light);
+		background: var(--header-bg);
+		flex-shrink: 0;
+	}
 	.body {
 		display: flex;
 		flex: 1;
