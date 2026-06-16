@@ -1,4 +1,7 @@
-import adapter from '@sveltejs/adapter-node';
+import nodeAdapter from '@sveltejs/adapter-node';
+import vercelAdapter from '@sveltejs/adapter-vercel';
+
+const isVercelBuild = process.env.VERCEL === '1' || process.env.DOCWRITER_ADAPTER === 'vercel';
 
 /** @type {import('@sveltejs/kit').Config} */
 const config = {
@@ -20,7 +23,12 @@ const config = {
 		// as a CLI tool, so the compression savings don't matter; skipping
 		// the precompressed variants makes the file-not-found path a clean
 		// 404 instead of a process crash.
-		adapter: adapter({ precompress: false })
+		adapter: isVercelBuild
+			? vercelAdapter({
+					runtime: 'nodejs22.x',
+					maxDuration: 60
+				})
+			: nodeAdapter({ precompress: false })
 	}
 };
 
