@@ -246,21 +246,11 @@
 
 	<section class="start">
 		<h2>Try it</h2>
-		<div class="try-grid">
-			<div class="try-card">
-				<h3>DocWriter</h3>
-				<p>Local editor with a built-in writing agent. Open a folder with your files and write.</p>
-			</div>
-			<div class="try-card">
-				<h3>Plain writing skill</h3>
-				<p>Rules for the agent: simple words, complete sentences, no filler. It can show a diff when it revises text.</p>
-			</div>
-		</div>
 		<div class="try-buttons">
-			<div class="install-block disabled"><code>npx docwriter</code> <span class="coming-soon">(coming soon!)</span></div>
-			<div class="install-block disabled"><code>more harness artifacts</code> <span class="coming-soon">(coming soon!)</span></div>
+			<div class="install-block disabled"><code>npx docwriter</code> <span class="install-note">(coming soon!)</span></div>
+			<div class="install-block disabled"><code>plain-writing skill</code> <span class="install-note">(private repo)</span></div>
+			<a href="https://github.com/shreyashankar/docwriter" class="install-block" target="_blank" rel="noopener"><code>github.com/shreyashankar/docwriter</code></a>
 		</div>
-		<a href="https://github.com/shreyashankar/docwriter" class="start-link" target="_blank" rel="noopener">GitHub</a>
 	</section>
 
 	<section class="involved">
@@ -423,24 +413,19 @@
 	.research-card a:hover { text-decoration: underline; }
 
 	.start { max-width: 640px; margin: 56px auto 0; padding: 0 24px; }
-	.start h2 { font-family: 'Lora', Georgia, serif; font-size: 23px; font-weight: 600; margin: 0 0 16px; }
-	.try-grid { display: grid; grid-template-columns: 1fr; gap: 14px; margin-bottom: 20px; }
-	.try-card { padding: 18px 20px; border: 1px solid #e8e5de; border-radius: 8px; background: #fff; }
-	.try-card h3 { margin: 0 0 6px; font-family: 'Lora', Georgia, serif; font-size: 15px; font-weight: 600; }
-	.try-card p { margin: 0; font-size: 14.5px; line-height: 1.65; color: #555; }
-	.try-buttons { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
+	.start h2 { font-family: 'Lora', Georgia, serif; font-size: 23px; font-weight: 600; margin: 0 0 18px; }
+	.try-buttons { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
 	.install-block {
 		display: inline-block;
 		padding: 12px 22px;
 		background: #1a1a1a;
 		border-radius: 8px;
 		text-decoration: none;
+		border: none;
 	}
 	.install-block.disabled { opacity: 0.45; cursor: not-allowed; }
 	.install-block code { font-family: 'Geist Mono', 'SFMono-Regular', Consolas, monospace; font-size: 14px; color: #e0e0e0; }
-	.coming-soon { font-size: 13px; color: #999; font-style: italic; margin-left: 6px; }
-	.start-link { font-size: 14px; font-weight: 500; color: #003262; text-decoration: none; }
-	.start-link:hover { text-decoration: underline; }
+	.install-note { font-size: 13px; color: #999; font-style: italic; margin-left: 6px; }
 
 	.involved { max-width: 640px; margin: 56px auto 0; padding: 0 24px; }
 	.involved h2 { font-family: 'Lora', Georgia, serif; font-size: 23px; font-weight: 600; margin: 0 0 10px; }
