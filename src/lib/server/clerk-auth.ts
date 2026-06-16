@@ -1,9 +1,9 @@
 import { createClerkClient } from '@clerk/backend';
 import type { Handle } from '@sveltejs/kit';
 import { json } from '@sveltejs/kit';
+import { IS_HOSTED_LANDING } from '$lib/server/deploy-mode';
 
-export const IS_HOSTED_DEPLOY = process.env.VERCEL === '1' || process.env.LANDING_DEPLOY === '1';
-export const CLERK_AUTH_REQUIRED = IS_HOSTED_DEPLOY || process.env.CLERK_AUTH_REQUIRED === '1';
+export const CLERK_AUTH_REQUIRED = IS_HOSTED_LANDING || process.env.CLERK_AUTH_REQUIRED === '1';
 
 const authorizedUserCache = new Map<string, boolean>();
 
@@ -139,10 +139,11 @@ async function handleAuthStatus(
 	event: Parameters<Handle>[0]['event'],
 	clerkClient: NonNullable<ReturnType<typeof getClerkClient>>
 ): Promise<Response> {
+	const afterAuthUrl = IS_HOSTED_LANDING ? '/welcome' : '/';
 	const requestState = await clerkClient.authenticateRequest(event.request, {
 		authorizedParties: authorizedParties(event.url.origin),
-		afterSignInUrl: '/',
-		afterSignUpUrl: '/',
+		afterSignInUrl: afterAuthUrl,
+		afterSignUpUrl: afterAuthUrl,
 		signInUrl: `${event.url.origin}/sign-in`,
 		signUpUrl: `${event.url.origin}/sign-in`
 	});
@@ -189,10 +190,11 @@ export async function maybeHandleClerkAuth(
 		return null;
 	}
 
+	const afterAuthUrl = IS_HOSTED_LANDING ? '/welcome' : '/';
 	const requestState = await clerkClient.authenticateRequest(event.request, {
 		authorizedParties: authorizedParties(event.url.origin),
-		afterSignInUrl: '/',
-		afterSignUpUrl: '/',
+		afterSignInUrl: afterAuthUrl,
+		afterSignUpUrl: afterAuthUrl,
 		signInUrl: `${event.url.origin}/sign-in`,
 		signUpUrl: `${event.url.origin}/sign-in`
 	});
@@ -216,6 +218,10 @@ export async function maybeHandleClerkAuth(
 	const auth = requestState.toAuth();
 	if (!auth.userId || !(await isAuthorizedUser(clerkClient, auth.userId))) {
 		return redirectUnauthorizedUser(event, clerkClient, auth.sessionId);
+	}
+
+	if (IS_HOSTED_LANDING && !isPublicRoute(event.url.pathname)) {
+		return Response.redirect(new URL('/welcome', event.url.origin), 303);
 	}
 
 	event.locals.auth = {

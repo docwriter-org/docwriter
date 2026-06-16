@@ -12,13 +12,13 @@
 	function redirectTarget(): string {
 		const url = new URL(location.href);
 		const requested = url.searchParams.get('redirect_url');
-		if (!requested) return '/';
+		if (!requested) return '/welcome';
 		try {
 			const target = new URL(requested, location.origin);
-			if (target.origin !== location.origin) return '/';
-			return `${target.pathname}${target.search}${target.hash}` || '/';
+			if (target.origin !== location.origin) return '/welcome';
+			return `${target.pathname}${target.search}${target.hash}` || '/welcome';
 		} catch {
-			return '/';
+			return '/welcome';
 		}
 	}
 

@@ -1,9 +1,10 @@
 import { redirect } from '@sveltejs/kit';
 import type { PageServerLoad } from './$types';
+import { IS_HOSTED_LANDING } from '$lib/server/deploy-mode';
 
-/** On the landing branch Vercel deploy, root goes to /welcome. Main + local CLI skip this. */
+/** On the Vercel landing deploy, root goes to /welcome. Main + local CLI skip this. */
 export const load: PageServerLoad = () => {
-	if (process.env.LANDING_DEPLOY === '1') {
+	if (IS_HOSTED_LANDING) {
 		redirect(307, '/welcome');
 	}
 };

@@ -13,13 +13,12 @@ import { installBundledSkills } from '$lib/server/skills-install';
 import { createWsServer } from '$lib/server/ws-server';
 import { loadGlobalKeys } from '$lib/server/api-keys';
 import { maybeHandleClerkAuth } from '$lib/server/clerk-auth';
-
-const isLandingDeploy = process.env.LANDING_DEPLOY === '1';
+import { IS_HOSTED_LANDING } from '$lib/server/deploy-mode';
 
 // Load ~/.docwriter/keys.env into process.env (without overriding real env /
 // repo .env) so provider API keys are available cross-workspace and in the
 // built server. Runs before any render path reads process.env.<KEY>.
-if (!isLandingDeploy) {
+if (!IS_HOSTED_LANDING) {
 	loadGlobalKeys();
 }
 
@@ -32,11 +31,11 @@ if (!isLandingDeploy) {
 // Stashed on globalThis so the same module scope survives Vite HMR.
 const SERVER_INSTANCE_ID_KEY = '__docwriterServerInstanceId';
 const globalAny = globalThis as unknown as Record<string, string | undefined>;
-if (!isLandingDeploy && !globalAny[SERVER_INSTANCE_ID_KEY]) {
+if (!IS_HOSTED_LANDING && !globalAny[SERVER_INSTANCE_ID_KEY]) {
 	globalAny[SERVER_INSTANCE_ID_KEY] = randomUUID();
 }
 
-if (!isLandingDeploy) {
+if (!IS_HOSTED_LANDING) {
 	// Install DocWriter's bundled project skill(s) into the workspace's
 	// `.claude/skills/` dir so the SDK picks them up via the 'project'
 	// settingSource. Idempotent — only overwrites the built-in skill files.
