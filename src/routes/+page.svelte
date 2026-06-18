@@ -462,14 +462,10 @@
 		const textHandler = () => {
 			if (tabId !== getCurrentActiveTab()) return;
 			const rounds = arr.toArray();
-			if (rounds.length === 0) {
-				// Clear both stores to ensure consistency. This guards against
-				// timing issues where the fragment observer fires but the array
-				// observer hasn't yet, leaving pendingReviewRounds stale.
-				pendingReviewRounds.set([]);
-				reviewBaseline.set(null);
-				return;
-			}
+			// Use syncActiveReviewState for both paths to ensure consistent
+			// store updates (including pendingReviewTabs). This guards against
+			// timing issues where the fragment observer fires but the array
+			// observer hasn't yet, leaving pendingReviewRounds stale.
 			syncActiveReviewState(tabId, rounds);
 		};
 		fragment.observe(textHandler);
