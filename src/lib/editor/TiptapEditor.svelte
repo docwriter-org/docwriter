@@ -832,12 +832,19 @@
 		queueMicrotask(() => {
 			diffUpdateQueued = false;
 			if (!editor) return;
+			// Defensive consistency check: if no rounds, ensure baseline is null
+			// and vice versa. This guards against timing issues where one store
+			// updates before the other (e.g. fragment observer sets baseline to
+			// null before the array observer clears rounds, or vice versa).
+			const hasRounds = currentRoundsList.length > 0;
+			const effectiveBaseline = hasRounds ? currentBaseline : null;
+			const effectiveProposal = hasRounds ? currentProposalText : null;
 			// Muted mode: hide the overlay entirely until the user clicks a
 			// pending card, then show only that round's decorations.
-			let baselineForOverlay = currentBaseline;
-			let proposalForOverlay = currentProposalText;
+			let baselineForOverlay = effectiveBaseline;
+			let proposalForOverlay = effectiveProposal;
 			let pendingRoundsForOverlay: MaterializedPendingReviewRound[] = [];
-			if (isMuted && currentRoundsList.length > 0) {
+			if (isMuted && hasRounds) {
 				const expanded = expandedRoundId
 					? currentRoundsList.find((r) => r.id === expandedRoundId)
 					: null;
@@ -849,7 +856,7 @@
 					baselineForOverlay = null;
 					proposalForOverlay = null;
 				}
-			} else if (currentRoundsList.length > 0) {
+			} else if (hasRounds) {
 				pendingRoundsForOverlay = currentRoundsList;
 			}
 			setDiffState(editor, {
