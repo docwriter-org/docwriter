@@ -684,10 +684,9 @@
 	 * `$state` so the `.feedback-active` class on the wrapper reacts. */
 	let feedbackSelectionRange: { from: number; to: number } | null = $state(null);
 
-	// Cached preview-hook output path for the active tab. Used to gate
-	// the "Show in PDF" button in the feedback popover — only useful
-	// when there's a build hook producing a PDF (or other previewable
-	// file) for the current tab. Refreshed on every active-tab change.
+	// Cached preview output for the active tab: companion PDF for `.tex`
+	// (same stem) or a hook's configured output. Gates the "Locate in PDF"
+	// button in the feedback popover.
 	let previewOutputPath = $state<string | null>(null);
 	$effect(() => {
 		tabId;
