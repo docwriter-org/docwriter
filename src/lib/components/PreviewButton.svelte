@@ -5,12 +5,11 @@
 
 	/**
 	 * Top-right floating preview button. On click, opens /preview in a
-	 * popup window pointed at whatever output file the matching hook
-	 * produces for the active tab.
+	 * popup window pointed at the companion PDF for a `.tex` tab (same stem,
+	 * e.g. `main.tex` → `main.pdf`) or at a hook's configured output.
 	 *
-	 * Resolves the output via /api/hooks/preview-match. If no hook with
-	 * an `output` template matches the active tab, the button is hidden
-	 * — no point showing an inert control.
+	 * Resolves the output via /api/hooks/preview-match. If no companion
+	 * PDF or hook output matches, the button is hidden.
 	 */
 	interface Props {
 		activeTabPath: string | null;
