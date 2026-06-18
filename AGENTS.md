@@ -30,14 +30,23 @@ Node version (important gotcha):
 AI agent (for end-to-end testing of the headline feature):
 
 - The editor loads and edits without any key, but the agent loop
-  (Send → propose edit → review card) needs a provider credential.
-- `OPENAI_API_KEY` is available; select **Settings → Provider → OpenAI**.
+  (Send → propose edit → review card) needs a provider credential. Prompt
+  the agent via the **Send** button (top-right of the center pane); proposed
+  edits appear as tracked changes plus an **Accept/Reject/Retry** review card
+  in the right pane. Accept writes through to `document.md`.
+- **Claude** (default provider) needs `ANTHROPIC_API_KEY` (a secret). Two
+  non-obvious gotchas when present:
+  - The `@anthropic-ai/claude-agent-sdk` ships both a glibc and a musl native
+    binary and its resolver prefers the **musl** one, which cannot run on this
+    glibc VM (`ReferenceError: Claude Code native binary not found … -musl/claude`).
+    The update script deletes
+    `node_modules/@anthropic-ai/claude-agent-sdk-linux-x64-musl` after install so
+    the glibc binary is selected; if you reinstall deps by hand, remove it again.
+  - **Claude Opus 4.8** currently errors with `thinking.type.enabled is not
+    supported for this model` against the bundled SDK version. Use
+    **Settings → Model → Claude Sonnet 4.6** (or Haiku 4.5) for agent runs.
+- **OpenAI**: `OPENAI_API_KEY` works via **Settings → Provider → OpenAI**.
   NON-OBVIOUS: the OpenAI provider defaults to the **Codex Mini**
   (`codex-mini`) model, which is unavailable and errors with
   `Error 400 The requested model 'codex-mini' does not exist`. Switch to
   **Settings → Model → GPT-5.5** (or another listed GPT-5.x) before sending.
-- The default provider is Claude, which needs `ANTHROPIC_API_KEY` or a
-  `claude login` session (neither is present by default here).
-- Prompt the agent via the **Send** button (top-right of the center pane);
-  proposed edits appear as tracked changes plus an **Accept/Reject/Retry**
-  review card in the right pane. Accept writes through to `document.md`.
