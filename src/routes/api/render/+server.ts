@@ -634,7 +634,9 @@ function buildHooks(
 		return async (input) => {
 			const toolInput = (input as any).tool_input;
 			const toolName: string = (input as any).tool_name || '';
-			const filePath: string | undefined = toolInput?.file_path;
+			// Check both file_path (built-in Edit/Write tools) and path (MCP
+			// edit_doc/write_doc tools) so {{file}} templating works for both.
+			const filePath: string | undefined = toolInput?.file_path ?? toolInput?.path;
 			// For tool-based hooks, filter by matcher (regex over tool name).
 			// For non-tool hooks (Stop, UserPromptSubmit, Session*, etc.) the
 			// matcher is ignored here — the SDK handles event-type matching
