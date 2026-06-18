@@ -7,6 +7,8 @@
 	import FileTree from '$lib/components/FileTree.svelte';
 	import type { FileEntry } from '$lib/components/FileTree.svelte';
 	import TiptapEditor from '$lib/editor/TiptapEditor.svelte';
+	import PdfViewerPane from '$lib/components/PdfViewerPane.svelte';
+	import { isPdfPath } from '$lib/shared/file-kinds';
 	import AgentDockShell from '$lib/components/AgentDockShell.svelte';
 	import ToastStack from '$lib/components/ToastStack.svelte';
 	import { pushToast, dismissToast, toastQueue, type ToastSpec } from '$lib/toasts';
@@ -289,6 +291,7 @@
 	function refreshPendingReviewTabs(tabIds: string[]) {
 		const pending = new Map<string, number>();
 		for (const id of tabIds) {
+			if (isPdfPath(id)) continue;
 			const raw = getReviewArrayForTab(id).toArray();
 			if (raw.length === 0) continue;
 			// Count only actionable rounds. A stale round (its old_string no
@@ -314,12 +317,12 @@
 			let active: string | null = data.active ?? null;
 			tabs.set(tabIds);
 			activeTab.set(active);
-			if (active) getYDocForTab(active);
+			if (active && !isPdfPath(active)) getYDocForTab(active);
 			refreshPendingReviewTabs(tabIds);
 			// Attach background observers for every non-active tab so their
 			// round/comment changes keep the all-tab pane current.
 			for (const id of tabIds) {
-				if (id !== active) attachBgTabObserver(id);
+				if (id !== active && !isPdfPath(id)) attachBgTabObserver(id);
 			}
 			syncAllTabsState();
 			return active;
@@ -331,6 +334,12 @@
 
 	/** Load a single tab's meta and hydrate review state from its Y.Doc. */
 	async function loadTab(tabId: string) {
+		if (isPdfPath(tabId)) {
+			detachActiveReviewObservers(
+				activeReviewObserver?.tabId ?? activeReviewTextObserver?.tabId ?? tabId
+			);
+			return;
+		}
 		try {
 			getYDocForTab(tabId);
 			const res = await fetch(`/api/document?tab=${encodeURIComponent(tabId)}`);
@@ -381,6 +390,7 @@
 		const roundsAgg: Array<{ tabId: string; rounds: MaterializedPendingReviewRound[] }> = [];
 		const commentsAgg: Array<{ tabId: string; threads: CommentThread[] }> = [];
 		for (const id of tabIds) {
+			if (isPdfPath(id)) continue;
 			const rawRounds = getReviewArrayForTab(id).toArray();
 			if (rawRounds.length > 0) {
 				roundsAgg.push({ tabId: id, rounds: materializedRoundsForTab(id, rawRounds) });
@@ -506,7 +516,7 @@
 		expandedReviewRoundId.set(null);
 		// Move the old active tab to a bg observer and drop the bg observer
 		// for the new active tab (the active observer takes over after loadTab).
-		if (current) attachBgTabObserver(current);
+		if (current && !isPdfPath(current)) attachBgTabObserver(current);
 		detachBgTabObserver(tabId);
 		// New tab gets its own scroll position (top); don't carry the
 		// previous tab's pendingScrollRestore over.
@@ -664,8 +674,10 @@
 	/** Path of the currently active tab — same as its id. Used by the
 	 * FileTree to highlight the active file. */
 	let activeTabFilePath = $state<string | null>(null);
+	let activeTabIsPdf = $state(false);
 	$effect(() => {
 		activeTabFilePath = currentActiveTabId;
+		activeTabIsPdf = activeTabFilePath ? isPdfPath(activeTabFilePath) : false;
 	});
 
 	/** Open a file from the FileTree. Any text file becomes an agent-
@@ -2483,26 +2495,30 @@
 					onDismissPlan={(id) => dismissPlanProposal(id)}
 					onRejectPlan={(id, feedback) => rejectPlanProposal(id, feedback)}
 				/>
-				<TiptapEditor
-					tabId={activeTabFilePath}
-					bind:this={editorRef}
-					onSubmit={(trigger) => submit(trigger)}
-					initialScrollTop={pendingScrollRestore}
-					onAcceptInlineEdit={(roundId) => {
-						const rounds = currentRounds();
-						if (rounds.length === 0 || !roundId) return;
-						void acceptAgentEdit(roundId);
-					}}
-					onRejectInlineEdit={(roundId) => {
-						const rounds = currentRounds();
-						if (rounds.length === 0 || !roundId) return;
-						void rejectAgentEdit(roundId);
-					}}
-					onAcceptFeedbackEdits={(roundIds) => {
-						if (roundIds.length > 0) void acceptAgentEdit(roundIds);
-					}}
-					onResolveThread={(threadId, resolved) => void resolveThread(threadId, resolved)}
-				/>
+				{#if activeTabIsPdf}
+					<PdfViewerPane path={activeTabFilePath} />
+				{:else}
+					<TiptapEditor
+						tabId={activeTabFilePath}
+						bind:this={editorRef}
+						onSubmit={(trigger) => submit(trigger)}
+						initialScrollTop={pendingScrollRestore}
+						onAcceptInlineEdit={(roundId) => {
+							const rounds = currentRounds();
+							if (rounds.length === 0 || !roundId) return;
+							void acceptAgentEdit(roundId);
+						}}
+						onRejectInlineEdit={(roundId) => {
+							const rounds = currentRounds();
+							if (rounds.length === 0 || !roundId) return;
+							void rejectAgentEdit(roundId);
+						}}
+						onAcceptFeedbackEdits={(roundIds) => {
+							if (roundIds.length > 0) void acceptAgentEdit(roundIds);
+						}}
+						onResolveThread={(threadId, resolved) => void resolveThread(threadId, resolved)}
+					/>
+				{/if}
 				{/key}
 			{:else if docLoaded}
 				<div class="empty-editor-state">
@@ -2519,7 +2535,7 @@
 {#if docLoaded}
 	<AgentDockShell
 		onNewSession={newSession}
-		onWakeUp={docLoaded && activeTabFilePath ? () => submit() : undefined}
+		onWakeUp={docLoaded && activeTabFilePath && !activeTabIsPdf ? () => submit() : undefined}
 		onCancel={cancelRender}
 		onToggleMuted={toggleMuted}
 	>
