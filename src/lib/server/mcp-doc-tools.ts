@@ -522,7 +522,7 @@ const editDocTool = tool(
 	'edit_doc',
 	'Replace `old_string` with `new_string` in the given file. For an open tab, this creates or updates a pending review proposal; the live document changes only after the user accepts it. For a file under `.docwriter/agent/scratch/` it writes plain text. By default `old_string` must match exactly once; pass `replace_all: true` to replace every occurrence as a single proposal.',
 	{
-		path: z
+		file_path: z
 			.string()
 			.describe(
 				'Either the workspace-relative tab id (e.g. "drafts/chapter-1.md"), the absolute path to the tab file, or an absolute path inside .docwriter/agent/scratch/.'
@@ -546,11 +546,11 @@ const editDocTool = tool(
 				'Attach this edit to an existing comment thread. Pass the thread_id when you are REVISING the edit a thread is about (e.g. the user replied with feedback on a pending edit) — the proposal lands inside that thread\'s card and supersedes the thread\'s current pending edit. Omit it for a brand-new, unsolicited edit (the system opens a fresh thread for it automatically).'
 			)
 	},
-	async ({ path, old_string, new_string, replace_all, thread_id }) => {
+	async ({ file_path, old_string, new_string, replace_all, thread_id }) => {
 		const replaceAll = replace_all === true;
-		if (isScratchPath(path)) return editScratch(path, old_string, new_string, replaceAll);
+		if (isScratchPath(file_path)) return editScratch(file_path, old_string, new_string, replaceAll);
 
-		const opened = ensureWorkspaceTabOpen(path, { createIfMissing: false });
+		const opened = ensureWorkspaceTabOpen(file_path, { createIfMissing: false });
 		if (!opened.ok) return opened.error;
 		const tabId = opened.tabId;
 
@@ -566,11 +566,11 @@ const editDocTool = tool(
 		const result = await runTabWrite(tabId, 'agent_edit_doc', (currentMd) => {
 			const hits = countOccurrences(currentMd, old_string);
 			if (hits === 0) {
-				failure = `old_string not found in ${path}. The user may have edited this area — read_doc to see the current state and retry.`;
+				failure = `old_string not found in ${file_path}. The user may have edited this area — read_doc to see the current state and retry.`;
 				return null;
 			}
 			if (hits > 1 && !replaceAll) {
-				failure = `old_string matches ${hits} locations in ${path}. Make it more specific (add surrounding context), or pass replace_all: true to replace every occurrence.`;
+				failure = `old_string matches ${hits} locations in ${file_path}. Make it more specific (add surrounding context), or pass replace_all: true to replace every occurrence.`;
 				return null;
 			}
 			appliedHits = hits;
@@ -603,19 +603,19 @@ const editDocTool = tool(
 		if ('error' in result) {
 			if (result.error === 'mutator-aborted') {
 				// A mutator-level abort that didn't set `failure` is a bug; surface it.
-				return toolError(`edit_doc aborted without a reason for ${path}.`);
+				return toolError(`edit_doc aborted without a reason for ${file_path}.`);
 			}
-			return toolError(`edit_doc failed for ${path}: ${result.error}`);
+			return toolError(`edit_doc failed for ${file_path}: ${result.error}`);
 		}
 		if (result.discarded) {
 			return toolText(
-				`Edit discarded for ${path}: the user resolved this feedback thread before the edit landed, so it was not applied. Do not retry.`
+				`Edit discarded for ${file_path}: the user resolved this feedback thread before the edit landed, so it was not applied. Do not retry.`
 			);
 		}
 		return toolText(
 			replaceAll
-				? `Edit applied to ${path} (replaced ${appliedHits} occurrence${appliedHits === 1 ? '' : 's'}).`
-				: `Edit applied to ${path}.`
+				? `Edit applied to ${file_path} (replaced ${appliedHits} occurrence${appliedHits === 1 ? '' : 's'}).`
+				: `Edit applied to ${file_path}.`
 		);
 	}
 );
@@ -624,19 +624,19 @@ const readDocTool = tool(
 	'read_doc',
 	'Read the current content of an open tab or a scratch file. For tabs, returns the latest review-aware content: the newest pending proposal if one exists, otherwise the committed live document.',
 	{
-		path: z
+		file_path: z
 			.string()
 			.describe(
 				'Workspace-relative tab id, absolute path to an open tab file, or absolute path inside .docwriter/agent/scratch/.'
 			)
 	},
-	async ({ path }) => {
-		if (isScratchPath(path)) return readScratch(path);
+	async ({ file_path }) => {
+		if (isScratchPath(file_path)) return readScratch(file_path);
 
 		// Open tab → return review-aware live content (newest pending proposal
 		// if any, else the committed Y.Doc text). This is the path that lets
 		// the agent see its own queued edits before they land.
-		const tabId = resolveTabFromPath(path);
+		const tabId = resolveTabFromPath(file_path);
 		if (tabId && isOpenTab(tabId)) {
 			const ws = getHocuspocus();
 			if (!ws) {
@@ -650,7 +650,7 @@ const readDocTool = tool(
 				});
 				return { content: [{ type: 'text', text: content }] };
 			} catch (err) {
-				return toolError(`Failed to read ${path}: ${(err as Error).message}`);
+				return toolError(`Failed to read ${file_path}: ${(err as Error).message}`);
 			} finally {
 				await direct.disconnect();
 			}
@@ -662,48 +662,48 @@ const readDocTool = tool(
 		// pointless fallback to the built-in Read tool. Reading is non-
 		// mutating, so we don't open a tab on the user's behalf — that's an
 		// edit_doc / write_doc side effect, not a read one.
-		const candidateTabId = tabId ?? pathToTabId(path);
+		const candidateTabId = tabId ?? pathToTabId(file_path);
 		if (candidateTabId) {
 			let absPath: string;
 			try {
 				absPath = resolveWorkspacePath(candidateTabId);
 			} catch (err) {
-				return toolError(`${path} cannot be read: ${(err as Error).message}`);
+				return toolError(`${file_path} cannot be read: ${(err as Error).message}`);
 			}
 			if (!existsSync(absPath)) {
 				return toolError(
-					`${path} does not exist in the workspace. Use Glob to find files or write_doc to create one.`
+					`${file_path} does not exist in the workspace. Use Glob to find files or write_doc to create one.`
 				);
 			}
 			try {
 				const content = readFileSync(absPath, 'utf8');
 				return { content: [{ type: 'text', text: content }] };
 			} catch (err) {
-				return toolError(`Failed to read ${path}: ${(err as Error).message}`);
+				return toolError(`Failed to read ${file_path}: ${(err as Error).message}`);
 			}
 		}
 
 		return toolError(
-			`${path} is not a valid workspace path or scratch path. Workspace paths look like "drafts/chapter-1.md"; scratch paths live under .docwriter/agent/scratch/.`
+			`${file_path} is not a valid workspace path or scratch path. Workspace paths look like "drafts/chapter-1.md"; scratch paths live under .docwriter/agent/scratch/.`
 		);
 	}
 );
 
 const writeDocTool = tool(
 	'write_doc',
-	'Replace the full content of a workspace file or scratch file. For a path that already exists on disk (whether the tab is open or not), this creates a pending review proposal; the committed document only changes on Accept. For a path that does NOT exist, write_doc creates the file with the given content and opens it as a new tab — no review round is needed because there is nothing to compare against. For scratch paths (under .docwriter/agent/scratch/), it just writes the file directly.',
+	'Replace the full content of a workspace file or scratch file. For a file_path that already exists on disk (whether the tab is open or not), this creates a pending review proposal; the committed document only changes on Accept. For a file_path that does NOT exist, write_doc creates the file with the given content and opens it as a new tab — no review round is needed because there is nothing to compare against. For scratch paths (under .docwriter/agent/scratch/), it just writes the file directly.',
 	{
-		path: z
+		file_path: z
 			.string()
 			.describe(
 				'Workspace-relative path (e.g. "drafts/chapter-2.md"), an absolute path inside the workspace, or an absolute path under .docwriter/agent/scratch/. If the file does not exist, write_doc creates it and opens it as a new tab.'
 			),
 		content: z.string().describe('The new full content of the file.')
 	},
-	async ({ path, content }) => {
-		if (isScratchPath(path)) return writeScratch(path, content);
+	async ({ file_path, content }) => {
+		if (isScratchPath(file_path)) return writeScratch(file_path, content);
 
-		const opened = ensureWorkspaceTabOpen(path, { createIfMissing: true });
+		const opened = ensureWorkspaceTabOpen(file_path, { createIfMissing: true });
 		if (!opened.ok) return opened.error;
 
 		// Route every write — including brand-new files — through the review
@@ -715,10 +715,10 @@ const writeDocTool = tool(
 			afterMd: content
 		}));
 		if ('error' in result) {
-			return toolError(`write_doc failed for ${path}: ${result.error}`);
+			return toolError(`write_doc failed for ${file_path}: ${result.error}`);
 		}
 		const verb = opened.existedOnDisk ? 'Wrote' : 'Created';
-		return toolText(`${verb} ${content.length} chars to ${path}.`);
+		return toolText(`${verb} ${content.length} chars to ${file_path}.`);
 	}
 );
 
@@ -754,7 +754,7 @@ const replyToCommentTool = tool(
 	'reply_to_comment',
 	'Reply on an existing comment thread the user has opened. Use this when the user\'s feedback is open-ended, exploratory, or unsure ("what do you think", "idk", "is this right?", "maybe X?"), or when they ask a question that doesn\'t demand an immediate edit. Say what you think, optionally sketch an edit in `proposed_edit` (the user can approve it to apply later). You CANNOT open new threads — only the user can start a thread. If there is no relevant thread for what you want to say, prefer `edit_doc`, `AskUserQuestion`, or staying silent over forcing a thread.',
 	{
-		path: z
+		file_path: z
 			.string()
 			.describe(
 				'Workspace-relative path (e.g. "drafts/chapter-1.md") or absolute path inside the workspace. Must be an existing file — comments can only be attached to a tab the user can open.'
@@ -779,13 +779,13 @@ const replyToCommentTool = tool(
 				'Optional concrete edit you would propose if the user approves. `old_string` must match once in the current live markdown at the time of writing. The edit is NOT applied until the user clicks "Approve & propose edit" on your comment.'
 			)
 	},
-	async ({ path, thread_id, message, proposed_edit }) => {
-		if (isScratchPath(path)) {
+	async ({ file_path, thread_id, message, proposed_edit }) => {
+		if (isScratchPath(file_path)) {
 			return toolError(
 				'reply_to_comment cannot be used on scratch paths — only on workspace tab files.'
 			);
 		}
-		const opened = ensureWorkspaceTabOpen(path, { createIfMissing: false });
+		const opened = ensureWorkspaceTabOpen(file_path, { createIfMissing: false });
 		if (!opened.ok) return opened.error;
 
 		const trimmedMessage = message.trim();
@@ -811,7 +811,7 @@ const replyToCommentTool = tool(
 
 			const existing = commentsMap.get(thread_id);
 			if (!existing) {
-				return { ok: false, error: `Thread "${thread_id}" does not exist on ${path}.` };
+				return { ok: false, error: `Thread "${thread_id}" does not exist on ${file_path}.` };
 			}
 			const updated: CommentThread = {
 				...existing,
@@ -825,7 +825,7 @@ const replyToCommentTool = tool(
 		});
 
 		if (!outcome.ok) return toolError(outcome.error);
-		return toolText(`Replied on thread ${thread_id} (${path}).`);
+		return toolText(`Replied on thread ${thread_id} (${file_path}).`);
 	}
 );
 
@@ -836,17 +836,17 @@ const listThreadsTool = tool(
 	'list_threads',
 	'Return all open (unresolved) comment threads for a workspace tab, including every message in each thread. Use this when you need to read a thread\'s conversation before replying or to understand the full context of user feedback. The prompt only shows thread IDs and anchor quotes to keep context short; the full messages live here.',
 	{
-		path: z
+		file_path: z
 			.string()
 			.describe('Workspace-relative tab id or absolute path to the tab file.')
 	},
-	async ({ path }) => {
-		if (isScratchPath(path)) {
+	async ({ file_path }) => {
+		if (isScratchPath(file_path)) {
 			return toolError('list_threads cannot be used on scratch paths — only on workspace tab files.');
 		}
-		const tabId = resolveTabFromPath(path);
+		const tabId = resolveTabFromPath(file_path);
 		if (!tabId || !isOpenTab(tabId)) {
-			return toolError(`${path} is not an open tab. Open it first via the file tree.`);
+			return toolError(`${file_path} is not an open tab. Open it first via the file tree.`);
 		}
 		const ws = getHocuspocus();
 		if (!ws) {
@@ -861,10 +861,10 @@ const listThreadsTool = tool(
 				commentsMap.forEach((t) => { if (!t.resolved) threads.push(t); });
 				threads.sort((a, b) => a.createdAt - b.createdAt);
 				if (threads.length === 0) {
-					result = `No open threads on ${path}.`;
+					result = `No open threads on ${file_path}.`;
 					return;
 				}
-				const lines: string[] = [`${threads.length} open thread${threads.length === 1 ? '' : 's'} on ${path}:\n`];
+				const lines: string[] = [`${threads.length} open thread${threads.length === 1 ? '' : 's'} on ${file_path}:\n`];
 				for (const thread of threads) {
 					lines.push(`Thread \`${thread.id}\` — anchor: "${thread.anchor.quote.slice(0, 120)}${thread.anchor.quote.length > 120 ? '…' : ''}"`);
 					for (const msg of thread.messages) {
