@@ -33,12 +33,92 @@ import type {
 	CommentThread
 } from '$lib/types';
 import { resolveWorkspacePath } from '$lib/server/workspace-path';
+import { addCustomSkill, readEnabledSkill } from '$lib/server/skills-config';
+import {
+	acceptTabRounds,
+	flushTabMarkdownNow,
+	rejectTabRounds,
+	setThreadResolution
+} from '$lib/server/ws-server';
 
 function toToolResult(r: any): ToolResult {
 	const textContent = (r.content ?? [])
 		.filter((c: any) => c.type === 'text' && typeof c.text === 'string')
 		.map((c: any) => ({ type: 'text' as const, text: c.text as string }));
 	return { content: textContent, isError: r.isError };
+}
+
+export async function executeReviewAction(input: unknown): Promise<ToolResult> {
+	const { path, action, round_id, thread_id } = input as {
+		path?: string;
+		action?: string;
+		round_id?: string;
+		thread_id?: string;
+	};
+	if (!path) {
+		return { isError: true, content: [{ type: 'text' as const, text: 'review_action requires `path`.' }] };
+	}
+	const opened = ensureWorkspaceTabOpen(path, { createIfMissing: false });
+	if (!opened.ok) return toToolResult(opened.error);
+	const tabId = opened.tabId;
+
+	try {
+		if (action === 'accept_round' || action === 'accept_all') {
+			if (action === 'accept_round' && !round_id) {
+				return { isError: true, content: [{ type: 'text' as const, text: 'accept_round requires `round_id`.' }] };
+			}
+			const result = await acceptTabRounds(tabId, action === 'accept_round' ? round_id : undefined);
+			try { flushTabMarkdownNow(tabId); } catch { /* best effort */ }
+			return {
+				content: [{
+					type: 'text' as const,
+					text: `Accepted ${result.acceptedCount} review edit${result.acceptedCount === 1 ? '' : 's'} in ${path}.`
+				}]
+			};
+		}
+		if (action === 'reject_round' || action === 'reject_all') {
+			if (action === 'reject_round' && !round_id) {
+				return { isError: true, content: [{ type: 'text' as const, text: 'reject_round requires `round_id`.' }] };
+			}
+			const result = await rejectTabRounds(tabId, action === 'reject_round' ? round_id : undefined);
+			return {
+				content: [{
+					type: 'text' as const,
+					text: `Rejected ${result.rejectedCount} review edit${result.rejectedCount === 1 ? '' : 's'} in ${path}.`
+				}]
+			};
+		}
+		if (action === 'resolve_thread' || action === 'reopen_thread') {
+			if (!thread_id) {
+				return { isError: true, content: [{ type: 'text' as const, text: `${action} requires \`thread_id\`.` }] };
+			}
+			const result = await setThreadResolution(tabId, thread_id, action === 'resolve_thread');
+			if (!result.ok) {
+				return { isError: true, content: [{ type: 'text' as const, text: `Thread "${thread_id}" was not found in ${path}.` }] };
+			}
+			return {
+				content: [{
+					type: 'text' as const,
+					text: `${action === 'resolve_thread' ? 'Resolved' : 'Reopened'} thread ${thread_id} in ${path}.`
+				}]
+			};
+		}
+		return {
+			isError: true,
+			content: [{
+				type: 'text' as const,
+				text: 'Unknown review action. Use accept_round, accept_all, reject_round, reject_all, resolve_thread, or reopen_thread.'
+			}]
+		};
+	} catch (err) {
+		return {
+			isError: true,
+			content: [{
+				type: 'text' as const,
+				text: `review_action failed: ${(err as Error).message}`
+			}]
+		};
+	}
 }
 
 export function buildToolDefinitions(): ToolDefinition[] {
@@ -189,6 +269,87 @@ export function buildToolDefinitions(): ToolDefinition[] {
 			}
 		},
 		{
+			name: 'read_skill',
+			description: 'Read the full instructions for an enabled DocWriter skill by name.',
+			inputSchema: {
+				type: 'object',
+				properties: {
+					name: { type: 'string', description: 'Skill name, e.g. plain-writing.' }
+				},
+				required: ['name']
+			},
+			execute: async (input) => {
+				const { name } = input as { name: string };
+				const skill = readEnabledSkill(name);
+				if (!skill) {
+					return {
+						isError: true,
+						content: [{ type: 'text' as const, text: `Skill "${name}" is not enabled or does not exist.` }]
+					};
+				}
+				return {
+					content: [{
+						type: 'text' as const,
+						text: `Skill: ${skill.name}\nPath: ${skill.path}\n\n${skill.content}`
+					}]
+				};
+			}
+		},
+		{
+			name: 'add_skill',
+			description: 'Add an Agent Skill to DocWriter from a GitHub repository URL or local skill path.',
+			inputSchema: {
+				type: 'object',
+				properties: {
+					source: {
+						type: 'string',
+						description: 'A GitHub repository URL, local skill directory, or local SKILL.md path.'
+					}
+				},
+				required: ['source']
+			},
+			execute: async (input) => {
+				const { source } = input as { source: string };
+				try {
+					addCustomSkill(source);
+					return {
+						content: [{
+							type: 'text' as const,
+							text: `Added skill from ${source}. It is now enabled and synced to the native skill folders.`
+						}]
+					};
+				} catch (err) {
+					return {
+						isError: true,
+						content: [{
+							type: 'text' as const,
+							text: `add_skill failed: ${(err as Error).message}`
+						}]
+					};
+				}
+			}
+		},
+		{
+			name: 'review_action',
+			description:
+				'Accept/reject pending review edits or resolve/reopen comment threads ONLY when the user explicitly asks you to do that action. This mutates document review state.',
+			inputSchema: {
+				type: 'object',
+				properties: {
+					path: { type: 'string', description: 'Workspace-relative path or absolute path inside the workspace.' },
+					action: {
+						type: 'string',
+						enum: ['accept_round', 'accept_all', 'reject_round', 'reject_all', 'resolve_thread', 'reopen_thread'],
+						description: 'The explicit review action requested by the user.'
+					},
+					round_id: { type: 'string', description: 'Required for accept_round or reject_round.' },
+					thread_id: { type: 'string', description: 'Required for resolve_thread or reopen_thread.' }
+				},
+				required: ['path', 'action']
+			},
+			execute: executeReviewAction
+		},
+		{
 			name: 'propose_rule',
 			description: 'Propose a writing rule for the user to review.',
 			inputSchema: {
@@ -315,6 +476,9 @@ export const TOOL_NAMES = {
 	EDIT_DOC: 'edit_doc',
 	READ_DOC: 'read_doc',
 	WRITE_DOC: 'write_doc',
+	READ_SKILL: 'read_skill',
+	ADD_SKILL: 'add_skill',
+	REVIEW_ACTION: 'review_action',
 	PROPOSE_RULE: 'propose_rule',
 	PROPOSE_HOOK: 'propose_hook',
 	REPLY_TO_COMMENT: 'reply_to_comment',

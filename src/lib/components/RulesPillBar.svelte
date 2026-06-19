@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { X, Plus, Play, ChevronDown, BookOpen } from 'lucide-svelte';
+	import { X, Plus, Play, BookOpen } from 'lucide-svelte';
 	import { rules, pushHistory } from '$lib/stores';
 	import type { Rule } from '$lib/types';
 
@@ -12,8 +12,12 @@
 	rules.subscribe((v) => (rulesList = v));
 
 	let popoverOpen = $state(false);
+	let popoverMode: 'manage' | 'edit' = $state('manage');
 	let newRule = $state('');
+	let editingRuleId: string | null = $state(null);
+	let draftRule = $state('');
 	let inputEl: HTMLInputElement | undefined = $state();
+	let editInputEl: HTMLTextAreaElement | undefined = $state();
 	let anchorEl: HTMLDivElement | undefined = $state();
 
 	const MAX_VISIBLE_PILLS = 3;
@@ -44,23 +48,76 @@
 		const rule = rulesList.find((r) => r.id === id);
 		const next = rulesList.filter((x) => x.id !== id);
 		void saveRules(next);
+		if (editingRuleId === id) closePopover();
 		if (rule) {
 			pushHistory({ type: 'user_action', timestamp: Date.now(), description: `Removed rule: "${rule.text}"` });
 		}
 	}
 
-	function togglePopover() {
-		popoverOpen = !popoverOpen;
-		if (popoverOpen) {
-			requestAnimationFrame(() => inputEl?.focus());
-		} else {
-			newRule = '';
+	function startEditingRule(id: string) {
+		const rule = rulesList.find((r) => r.id === id);
+		if (!rule) return;
+		popoverOpen = true;
+		popoverMode = 'edit';
+		editingRuleId = id;
+		draftRule = rule.text;
+		requestAnimationFrame(() => {
+			editInputEl?.focus();
+			editInputEl?.select();
+		});
+	}
+
+	function cancelEdit() {
+		editingRuleId = null;
+		draftRule = '';
+	}
+
+	function saveEditedRule(id: string) {
+		const text = draftRule.trim();
+		const rule = rulesList.find((r) => r.id === id);
+		if (!rule || !text) return;
+		if (text === rule.text) {
+			if (popoverMode === 'edit') closePopover();
+			else cancelEdit();
+			return;
 		}
+		const next = rulesList.map((r) => (r.id === id ? { ...r, text } : r));
+		void saveRules(next);
+		pushHistory({ type: 'user_action', timestamp: Date.now(), description: `Edited rule: "${rule.text}" to "${text}"` });
+		if (popoverMode === 'edit') closePopover();
+		else cancelEdit();
+	}
+
+	function openManagePopover() {
+		popoverOpen = true;
+		popoverMode = 'manage';
+		cancelEdit();
+		requestAnimationFrame(() => inputEl?.focus());
+	}
+
+	function toggleManagePopover() {
+		if (popoverOpen && popoverMode === 'manage') {
+			closePopover();
+			return;
+		}
+		openManagePopover();
 	}
 
 	function handleInputKeydown(e: KeyboardEvent) {
 		if (e.key === 'Enter') addRule();
-		if (e.key === 'Escape') { popoverOpen = false; newRule = ''; }
+		if (e.key === 'Escape') closePopover();
+	}
+
+	function handleEditKeydown(e: KeyboardEvent, id: string) {
+		if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+			e.preventDefault();
+			saveEditedRule(id);
+		}
+		if (e.key === 'Escape') {
+			e.preventDefault();
+			if (popoverMode === 'edit') closePopover();
+			else cancelEdit();
+		}
 	}
 
 	function handlePopoverPointerdown(e: PointerEvent) {
@@ -68,8 +125,14 @@
 	}
 
 	function handleBackdropClick() {
+		closePopover();
+	}
+
+	function closePopover() {
 		popoverOpen = false;
+		popoverMode = 'manage';
 		newRule = '';
+		cancelEdit();
 	}
 
 	function applyRules() {
@@ -90,7 +153,15 @@
 	<!-- Inline pills for the first few rules -->
 	{#each visibleRules as rule (rule.id)}
 		<span class="rule-pill">
-			<span class="pill-text">{rule.text}</span>
+			<button
+				type="button"
+				class="pill-open"
+				onclick={() => startEditingRule(rule.id)}
+				title="Edit rule: {rule.text}"
+				aria-label="Edit rule: {rule.text}"
+			>
+				<span class="pill-text">{rule.text}</span>
+			</button>
 			<button
 				class="pill-remove"
 				onclick={() => removeRule(rule.id)}
@@ -104,7 +175,7 @@
 
 	<!-- Overflow badge -->
 	{#if overflowCount > 0}
-		<button class="overflow-badge" onclick={togglePopover} title="Show all rules">
+		<button class="overflow-badge" onclick={openManagePopover} title="Show all rules">
 			+{overflowCount} more
 		</button>
 	{/if}
@@ -112,8 +183,8 @@
 	<!-- Add / manage button -->
 	<button
 		class="add-rule-btn"
-		class:active={popoverOpen}
-		onclick={togglePopover}
+		class:active={popoverOpen && popoverMode === 'manage'}
+		onclick={toggleManagePopover}
 		title={rulesList.length > 0 ? 'Manage rules' : 'Add a writing rule'}
 	>
 		<Plus size={11} strokeWidth={2} />
@@ -139,14 +210,48 @@
 		<div class="rules-popover" onpointerdown={handlePopoverPointerdown} onclick={(e) => e.stopPropagation()}>
 			<div class="popover-header">
 				<BookOpen size={13} strokeWidth={1.8} />
-				<span>Writing rules</span>
+				<span>{popoverMode === 'edit' ? 'Edit rule' : 'Writing rules'}</span>
 			</div>
 
-			{#if rulesList.length > 0}
+			{#if popoverMode === 'edit'}
+				{@const editingRule = rulesList.find((rule) => rule.id === editingRuleId)}
+				{#if editingRule}
+					<div class="popover-rule-editor">
+						<textarea
+							bind:this={editInputEl}
+							class="popover-rule-edit-input"
+							bind:value={draftRule}
+							onkeydown={(e) => handleEditKeydown(e, editingRule.id)}
+							rows="4"
+							aria-label="Edit rule"
+						></textarea>
+						<div class="popover-rule-actions">
+							<button
+								type="button"
+								class="popover-rule-cancel"
+								onclick={closePopover}
+							>Cancel</button>
+							<button
+								type="button"
+								class="popover-rule-save"
+								onclick={() => saveEditedRule(editingRule.id)}
+								disabled={!draftRule.trim()}
+							>Save</button>
+						</div>
+					</div>
+				{/if}
+			{:else if rulesList.length > 0}
 				<div class="popover-rules-list">
 					{#each rulesList as rule (rule.id)}
 						<div class="popover-rule-row">
-							<span class="popover-rule-text">{rule.text}</span>
+							<button
+								type="button"
+								class="popover-rule-edit-body"
+								onclick={() => startEditingRule(rule.id)}
+								title="Edit rule"
+							>
+								<span class="popover-rule-text">{rule.text}</span>
+							</button>
 							<button
 								class="popover-rule-remove"
 								onclick={() => removeRule(rule.id)}
@@ -161,26 +266,28 @@
 				<div class="popover-empty">No rules yet. Rules tell the AI what constraints to follow.</div>
 			{/if}
 
-			<div class="popover-input-row">
-				<input
-					bind:this={inputEl}
-					class="popover-input"
-					bind:value={newRule}
-					onkeydown={handleInputKeydown}
-					placeholder="Add a rule, e.g. 'No passive voice'"
-				/>
-				<button
-					class="popover-add-btn"
-					onclick={addRule}
-					disabled={!newRule.trim()}
-				>Add</button>
-			</div>
+			{#if popoverMode === 'manage'}
+				<div class="popover-input-row">
+					<input
+						bind:this={inputEl}
+						class="popover-input"
+						bind:value={newRule}
+						onkeydown={handleInputKeydown}
+						placeholder="Add a rule, e.g. 'No passive voice'"
+					/>
+					<button
+						class="popover-add-btn"
+						onclick={addRule}
+						disabled={!newRule.trim()}
+					>Add</button>
+				</div>
 
-			{#if rulesList.length > 0}
-				<button class="popover-apply-btn" onclick={applyRules}>
-					<Play size={11} strokeWidth={2} />
-					Apply rules to document
-				</button>
+				{#if rulesList.length > 0}
+					<button class="popover-apply-btn" onclick={applyRules}>
+						<Play size={11} strokeWidth={2} />
+						Apply rules to document
+					</button>
+				{/if}
 			{/if}
 		</div>
 	</div>
@@ -201,7 +308,7 @@
 		display: inline-flex;
 		align-items: center;
 		gap: 4px;
-		padding: 2px 6px 2px 8px;
+		padding: 0 4px 0 8px;
 		border-radius: 4px;
 		background: color-mix(in srgb, var(--accent) 8%, transparent);
 		border: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
@@ -217,9 +324,22 @@
 		background: color-mix(in srgb, var(--accent) 14%, transparent);
 		border-color: color-mix(in srgb, var(--accent) 30%, transparent);
 	}
+	.pill-open {
+		display: inline-flex;
+		align-items: center;
+		min-width: 0;
+		padding: 2px 0;
+		border: none;
+		background: transparent;
+		color: inherit;
+		font: inherit;
+		line-height: inherit;
+		cursor: pointer;
+	}
 	.pill-text {
 		overflow: hidden;
 		text-overflow: ellipsis;
+		min-width: 0;
 	}
 	.pill-remove {
 		display: inline-flex;
@@ -359,7 +479,7 @@
 	}
 	.popover-rule-row {
 		display: flex;
-		align-items: center;
+		align-items: flex-start;
 		gap: 8px;
 		padding: 5px 8px;
 		border-radius: 5px;
@@ -368,6 +488,16 @@
 	.popover-rule-row:hover {
 		background: var(--bg-hover);
 	}
+	.popover-rule-edit-body {
+		flex: 1;
+		min-width: 0;
+		padding: 0;
+		border: none;
+		background: transparent;
+		text-align: left;
+		font: inherit;
+		cursor: text;
+	}
 	.popover-rule-text {
 		flex: 1;
 		font-size: 12.5px;
@@ -375,6 +505,67 @@
 		line-height: 1.4;
 		min-width: 0;
 		overflow-wrap: break-word;
+	}
+	.popover-rule-editor {
+		display: flex;
+		flex-direction: column;
+		gap: 7px;
+		width: 100%;
+		min-width: 0;
+	}
+	.popover-rule-edit-input {
+		width: 100%;
+		box-sizing: border-box;
+		resize: vertical;
+		min-height: 86px;
+		max-height: 180px;
+		font: inherit;
+		font-size: 12.5px;
+		line-height: 1.4;
+		border: 1px solid var(--border-light);
+		border-radius: 6px;
+		padding: 7px 9px;
+		outline: none;
+		color: var(--text);
+		background: var(--bg);
+	}
+	.popover-rule-edit-input:focus {
+		border-color: var(--accent);
+		box-shadow: 0 0 0 2px var(--accent-bg);
+	}
+	.popover-rule-actions {
+		display: flex;
+		justify-content: flex-end;
+		gap: 6px;
+	}
+	.popover-rule-cancel,
+	.popover-rule-save {
+		padding: 5px 10px;
+		border-radius: 5px;
+		font: inherit;
+		font-size: 12px;
+		cursor: pointer;
+	}
+	.popover-rule-cancel {
+		border: 1px solid var(--border-light);
+		background: var(--bg);
+		color: var(--text-secondary);
+	}
+	.popover-rule-cancel:hover {
+		background: var(--bg-hover);
+	}
+	.popover-rule-save {
+		border: 1px solid var(--accent);
+		background: var(--accent);
+		color: white;
+		font-weight: 500;
+	}
+	.popover-rule-save:disabled {
+		opacity: 0.35;
+		cursor: default;
+	}
+	.popover-rule-save:hover:not(:disabled) {
+		opacity: 0.85;
 	}
 	.popover-rule-remove {
 		background: none;

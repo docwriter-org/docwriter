@@ -23,6 +23,7 @@
 	import { cubicOut } from 'svelte/easing';
 	import type { CommentThread } from '$lib/types';
 	import { resolveThreadRange } from '$lib/editor/comment-overlay';
+	import { resolveRoundAnchorPos } from '$lib/editor/diff-overlay';
 	import { tooltip } from '$lib/actions/tooltip';
 	import type { MaterializedPendingReviewRound } from '$lib/review-rounds';
 	import { summarizeRound } from '$lib/review-diff';
@@ -120,6 +121,14 @@
 		if (muted) return [];
 		return roundsByThread.get(threadId) ?? [];
 	}
+	function editCardId(roundId: string): string {
+		return `edit:${roundId}`;
+	}
+	let looseEditRounds = $derived(
+		muted
+			? []
+			: rounds.filter((r) => !r.feedbackThreadId || !openThreadIds.has(r.feedbackThreadId))
+	);
 	/** A thread the agent opened (first message is the agent's) — hidden in
 	 * mute mode. User-opened threads always show. */
 	function isAgentThread(thread: CommentThread): boolean {
@@ -282,19 +291,43 @@
 		for (const thread of threads) {
 			if (thread.resolved) continue;
 			if (muted && isAgentThread(thread)) continue;
-			const range = resolveThreadRange(editor, thread);
-			if (!range) continue;
+			const threadEdits = editsForThread(thread.id);
+			const editPos =
+				baseline && threadEdits.length > 0
+					? resolveRoundAnchorPos(editor, threadEdits[0], baseline)
+					: null;
+			const range = editPos == null ? resolveThreadRange(editor, thread) : null;
+			const anchorPos = editPos ?? range?.from ?? null;
+			if (anchorPos == null) continue;
 			try {
-				const coords = editor.view.coordsAtPos(range.from);
+				const coords = editor.view.coordsAtPos(anchorPos);
 				entries.push({
 					id: thread.id,
 					kind: 'comment',
 					top: coords.top - gutterRect.top,
 					expanded: thread.id === openThreadId,
-					editCount: editsForThread(thread.id).length
+					editCount: threadEdits.length
 				});
 			} catch {
 				// coordsAtPos throws if the view isn't mounted — skip.
+			}
+		}
+		if (!muted && baseline) {
+			for (const round of looseEditRounds) {
+				const pos = resolveRoundAnchorPos(editor, round, baseline);
+				if (pos == null) continue;
+				try {
+					const coords = editor.view.coordsAtPos(pos);
+					entries.push({
+						id: editCardId(round.id),
+						kind: 'edit',
+						top: coords.top - gutterRect.top,
+						expanded: false,
+						editCount: 0
+					});
+				} catch {
+					// View not mounted or anchor no longer addressable.
+				}
 			}
 		}
 		entries.sort((a, b) => a.top - b.top);
@@ -336,6 +369,7 @@
 		threads;
 		openThreadId;
 		rounds;
+		looseEditRounds;
 		baseline;
 		muted;
 		requestAnimationFrame(() => recomputePositions());
@@ -358,6 +392,15 @@
 			.sort(
 				(a, b) =>
 					(stackedPositions.get(a.id) ?? 0) - (stackedPositions.get(b.id) ?? 0)
+			)
+	);
+	let visibleLooseEditRounds = $derived(
+		looseEditRounds
+			.filter((r) => stackedPositions.has(editCardId(r.id)))
+			.sort(
+				(a, b) =>
+					(stackedPositions.get(editCardId(a.id)) ?? 0) -
+					(stackedPositions.get(editCardId(b.id)) ?? 0)
 			)
 	);
 
@@ -628,6 +671,41 @@
 					{/if}
 				</div>
 			{/if}
+		</div>
+	{/each}
+	{#each visibleLooseEditRounds as round (round.id)}
+		{@const top = stackedPositions.get(editCardId(round.id)) ?? 0}
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<div
+			class="gutter-card loose-edit-card"
+			class:stale={round.stale}
+			data-card-id={editCardId(round.id)}
+			style:top="{top}px"
+			in:fly={cardIn()}
+			onmouseenter={() => onHoverEdit(round.id)}
+			onmouseleave={() => onHoverEdit(null)}
+		>
+			<div class="card-collapsed-row">
+				<span class="avatar avatar-agent">
+					<Sparkles size={12} strokeWidth={1.8} />
+				</span>
+				<div class="card-preview" title={summarizeRound(round)}>
+					{summarizeRound(round)}
+				</div>
+				<span class="edit-row-actions">
+					<button class="mini-btn reject" title="Reject this edit" onclick={() => onRejectRound(round.id)}>
+						<X size={12} />
+					</button>
+					<button
+						class="mini-btn accept"
+						title={round.stale ? 'Stale — can no longer apply' : 'Accept this edit'}
+						disabled={round.stale}
+						onclick={() => onAcceptRound(round.id)}
+					>
+						<Check size={12} />
+					</button>
+				</span>
+			</div>
 		</div>
 	{/each}
 </div>

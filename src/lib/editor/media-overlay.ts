@@ -71,6 +71,23 @@ interface ParagraphMedia {
 	readonly tokens: readonly MediaToken[];
 }
 
+interface BlockLineRange {
+	readonly from: number;
+	readonly to: number;
+}
+
+interface SvgBlock {
+	readonly id: string;
+	/** PM position immediately after the closing </svg> paragraph. */
+	readonly insertAt: number;
+	/** Raw SVG markup reconstructed from the markdown source lines. */
+	readonly markup: string;
+	/** Paragraph ranges for the raw SVG source lines. */
+	readonly sourceLines: readonly BlockLineRange[];
+	/** Stable key so the preview updates when the SVG source changes. */
+	readonly key: string;
+}
+
 type OgState =
 	| { readonly kind: 'loading' }
 	| {
@@ -97,6 +114,8 @@ interface InlineLink {
 
 interface MediaOverlayState {
 	readonly paragraphs: readonly ParagraphMedia[];
+	readonly svgBlocks: readonly SvgBlock[];
+	readonly expandedSvgIds: ReadonlySet<string>;
 	readonly inlineLinks: readonly InlineLink[];
 	/** og fetch results keyed by URL. Survives across transactions so a
 	 * fetch that resolves three keystrokes after it was started still
@@ -128,6 +147,15 @@ const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|svg|bmp|avif)(\?.*)?$/i;
  * a WeakMap on the node lets us skip the regex pass for paragraphs the
  * user didn't touch. Same trick the diff overlay uses for word diffs. */
 const scanCache = new WeakMap<PMNode, MediaToken[]>();
+
+function hashString(value: string): string {
+	let hash = 2166136261;
+	for (let i = 0; i < value.length; i += 1) {
+		hash ^= value.charCodeAt(i);
+		hash = Math.imul(hash, 16777619);
+	}
+	return (hash >>> 0).toString(36);
+}
 
 function scanParagraphTokens(node: PMNode): MediaToken[] {
 	const cached = scanCache.get(node);
@@ -183,6 +211,63 @@ function scanDoc(doc: PMNode): ParagraphMedia[] {
 					key: `${i}:${child.textContent.length}:${tokens.map(tokenKey).join('|')}`,
 					tokens
 				});
+			}
+		}
+		pos = childEnd;
+	}
+	return out;
+}
+
+/** Detect raw SVG blocks written directly in markdown:
+ *
+ *   <svg ...>
+ *     ...
+ *   </svg>
+ *
+ * The editor still stores and edits those lines as plain text; this only
+ * adds a rendered preview after the closing tag. */
+function scanSvgBlocks(doc: PMNode): SvgBlock[] {
+	const out: SvgBlock[] = [];
+	let pos = 0;
+	let inSvg = false;
+	let lines: string[] = [];
+	let sourceLines: BlockLineRange[] = [];
+	let blockIndex = 0;
+
+	function finishSvgBlock(insertAt: number) {
+		const markup = lines.join('\n');
+		const id = `svg:${blockIndex}`;
+		out.push({
+			id,
+			insertAt,
+			markup,
+			sourceLines,
+			key: `${id}:${hashString(markup)}`
+		});
+		blockIndex += 1;
+		inSvg = false;
+		lines = [];
+		sourceLines = [];
+	}
+
+	for (let i = 0; i < doc.childCount; i += 1) {
+		const child = doc.child(i);
+		const childEnd = pos + child.nodeSize;
+		if (child.type.name === 'paragraph') {
+			const text = child.textContent;
+			if (!inSvg && /^\s*<svg\b/i.test(text)) {
+				inSvg = true;
+				lines = [text];
+				sourceLines = [{ from: pos, to: childEnd }];
+				if (/<\/svg>\s*$/i.test(text)) {
+					finishSvgBlock(childEnd);
+				}
+			} else if (inSvg) {
+				lines.push(text);
+				sourceLines.push({ from: pos, to: childEnd });
+				if (/<\/svg>\s*$/i.test(text)) {
+					finishSvgBlock(childEnd);
+				}
 			}
 		}
 		pos = childEnd;
@@ -288,6 +373,61 @@ function renderImageWidget(token: ImageToken): HTMLElement {
 		wrap.replaceChildren(note);
 	});
 	wrap.appendChild(img);
+	return wrap;
+}
+
+function renderSvgWidget(block: SvgBlock): HTMLElement {
+	const wrap = document.createElement('div');
+	wrap.className = 'media-widget media-svg-widget';
+	wrap.setAttribute('contenteditable', 'false');
+
+	const label = document.createElement('div');
+	label.className = 'media-svg-label';
+	label.textContent = 'SVG preview';
+	wrap.appendChild(label);
+
+	const img = document.createElement('img');
+	img.className = 'media-thumb media-svg-thumb';
+	img.loading = 'eager';
+	img.alt = 'SVG preview';
+	img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(block.markup)}`;
+	img.draggable = false;
+	img.addEventListener('error', () => {
+		wrap.classList.add('media-thumb-error');
+		const note = document.createElement('div');
+		note.className = 'media-thumb-error-label';
+		note.textContent = "Couldn't render SVG preview";
+		wrap.replaceChildren(note);
+	});
+	wrap.appendChild(img);
+	return wrap;
+}
+
+function dispatchSvgToggle(view: EditorView, blockId: string): void {
+	view.dispatch(view.state.tr.setMeta(mediaKey, { type: 'svg-toggle', id: blockId } satisfies SvgToggleMeta));
+	requestAnimationFrame(() => {
+		view.dom.dispatchEvent(new CustomEvent('docwriter:media-layout-changed', { bubbles: true }));
+	});
+}
+
+function renderSvgSourceToggle(block: SvgBlock, expanded: boolean, view: EditorView): HTMLElement {
+	const wrap = document.createElement('div');
+	wrap.className = 'svg-source-toggle';
+	wrap.setAttribute('contenteditable', 'false');
+
+	const button = document.createElement('button');
+	button.className = 'svg-source-toggle-btn';
+	button.type = 'button';
+	button.textContent = expanded ? 'hide SVG source' : 'show SVG source';
+	button.setAttribute('aria-label', expanded ? 'Hide SVG source' : 'Show SVG source');
+	button.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+	button.addEventListener('click', (event) => {
+		event.preventDefault();
+		event.stopPropagation();
+		dispatchSvgToggle(view, block.id);
+	});
+	wrap.appendChild(button);
+
 	return wrap;
 }
 
@@ -416,6 +556,34 @@ function buildDecorations(state: MediaOverlayState, doc: PMNode): DecorationSet 
 			}
 		}
 	}
+	for (const block of state.svgBlocks) {
+		if (block.insertAt > doc.content.size) continue;
+		const expanded = state.expandedSvgIds.has(block.id);
+		const firstLine = block.sourceLines[0];
+		if (firstLine) {
+			decorations.push(
+				Decoration.widget(firstLine.to, (view) => renderSvgSourceToggle(block, expanded, view), {
+					side: 1,
+					key: `${block.key}:source-toggle:${expanded ? 'open' : 'closed'}`,
+					ignoreSelection: true
+				})
+			);
+		}
+		for (const line of block.sourceLines) {
+			decorations.push(
+				Decoration.node(line.from, line.to, {
+					class: expanded ? 'svg-source-line svg-source-line-expanded' : 'svg-source-line svg-source-line-hidden'
+				})
+			);
+		}
+		decorations.push(
+			Decoration.widget(block.insertAt, () => renderSvgWidget(block), {
+				side: 1,
+				key: `${block.key}:preview`,
+				ignoreSelection: true
+			})
+		);
+	}
 	// Inline link marks. Both safe attributes (`class`, `data-url`) make
 	// it trivially easy for the view-level hover handler to find the
 	// hovered link's URL without any extra plugin state lookups.
@@ -460,6 +628,13 @@ interface OgFetchedMeta {
 	readonly value: Exclude<OgState, { kind: 'loading' }>;
 }
 
+interface SvgToggleMeta {
+	readonly type: 'svg-toggle';
+	readonly id: string;
+}
+
+type MediaOverlayMeta = OgFetchedMeta | SvgToggleMeta;
+
 export const MediaOverlay = Extension.create({
 	name: 'mediaOverlay',
 	addProseMirrorPlugins() {
@@ -469,24 +644,37 @@ export const MediaOverlay = Extension.create({
 				state: {
 					init: (_config, instance): MediaOverlayState => ({
 						paragraphs: scanDoc(instance.doc),
+						svgBlocks: scanSvgBlocks(instance.doc),
+						expandedSvgIds: new Set(),
 						inlineLinks: scanInlineLinks(instance.doc),
 						ogByUrl: new Map(),
 						version: 0
 					}),
 					apply(tr, prev): MediaOverlayState {
-						const meta = tr.getMeta(mediaKey) as OgFetchedMeta | undefined;
+						const meta = tr.getMeta(mediaKey) as MediaOverlayMeta | undefined;
 						let next = prev;
 						if (tr.docChanged) {
 							// `tr.doc` is the post-transaction doc — same as the
 							// in-flight newState's doc but doesn't require us to
 							// rely on partial-state semantics during construction.
+							const svgBlocks = scanSvgBlocks(tr.doc);
+							const svgBlockIds = new Set(svgBlocks.map((block) => block.id));
 							next = {
 								...next,
 								paragraphs: scanDoc(tr.doc),
+								svgBlocks,
+								expandedSvgIds: new Set(
+									Array.from(next.expandedSvgIds).filter((id) => svgBlockIds.has(id))
+								),
 								inlineLinks: scanInlineLinks(tr.doc)
 							};
 						}
-						if (meta?.type === 'og-fetched') {
+						if (meta?.type === 'svg-toggle') {
+							const expandedSvgIds = new Set(next.expandedSvgIds);
+							if (expandedSvgIds.has(meta.id)) expandedSvgIds.delete(meta.id);
+							else expandedSvgIds.add(meta.id);
+							next = { ...next, expandedSvgIds };
+						} else if (meta?.type === 'og-fetched') {
 							const ogByUrl = new Map(next.ogByUrl);
 							ogByUrl.set(meta.url, meta.value);
 							next = { ...next, ogByUrl, version: next.version + 1 };
@@ -702,4 +890,3 @@ async function fetchOgInto(view: EditorView, url: string): Promise<void> {
 		/* editor destroyed mid-fetch; nothing to update */
 	}
 }
-

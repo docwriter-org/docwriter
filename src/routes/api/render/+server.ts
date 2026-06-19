@@ -26,6 +26,7 @@ import { replayUpdatesInto } from '$lib/server/ydoc-persistence';
 import { registerPendingAskUser } from '$lib/server/ask-user-state';
 import { unifiedLineDiff } from '$lib/diff';
 import { listStyleReferences } from '$lib/server/references';
+import { buildSkillsPromptBlock } from '$lib/server/skills-config';
 import { materializePendingReviewText } from '$lib/review-rounds';
 import {
 	EDIT_DOC_TOOL_NAME,
@@ -333,7 +334,8 @@ When the same user message carries both a clear directive AND ambient uncertaint
 - **Write / Edit** has two channels:
   1. **Workspace files** — use \`edit_doc\` / \`write_doc\` with the path as \`path\`. These auto-open the file as a tab if needed and create pending review rounds on existing content; brand-new files created via \`write_doc\` land as a new tab directly. The built-in \`Edit\` / \`Write\` tools are blocked outside scratch for this reason.
   2. **Your scratch space** at \`${AGENT_SCRATCH_DIR}/\` — any path under here. Use it for drafts, outlines, notes-to-self, intermediate passes. Either \`edit_doc\` / \`write_doc\` (they fall through to plain file I/O on scratch paths) or the built-in \`Edit\` / \`Write\` tools work. Not surfaced to the user; persists across rounds in the same session; wiped on "New session". Think of it as your working memory.
-- For adding **hooks** → call \`propose_hook\`. For **rules** → \`propose_rule\`. Don't try to edit \`.docwriter/hooks.json\` directly.
+- For adding **hooks** → call \`propose_hook\`. For **rules** → \`propose_rule\`. For **skills** → call \`add_skill\` when the user gives a GitHub URL or local skill path. If the user describes a desired skill in plain language but gives no source, use \`AskUserQuestion\` or explain what source/path you need. Don't try to edit \`.docwriter/hooks.json\`, \`.docwriter/skills.json\`, \`.claude/skills\`, or \`.agents/skills\` directly.
+- For review state mutations — accepting/rejecting pending edits or resolving/reopening comment threads — call \`review_action\` ONLY when the user's current message explicitly asks you to perform that action. Never accept, reject, resolve, or reopen as part of normal writing assistance.
 
 ## When to use subagents (Agent tool)
 
@@ -620,6 +622,50 @@ const USER_HOOK_TIMEOUT_SEC = 60;
 type HookCallback = (input: any) => Promise<any>;
 type HookEntry = { matcher: string; hooks: HookCallback[]; timeout?: number };
 
+function hookToolInputFilePath(toolInput: unknown): string | undefined {
+	if (!toolInput || typeof toolInput !== 'object') return undefined;
+	const input = toolInput as Record<string, unknown>;
+	for (const key of ['file_path', 'path', 'file', 'target', 'source']) {
+		const value = input[key];
+		if (typeof value === 'string' && value.trim()) return value;
+	}
+	return undefined;
+}
+
+function hookMatchesTool(hook: Hook, toolName: string): boolean {
+	if (!hook.matcher?.trim()) return true;
+	if (!toolName) return false;
+	try {
+		// Case-insensitive so `Edit|Write` matches both built-in tools and
+		// namespaced MCP variants like `mcp__docwriter-doc__edit_doc`.
+		return new RegExp(hook.matcher, 'i').test(toolName);
+	} catch {
+		return false;
+	}
+}
+
+async function runUserHooksForEvent(
+	event: HookEvent,
+	emitHookRun: HookRunEmitter,
+	opts: { toolName?: string; toolInput?: unknown } = {}
+): Promise<void> {
+	const userHooks = readHooks().hooks.filter((h) => h.enabled !== false && h.event === event);
+	const isToolEvent =
+		event === 'PreToolUse' ||
+		event === 'PostToolUse' ||
+		event === 'PostToolUseFailure';
+	const toolName = opts.toolName ?? '';
+	for (const hook of userHooks) {
+		if (isToolEvent && !hookMatchesTool(hook, toolName)) continue;
+		await runHookCommand(
+			hook,
+			toolName,
+			hookToolInputFilePath(opts.toolInput),
+			emitHookRun
+		);
+	}
+}
+
 /** Build the hook map for this render. Only user-defined shell hooks
  * (from `.docwriter/hooks.json`) are wired in. Agent writes to open tabs
  * go through `edit_doc` / `write_doc`, which mutate the live Y.Doc
@@ -634,22 +680,12 @@ function buildHooks(
 		return async (input) => {
 			const toolInput = (input as any).tool_input;
 			const toolName: string = (input as any).tool_name || '';
-			const filePath: string | undefined = toolInput?.file_path;
 			// For tool-based hooks, filter by matcher (regex over tool name).
 			// For non-tool hooks (Stop, UserPromptSubmit, Session*, etc.) the
 			// matcher is ignored here — the SDK handles event-type matching
 			// via the top-level matcher on the hook entry.
-			if (toolName && hook.matcher && hook.matcher.trim()) {
-				try {
-					// Case-insensitive so `Edit|Write` matches both the built-in
-					// `Edit`/`Write` tools and the agent's MCP tool variants
-					// like `mcp__docwriter-doc__edit_doc`.
-					if (!new RegExp(hook.matcher, 'i').test(toolName)) return {};
-				} catch {
-					return {};
-				}
-			}
-			await runHookCommand(hook, toolName, filePath, emitHookRun);
+			if (toolName && !hookMatchesTool(hook, toolName)) return {};
+			await runHookCommand(hook, toolName, hookToolInputFilePath(toolInput), emitHookRun);
 			return {};
 		};
 	}
@@ -747,7 +783,14 @@ export const POST: RequestHandler = async ({ request }) => {
 		const prompt = warmup
 			? `You are a writing assistant. The user has a set of files open as tabs. Acknowledge you're ready in 1-2 sentences. Don't edit anything.`
 			: buildMultiTabPrompt(active, tabsForPrompt, message) + planModeInstruction;
-		const systemPromptBlock = warmup ? undefined : buildSystemPrompt();
+		const baseSystemPromptBlock = warmup ? undefined : buildSystemPrompt();
+		const skillsPromptBlock =
+			!warmup && (providerId === 'openai' || providerId === 'cursor')
+				? buildSkillsPromptBlock()
+				: null;
+		const systemPromptBlock = [baseSystemPromptBlock, skillsPromptBlock]
+			.filter(Boolean)
+			.join('\n\n') || undefined;
 		if (systemPromptBlock) setLastSystemPrompt(systemPromptBlock);
 		const openTabPaths = new Set(allTabIds.map((tabId) => normalizeToolPath(tabFile(tabId))));
 
@@ -784,7 +827,8 @@ export const POST: RequestHandler = async ({ request }) => {
 					}
 				}
 
-				const hooks = buildHooks((entry) => send('hook_run', entry));
+				const emitHookRun: HookRunEmitter = (entry) => send('hook_run', entry);
+				const hooks = buildHooks(emitHookRun);
 
 				try {
 					const resolvedModel =
@@ -862,15 +906,15 @@ export const POST: RequestHandler = async ({ request }) => {
 						'Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch', 'Agent',
 						'AskUserQuestion', 'ExitPlanMode',
 						READ_DOC_TOOL_NAME, REPLY_TO_COMMENT_TOOL_NAME,
-						'read_doc', 'reply_to_comment', 'list_threads'
+						'read_doc', 'reply_to_comment', 'list_threads', TOOL_NAMES.READ_SKILL
 					];
 					const fullAllowedTools = [
 						'Read', 'Bash', 'Glob', 'Grep', 'WebSearch', 'WebFetch', 'Agent',
-						'mcp__docwriter__propose_rule', 'mcp__docwriter__propose_hook',
+						'mcp__docwriter__propose_rule', 'mcp__docwriter__propose_hook', 'mcp__docwriter__add_skill', 'mcp__docwriter__review_action',
 						'AskUserQuestion', 'ExitPlanMode',
 						EDIT_DOC_TOOL_NAME, READ_DOC_TOOL_NAME, WRITE_DOC_TOOL_NAME, REPLY_TO_COMMENT_TOOL_NAME,
 						'edit_doc', 'read_doc', 'write_doc', 'reply_to_comment', 'list_threads',
-						'propose_rule', 'propose_hook'
+						'propose_rule', 'propose_hook', TOOL_NAMES.READ_SKILL, TOOL_NAMES.ADD_SKILL, TOOL_NAMES.REVIEW_ACTION
 					];
 					const allowedTools = warmup
 						? ['Read', 'Glob', 'WebSearch', 'WebFetch']
@@ -889,6 +933,10 @@ export const POST: RequestHandler = async ({ request }) => {
 						roundImages?: ImageAttachmentPayload[]
 					): Promise<QueryRoundOutcome> {
 						let usedDocMutationTool = false;
+						const toolInputsForHooks = new Map<string, {
+							toolName: string;
+							input: Record<string, unknown>;
+						}>();
 
 						for await (const event of provider.query({
 							prompt: roundPrompt,
@@ -911,6 +959,12 @@ export const POST: RequestHandler = async ({ request }) => {
 							if (event.type === 'tool_call' && mutationToolNames.has(event.tool_name)) {
 								usedDocMutationTool = true;
 							}
+							if (providerId !== 'claude' && event.type === 'tool_call') {
+								toolInputsForHooks.set(event.tool_use_id, {
+									toolName: event.tool_name,
+									input: event.input
+								});
+							}
 							// Forward session IDs to runtime state. The session event
 							// arrives first, so this is also where we log the user
 							// message — under the now-established session id, so it
@@ -926,6 +980,20 @@ export const POST: RequestHandler = async ({ request }) => {
 							}
 							// Forward the event as-is to the SSE stream
 							send(event.type, event);
+							if (providerId !== 'claude' && event.type === 'tool_result') {
+								const toolCall = toolInputsForHooks.get(event.tool_use_id);
+								const hookEvent: HookEvent = event.is_error
+									? 'PostToolUseFailure'
+									: 'PostToolUse';
+								await runUserHooksForEvent(hookEvent, emitHookRun, {
+									toolName: toolCall?.toolName ?? '',
+									toolInput: toolCall?.input
+								});
+							}
+						}
+
+						if (providerId !== 'claude' && !warmup) {
+							await runUserHooksForEvent('Stop', emitHookRun);
 						}
 
 						return { usedDocMutationTool };

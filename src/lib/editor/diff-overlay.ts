@@ -176,6 +176,15 @@ function buildLineAlignmentMap(anchorMd: string, currentMd: string): Map<number,
 // PM's default handling instead of jumping to a sibling.
 const DIFF_NODE_SELECTOR =
 	'.diff-added-line, .diff-removed-line, .diff-removed-widget';
+const DIFF_THREAD_SELECTOR = [
+	'.diff-thread-btn[data-thread-id]',
+	'.diff-added[data-thread-id]',
+	'.diff-added-line[data-thread-id]',
+	'.diff-removed[data-thread-id]',
+	'.diff-removed-line[data-thread-id]',
+	'.diff-removed-widget[data-thread-id]',
+	'.diff-insert-caret[data-thread-id]'
+].join(',');
 
 function isDiffNode(el: Element | null): boolean {
 	return !!el?.matches?.(DIFF_NODE_SELECTOR);
@@ -297,6 +306,27 @@ function placeCaretFromClick(
 	return true;
 }
 
+function dispatchOpenThread(view: EditorView, source: HTMLElement, threadId: string): void {
+	const rect = source.getBoundingClientRect();
+	view.dom.dispatchEvent(
+		new CustomEvent('docwriter:open-thread', {
+			detail: { threadId, x: rect.right, y: rect.top },
+			bubbles: true
+		})
+	);
+}
+
+function openThreadFromDiff(view: EditorView, event: MouseEvent): boolean {
+	const target = event.target as Element | null;
+	const el = target?.closest(DIFF_THREAD_SELECTOR) as HTMLElement | null;
+	const threadId = el?.getAttribute('data-thread-id');
+	if (!el || !threadId) return false;
+	event.preventDefault();
+	event.stopPropagation();
+	dispatchOpenThread(view, el, threadId);
+	return true;
+}
+
 export const DiffOverlay = Extension.create({
 	name: 'diffOverlay',
 
@@ -319,6 +349,7 @@ export const DiffOverlay = Extension.create({
 					handleDOMEvents: {
 						mousedown(view, event) {
 							const target = event.target as Element | null;
+							if (openThreadFromDiff(view, event)) return true;
 							if (!target?.closest(DIFF_NODE_SELECTOR)) return false;
 							return placeCaretFromClick(editor, view, event);
 						}
@@ -378,6 +409,7 @@ export const DiffOverlay = Extension.create({
 									interface DiffBlock {
 										id: string;
 										roundId: string;
+										threadId: string | null;
 										insertionPos: number;
 										removedParagraphIdxs: number[];
 										addedLines: string[];
@@ -385,6 +417,7 @@ export const DiffOverlay = Extension.create({
 									interface ModifiedPara {
 										id: string;
 										roundId: string;
+										threadId: string | null;
 										para: ParagraphTextSpan;
 										afterText: string;
 										stale: boolean;
@@ -416,6 +449,7 @@ export const DiffOverlay = Extension.create({
 											currentBlock = {
 												id: `block:${round.id}:${docLine}`,
 												roundId: round.id,
+												threadId: round.feedbackThreadId ?? null,
 												insertionPos: 0,
 												removedParagraphIdxs: [],
 												addedLines: []
@@ -468,6 +502,7 @@ export const DiffOverlay = Extension.create({
 														modified.push({
 															id: `mod:${round.id}:${docLine}`,
 															roundId: round.id,
+															threadId: round.feedbackThreadId ?? null,
 															para,
 															afterText: addedLines[j],
 															stale,
@@ -505,6 +540,8 @@ export const DiffOverlay = Extension.create({
 									// left so they don't stack on top of each other.
 									const numberedRoundsDone = new Set<string>();
 									const badgeStackAtPos = new Map<number, number>();
+									const threadButtonsDone = new Set<string>();
+									const threadButtonStackAtPos = new Map<number, number>();
 									const pushNumberBadge = (roundId: string, pos: number) => {
 										const num = roundNumbers.get(roundId);
 										if (num == null || numberedRoundsDone.has(roundId)) return;
@@ -526,6 +563,27 @@ export const DiffOverlay = Extension.create({
 											)
 										);
 									};
+									const pushThreadButton = (
+										roundId: string,
+										threadId: string | null,
+										pos: number
+									) => {
+										if (!threadId || threadButtonsDone.has(roundId)) return;
+										threadButtonsDone.add(roundId);
+										const stackIdx = threadButtonStackAtPos.get(pos) ?? 0;
+										threadButtonStackAtPos.set(pos, stackIdx + 1);
+										decorations.push(
+											Decoration.widget(
+												pos,
+												(view) => createThreadButton(view, threadId, stackIdx),
+												{
+													side: -1,
+													ignoreSelection: true,
+													key: `threadbtn:${roundId}:${threadId}`
+												}
+											)
+										);
+									};
 
 									for (const block of blocks) {
 										const expanded = revealedRoundIds.has(block.roundId);
@@ -540,11 +598,18 @@ export const DiffOverlay = Extension.create({
 													Decoration.node(
 														paragraph.pos,
 														paragraph.pos + paragraph.nodeSize,
-														{ class: flashing ? 'diff-removed-line diff-flash' : 'diff-removed-line' }
+														{
+															class: flashing ? 'diff-removed-line diff-flash' : 'diff-removed-line',
+															...(block.threadId ? { 'data-thread-id': block.threadId } : {})
+														}
 													)
 												);
 												pushNumberBadge(block.roundId, paragraph.pos + 1);
+												pushThreadButton(block.roundId, block.threadId, paragraph.pos + 1);
 											}
+										}
+										if (block.removedParagraphIdxs.length === 0) {
+											pushThreadButton(block.roundId, block.threadId, block.insertionPos);
 										}
 										// Proposed (green) lines: only when expanded.
 										if (expanded && block.addedLines.length > 0) {
@@ -556,7 +621,7 @@ export const DiffOverlay = Extension.create({
 													Decoration.widget(
 														block.insertionPos,
 														(view, getPos) =>
-															createAddedLineWidget(view, getPos, line, className),
+															createAddedLineWidget(view, getPos, line, className, block.threadId),
 														{
 															side: -1,
 															ignoreSelection: true,
@@ -599,7 +664,7 @@ export const DiffOverlay = Extension.create({
 													Decoration.widget(
 														m.para.pos + m.para.nodeSize,
 														(view, getPos) =>
-															createAddedLineWidget(view, getPos, value, className),
+															createAddedLineWidget(view, getPos, value, className, m.threadId),
 														{
 															side: 1,
 															ignoreSelection: true,
@@ -614,7 +679,8 @@ export const DiffOverlay = Extension.create({
 												m.para,
 												m.afterText,
 												expanded,
-												addedClass
+												addedClass,
+												m.threadId
 											);
 										}
 										if (changeGroups <= 0) continue;
@@ -629,11 +695,13 @@ export const DiffOverlay = Extension.create({
 													class:
 														m.roundId === flashRoundId
 															? 'diff-modified-line diff-flash'
-															: 'diff-modified-line'
+															: 'diff-modified-line',
+													...(m.threadId ? { 'data-thread-id': m.threadId } : {})
 												}
 											)
 										);
 										pushNumberBadge(m.roundId, m.para.pos + 1);
+										pushThreadButton(m.roundId, m.threadId, m.para.pos + 1);
 									}
 								} else if (proposedText !== null && proposedText !== undefined) {
 									let baselineIdx = 0;
@@ -743,7 +811,8 @@ function applyInlineClassRange(
 	charPositions: number[],
 	start: number,
 	end: number,
-	cls: string
+	cls: string,
+	attrs?: Record<string, string>
 ) {
 	let i = start;
 	const clampedEnd = Math.min(end, charPositions.length);
@@ -758,7 +827,7 @@ function applyInlineClassRange(
 		const from = charPositions[i];
 		const to = charPositions[j] + 1;
 		if (from !== undefined && to > from) {
-			decorations.push(Decoration.inline(from, to, { class: cls }));
+			decorations.push(Decoration.inline(from, to, { ...attrs, class: cls }));
 		}
 		i = j + 1;
 	}
@@ -921,10 +990,12 @@ function renderModifiedParagraph(
 	para: ParagraphTextSpan,
 	afterText: string,
 	expanded: boolean,
-	addedClass: string
+	addedClass: string,
+	threadId?: string | null
 ): number {
 	const parts = cachedWordDiff(para.text, afterText);
 	const charPositions = para.localCharPositions;
+	const threadAttrs = threadId ? { 'data-thread-id': threadId } : undefined;
 
 	// Threshold fallback: when most of the paragraph is being rewritten,
 	// the per-token diff turns into a confetti of small strikes around
@@ -947,7 +1018,7 @@ function renderModifiedParagraph(
 	const denom = Math.max(1, para.text.length + afterText.length);
 	const churnRatio = (removedChars + addedChars) / denom;
 	if (churnRatio > 0.8 || groupCount > 6) {
-		applyInlineClassRange(decorations, charPositions, 0, para.text.length, 'diff-removed');
+		applyInlineClassRange(decorations, charPositions, 0, para.text.length, 'diff-removed', threadAttrs);
 		if (expanded && afterText.length > 0) {
 			const widgetPos = ghostPosLocal(para, para.text.length);
 			decorations.push(
@@ -958,6 +1029,7 @@ function renderModifiedParagraph(
 						span.className = addedClass;
 						span.textContent = afterText;
 						span.setAttribute('contenteditable', 'false');
+						if (threadId) span.setAttribute('data-thread-id', threadId);
 						applyProposedLinkAttrs(span, afterText);
 						return span;
 					},
@@ -989,7 +1061,8 @@ function renderModifiedParagraph(
 				charPositions,
 				cursor,
 				cursor + p.text.length,
-				'diff-removed'
+				'diff-removed',
+				threadAttrs
 			);
 			cursor += p.text.length;
 		} else if (expanded) {
@@ -1008,6 +1081,7 @@ function renderModifiedParagraph(
 						span.className = addedClass;
 						span.textContent = value;
 						span.setAttribute('contenteditable', 'false');
+						if (threadId) span.setAttribute('data-thread-id', threadId);
 						applyProposedLinkAttrs(span, value);
 						return span;
 					},
@@ -1035,6 +1109,7 @@ function renderModifiedParagraph(
 						el.className = 'diff-insert-caret';
 						el.setAttribute('contenteditable', 'false');
 						el.setAttribute('aria-hidden', 'true');
+						if (threadId) el.setAttribute('data-thread-id', threadId);
 						return el;
 					},
 					{ side: -1, ignoreSelection: true, key: `inscaret:${para.pos}:${cursor}` }
@@ -1050,7 +1125,8 @@ function createAddedLineWidget(
 	_view: EditorView,
 	_getPos: () => number | undefined,
 	line: string,
-	className: string
+	className: string,
+	threadId?: string | null
 ): HTMLElement {
 	const block = document.createElement('div');
 	block.className = className;
@@ -1061,7 +1137,34 @@ function createAddedLineWidget(
 	// `handleDOMEvents.mousedown` so we don't need a per-widget listener
 	// (and so the closure stays out of the way of HMR / view re-mounts).
 	block.setAttribute('contenteditable', 'false');
+	if (threadId) block.setAttribute('data-thread-id', threadId);
 	return block;
+}
+
+function createThreadButton(view: EditorView, threadId: string, stackIdx: number): HTMLElement {
+	const button = document.createElement('button');
+	button.className = 'diff-thread-btn';
+	button.type = 'button';
+	button.title = 'Open comment thread';
+	button.setAttribute('aria-label', 'Open comment thread');
+	button.setAttribute('contenteditable', 'false');
+	button.setAttribute('data-thread-id', threadId);
+	button.style.setProperty('--thread-i', String(stackIdx));
+	button.innerHTML = `
+		<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+		</svg>
+	`;
+	button.addEventListener('mousedown', (event) => {
+		event.preventDefault();
+		event.stopPropagation();
+		dispatchOpenThread(view, button, threadId);
+	});
+	button.addEventListener('click', (event) => {
+		event.preventDefault();
+		event.stopPropagation();
+	});
+	return button;
 }
 
 /** Strip markdown syntax to plain text, matching node.textContent semantics. */
