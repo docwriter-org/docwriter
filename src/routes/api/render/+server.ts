@@ -801,6 +801,7 @@ export const POST: RequestHandler = async ({ request }) => {
 			async start(controller) {
 				const encoder = new TextEncoder();
 				const renderStart = Date.now();
+				let currentModelForTranscript = '';
 
 				const persistableEvents = new Set([
 					'assistant_text', 'assistant_thinking', 'tool_call_start',
@@ -809,7 +810,11 @@ export const POST: RequestHandler = async ({ request }) => {
 				]);
 
 				function send(event: string, data: unknown) {
-					const payload = { ...(data as object), _elapsed: Date.now() - renderStart };
+					const payload = {
+						...(data as object),
+						...(currentModelForTranscript ? { model: currentModelForTranscript } : {}),
+						_elapsed: Date.now() - renderStart
+					};
 					controller.enqueue(
 						encoder.encode(
 							`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`
@@ -833,6 +838,8 @@ export const POST: RequestHandler = async ({ request }) => {
 				try {
 					const resolvedModel =
 						model || process.env.DOCWRITER_DEFAULT_MODEL || undefined;
+					kvSet('model', resolvedModel ?? '');
+					currentModelForTranscript = resolvedModel ?? '';
 
 					const provider = await getProvider(providerId);
 					const tools = buildToolDefinitions();

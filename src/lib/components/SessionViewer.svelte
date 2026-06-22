@@ -64,6 +64,7 @@
 		messages?: unknown[];
 		systemPrompt?: string | null;
 		provider?: string | null;
+		model?: string | null;
 	};
 
 	type SaveFilePickerWindow = Window & {
@@ -84,6 +85,7 @@
 	let events = $state<SessionEvent[]>([]);
 	let sessionId = $state('');
 	let providerId = $state('claude');
+	let modelId = $state('');
 	let rawHistory = $state<unknown[]>([]);
 	let sdkMessages = $state<unknown[]>([]);
 	// Label for assistant rows / filter — reflects the provider that produced
@@ -175,6 +177,7 @@
 	let contextPctFull = $derived(
 		Math.min(100, Math.round((totalContextTokens / CONTEXT_BUDGET) * 100))
 	);
+	let modelDisplay = $derived(modelId || latestAssistant?.model || '');
 	type ContextBucket = { id: string; label: string; tokens: number; color: string };
 	let contextBuckets = $derived<ContextBucket[]>([
 		{ id: 'system', label: 'System prompt', tokens: systemPromptTokens, color: 'var(--ctx-color-system)' },
@@ -278,6 +281,7 @@
 			session: {
 				id: sessionId || null,
 				provider: providerId,
+				model: modelDisplay || null,
 				assistantLabel
 			},
 			stats: {
@@ -303,6 +307,14 @@
 				messages: sdkMessages
 			}
 		};
+	}
+
+	function modelFromEvents(parsedEvents: SessionEvent[]): string {
+		for (let i = parsedEvents.length - 1; i >= 0; i -= 1) {
+			const model = parsedEvents[i].model;
+			if (model) return model;
+		}
+		return '';
 	}
 
 	function downloadJsonFallback(filename: string, jsonText: string) {
@@ -370,6 +382,7 @@
 			rawHistory = Array.isArray(data.raw) ? data.raw : [];
 			sdkMessages = Array.isArray(data.messages) ? data.messages : [];
 			providerId = data.provider ?? 'claude';
+			modelId = typeof data.model === 'string' ? data.model : '';
 			const raw = rawHistory;
 			const messages = sdkMessages;
 			const provider = providerId;
@@ -383,7 +396,9 @@
 					: raw.length > 0
 						? parseRaw(raw)
 						: parseMessages(messages);
-			events = pairToolResults(parsed);
+			const paired = pairToolResults(parsed);
+			events = paired;
+			if (!modelId) modelId = modelFromEvents(paired);
 		} catch (e) {
 			error = String(e);
 		} finally {
@@ -411,11 +426,18 @@
 			if (t === 'assistant_text' || t === 'assistant_thinking') {
 				const kind: EventKind = t === 'assistant_thinking' ? 'thinking' : 'assistant_text';
 				const delta = typeof e.text === 'string' ? e.text : '';
+				const eventModel = typeof e.model === 'string' ? e.model : undefined;
 				if (acc && acc.kind === kind) {
 					acc.text = (acc.text ?? '') + delta;
+					if (!acc.model && eventModel) acc.model = eventModel;
 				} else {
 					flush();
-					acc = { kind, ts, text: delta };
+					acc = {
+						kind,
+						ts,
+						text: delta,
+						model: eventModel
+					};
 				}
 				continue;
 			}
@@ -721,6 +743,9 @@
 			</div>
 			<div class="topbar-right">
 				<div class="stats-pills">
+					{#if modelDisplay}
+						<span class="stat-pill model-pill" title={modelDisplay}>{modelDisplay}</span>
+					{/if}
 					<span class="stat-pill">{userTurns} turns</span>
 					<span class="stat-pill">{toolCounts.reduce((a,[,v])=>a+v,0)} calls</span>
 					<span class="stat-pill">{fmtTokens(totalInTok)} in</span>
@@ -902,6 +927,9 @@
 											<span class="msg-preview">{preview}</span>
 										{:else}
 											<span class="card-ts">{fmtTs(ev.ts)}</span>
+											{#if ev.model || modelDisplay}
+												<span class="model-info" title={ev.model || modelDisplay}>{ev.model || modelDisplay}</span>
+											{/if}
 											{#if ev.inputTokens || ev.outputTokens}
 												<span class="tok-info">
 													{fmtTokens((ev.inputTokens ?? 0) + (ev.cacheRead ?? 0))} in
@@ -1129,6 +1157,12 @@
 		padding: 2px 8px;
 		font-family: ui-monospace, monospace;
 		white-space: nowrap;
+	}
+	.model-pill {
+		max-width: 220px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		color: var(--text-secondary);
 	}
 
 	/* ── Context breakdown ───────────────────────────────────────── */
@@ -1489,6 +1523,15 @@
 		font-size: 11px;
 		color: var(--text-faint);
 		font-family: ui-monospace, monospace;
+	}
+	.model-info {
+		font-size: 11px;
+		color: var(--text-faint);
+		font-family: ui-monospace, monospace;
+		max-width: 240px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 	.tool-preview {
 		flex: 1;
