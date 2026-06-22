@@ -15,6 +15,7 @@ import type {
 } from './types';
 import { buildToolDefinitions } from './tool-handlers';
 import { randomUUID } from 'node:crypto';
+import { WORKSPACE_ROOT } from '$lib/server/document-files';
 
 let sdkLoaded = false;
 let createAgentSession: any = null;
@@ -133,11 +134,12 @@ export class PiProvider implements AgentProvider {
 		const modelRegistry = ModelRegistry.create(authStorage);
 
 		const sessionOpts: any = {
+			cwd: WORKSPACE_ROOT,
 			sessionManager: SessionManager.inMemory(),
 			authStorage,
 			modelRegistry,
 			customTools: piTools,
-			noTools: 'builtin'
+			tools: ['read', ...allTools.map((toolDef) => toolDef.name)]
 		};
 
 		if (options.model) {

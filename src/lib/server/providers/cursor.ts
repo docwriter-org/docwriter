@@ -13,6 +13,7 @@ import type {
 } from './types';
 import { buildToolDefinitions } from './tool-handlers';
 import { randomUUID } from 'node:crypto';
+import { WORKSPACE_ROOT } from '$lib/server/document-files';
 
 /** Cursor wraps custom-tool results in a synthetic-MCP envelope, e.g.
  * `{status, value:{content:[{text:{text:"…"}}], isError}}` or
@@ -113,7 +114,7 @@ export class CursorProvider implements AgentProvider {
 				apiKey: process.env.CURSOR_API_KEY,
 				model: { id: model },
 				local: {
-					cwd: process.cwd(),
+					cwd: WORKSPACE_ROOT,
 					customTools
 				}
 			});

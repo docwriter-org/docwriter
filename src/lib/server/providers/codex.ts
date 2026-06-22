@@ -11,6 +11,7 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { WORKSPACE_ROOT } from '$lib/server/document-files';
 import type {
 	AgentProvider,
 	ProviderEvent,
@@ -242,7 +243,7 @@ export class CodexProvider implements AgentProvider {
 	private async getThread(options: ProviderQueryOptions): Promise<any> {
 		const client = await this.getClient();
 		const threadOptions = {
-			workingDirectory: process.cwd(),
+			workingDirectory: WORKSPACE_ROOT,
 			skipGitRepoCheck: true,
 			sandboxMode: 'read-only',
 			approvalPolicy: 'never',

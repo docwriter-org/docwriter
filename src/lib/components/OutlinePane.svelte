@@ -37,12 +37,13 @@
 		pendingReviewRounds,
 		allTabPendingRounds,
 		allTabCommentThreads,
+		openCommentThreadId,
 		seenCommentIds,
 		markCommentSeen,
 		agentSettings,
 		expandedReviewRoundId
 	} from '$lib/stores';
-	import { getYDocForTab } from '$lib/yjs-doc';
+	import { getCommentsMapForTab, getYDocForTab } from '$lib/yjs-doc';
 	import type { ProposedRule, ProposedHook, CommentThread } from '$lib/types';
 	import type { MaterializedPendingReviewRound } from '$lib/review-rounds';
 	import {
@@ -226,10 +227,12 @@
 
 	async function handleCommentClick(tabId: string, thread: CommentThread) {
 		markCommentSeen(thread.id);
-		if (tabId !== activeTabId && onNavigateToComment) {
+		if (tabId !== activeTabId) {
+			if (!onNavigateToComment) return;
 			await onNavigateToComment(tabId, thread);
 			await tick();
 		}
+		openCommentThreadId.set(thread.id);
 	}
 
 	function diffPreview(round: MaterializedPendingReviewRound): ReviewPreviewLine[] {
@@ -267,6 +270,18 @@
 	function firstAgentMessage(thread: CommentThread): string {
 		return thread.messages.find((m) => m.author === 'agent')?.text ?? '';
 	}
+
+	function threadForRound(tabId: string, round: MaterializedPendingReviewRound): CommentThread | null {
+		const threadId = round.feedbackThreadId;
+		if (!threadId) return null;
+		return getCommentsMapForTab(tabId).get(threadId) ?? null;
+	}
+
+	async function openRoundThread(tabId: string, round: MaterializedPendingReviewRound) {
+		const thread = threadForRound(tabId, round);
+		if (!thread) return;
+		await handleCommentClick(tabId, thread);
+	}
 </script>
 
 <div class="outline-pane">
@@ -280,8 +295,12 @@
 					{#each toc as h}
 						<!-- svelte-ignore a11y_click_events_have_key_events -->
 						<!-- svelte-ignore a11y_no_static_element_interactions -->
-						<div class="toc-item" style:padding-left={`${(h.level - 1) * 12}px`} onclick={() => scrollToHeading(h.text)}>
-							<FileText size={11} />
+						<div
+							class="toc-item"
+							data-level={h.level}
+							style:padding-left={`${Math.max(0, h.level - 1) * 14}px`}
+							onclick={() => scrollToHeading(h.text)}
+						>
 							<span>{h.text}</span>
 						</div>
 					{/each}
@@ -359,6 +378,11 @@
 								<button class="btn-reject" onclick={() => onReject?.(round.id)}>
 									<X size={11} />Reject
 								</button>
+								{#if threadForRound(group.tabId, round)}
+									<button class="btn-secondary" onclick={() => void openRoundThread(group.tabId, round)}>
+										<MessageSquare size={11} />Thread
+									</button>
+								{/if}
 								<button class="btn-retry" onclick={() => openRetryFeedback(round.id)}>
 									<RotateCcw size={11} />Retry with feedback
 								</button>
@@ -502,17 +526,45 @@
 	}
 	.empty { color: var(--text-faint); font-size: 13px; padding: 4px 0; }
 	.toc-item {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		padding: 5px 8px;
-		border-radius: 4px;
+		position: relative;
+		display: block;
+		padding-top: 5px;
+		padding-right: 8px;
+		padding-bottom: 5px;
+		border-radius: 3px;
 		cursor: pointer;
 		color: var(--text-secondary);
 		font-size: 13px;
-		line-height: 1.4;
+		line-height: 1.35;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 	.toc-item:hover { background: var(--bg-hover); }
+	.toc-item:hover::before {
+		content: '';
+		position: absolute;
+		left: 0;
+		top: 7px;
+		bottom: 7px;
+		width: 2px;
+		border-radius: 2px;
+		background: var(--accent);
+	}
+	.toc-item[data-level='1'] {
+		font-weight: 500;
+		color: var(--text);
+	}
+	.toc-item[data-level='2'] {
+		font-weight: 450;
+		color: var(--text-secondary);
+	}
+	.toc-item[data-level='3'],
+	.toc-item[data-level='4'],
+	.toc-item[data-level='5'],
+	.toc-item[data-level='6'] {
+		font-size: 12.5px;
+		color: var(--text-muted);
+	}
 	.tab-group-label {
 		display: flex;
 		align-items: center;

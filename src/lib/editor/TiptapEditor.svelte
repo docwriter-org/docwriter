@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount, onDestroy } from 'svelte';
+	import { onMount, onDestroy, tick } from 'svelte';
 	import { Editor } from '@tiptap/core';
 	import { TextSelection, type Transaction } from '@tiptap/pm/state';
 	import { ySyncPluginKey } from 'y-prosemirror';
@@ -21,6 +21,11 @@
 	} from './find-overlay';
 	import { MediaOverlay } from './media-overlay';
 	import { D3Overlay } from './d3-overlay';
+	import { MarkdownRender } from './markdown-render';
+	import {
+		SourceCommentOverlay,
+		type SourceCommentStyle
+	} from './source-comment-overlay';
 	import { handleEditorPaste, handleEditorDrop } from './media-paste';
 	import FindBar from '$lib/components/FindBar.svelte';
 	import PreviewButton from '$lib/components/PreviewButton.svelte';
@@ -66,6 +71,9 @@
 		onAcceptFeedbackEdits?: (roundIds: string[]) => void;
 		/** Resolve / reopen a thread (undoable; also drops its pending edits). */
 		onResolveThread?: (threadId: string, resolved: boolean) => void;
+		/** Open the resolved preview output beside the source editor. */
+		onOpenSplitPreview?: (path: string) => void;
+		splitPreviewOpen?: boolean;
 	}
 	let {
 		tabId,
@@ -74,7 +82,9 @@
 		onAcceptInlineEdit,
 		onRejectInlineEdit,
 		onAcceptFeedbackEdits,
-		onResolveThread
+		onResolveThread,
+		onOpenSplitPreview,
+		splitPreviewOpen = false
 	}: Props = $props();
 
 	let element: HTMLDivElement;
@@ -178,6 +188,151 @@
 		return a?.from === b.from && a?.to === b.to;
 	}
 
+	function extensionForPath(path: string): string {
+		const clean = path.split(/[?#]/, 1)[0].toLowerCase();
+		const slash = Math.max(clean.lastIndexOf('/'), clean.lastIndexOf('\\'));
+		const dot = clean.lastIndexOf('.');
+		return dot > slash ? clean.slice(dot) : '';
+	}
+
+	function sourceCommentStyleForPath(path: string): SourceCommentStyle | null {
+		const ext = extensionForPath(path);
+		if (['.tex', '.ltx', '.sty', '.cls', '.bib'].includes(ext)) {
+			return { kind: 'line', marker: '%' };
+		}
+		if (['.py', '.r', '.rb', '.sh', '.bash', '.zsh', '.fish', '.yaml', '.yml', '.toml', '.ini', '.conf', '.env'].includes(ext)) {
+			return { kind: 'line', marker: '#' };
+		}
+		if (['.js', '.jsx', '.ts', '.tsx', '.svelte', '.java', '.c', '.cc', '.cpp', '.h', '.hpp', '.cs', '.go', '.rs', '.swift', '.kt', '.kts', '.php', '.scala'].includes(ext)) {
+			return { kind: 'line', marker: '//' };
+		}
+		if (['.sql', '.lua'].includes(ext)) {
+			return { kind: 'line', marker: '--' };
+		}
+		if (['.md', '.markdown', '.mdx', '.html', '.htm', '.xml', '.svg'].includes(ext)) {
+			return { kind: 'block', open: '<!-- ', close: ' -->' };
+		}
+		if (['.css', '.scss', '.less'].includes(ext)) {
+			return { kind: 'block', open: '/* ', close: ' */' };
+		}
+		return null;
+	}
+
+	function escapeRegExp(value: string): string {
+		return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	}
+
+	function selectedSourceLines(): Array<{ contentStart: number; text: string }> {
+		if (!editor || !(editor.state.selection instanceof TextSelection)) return [];
+		const { from, to, empty } = editor.state.selection;
+		const lines: Array<{ contentStart: number; text: string }> = [];
+		editor.state.doc.forEach((node, offset) => {
+			if (node.type.name !== 'paragraph') return;
+			const contentStart = offset + 1;
+			const contentEnd = contentStart + node.content.size;
+			const nodeEnd = offset + node.nodeSize;
+			const text = node.textBetween(0, node.content.size, '\n', '');
+			const include = empty
+				? from >= offset && from <= nodeEnd
+				: contentEnd > contentStart
+					? to > contentStart && from < contentEnd
+					: to >= contentStart && from <= contentStart;
+			if (include) lines.push({ contentStart, text });
+		});
+		return lines;
+	}
+
+	function selectedOrCurrentBlockRange(): { from: number; to: number } | null {
+		if (!editor || !(editor.state.selection instanceof TextSelection)) return null;
+		const { from, to, empty } = editor.state.selection;
+		if (!empty) return { from, to };
+		let range: { from: number; to: number } | null = null;
+		editor.state.doc.forEach((node, offset) => {
+			if (range || node.type.name !== 'paragraph') return;
+			const contentStart = offset + 1;
+			const contentEnd = contentStart + node.content.size;
+			if (from >= offset && from <= offset + node.nodeSize) {
+				range = { from: contentStart, to: contentEnd };
+			}
+		});
+		return range;
+	}
+
+	function toggleLineSourceComment(marker: string): boolean {
+		if (!editor) return false;
+		const lines = selectedSourceLines().filter((line) => line.text.trim().length > 0);
+		if (lines.length === 0) return false;
+		const markerRe = new RegExp(`^(\\s*)${escapeRegExp(marker)} ?`);
+		const shouldUncomment = lines.every((line) => markerRe.test(line.text));
+		let tr = editor.state.tr;
+		for (const line of [...lines].sort((a, b) => b.contentStart - a.contentStart)) {
+			if (shouldUncomment) {
+				const match = line.text.match(markerRe);
+				if (!match) continue;
+				const indentLen = match[1].length;
+				const removeFrom = line.contentStart + indentLen;
+				tr = tr.delete(removeFrom, removeFrom + match[0].length - indentLen);
+			} else {
+				const indentLen = line.text.match(/^\s*/)?.[0].length ?? 0;
+				tr = tr.insertText(`${marker} `, line.contentStart + indentLen);
+			}
+		}
+		if (!tr.docChanged) return false;
+		editor.view.dispatch(tr.scrollIntoView());
+		closeFeedbackPopup({ preserveSelection: true, refocusEditor: true });
+		return true;
+	}
+
+	function toggleBlockSourceComment(open: string, close: string): boolean {
+		if (!editor) return false;
+		const range = selectedOrCurrentBlockRange();
+		if (!range) return false;
+		const selected = editor.state.doc.textBetween(range.from, range.to, '\n', '\n');
+		let tr = editor.state.tr;
+		if (selected.startsWith(open) && selected.endsWith(close)) {
+			tr = tr.delete(range.to - close.length, range.to);
+			tr = tr.delete(range.from, range.from + open.length);
+		} else {
+			tr = tr.insertText(close, range.to);
+			tr = tr.insertText(open, range.from);
+		}
+		if (!tr.docChanged) return false;
+		editor.view.dispatch(tr.scrollIntoView());
+		closeFeedbackPopup({ preserveSelection: true, refocusEditor: true });
+		return true;
+	}
+
+	function toggleSourceComment(): boolean {
+		const style = sourceCommentStyleForPath(tabId);
+		if (!style) return false;
+		return style.kind === 'line'
+			? toggleLineSourceComment(style.marker)
+			: toggleBlockSourceComment(style.open, style.close);
+	}
+
+	function isSourceCommentShortcut(event: KeyboardEvent): boolean {
+		return (
+			(event.metaKey || event.ctrlKey) &&
+			!event.altKey &&
+			(event.key === '/' || event.key === '?' || event.code === 'Slash')
+		);
+	}
+
+	function handleSourceCommentShortcut(event: KeyboardEvent): boolean {
+		if (!isSourceCommentShortcut(event)) return false;
+		const target = event.target as HTMLElement | null;
+		const inThisEditor =
+			!!feedbackPopup ||
+			!!editor?.isFocused ||
+			!!(target && wrapperEl?.contains(target)) ||
+			!!(target && feedbackPopupEl?.contains(target));
+		if (!inThisEditor) return false;
+		if (!toggleSourceComment()) return false;
+		event.preventDefault();
+		event.stopPropagation();
+		return true;
+	}
+
 	function updateFeedbackPopup(autoFocus = false) {
 		if (!editor || !editor.isFocused) return;
 		const selection = editor.state.selection;
@@ -195,7 +350,7 @@
 			updateDiff();
 			return;
 		}
-		const selectedText = editor.state.doc.textBetween(from, to, ' ');
+		const selectedText = editor.state.doc.textBetween(from, to, '\n', '\n');
 		if (!selectedText.trim()) {
 			dismissedFeedbackSelectionRange = null;
 			feedbackPopup = null;
@@ -337,6 +492,7 @@
 	}
 
 	function handleFeedbackWindowKeydown(e: KeyboardEvent) {
+		if (handleSourceCommentShortcut(e)) return;
 		if (!feedbackPopup || e.key !== 'Escape') return;
 		e.preventDefault();
 		e.stopPropagation();
@@ -449,7 +605,10 @@
 		// it to `auto`, but we want to honor what the user picked.
 		feedbackMode = modeSnapshot;
 		const threadId = await maybeOpenThreadForFeedback(action.label, text, relSnapshot);
-		if (threadId) newAwaitingThreadId = threadId;
+		if (threadId) {
+			newAwaitingThreadId = threadId;
+			tick().then(() => { newAwaitingThreadId = null; });
+		}
 		const trigger = buildFeedbackTrigger(action.label, text, false, threadId);
 		feedbackMode = 'edit';
 		if (onSubmit) onSubmit(trigger);
@@ -476,7 +635,10 @@
 		closeFeedbackPopup();
 		feedbackMode = modeSnapshot;
 		const threadId = await maybeOpenThreadForFeedback(fb, text, relSnapshot);
-		if (threadId) newAwaitingThreadId = threadId;
+		if (threadId) {
+			newAwaitingThreadId = threadId;
+			tick().then(() => { newAwaitingThreadId = null; });
+		}
 		const trigger = buildFeedbackTrigger(fb, text, true, threadId);
 		feedbackMode = 'edit';
 		if (onSubmit) onSubmit(trigger);
@@ -496,7 +658,11 @@
 		) as HTMLElement[];
 		const visibleParagraphs = paragraphs
 			.map((paragraph, index) => ({ paragraph, index }))
-			.filter(({ paragraph }) => !paragraph.classList.contains('d3-code-line-hidden'));
+			.filter(({ paragraph }) =>
+				!paragraph.classList.contains('d3-code-line-hidden') &&
+				!paragraph.classList.contains('svg-source-line-hidden') &&
+				!paragraph.classList.contains('md-table-source-line-hidden')
+			);
 		const contentRect = contentEl.getBoundingClientRect();
 		if (paragraphs.length === 0) {
 			plainLineRows = [{ label: '1', top: 0 }];
@@ -729,6 +895,21 @@
 	}
 
 	let pdfJumpChannel: BroadcastChannel | null = null;
+	type PdfJumpMessage = {
+		kind: 'pdf-jump';
+		page: number;
+		x: number;
+		y: number;
+		h?: number;
+		v?: number;
+		w?: number;
+		height?: number;
+	};
+	type PdfSearchMessage = {
+		kind: 'pdf-search';
+		queries: string[];
+	};
+	type PdfPreviewMessage = PdfJumpMessage | PdfSearchMessage;
 	function getPdfJumpChannel(): BroadcastChannel | null {
 		if (typeof window === 'undefined') return null;
 		if (pdfJumpChannel) return pdfJumpChannel;
@@ -739,11 +920,69 @@
 		}
 		return pdfJumpChannel;
 	}
+	function postPdfPreviewMessage(message: PdfPreviewMessage) {
+		const ch = getPdfJumpChannel();
+		if (!ch) return;
+		ch.postMessage(message);
+	}
+	function postPdfPreviewMessageWithOpenRetry(message: PdfPreviewMessage, shouldOpenSidePreview: boolean) {
+		if (shouldOpenSidePreview) {
+			for (const delay of [250, 800, 1500, 2500]) {
+				setTimeout(() => postPdfPreviewMessage(message), delay);
+			}
+		} else {
+			postPdfPreviewMessage(message);
+		}
+	}
+	function stripLatexForPdfSearch(text: string): string {
+		let out = text
+			.replace(/~/g, ' ')
+			.replace(/``|''/g, '"')
+			.replace(/\\(?:cite|citep|citet|autocite|parencite|textcite)(?:\[[^\]]*\])*\{[^}]*\}/g, ' ')
+			.replace(/\\(?:ref|eqref|label|url|href)(?:\[[^\]]*\])*\{[^}]*\}/g, ' ');
+		for (let i = 0; i < 5; i += 1) {
+			out = out.replace(/\\[a-zA-Z]+\*?(?:\[[^\]]*\])?\{([^{}]*)\}/g, '$1');
+		}
+		return out
+			.replace(/\\([#$%&_{}])/g, '$1')
+			.replace(/[{}$]/g, ' ')
+			.replace(/\\[a-zA-Z]+\*?/g, ' ')
+			.replace(/[^\S\r\n]+/g, ' ')
+			.replace(/\s+/g, ' ')
+			.trim();
+	}
+	function pdfSearchQueries(text: string): string[] {
+		const cleaned = stripLatexForPdfSearch(text);
+		const words = cleaned.split(/\s+/).filter(Boolean);
+		const seen = new Set<string>();
+		const queries: string[] = [];
+		const add = (query: string) => {
+			const q = query.replace(/\s+/g, ' ').trim();
+			if (q.length < 18 || seen.has(q.toLowerCase())) return;
+			seen.add(q.toLowerCase());
+			queries.push(q);
+		};
+		add(words.slice(0, 16).join(' '));
+		for (const size of [12, 9, 6]) {
+			for (let start = 0; start <= Math.max(0, words.length - size); start += Math.max(1, Math.floor(size / 2))) {
+				add(words.slice(start, start + size).join(' '));
+				if (queries.length >= 12) return queries;
+			}
+		}
+		return queries;
+	}
 
 	async function showInPdf() {
 		if (!previewOutputPath) return;
 		const line = selectionLineNumber();
 		if (line == null) return;
+		const shouldOpenSidePreview = !splitPreviewOpen && !!onOpenSplitPreview;
+		if (shouldOpenSidePreview) onOpenSplitPreview?.(previewOutputPath);
+		const fallbackSearch = () => {
+			const queries = pdfSearchQueries(feedbackPopup?.text ?? '');
+			if (queries.length === 0) return;
+			postPdfPreviewMessageWithOpenRetry({ kind: 'pdf-search', queries }, shouldOpenSidePreview);
+		};
 		try {
 			const res = await fetch('/api/synctex', {
 				method: 'POST',
@@ -757,10 +996,11 @@
 				})
 			});
 			const data = await res.json();
-			if (!data?.ok) return;
-			const ch = getPdfJumpChannel();
-			if (!ch) return;
-			ch.postMessage({
+			if (!data?.ok) {
+				fallbackSearch();
+				return;
+			}
+			const jump: PdfJumpMessage = {
 				kind: 'pdf-jump',
 				page: data.page,
 				x: data.x,
@@ -769,9 +1009,10 @@
 				v: data.v,
 				w: data.w,
 				height: data.height
-			});
+			};
+			postPdfPreviewMessageWithOpenRetry(jump, shouldOpenSidePreview);
 		} catch {
-			/* synctex CLI missing or build not yet produced .synctex.gz — silent */
+			fallbackSearch();
 		}
 	}
 
@@ -856,6 +1097,14 @@
 			} else if (hasRounds) {
 				pendingRoundsForOverlay = currentRoundsList;
 			}
+			const validThreadIds = new Set(
+				threadsForTab.filter((t) => !t.resolved).map((t) => t.id)
+			);
+			const overlayRounds = pendingRoundsForOverlay.map((round) =>
+				round.feedbackThreadId && !validThreadIds.has(round.feedbackThreadId)
+					? { ...round, feedbackThreadId: undefined }
+					: round
+			);
 			setDiffState(editor, {
 				baseline: baselineForOverlay,
 				proposedText: proposalForOverlay,
@@ -875,7 +1124,7 @@
 				roundNumbers: openThreadRoundNumbers(),
 				// Pulse the hovered edit's diff so the user can locate it fast.
 				flashRoundId,
-				pendingRounds: pendingRoundsForOverlay
+				pendingRounds: overlayRounds
 			});
 		});
 	}
@@ -962,7 +1211,11 @@
 				CelebrationOverlay,
 				FindOverlay,
 				MediaOverlay,
-				D3Overlay
+				D3Overlay,
+				MarkdownRender,
+				SourceCommentOverlay.configure({
+					style: sourceCommentStyleForPath(tabId)
+				})
 			],
 			// Collaboration provides initial content from the Y.Doc; do NOT
 			// pass a string `content` here (doing so would wipe the Y.Doc).
@@ -988,6 +1241,7 @@
 						if (editor) openFind(editor);
 						return true;
 					}
+					if (handleSourceCommentShortcut(event)) return true;
 					// Cmd/Ctrl+Enter wakes the agent immediately, skipping the
 					// idle countdown. Plain Enter still inserts a new line.
 					if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
@@ -1024,8 +1278,10 @@
 
 		const editorRoot = editor.view.dom;
 
-		const handleD3CodeVisibilityChanged = () => schedulePlainLineSync();
-		editorRoot.addEventListener('d3-code-visibility-changed', handleD3CodeVisibilityChanged);
+		const handlePreviewLayoutChanged = () => schedulePlainLineSync();
+		editorRoot.addEventListener('d3-code-visibility-changed', handlePreviewLayoutChanged);
+		editorRoot.addEventListener('docwriter:media-layout-changed', handlePreviewLayoutChanged);
+		editorRoot.addEventListener('docwriter:markdown-layout-changed', handlePreviewLayoutChanged);
 
 		const handlePointerDown = () => {
 			pointerSelecting = true;
@@ -1082,7 +1338,9 @@
 
 		const detachOpenThread = () => {
 			editorRoot.removeEventListener('docwriter:open-thread', handleOpenThread as EventListener);
-			editorRoot.removeEventListener('d3-code-visibility-changed', handleD3CodeVisibilityChanged);
+			editorRoot.removeEventListener('d3-code-visibility-changed', handlePreviewLayoutChanged);
+			editorRoot.removeEventListener('docwriter:media-layout-changed', handlePreviewLayoutChanged);
+			editorRoot.removeEventListener('docwriter:markdown-layout-changed', handlePreviewLayoutChanged);
 			window.removeEventListener('mousedown', handleOutsideMousedown);
 			window.removeEventListener('mousedown', handleFeedbackOutsideMousedown);
 		};
@@ -1187,7 +1445,11 @@
 	     outside the scroll container so they pin regardless of scroll.
 	     When find is open, the preview button shifts down so the two
 	     don't overlap (FindBar wins the corner). -->
-	<PreviewButton activeTabPath={tabId} />
+	<PreviewButton
+		activeTabPath={tabId}
+		onOpenSplit={onOpenSplitPreview}
+		splitOpen={splitPreviewOpen}
+	/>
 	{#if findState.open}
 		<FindBar
 			findState={findState}
@@ -1319,7 +1581,7 @@
 					class="feedback-show-in-pdf"
 					type="button"
 					onclick={showInPdf}
-					title="Locate this passage in the preview window (forward SyncTeX). Preview window must be open."
+					title="Locate this passage in the PDF preview"
 				>
 					<Crosshair size={11} />
 					<span>Locate in PDF</span>
@@ -1437,7 +1699,7 @@
 	}
 	/* When the FindBar is open, drop the PreviewButton below it so the
 	 * two don't collide in the corner. */
-	.tiptap-host.find-open :global(.preview-btn) {
+	.tiptap-host.find-open :global(.preview-control) {
 		top: 50px;
 	}
 	.tiptap-wrapper {
@@ -1489,8 +1751,8 @@
 	 * `.comment-gutter` in CommentGutter.svelte. */
 	.plain-editor-shell {
 		display: grid;
-		grid-template-columns: 52px minmax(0, var(--paper-width, 720px)) var(--gutter-width, 240px);
-		gap: 18px;
+		grid-template-columns: var(--line-gutter-width, 52px) minmax(0, var(--paper-width, 720px)) var(--gutter-width, 240px);
+		gap: var(--editor-grid-gap, 18px);
 		width: 100%;
 		justify-content: center;
 		align-items: start;
@@ -1524,8 +1786,8 @@
 		 * so the digit stops well before the column rule. Fixed width +
 		 * `text-align: right` keeps single- and multi-digit numbers
 		 * right-aligned consistently. */
-		width: 40px;
-		padding-right: 12px;
+		width: var(--line-number-width, 40px);
+		padding-right: var(--line-number-pad-right, 12px);
 		box-sizing: border-box;
 		height: 1.45em;
 		text-align: right;
@@ -1577,6 +1839,11 @@
 		min-height: 1.45em;
 	}
 	.tiptap-editor :global(.tiptap-content:not(.tiptap-plain) p) { margin: 0 0 10px; }
+
+	.tiptap-editor :global(.source-comment) {
+		color: var(--text-muted);
+		opacity: 0.58;
+	}
 
 	/* `<mark>` from the Highlight extension: theme-aware flat tint (no
 	 * rough-notation for persistent marks since they can be many). */
@@ -1699,6 +1966,13 @@
 		user-select: none;
 		transform-origin: top;
 		animation: diffSlideIn 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
+	}
+	.tiptap-editor :global(.diff-added[data-thread-id]),
+	.tiptap-editor :global(.diff-added-line[data-thread-id]),
+	.tiptap-editor :global(.diff-removed[data-thread-id]),
+	.tiptap-editor :global(.diff-removed-line[data-thread-id]),
+	.tiptap-editor :global(.diff-insert-caret[data-thread-id]) {
+		cursor: pointer;
 	}
 	/* Insertion caret: a small pulsing green bar marking where a collapsed,
 	 * purely-additive agent edit will add text — so an edit with nothing
@@ -1940,6 +2214,34 @@
 		font-weight: 700;
 		line-height: 1;
 		user-select: none;
+	}
+	.tiptap-editor :global(.diff-thread-btn) {
+		position: absolute;
+		left: calc(-3.45em - var(--thread-i, 0) * 1.55em);
+		top: 0.08em;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 1.55em;
+		height: 1.55em;
+		padding: 0;
+		border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border-light));
+		border-radius: 50%;
+		background: var(--bg-elevated);
+		color: var(--accent);
+		box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+		cursor: pointer;
+		user-select: none;
+		z-index: 6;
+	}
+	.tiptap-editor :global(.diff-thread-btn:hover) {
+		background: var(--accent-bg);
+		border-color: var(--accent);
+	}
+	.tiptap-editor :global(.diff-thread-btn svg) {
+		display: block;
+		width: 0.85em;
+		height: 0.85em;
 	}
 	/* Hover-flash: pulse a changed paragraph when its row is hovered in the
 	 * thread card, so the user can locate it instantly. */
@@ -2302,6 +2604,23 @@
 		display: block;
 		max-width: 100%;
 	}
+	:global(.media-svg-widget) {
+		display: block;
+		max-width: 720px;
+		padding: 10px;
+		border: 1px solid var(--border-light);
+		border-radius: 8px;
+		background: var(--bg-elevated);
+	}
+	:global(.media-svg-label) {
+		margin-bottom: 8px;
+		font-family: 'Inter', -apple-system, sans-serif;
+		font-size: 10.5px;
+		font-weight: 600;
+		color: var(--text-faint);
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+	}
 	:global(.media-thumb) {
 		display: block;
 		max-width: 100%;
@@ -2312,6 +2631,11 @@
 		object-fit: contain;
 		object-position: left center;
 		animation: media-fade-in 240ms ease-out both;
+	}
+	:global(.media-svg-thumb) {
+		width: 100%;
+		max-height: 420px;
+		background: white;
 	}
 	:global(.media-thumb-error) {
 		padding: 10px 12px;
@@ -2469,11 +2793,25 @@
 	.tiptap-editor :global(.tiptap-plain p.d3-code-line-expanded) {
 		animation: d3-source-reveal 90ms ease-out both;
 	}
+	.tiptap-editor :global(.tiptap-plain p.svg-source-line-hidden) {
+		display: none;
+	}
+	.tiptap-editor :global(.tiptap-plain p.svg-source-line-expanded) {
+		animation: d3-source-reveal 90ms ease-out both;
+	}
+	.tiptap-editor :global(.tiptap-plain p.md-table-source-line-hidden) {
+		display: none;
+	}
+	.tiptap-editor :global(.tiptap-plain p.md-table-source-line-expanded) {
+		animation: d3-source-reveal 90ms ease-out both;
+	}
 	@keyframes d3-source-reveal {
 		from { opacity: 0; transform: translateY(-1px); }
 		to { opacity: 1; transform: translateY(0); }
 	}
-	:global(.d3-code-toggle) {
+	:global(.d3-code-toggle),
+	:global(.svg-source-toggle),
+	:global(.md-table-source-toggle) {
 		display: inline-flex;
 		align-items: center;
 		margin: 1px 0 2px;
@@ -2482,7 +2820,9 @@
 		line-height: 1.45;
 		user-select: none;
 	}
-	:global(.d3-code-toggle-btn) {
+	:global(.d3-code-toggle-btn),
+	:global(.svg-source-toggle-btn),
+	:global(.md-table-source-toggle-btn) {
 		padding: 0;
 		border: 0;
 		background: transparent;
@@ -2494,9 +2834,67 @@
 		text-underline-offset: 3px;
 		transition: color 120ms ease, text-decoration-color 120ms ease;
 	}
-	:global(.d3-code-toggle-btn:hover) {
+	:global(.d3-code-toggle-btn:hover),
+	:global(.svg-source-toggle-btn:hover),
+	:global(.md-table-source-toggle-btn:hover) {
 		color: var(--text-muted);
 		text-decoration-color: color-mix(in srgb, var(--text-muted) 45%, transparent);
+	}
+	:global(.md-table-widget) {
+		display: block;
+		max-width: min(100%, 980px);
+		margin: 6px 0 14px;
+		font-family: 'Inter', -apple-system, sans-serif;
+		animation: media-fade-in 180ms ease-out both;
+	}
+	:global(.md-table-label) {
+		margin-bottom: 5px;
+		font-size: 10.5px;
+		font-weight: 600;
+		color: var(--text-faint);
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+	}
+	:global(.md-table-scroll) {
+		max-width: 100%;
+		overflow-x: auto;
+		border: 1px solid var(--border-light);
+		border-radius: 6px;
+		background: var(--bg-elevated);
+	}
+	:global(.md-table-preview) {
+		width: 100%;
+		min-width: 520px;
+		border-collapse: collapse;
+		font-size: calc(13px * var(--font-scale, 1));
+		line-height: 1.45;
+		color: var(--text);
+	}
+	:global(.md-table-preview th),
+	:global(.md-table-preview td) {
+		padding: 8px 10px;
+		border-bottom: 1px solid var(--border-light);
+		border-right: 1px solid var(--border-light);
+		vertical-align: top;
+	}
+	:global(.md-table-preview th:last-child),
+	:global(.md-table-preview td:last-child) {
+		border-right: 0;
+	}
+	:global(.md-table-preview tbody tr:last-child td) {
+		border-bottom: 0;
+	}
+	:global(.md-table-preview th) {
+		background: var(--bg-surface);
+		font-weight: 650;
+		color: var(--text-secondary);
+	}
+	:global(.md-table-preview code) {
+		font-family: 'Geist Mono', ui-monospace, monospace;
+		font-size: 0.92em;
+		background: var(--bg-surface);
+		border-radius: 3px;
+		padding: 1px 4px;
 	}
 	:global(.d3-widget) {
 		display: block;
@@ -2587,5 +2985,100 @@
 	@keyframes media-tooltip-in {
 		from { opacity: 0; transform: translateY(-3px); }
 		to { opacity: 1; transform: translateY(0); }
+	}
+
+	/* ── Markdown visual rendering (decoration-only) ── */
+	.tiptap-editor :global(.tiptap-plain p.md-heading) {
+		font-family: 'Lora', 'Georgia', serif;
+		color: var(--text);
+	}
+	.tiptap-editor :global(.tiptap-plain p.md-h1) {
+		font-size: calc(26px * var(--font-scale, 1));
+		font-weight: 700;
+		line-height: 1.3;
+	}
+	.tiptap-editor :global(.tiptap-plain p.md-h2) {
+		font-size: calc(22px * var(--font-scale, 1));
+		font-weight: 600;
+		line-height: 1.35;
+	}
+	.tiptap-editor :global(.tiptap-plain p.md-h3) {
+		font-size: calc(19px * var(--font-scale, 1));
+		font-weight: 600;
+		line-height: 1.4;
+	}
+	.tiptap-editor :global(.tiptap-plain p.md-h4) {
+		font-size: calc(17px * var(--font-scale, 1));
+		font-weight: 600;
+		line-height: 1.4;
+	}
+	.tiptap-editor :global(.tiptap-plain p.md-h5),
+	.tiptap-editor :global(.tiptap-plain p.md-h6) {
+		font-size: calc(15px * var(--font-scale, 1));
+		font-weight: 600;
+		line-height: 1.45;
+	}
+	.tiptap-editor :global(.md-syntax) {
+		opacity: 0.3;
+	}
+	.tiptap-editor :global(.md-bold) {
+		font-weight: 700;
+	}
+	.tiptap-editor :global(.md-italic) {
+		font-style: italic;
+	}
+	.tiptap-editor :global(.md-code) {
+		font-family: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+		font-size: 0.9em;
+		background: var(--bg-surface);
+		padding: 1px 4px;
+		border-radius: 3px;
+	}
+	.tiptap-editor :global(.md-strikethrough) {
+		text-decoration: line-through;
+		opacity: 0.6;
+	}
+	.tiptap-editor :global(.md-link-text) {
+		color: var(--accent);
+		text-decoration: underline;
+		text-underline-offset: 2px;
+	}
+	.tiptap-editor :global(.md-link-url) {
+		opacity: 0.3;
+		font-size: 0.9em;
+	}
+	.tiptap-editor :global(.tiptap-plain p.md-blockquote) {
+		border-left: 3px solid var(--border-light);
+		padding-left: 12px;
+		color: var(--text-muted);
+	}
+	.tiptap-editor :global(.tiptap-plain p.md-list-item) {
+		--md-list-offset: 2.6ch;
+		padding-left: var(--md-list-offset);
+		text-indent: calc(-1 * var(--md-list-offset));
+	}
+	.tiptap-editor :global(.tiptap-plain p.md-ol-item) {
+		--md-list-offset: 3.6ch;
+	}
+	.tiptap-editor :global(.md-list-marker) {
+		display: inline-block;
+		color: var(--text-faint);
+		font-weight: 600;
+		opacity: 0.72;
+	}
+	.tiptap-editor :global(.md-bullet) {
+		width: 1.7ch;
+		margin-right: 0.55ch;
+		text-align: right;
+	}
+	.tiptap-editor :global(.md-ordered-marker) {
+		width: 3ch;
+		margin-right: 0.45ch;
+		text-align: right;
+	}
+	.tiptap-editor :global(.tiptap-plain p.md-hr) {
+		border-bottom: 1px solid var(--border-light);
+		line-height: 0.5;
+		opacity: 0.5;
 	}
 </style>
