@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { fade, fly } from 'svelte/transition';
 	import { cubicOut } from 'svelte/easing';
-	import { X, Search, ChevronDown, ChevronRight, Activity } from 'lucide-svelte';
+	import { X, Search, ChevronDown, ChevronRight, Activity, Download } from 'lucide-svelte';
 	import { onMount } from 'svelte';
 	import { marked } from 'marked';
 
@@ -58,8 +58,34 @@
 		_resultError?: boolean;
 	}
 
+	type HistoryResponse = {
+		sessionId?: string | null;
+		raw?: unknown[];
+		messages?: unknown[];
+		systemPrompt?: string | null;
+		provider?: string | null;
+	};
+
+	type SaveFilePickerWindow = Window & {
+		showSaveFilePicker?: (options?: {
+			suggestedName?: string;
+			types?: Array<{
+				description: string;
+				accept: Record<string, string[]>;
+			}>;
+		}) => Promise<{
+			createWritable: () => Promise<{
+				write: (data: Blob) => Promise<void>;
+				close: () => Promise<void>;
+			}>;
+		}>;
+	};
+
 	let events = $state<SessionEvent[]>([]);
 	let sessionId = $state('');
+	let providerId = $state('claude');
+	let rawHistory = $state<unknown[]>([]);
+	let sdkMessages = $state<unknown[]>([]);
 	// Label for assistant rows / filter — reflects the provider that produced
 	// this session, not a hardcoded "Claude".
 	const PROVIDER_LABELS: Record<string, string> = {
@@ -74,6 +100,8 @@
 	let systemPromptOpen = $state(false);
 	let loading = $state(true);
 	let error = $state('');
+	let exportError = $state('');
+	let exporting = $state(false);
 	let searchQuery = $state('');
 	let filter = $state<'all' | 'user' | 'assistant' | 'tools' | 'thinking'>('all');
 	// Set of tool_use/thinking indices that are expanded
@@ -226,18 +254,125 @@
 		return `${(n / 1_000_000).toFixed(2)}M`;
 	}
 
+	function safeFilePart(value: string): string {
+		return (
+			value
+				.trim()
+				.replace(/[^a-zA-Z0-9._-]+/g, '-')
+				.replace(/^-+|-+$/g, '')
+				.slice(0, 80) || 'session'
+		);
+	}
+
+	function suggestedExportFilename(): string {
+		const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
+		const id = sessionId ? sessionId.slice(0, 12) : 'session';
+		return `docwriter-transcript-${safeFilePart(id)}-${stamp}.json`;
+	}
+
+	function buildExportPayload() {
+		const toolCallCount = toolCounts.reduce((a, [, v]) => a + v, 0);
+		return {
+			schema: 'docwriter.sessionTranscript.v1',
+			exportedAt: new Date().toISOString(),
+			session: {
+				id: sessionId || null,
+				provider: providerId,
+				assistantLabel
+			},
+			stats: {
+				turns: userTurns,
+				toolCalls: toolCallCount,
+				inputTokens: totalInTok,
+				outputTokens: totalOutTok,
+				context: {
+					percentFull: contextPctFull,
+					totalTokens: totalContextTokens,
+					budgetTokens: CONTEXT_BUDGET,
+					buckets: contextBuckets.map((bucket) => ({
+						id: bucket.id,
+						label: bucket.label,
+						tokens: bucket.tokens
+					}))
+				}
+			},
+			systemPrompt,
+			events: events.map((event) => ({ ...event })),
+			raw: {
+				entries: rawHistory,
+				messages: sdkMessages
+			}
+		};
+	}
+
+	function downloadJsonFallback(filename: string, jsonText: string) {
+		const blob = new Blob([jsonText], { type: 'application/json' });
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = filename;
+		a.rel = 'noopener';
+		document.body.appendChild(a);
+		a.click();
+		a.remove();
+		setTimeout(() => URL.revokeObjectURL(url), 1000);
+	}
+
+	async function saveJsonFile(filename: string, jsonText: string) {
+		const blob = new Blob([jsonText], { type: 'application/json' });
+		const picker = (window as SaveFilePickerWindow).showSaveFilePicker;
+		if (picker) {
+			try {
+				const handle = await picker({
+					suggestedName: filename,
+					types: [
+						{
+							description: 'JSON transcript',
+							accept: { 'application/json': ['.json'] }
+						}
+					]
+				});
+				const writable = await handle.createWritable();
+				await writable.write(blob);
+				await writable.close();
+				return;
+			} catch (e) {
+				if (e instanceof DOMException && e.name === 'AbortError') return;
+				console.warn('[SessionViewer] Save picker failed; falling back to download', e);
+			}
+		}
+		downloadJsonFallback(filename, jsonText);
+	}
+
+	async function exportTranscript() {
+		if (exporting || loading) return;
+		exporting = true;
+		exportError = '';
+		try {
+			const jsonText = JSON.stringify(buildExportPayload(), null, 2);
+			await saveJsonFile(suggestedExportFilename(), jsonText);
+		} catch (e) {
+			exportError = e instanceof Error ? e.message : String(e);
+		} finally {
+			exporting = false;
+		}
+	}
+
 	onMount(async () => {
 		void fetchRules();
 		try {
 			const res = await fetch('/api/history');
-			const data = await res.json();
+			const data = (await res.json()) as HistoryResponse;
 			sessionId = data.sessionId ?? '';
 			systemPrompt = typeof data.systemPrompt === 'string' ? data.systemPrompt : null;
 			// Prefer raw JSONL entries (direct file read, complete).
 			// Fall back to the SDK-wrapped `messages` array if raw is absent.
-			const raw: unknown[] = data.raw ?? [];
-			const messages: unknown[] = data.messages ?? [];
-			const provider = (data.provider ?? 'claude') as string;
+			rawHistory = Array.isArray(data.raw) ? data.raw : [];
+			sdkMessages = Array.isArray(data.messages) ? data.messages : [];
+			providerId = data.provider ?? 'claude';
+			const raw = rawHistory;
+			const messages = sdkMessages;
+			const provider = providerId;
 			assistantLabel = PROVIDER_LABELS[provider] ?? 'Assistant';
 			// Non-Claude providers persist DocWriter's own SSE event payloads
 			// (type: 'tool_call' | 'assistant_text' | …) rather than the Claude
@@ -600,6 +735,18 @@
 					<Activity size={11} />
 					<span>Context</span>
 					<span class="context-toggle-pct">{contextPctFull}%</span>
+				</button>
+				{#if exportError}
+					<span class="export-error" title={exportError}>Export failed</span>
+				{/if}
+				<button
+					class="export-btn"
+					onclick={exportTranscript}
+					disabled={loading || exporting}
+					aria-label="Export transcript JSON"
+					title="Export transcript as JSON"
+				>
+					<Download size={14} />
 				</button>
 				<button class="close-btn" onclick={onClose} aria-label="Close">
 					<X size={15} />
@@ -1175,8 +1322,9 @@
 		color: var(--text-faint);
 	}
 
-	/* ── Close button ────────────────────────────────────────────── */
-	.close-btn {
+	/* ── Top-right icon buttons ──────────────────────────────────── */
+	.close-btn,
+	.export-btn {
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
@@ -1189,7 +1337,20 @@
 		cursor: pointer;
 		transition: all .1s;
 	}
-	.close-btn:hover { background: var(--bg-hover); color: var(--text); }
+	.close-btn:hover,
+	.export-btn:hover:not(:disabled) {
+		background: var(--bg-hover);
+		color: var(--text);
+	}
+	.export-btn:disabled {
+		opacity: 0.5;
+		cursor: default;
+	}
+	.export-error {
+		font-size: 11px;
+		color: #ef4444;
+		white-space: nowrap;
+	}
 
 	/* ── Body layout ─────────────────────────────────────────────── */
 	.body {
