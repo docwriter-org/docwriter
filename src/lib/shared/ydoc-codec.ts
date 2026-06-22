@@ -12,6 +12,27 @@
 import * as Y from 'yjs';
 import type { CommentThread, PendingReviewRound } from '$lib/types';
 
+/**
+ * Normalize typographic characters to their ASCII equivalents. Applied at
+ * serialization so all consumers (read_doc, edit_doc, prompt diffs, disk
+ * writes) see consistent plain-ASCII text. This prevents agent edit failures
+ * when LLMs generate old_string with straight quotes/hyphens but the document
+ * contains curly quotes/en-dashes.
+ */
+export function normalizeTypography(text: string): string {
+	return text
+		// Curly double quotes → straight double quote
+		.replace(/[\u201C\u201D\u201E\u201F\u2033\u2036]/g, '"')
+		// Curly single quotes, apostrophes → straight single quote
+		.replace(/[\u2018\u2019\u201A\u201B\u2032\u2035]/g, "'")
+		// En-dash, em-dash, figure dash, horizontal bar → hyphen-minus
+		.replace(/[\u2013\u2014\u2012\u2015]/g, '-')
+		// Ellipsis → three dots
+		.replace(/\u2026/g, '...')
+		// Non-breaking space → regular space
+		.replace(/\u00A0/g, ' ');
+}
+
 export const FRAGMENT_NAME = 'default';
 export const REVIEW_ARRAY_NAME = 'rounds';
 export const COMMENTS_MAP_NAME = 'comments';
@@ -58,7 +79,7 @@ export function serializeYDoc(ydoc: Y.Doc): string {
 export function serializeFragment(fragment: Y.XmlFragment): string {
 	const lines: string[] = [];
 	fragment.forEach((child) => lines.push(textOf(child)));
-	return lines.join('\n');
+	return normalizeTypography(lines.join('\n'));
 }
 
 function textOf(node: unknown): string {
@@ -117,7 +138,7 @@ export function applyEditToFragment(
 		// typing protection is weaker here (we touch the whole fragment),
 		// but replace_all is a sweeping rename by intent — the caller is
 		// asking for it.
-		const fullText = paraTexts.join('\n');
+		const fullText = normalizeTypography(paraTexts.join('\n'));
 		if (fullText.indexOf(oldString) < 0) return false;
 		const replaced = fullText.split(oldString).join(newString);
 		if (replaced === fullText) return false;
@@ -127,7 +148,7 @@ export function applyEditToFragment(
 		return true;
 	}
 
-	const fullText = paraTexts.join('\n');
+	const fullText = normalizeTypography(paraTexts.join('\n'));
 	const startOffset = fullText.indexOf(oldString);
 	if (startOffset < 0) return false;
 	const endOffset = startOffset + oldString.length;
