@@ -22,6 +22,7 @@
 	import Dialog from '$lib/components/Dialog.svelte';
 	import AgentSettingsPanel from '$lib/components/AgentSettingsPanel.svelte';
 	import HooksPanel from '$lib/components/HooksPanel.svelte';
+	import SkillsPanel from '$lib/components/SkillsPanel.svelte';
 	import ApiKeysPanel from '$lib/components/ApiKeysPanel.svelte';
 	import CustomModelDialog from '$lib/components/CustomModelDialog.svelte';
 	import { themes, applyTheme } from '$lib/themes';
@@ -680,6 +681,72 @@
 		activeTabIsPdf = activeTabFilePath ? isPdfPath(activeTabFilePath) : false;
 	});
 
+	let splitPreviewPath = $state<string | null>(null);
+	let splitPreviewSourcePath = $state<string | null>(null);
+	let splitPreviewOpen = $derived(!!splitPreviewPath && !activeTabIsPdf);
+	let splitPreviewWidth = $state(820);
+	let splitLayoutEl: HTMLDivElement | null = $state(null);
+	const MIN_SPLIT_PREVIEW_WIDTH = 480;
+	const MIN_SPLIT_SOURCE_WIDTH = 620;
+
+	function maxSplitPreviewWidth() {
+		const layoutWidth =
+			splitLayoutEl?.clientWidth ??
+			(typeof window === 'undefined' ? 1440 : Math.max(0, window.innerWidth - leftWidth));
+		return Math.max(MIN_SPLIT_PREVIEW_WIDTH, layoutWidth - MIN_SPLIT_SOURCE_WIDTH);
+	}
+
+	function clampSplitPreviewWidth(width: number) {
+		return Math.max(MIN_SPLIT_PREVIEW_WIDTH, Math.min(maxSplitPreviewWidth(), width));
+	}
+
+	function resizeSplitPreview(deltaX: number) {
+		splitPreviewWidth = clampSplitPreviewWidth(splitPreviewWidth - deltaX);
+	}
+
+	async function resolvePreviewOutputForTab(tabPath: string | null): Promise<string | null> {
+		if (!tabPath) return null;
+		try {
+			const res = await fetch(
+				`/api/hooks/preview-match?file=${encodeURIComponent(tabPath)}`
+			);
+			if (!res.ok) return null;
+			const data = await res.json();
+			return typeof data?.outputPath === 'string' ? data.outputPath : null;
+		} catch {
+			return null;
+		}
+	}
+
+	function openSplitPreview(path: string) {
+		splitPreviewPath = path;
+		splitPreviewSourcePath = activeTabFilePath;
+	}
+
+	function closeSplitPreview() {
+		splitPreviewPath = null;
+		splitPreviewSourcePath = null;
+	}
+
+	async function refreshSplitPreviewForTab(tabPath: string) {
+		const nextPath = await resolvePreviewOutputForTab(tabPath);
+		if (activeTabFilePath !== tabPath) return;
+		splitPreviewPath = nextPath;
+		splitPreviewSourcePath = nextPath ? tabPath : null;
+	}
+
+	$effect(() => {
+		const tabPath = activeTabFilePath;
+		if (!splitPreviewPath) return;
+		if (!tabPath || activeTabIsPdf) {
+			closeSplitPreview();
+			return;
+		}
+		if (tabPath !== splitPreviewSourcePath) {
+			void refreshSplitPreviewForTab(tabPath);
+		}
+	});
+
 	/** Open a file from the FileTree. Any text file becomes an agent-
 	 * editable tab: either switch to it (if already open) or register it
 	 * via POST /api/tabs (which creates the file if missing). */
@@ -1267,6 +1334,10 @@
 			currentAbort = null;
 			submitInFlight = false;
 			isRendering.set(false);
+			// Agent shell tools can create folders/files without opening tabs.
+			// Refresh visible file-tree nodes at the end of each run so those
+			// filesystem changes show up even without a tab-count change.
+			void fileTreeRef?.refresh();
 			// If the render failed, push one visible error entry. Otherwise
 			// the mascot already tells the user it's done.
 			if (!success) {
@@ -1951,6 +2022,7 @@
 					onClick: () => editorSoftWrap.update((v) => !v)
 				},
 				{ kind: 'panel', label: 'Writing references', panelKey: 'references' },
+				{ kind: 'panel', label: 'Skills', panelKey: 'skills' },
 				{ kind: 'panel', label: 'Hooks', panelKey: 'hooks' },
 				{ kind: 'divider' },
 				{
@@ -2154,7 +2226,8 @@
 
 		// Subscribe to the file-watcher event bus (used by `docwriter --watch`).
 		// When the bin's fs.watch sees external changes it POSTs to /api/live,
-		// which streams a `reload` event here and we refresh the active tab.
+		// which streams a `reload` event here and we refresh the active tab
+		// plus the visible file tree.
 		void connectLive();
 
 		// Listen for SyncTeX jump messages from the preview popup so a
@@ -2234,6 +2307,7 @@
 				return;
 			}
 			es.addEventListener('reload', async () => {
+				void fileTreeRef?.refresh();
 				const tabId = getCurrentActiveTab();
 				if (!tabId) return;
 				await remountActiveTabFromServer(tabId);
@@ -2285,7 +2359,12 @@
 		const handler = async (ev: MessageEvent) => {
 			if (ev.origin !== window.location.origin) return;
 			const data = ev.data as { kind?: string; file?: string; line?: number } | null;
-			if (!data || data.kind !== 'docwriter-synctex-jump') return;
+			if (!data) return;
+			if (data.kind === 'docwriter-close-preview-pane') {
+				closeSplitPreview();
+				return;
+			}
+			if (data.kind !== 'docwriter-synctex-jump') return;
 			if (typeof data.file !== 'string' || typeof data.line !== 'number') return;
 			const tabId = data.file;
 			const line = data.line;
@@ -2397,6 +2476,7 @@
 					rules: rulesPanelSnippet,
 					agentSettings: agentSettingsSnippet,
 					hooks: hooksPanelSnippet,
+					skills: skillsPanelSnippet,
 					apiKeys: apiKeysPanelSnippet
 				}}
 			/>
@@ -2438,6 +2518,10 @@
 		<HooksPanel />
 	{/snippet}
 
+	{#snippet skillsPanelSnippet()}
+		<SkillsPanel onSubmit={(trigger) => void submit(trigger)} />
+	{/snippet}
+
 	{#snippet apiKeysPanelSnippet()}
 		<ApiKeysPanel />
 	{/snippet}
@@ -2473,61 +2557,77 @@
 		<PanelResizer onResize={resizeLeft} />
 		{/if}
 		<main class="center-pane">
-			<!-- Align the tab strip over the page column (same geometry as
-			     `.plain-editor-shell`) so the active tab sits on the page. -->
-			<div class="tab-align">
-				<div class="tab-slot">
-					<TabBar
-						onSwitch={switchTab}
-						onClose={closeTab}
-						onDelete={deleteTab}
-						onRename={renameTabAction}
-						pendingTabs={mergedPendingTabs}
-						onDropFile={handleDropFiles}
-					/>
-				</div>
-			</div>
-			{#if docLoaded && activeTabFilePath}
-				{#key activeTabFilePath}
-				<AgentModal
-					onAnswerQuestion={(id, answers) => answerUserQuestion(id, answers)}
-					onRunPlan={(id) => runPlanProposal(id)}
-					onDismissPlan={(id) => dismissPlanProposal(id)}
-					onRejectPlan={(id, feedback) => rejectPlanProposal(id, feedback)}
-				/>
-				{#if activeTabIsPdf}
-					<PdfViewerPane path={activeTabFilePath} />
-				{:else}
-					<TiptapEditor
-						tabId={activeTabFilePath}
-						bind:this={editorRef}
-						onSubmit={(trigger) => submit(trigger)}
-						initialScrollTop={pendingScrollRestore}
-						onAcceptInlineEdit={(roundId) => {
-							const rounds = currentRounds();
-							if (rounds.length === 0 || !roundId) return;
-							void acceptAgentEdit(roundId);
-						}}
-						onRejectInlineEdit={(roundId) => {
-							const rounds = currentRounds();
-							if (rounds.length === 0 || !roundId) return;
-							void rejectAgentEdit(roundId);
-						}}
-						onAcceptFeedbackEdits={(roundIds) => {
-							if (roundIds.length > 0) void acceptAgentEdit(roundIds);
-						}}
-						onResolveThread={(threadId, resolved) => void resolveThread(threadId, resolved)}
-					/>
-				{/if}
-				{/key}
-			{:else if docLoaded}
-				<div class="empty-editor-state">
-					<div class="empty-editor-title">No file open</div>
-					<div class="empty-editor-copy">
-						Open a file from the left sidebar, or create a new one there.
+			<div class="source-preview-layout" class:split-preview-open={splitPreviewOpen} bind:this={splitLayoutEl}>
+				<section class="source-workspace" aria-label="Source editor">
+					<!-- Align the tab strip over the page column (same geometry as
+					     `.plain-editor-shell`) so the active tab sits on the page. -->
+					<div class="tab-align">
+						<div class="tab-slot">
+							<TabBar
+								onSwitch={switchTab}
+								onClose={closeTab}
+								onDelete={deleteTab}
+								onRename={renameTabAction}
+								pendingTabs={mergedPendingTabs}
+								onDropFile={handleDropFiles}
+							/>
+						</div>
 					</div>
-				</div>
-			{/if}
+					{#if docLoaded && activeTabFilePath}
+						{#key activeTabFilePath}
+						<AgentModal
+							onAnswerQuestion={(id, answers) => answerUserQuestion(id, answers)}
+							onRunPlan={(id) => runPlanProposal(id)}
+							onDismissPlan={(id) => dismissPlanProposal(id)}
+							onRejectPlan={(id, feedback) => rejectPlanProposal(id, feedback)}
+						/>
+						{#if activeTabIsPdf}
+							<PdfViewerPane path={activeTabFilePath} />
+						{:else}
+							<TiptapEditor
+								tabId={activeTabFilePath}
+								bind:this={editorRef}
+								onSubmit={(trigger) => submit(trigger)}
+								initialScrollTop={pendingScrollRestore}
+								onAcceptInlineEdit={(roundId) => {
+									const rounds = currentRounds();
+									if (rounds.length === 0 || !roundId) return;
+									void acceptAgentEdit(roundId);
+								}}
+								onRejectInlineEdit={(roundId) => {
+									const rounds = currentRounds();
+									if (rounds.length === 0 || !roundId) return;
+									void rejectAgentEdit(roundId);
+								}}
+								onAcceptFeedbackEdits={(roundIds) => {
+									if (roundIds.length > 0) void acceptAgentEdit(roundIds);
+								}}
+								onResolveThread={(threadId, resolved) => void resolveThread(threadId, resolved)}
+								onOpenSplitPreview={openSplitPreview}
+								splitPreviewOpen={splitPreviewOpen}
+							/>
+						{/if}
+						{/key}
+					{:else if docLoaded}
+						<div class="empty-editor-state">
+							<div class="empty-editor-title">No file open</div>
+							<div class="empty-editor-copy">
+								Open a file from the left sidebar, or create a new one there.
+							</div>
+						</div>
+					{/if}
+				</section>
+				{#if splitPreviewOpen && splitPreviewPath}
+					<PanelResizer onResize={resizeSplitPreview} />
+					<aside
+						class="split-preview-pane"
+						aria-label="PDF preview"
+						style:--split-preview-width="{splitPreviewWidth}px"
+					>
+						<PdfViewerPane path={splitPreviewPath} />
+					</aside>
+				{/if}
+			</div>
 		</main>
 	</div>
 </div>
@@ -2586,6 +2686,8 @@
 		 * grid and the tab-align grid both read these. */
 		--paper-width: 900px;
 		--gutter-width: 240px;
+		--line-gutter-width: 52px;
+		--editor-grid-gap: 18px;
 		background: var(--canvas);
 		color: var(--text);
 		font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -2705,12 +2807,63 @@
 		min-width: 0;
 		background: var(--canvas);
 	}
+	.source-preview-layout {
+		flex: 1;
+		min-width: 0;
+		min-height: 0;
+		display: flex;
+		overflow: hidden;
+	}
+	.source-workspace {
+		position: relative;
+		flex: 1 1 auto;
+		min-width: 0;
+		min-height: 0;
+		display: flex;
+		flex-direction: column;
+	}
+	.source-preview-layout.split-preview-open .source-workspace {
+		flex: 1 1 auto;
+		min-width: 620px;
+		max-width: none;
+		--line-gutter-width: 34px;
+		--line-number-width: 28px;
+		--line-number-pad-right: 6px;
+		--editor-grid-gap: 10px;
+	}
+	.source-preview-layout.split-preview-open > :global(.resizer) {
+		z-index: 30;
+	}
+	.split-preview-pane {
+		position: relative;
+		flex: 0 0 var(--split-preview-width, 820px);
+		width: var(--split-preview-width, 820px);
+		min-width: 520px;
+		max-width: none;
+		min-height: 0;
+		display: flex;
+		flex-direction: column;
+		background: var(--bg-surface);
+		border-left: 0;
+		box-shadow: -12px 0 28px rgba(15, 23, 42, 0.08);
+	}
+	.source-preview-layout.split-preview-open .tab-align {
+		justify-content: start;
+		padding-left: 12px;
+	}
+	.source-preview-layout.split-preview-open .source-workspace :global(.plain-editor-shell) {
+		justify-content: start;
+	}
+	.source-preview-layout.split-preview-open .source-workspace :global(.tiptap-wrapper) {
+		padding-left: 12px;
+		padding-right: 16px;
+	}
 	/* Mirrors `.plain-editor-shell`'s columns + centering + horizontal padding
 	 * so the tab strip lands directly over the page column below it. */
 	.tab-align {
 		display: grid;
-		grid-template-columns: 52px minmax(0, var(--paper-width, 720px)) var(--gutter-width, 240px);
-		gap: 18px;
+		grid-template-columns: var(--line-gutter-width, 52px) minmax(0, var(--paper-width, 720px)) var(--gutter-width, 240px);
+		gap: var(--editor-grid-gap, 18px);
 		justify-content: center;
 		padding: 10px 32px 0;
 		flex-shrink: 0;
@@ -2741,5 +2894,27 @@
 		font-size: 14px;
 		line-height: 1.5;
 		color: var(--text-faint);
+	}
+	@media (max-width: 1600px) {
+		.source-preview-layout.split-preview-open {
+			flex-direction: column;
+		}
+		.source-preview-layout.split-preview-open > :global(.resizer) {
+			display: none;
+		}
+		.source-preview-layout.split-preview-open .source-workspace {
+			min-width: 0;
+			min-height: 50%;
+			max-width: none;
+		}
+		.split-preview-pane {
+			flex: 0 0 42vh;
+			min-width: 0;
+			max-width: none;
+			min-height: 320px;
+			border-left: 0;
+			border-top: 1px solid var(--border-light);
+			box-shadow: 0 -10px 24px rgba(15, 23, 42, 0.08);
+		}
 	}
 </style>

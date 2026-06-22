@@ -28,8 +28,9 @@ export const GET: RequestHandler = async () => {
 	const systemPrompt = getLastSystemPrompt();
 	const sessionId = getSessionId();
 	const provider = kvGet('provider') || 'claude';
+	const model = kvGet('model') || null;
 
-	if (!sessionId) return json({ sessionId: null, raw: [], messages: [], systemPrompt, provider });
+	if (!sessionId) return json({ sessionId: null, raw: [], messages: [], systemPrompt, provider, model });
 
 	// Non-Claude providers: load from the conversation_events DB table.
 	if (provider !== 'claude') {
@@ -37,7 +38,7 @@ export const GET: RequestHandler = async () => {
 		const raw = events.map((e) => {
 			try { return JSON.parse(e.data); } catch { return null; }
 		}).filter(Boolean);
-		return json({ sessionId, raw, messages: [], systemPrompt, provider });
+		return json({ sessionId, raw, messages: [], systemPrompt, provider, model });
 	}
 
 	// Claude: try the direct JSONL path first.
@@ -47,7 +48,7 @@ export const GET: RequestHandler = async () => {
 	if (existsSync(jsonlPath)) {
 		try {
 			const raw = await readJsonlFile(jsonlPath);
-			return json({ sessionId, raw, systemPrompt, provider });
+			return json({ sessionId, raw, systemPrompt, provider, model });
 		} catch (e) {
 			console.error('[history] raw JSONL read failed:', e);
 		}
@@ -61,7 +62,7 @@ export const GET: RequestHandler = async () => {
 				dir: process.cwd(),
 				limit: 500
 			});
-			return json({ sessionId, raw: [], messages, systemPrompt, provider });
+			return json({ sessionId, raw: [], messages, systemPrompt, provider, model });
 		}
 	} catch (e) {
 		console.error('[history] getSessionMessages failed:', e);
@@ -73,10 +74,10 @@ export const GET: RequestHandler = async () => {
 		const raw = events.map((e) => {
 			try { return JSON.parse(e.data); } catch { return null; }
 		}).filter(Boolean);
-		return json({ sessionId, raw, messages: [], systemPrompt, provider });
+		return json({ sessionId, raw, messages: [], systemPrompt, provider, model });
 	}
 
-	return json({ sessionId, raw: [], messages: [], systemPrompt, provider });
+	return json({ sessionId, raw: [], messages: [], systemPrompt, provider, model });
 };
 
 function readJsonlFile(filePath: string): Promise<unknown[]> {

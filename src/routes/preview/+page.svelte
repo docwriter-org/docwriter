@@ -25,10 +25,16 @@
 	let connectionState = $state<'connecting' | 'connected' | 'disconnected'>('connecting');
 	let lastReloadAt = $state<number | null>(null);
 	let themeName = $state('light');
+	let embedded = $state(false);
+	let closePdfSidebar = $state(false);
 
 	let sseSource: EventSource | null = null;
 	let saved: { kind: 'html' | 'pdf' | 'image'; data: unknown } | null = null;
 	let broadcastChannel: BroadcastChannel | null = null;
+	let pendingPdfJump: { page: number; x: number; y: number } | null = null;
+	let pendingPdfJumpAttempts = 0;
+	let pendingPdfJumpTimer: ReturnType<typeof setTimeout> | null = null;
+	let pdfSearchSerial = 0;
 
 	function inferKind(p: string): typeof kind {
 		const ext = p.toLowerCase().split('.').pop() ?? '';
@@ -41,7 +47,7 @@
 
 	function makePdfSrc(path: string, buster: number): string {
 		const fileUrl = `/api/preview?path=${encodeURIComponent(path)}&v=${buster}`;
-		return `/pdfjs/web/viewer.html?file=${encodeURIComponent(fileUrl)}`;
+		return `/pdfjs/web/viewer.html?file=${encodeURIComponent(fileUrl)}${closePdfSidebar ? '#pagemode=none' : ''}`;
 	}
 	function makeDirectSrc(path: string, buster: number): string {
 		return `/api/preview?path=${encodeURIComponent(path)}&v=${buster}`;
@@ -210,9 +216,41 @@
 		}
 	}
 
+	function closePdfSidebarIfRequested() {
+		if (!closePdfSidebar || !iframeEl || kind !== 'pdf') return;
+		const win = iframeEl.contentWindow as unknown as
+			| {
+					PDFViewerApplication?: {
+						pdfSidebar?: {
+							isOpen?: boolean;
+							close?: () => void;
+							switchView?: (view: number, forceOpen?: boolean) => void;
+						};
+					};
+			  }
+			| null;
+		const start = Date.now();
+		const attempt = () => {
+			try {
+				const sidebar = win?.PDFViewerApplication?.pdfSidebar;
+				if (sidebar) {
+					sidebar.switchView?.(0, false);
+					if (sidebar.isOpen) sidebar.close?.();
+					return;
+				}
+			} catch {
+				/* PDF.js may still be initializing — retry briefly. */
+			}
+			if (Date.now() - start < 3000) {
+				setTimeout(attempt, 50);
+			}
+		};
+		attempt();
+	}
+
 	/** Attach a dblclick listener to the PDF.js viewer that resolves the
 	 * click to a source location via /api/synctex and relays it to the
-	 * docwriter opener window. PDF.js renders each page as a
+	 * docwriter host window. PDF.js renders each page as a
 	 * `<div class="page" data-page-number="N">`; we compute the click's
 	 * page-relative coordinates, divide by the current scale to get PDF
 	 * points (synctex expects points, not CSS pixels), and POST to the
@@ -248,7 +286,7 @@
 				});
 				const data = await res.json();
 				if (data?.ok && typeof data.file === 'string' && typeof data.line === 'number') {
-					relayJumpToOpener(data.file, data.line);
+					relayJumpToHost(data.file, data.line);
 				}
 			} catch {
 				/* synctex CLI missing, .synctex.gz missing, network error — silent */
@@ -262,17 +300,19 @@
 		doc.addEventListener('dblclick', listener, true);
 	}
 
-	function relayJumpToOpener(file: string, line: number) {
+	function relayJumpToHost(file: string, line: number) {
 		const opener = window.opener as Window | null;
-		if (!opener || opener.closed) return;
+		const embeddedParent = window.parent !== window ? window.parent : null;
+		const target = opener && !opener.closed ? opener : embeddedParent;
+		if (!target) return;
 		try {
-			opener.postMessage(
+			target.postMessage(
 				{ kind: 'docwriter-synctex-jump', file, line },
 				window.location.origin
 			);
-			opener.focus();
+			if (target === opener) opener.focus();
 		} catch {
-			/* opener navigated away or different origin — ignore */
+			/* host navigated away or different origin — ignore */
 		}
 	}
 
@@ -291,15 +331,23 @@
 		}
 		broadcastChannel.onmessage = (ev: MessageEvent) => {
 			const data = ev.data as
-				| { kind?: string; page?: number; x?: number; y?: number; h?: number; v?: number }
+				| { kind?: string; page?: number; x?: number; y?: number; h?: number; v?: number; queries?: string[] }
 				| null;
-			if (!data || data.kind !== 'pdf-jump') return;
+			if (!data) return;
+			if (data.kind === 'pdf-search') {
+				const queries = Array.isArray(data.queries)
+					? data.queries.filter((q): q is string => typeof q === 'string' && q.trim().length > 0)
+					: [];
+				if (queries.length > 0) void searchPdf(queries);
+				return;
+			}
+			if (data.kind !== 'pdf-jump') return;
 			scrollPdfTo(data.page ?? 1, data.x ?? 0, data.v ?? data.y ?? 0);
 		};
 	}
 
-	function scrollPdfTo(page: number, x: number, y: number) {
-		if (!iframeEl) return;
+	function tryScrollPdfTo(jump: { page: number; x: number; y: number }): boolean {
+		if (!iframeEl || kind !== 'pdf') return false;
 		const w = iframeEl.contentWindow as unknown as {
 			PDFViewerApplication?: {
 				pdfViewer?: {
@@ -311,8 +359,8 @@
 			};
 		};
 		const app = w?.PDFViewerApplication;
-		if (!app?.pdfViewer) return;
-		// destArray: ['XYZ', x, top, zoom]. PDF.js uses bottom-left origin
+		if (!app?.pdfViewer) return false;
+		// destArray: [ref, { name: 'XYZ' }, x, top, zoom]. PDF.js uses bottom-left origin
 		// for PDF coords; synctex Y is from the top of the page in points,
 		// so we leave it as `y` (PDF.js does the conversion internally
 		// when interpreting XYZ dest with `top` measured from page bottom?
@@ -325,12 +373,109 @@
 		// conversion. If it's slightly off vertically that's the cause.)
 		try {
 			app.pdfViewer.scrollPageIntoView({
-				pageNumber: page,
-				destArray: ['XYZ', x, y, null]
+				pageNumber: jump.page,
+				destArray: [null, { name: 'XYZ' }, jump.x, jump.y, null]
 			});
 			window.focus();
+			return true;
 		} catch {
-			/* PDF not ready yet — ignore */
+			return false;
+		}
+	}
+
+	function flushPendingPdfJump() {
+		if (!pendingPdfJump) return;
+		if (tryScrollPdfTo(pendingPdfJump)) {
+			pendingPdfJump = null;
+			pendingPdfJumpAttempts = 0;
+			if (pendingPdfJumpTimer) clearTimeout(pendingPdfJumpTimer);
+			pendingPdfJumpTimer = null;
+			return;
+		}
+		if (pendingPdfJumpAttempts >= 40) {
+			pendingPdfJump = null;
+			pendingPdfJumpAttempts = 0;
+			pendingPdfJumpTimer = null;
+			return;
+		}
+		pendingPdfJumpAttempts += 1;
+		if (pendingPdfJumpTimer) clearTimeout(pendingPdfJumpTimer);
+		pendingPdfJumpTimer = setTimeout(flushPendingPdfJump, 100);
+	}
+
+	function scrollPdfTo(page: number, x: number, y: number) {
+		pendingPdfJump = { page, x, y };
+		pendingPdfJumpAttempts = 0;
+		flushPendingPdfJump();
+	}
+
+	function getPdfApplication():
+		| {
+				eventBus?: { dispatch: (name: string, data: Record<string, unknown>) => void };
+				findController?: { _matchesCountTotal?: number };
+				pdfViewer?: { container?: HTMLElement };
+		  }
+		| null {
+		if (!iframeEl || kind !== 'pdf') return null;
+		try {
+			const w = iframeEl.contentWindow as unknown as {
+				PDFViewerApplication?: {
+					eventBus?: { dispatch: (name: string, data: Record<string, unknown>) => void };
+					findController?: { _matchesCountTotal?: number };
+					pdfViewer?: { container?: HTMLElement };
+				};
+			};
+			return w?.PDFViewerApplication ?? null;
+		} catch {
+			return null;
+		}
+	}
+
+	function dispatchPdfFind(query: string): boolean {
+		const app = getPdfApplication();
+		if (!app?.eventBus) return false;
+		app.eventBus.dispatch('find', {
+			source: window,
+			type: '',
+			query,
+			caseSensitive: false,
+			entireWord: false,
+			highlightAll: true,
+			findPrevious: false,
+			matchDiacritics: false,
+			phraseSearch: true
+		});
+		return true;
+	}
+
+	async function searchPdf(queries: string[]) {
+		const serial = ++pdfSearchSerial;
+		const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+		for (let attempt = 0; attempt < 40; attempt += 1) {
+			if (serial !== pdfSearchSerial) return;
+			const app = getPdfApplication();
+			if (app?.eventBus && app.findController) {
+				for (const query of queries) {
+					if (serial !== pdfSearchSerial) return;
+					if (!dispatchPdfFind(query)) break;
+					await sleep(450);
+					if ((app.findController._matchesCountTotal ?? 0) > 0) return;
+				}
+				return;
+			}
+			await sleep(100);
+		}
+	}
+
+	function closeEmbeddedPreview() {
+		if (!embedded || window.parent === window) return;
+		try {
+			window.parent.postMessage(
+				{ kind: 'docwriter-close-preview-pane' },
+				window.location.origin
+			);
+		} catch {
+			/* parent navigated away or different origin — ignore */
 		}
 	}
 
@@ -338,6 +483,10 @@
 		const url = new URL(window.location.href);
 		path = url.searchParams.get('path') ?? '';
 		kind = inferKind(path);
+		embedded = url.searchParams.get('embedded') === '1';
+		closePdfSidebar =
+			url.searchParams.get('pdfSidebar') === '0' ||
+			url.searchParams.get('pdfSidebar') === 'closed';
 		const themeParam = url.searchParams.get('theme');
 		applyDocwriterTheme(themeParam ?? 'light');
 		if (path) {
@@ -352,6 +501,8 @@
 		sseSource = null;
 		broadcastChannel?.close();
 		broadcastChannel = null;
+		if (pendingPdfJumpTimer) clearTimeout(pendingPdfJumpTimer);
+		pendingPdfJumpTimer = null;
 	});
 
 	let src = $derived(
@@ -375,6 +526,9 @@
 		</span>
 		<button onclick={manualReload} title="Reload now">Reload</button>
 		<button onclick={openInNewWindow} title="Open raw file in a new tab">Raw</button>
+		{#if embedded}
+			<button onclick={closeEmbeddedPreview} title="Close side preview">Close</button>
+		{/if}
 		{#if lastReloadAt}
 			<span class="last-reload">updated {new Date(lastReloadAt).toLocaleTimeString()}</span>
 		{/if}
@@ -391,7 +545,9 @@
 				onload={() => {
 					restoreScroll();
 					injectThemeIntoIframe();
+					closePdfSidebarIfRequested();
 					attachSynctexHandler();
+					flushPendingPdfJump();
 				}}
 			></iframe>
 		{:else if kind === 'image'}
@@ -406,7 +562,9 @@
 				onload={() => {
 					restoreScroll();
 					injectThemeIntoIframe();
+					closePdfSidebarIfRequested();
 					attachSynctexHandler();
+					flushPendingPdfJump();
 				}}
 			></iframe>
 		{:else}

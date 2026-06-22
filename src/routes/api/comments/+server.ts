@@ -86,7 +86,8 @@ export const POST: RequestHandler = async ({ request }) => {
 		const outcomeBox: { threadId?: string } = {};
 		const outcome = await mutateTabYDoc(tabId, (doc) => {
 			const liveText = serializeYDoc(doc);
-			if (countOccurrences(liveText, anchorText) === 0) {
+			const hasRelAnchor = !!(relStart && relEnd);
+			if (!hasRelAnchor && countOccurrences(liveText, anchorText) === 0) {
 				return { ok: false, error: 'anchorText was not found in the document', status: 409 };
 			}
 			const threadId = 'thread_' + cryptoRandomId();

@@ -29,6 +29,8 @@ import {
 	type HookEvent
 } from '$lib/server/hooks-config';
 import { runHookCommand, type HookRunEmitter } from '$lib/server/hook-runner';
+import { addCustomSkill } from '$lib/server/skills-config';
+import { executeReviewAction } from './tool-handlers';
 
 const PROPOSE_RULE_TOOL_NAME = 'mcp__docwriter__propose_rule';
 const PROPOSE_HOOK_TOOL_NAME = 'mcp__docwriter__propose_hook';
@@ -68,6 +70,49 @@ function buildDocwriterMcp() {
 					reason: z.string().optional().describe('Explanation.')
 				},
 				async () => ({ content: [{ type: 'text', text: 'Hook proposal sent to the user for review.' }] })
+			),
+			tool(
+				'add_skill',
+				'Add an Agent Skill to DocWriter from a GitHub repository URL or local skill path.',
+				{
+					source: z.string().describe('A GitHub repository URL, local skill directory, or local SKILL.md path.')
+				},
+				async ({ source }) => {
+					try {
+						addCustomSkill(source);
+						return {
+							content: [{
+								type: 'text',
+								text: `Added skill from ${source}. It is now enabled and synced to native skill folders.`
+							}]
+						};
+					} catch (err) {
+						return {
+							content: [{
+								type: 'text',
+								text: `add_skill failed: ${(err as Error).message}`
+							}],
+							isError: true
+						};
+					}
+				}
+			),
+			tool(
+				'review_action',
+				'Accept/reject pending review edits or resolve/reopen comment threads ONLY when the user explicitly asks you to do that action. This mutates document review state.',
+				{
+					path: z.string().describe('Workspace-relative path or absolute path inside the workspace.'),
+					action: z.enum(['accept_round', 'accept_all', 'reject_round', 'reject_all', 'resolve_thread', 'reopen_thread']).describe('The explicit review action requested by the user.'),
+					round_id: z.string().optional().describe('Required for accept_round or reject_round.'),
+					thread_id: z.string().optional().describe('Required for resolve_thread or reopen_thread.')
+				},
+				async (input) => {
+					const result = await executeReviewAction(input);
+					return {
+						content: result.content.map((c) => ({ type: 'text' as const, text: c.text })),
+						...(result.isError ? { isError: true } : {})
+					};
+				}
 			)
 		]
 	});
@@ -111,7 +156,7 @@ export class ClaudeProvider implements AgentProvider {
 			agentProgressSummaries: true,
 			effort: options.effort || 'low',
 			...(options.abortSignal ? { abortController: { signal: options.abortSignal, abort() { /* unused */ } } } : {}),
-			...(options.hooks || {}),
+			...(options.hooks ? { hooks: options.hooks } : {}),
 			...(canUseToolCb ? {
 				canUseTool: async (toolName: string, toolInput: any) => {
 					const result = await canUseToolCb(toolName, toolInput);
