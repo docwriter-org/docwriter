@@ -130,7 +130,16 @@ export function materializePendingReviewText(
 ): string {
 	let currentText = baseText;
 	for (const round of rounds) {
-		currentText = applyPendingReviewRound(currentText, round).nextText;
+		const applied = applyPendingReviewRound(currentText, round);
+		if (applied.stale) {
+			// Stop cascading: once a round is stale, subsequent rounds likely
+			// depend on it and would produce incorrect matches. Return the
+			// current text (committed + successfully-applied rounds) so that
+			// `read_doc` / `edit_doc` see a consistent snapshot rather than
+			// a broken chain where some edits silently failed to apply.
+			break;
+		}
+		currentText = applied.nextText;
 	}
 	return currentText;
 }
