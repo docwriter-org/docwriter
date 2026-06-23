@@ -481,6 +481,8 @@ export async function loadAvailableModels(providerId?: string) {
 	}
 }
 
+/** Active UI theme. Persisted through the server runtime-state layer
+ * (SQLite-backed) via /api/session whenever the user changes it. */
 export const selectedTheme = writable<string>('light');
 
 /** History pane verbosity. `verbose` = every tool call, assistant monologue,

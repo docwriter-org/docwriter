@@ -6,9 +6,11 @@ import {
 	dbSetAgentSettings,
 	dbSetSessionId,
 	dbSetEditorSoftWrap,
+	dbSetTheme,
 	dbUpsertTabs,
 	kvGet
 } from './db-writes';
+import { resolveThemeName } from '$lib/themes';
 import { getDb } from './db';
 import { syncRulesToClaudeMemory } from './claude-memory';
 
@@ -160,6 +162,14 @@ export function getEditorSoftWrap(): boolean {
 
 export function setEditorSoftWrap(enabled: boolean) {
 	dbSetEditorSoftWrap(enabled);
+}
+
+export function getTheme(): string {
+	return resolveThemeName(kvGet('theme'));
+}
+
+export function setTheme(theme: string) {
+	dbSetTheme(resolveThemeName(theme));
 }
 
 export function getTabsState(): TabsState {
