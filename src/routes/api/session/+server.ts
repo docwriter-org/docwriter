@@ -9,7 +9,9 @@ import {
 	setActionUsageCounts,
 	clearSessionState,
 	getEditorSoftWrap,
-	setEditorSoftWrap
+	setEditorSoftWrap,
+	getTheme,
+	setTheme
 } from '$lib/server/runtime-state';
 import { AGENT_SCRATCH_DIR } from '$lib/server/document-files';
 import { existsSync, readdirSync, rmSync } from 'fs';
@@ -21,7 +23,8 @@ export const GET: RequestHandler = async () => {
 		serverInstanceId: getServerInstanceId(),
 		recentActions: getRecentActions(),
 		actionUsageCounts: getActionUsageCounts(),
-		editorSoftWrap: getEditorSoftWrap()
+		editorSoftWrap: getEditorSoftWrap(),
+		theme: getTheme()
 	});
 };
 
@@ -30,6 +33,7 @@ export const PUT: RequestHandler = async ({ request }) => {
 	if (body.recentActions) setRecentActions(body.recentActions);
 	if (body.actionUsageCounts) setActionUsageCounts(body.actionUsageCounts);
 	if (typeof body.editorSoftWrap === 'boolean') setEditorSoftWrap(body.editorSoftWrap);
+	if (typeof body.theme === 'string') setTheme(body.theme);
 	return json({ ok: true });
 };
 
