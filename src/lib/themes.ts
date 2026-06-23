@@ -4,6 +4,14 @@ export interface Theme {
 	vars: Record<string, string>;
 }
 
+export const DEFAULT_THEME_NAME = 'light';
+
+/** Return a known theme name, falling back to the default when missing or invalid. */
+export function resolveThemeName(name: string | null | undefined): string {
+	if (name && themes.some((t) => t.name === name)) return name;
+	return DEFAULT_THEME_NAME;
+}
+
 export const themes: Theme[] = [
 	{
 		name: 'light',

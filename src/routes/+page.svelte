@@ -2134,6 +2134,9 @@
 			if (typeof data.editorSoftWrap === 'boolean') {
 				editorSoftWrap.set(data.editorSoftWrap);
 			}
+			if (typeof data.theme === 'string') {
+				selectedTheme.set(data.theme);
+			}
 		} catch (e) {
 			console.error('Failed to restore session state:', e);
 		}
@@ -2155,6 +2158,8 @@
 			actionUsageCounts.subscribe((v) => (counts = v))();
 			let wrapLongLines = false;
 			editorSoftWrap.subscribe((v) => (wrapLongLines = v))();
+			let theme = 'light';
+			selectedTheme.subscribe((v) => (theme = v))();
 			try {
 				await fetch('/api/session', {
 					method: 'PUT',
@@ -2162,7 +2167,8 @@
 					body: JSON.stringify({
 						recentActions: recent,
 						actionUsageCounts: counts,
-						editorSoftWrap: wrapLongLines
+						editorSoftWrap: wrapLongLines,
+						theme
 					})
 				});
 			} catch (e) {
@@ -2187,8 +2193,6 @@
 			window.removeEventListener('resize', clampSidebarPanels);
 		};
 
-		const initialTheme = themes.find((t) => t.name === themeName) || themes[0];
-		applyTheme(initialTheme);
 		// HMR safety: if the module was hot-reloaded during a render, the
 		// store could still say we're rendering. Clamp it to false so the
 		// submit button unlocks.
@@ -2199,10 +2203,13 @@
 		// docLoaded flips true, so by then the right Y.Doc is registered.
 		// Restore the selection-toolbar recents + LRU usage counts from
 		// server state so refresh doesn't wipe cached feedback pills or editor
-		// view prefs like soft wrap. Must complete BEFORE the editor mounts and
-		// before we attach the persist subscribers, otherwise defaults could
-		// overwrite the real values.
+		// view prefs like soft wrap and theme. Must complete BEFORE the editor
+		// mounts and before we attach the persist subscribers, otherwise
+		// defaults could overwrite the real values.
 		await restoreSessionState();
+
+		const initialTheme = themes.find((t) => t.name === themeName) || themes[0];
+		applyTheme(initialTheme);
 
 		const active = await loadTabs();
 		if (active) await loadTab(active);
@@ -2223,6 +2230,7 @@
 		recentActions.subscribe(() => schedulePersistSession());
 		actionUsageCounts.subscribe(() => schedulePersistSession());
 		editorSoftWrap.subscribe(() => schedulePersistSession());
+		selectedTheme.subscribe(() => schedulePersistSession());
 
 		// Subscribe to the file-watcher event bus (used by `docwriter --watch`).
 		// When the bin's fs.watch sees external changes it POSTs to /api/live,

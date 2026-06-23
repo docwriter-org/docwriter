@@ -82,6 +82,15 @@ export function dbSetEditorSoftWrap(enabled: boolean) {
 	}
 }
 
+export function dbSetTheme(theme: string) {
+	try {
+		const db = getDb();
+		db.prepare('INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)').run('theme', theme);
+	} catch (err) {
+		logDbError('setTheme', err);
+	}
+}
+
 export function dbClearSessionState() {
 	try {
 		const db = getDb();
