@@ -49,3 +49,6 @@ vite.config.ts.timestamp-*
 scratch-*.ts
 scratch-*.mjs
 dw-*.mjs
+
+# Programming-by-correction artifact
+artifact_data/
