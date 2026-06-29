@@ -28,7 +28,8 @@ import {
 	getReviewArray,
 	readReviewRounds,
 	getCommentsMap,
-	AGENT_ORIGIN
+	AGENT_ORIGIN,
+	normalizeTypography
 } from '$lib/shared/ydoc-codec';
 import { isScratchPath, resolveTabFromPath, isOpenTab } from './path-router';
 import { classifyRoundKind } from '$lib/review-diff';
@@ -548,6 +549,8 @@ const editDocTool = tool(
 	},
 	async ({ file_path, old_string, new_string, replace_all, thread_id }) => {
 		const replaceAll = replace_all === true;
+		old_string = normalizeTypography(old_string);
+		new_string = normalizeTypography(new_string);
 		if (isScratchPath(file_path)) return editScratch(file_path, old_string, new_string, replaceAll);
 
 		const opened = ensureWorkspaceTabOpen(file_path, { createIfMissing: false });
@@ -702,6 +705,8 @@ const writeDocTool = tool(
 	},
 	async ({ file_path, content }) => {
 		if (isScratchPath(file_path)) return writeScratch(file_path, content);
+
+		content = normalizeTypography(content);
 
 		const opened = ensureWorkspaceTabOpen(file_path, { createIfMissing: true });
 		if (!opened.ok) return opened.error;

@@ -1,5 +1,6 @@
 import type { PendingReviewOperation, PendingReviewRound } from './types';
 import { classifyRoundKind } from './review-diff';
+import { normalizeTypography } from '$lib/shared/ydoc-codec';
 
 export interface MaterializedPendingReviewRound extends PendingReviewRound {
 	beforeMd: string;
@@ -35,7 +36,7 @@ export function reviewTextHash(text: string): string {
 
 function applyOperation(currentText: string, operation: PendingReviewOperation): AppliedReviewRound {
 	if (operation.type === 'write') {
-		return { nextText: operation.content, stale: false };
+		return { nextText: normalizeTypography(operation.content), stale: false };
 	}
 
 	const hits = countOccurrences(currentText, operation.oldString);
@@ -62,9 +63,11 @@ function applyOperation(currentText: string, operation: PendingReviewOperation):
 	// any other content with literal $-with-trailing-quote sequences. The
 	// replaceAll path uses split/join which goes through a different code
 	// path and isn't affected.
-	const nextText = operation.replaceAll
-		? currentText.split(operation.oldString).join(operation.newString)
-		: currentText.replace(operation.oldString, () => operation.newString);
+	const nextText = normalizeTypography(
+		operation.replaceAll
+			? currentText.split(operation.oldString).join(operation.newString)
+			: currentText.replace(operation.oldString, () => operation.newString)
+	);
 	return { nextText, stale: false };
 }
 
@@ -132,5 +135,5 @@ export function materializePendingReviewText(
 	for (const round of rounds) {
 		currentText = applyPendingReviewRound(currentText, round).nextText;
 	}
-	return currentText;
+	return normalizeTypography(currentText);
 }

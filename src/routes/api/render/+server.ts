@@ -20,14 +20,14 @@ import { runHookCommand, type HookRunEmitter } from '$lib/server/hook-runner';
 import { getSessionId, setSessionId, setLastSystemPrompt, getTabsState } from '$lib/server/runtime-state';
 import { readMeta } from '$lib/server/document-io';
 import { kvGet, kvSet, dbAppendConversationEvent } from '$lib/server/db-writes';
-import { serializeYDoc, readReviewRounds, readCommentThreads } from '$lib/shared/ydoc-codec';
+import { readCommentThreads, readReviewRounds } from '$lib/shared/ydoc-codec';
 import type { CommentThread } from '$lib/types';
 import { replayUpdatesInto } from '$lib/server/ydoc-persistence';
 import { registerPendingAskUser } from '$lib/server/ask-user-state';
 import { unifiedLineDiff } from '$lib/diff';
 import { listStyleReferences } from '$lib/server/references';
 import { buildSkillsPromptBlock } from '$lib/server/skills-config';
-import { materializePendingReviewText } from '$lib/review-rounds';
+import { lastSeenKey, readTabMarkdownForAgent } from '$lib/server/last-seen';
 import {
 	EDIT_DOC_TOOL_NAME,
 	READ_DOC_TOOL_NAME,
@@ -49,12 +49,12 @@ function readLiveTabMarkdown(tabId: string): string {
 	const hp = holder.__docwriterWsServer?.hocuspocus;
 	const liveDoc = hp?.documents?.get(tabId) as Y.Doc | undefined;
 	if (liveDoc) {
-		return materializePendingReviewText(serializeYDoc(liveDoc), readReviewRounds(liveDoc));
+		return readTabMarkdownForAgent(liveDoc);
 	}
 	const ydoc = new Y.Doc();
 	try {
 		replayUpdatesInto(ydoc, tabId);
-		return materializePendingReviewText(serializeYDoc(ydoc), readReviewRounds(ydoc));
+		return readTabMarkdownForAgent(ydoc);
 	} finally {
 		ydoc.destroy();
 	}
@@ -108,7 +108,6 @@ function readLiveTabPendingEditThreadIds(tabId: string): Set<string> {
 	}
 }
 
-const LAST_SEEN_PREFIX = 'last_seen:';
 const GENERIC_WAKEUP_MESSAGE =
 	'The user clicked Wake-up without a specific request. Decide what (if anything) to do per the agency guidance above.';
 const WORKSPACE_ROOT = resolve(process.env.DOCWRITER_ROOT || process.cwd());
@@ -124,10 +123,6 @@ interface ImageAttachmentPayload {
 const KV_LAST_RULES = 'last_render:rules';
 const KV_LAST_REFS = 'last_render:refs';
 const KV_LAST_AGENCY = 'last_render:agency';
-
-function lastSeenKey(tabId: string): string {
-	return LAST_SEEN_PREFIX + tabId;
-}
 
 function normalizeToolPath(pathLike: string): string {
 	return normalize(resolve(WORKSPACE_ROOT, pathLike));
