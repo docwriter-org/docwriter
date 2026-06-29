@@ -19,15 +19,15 @@ env vars (desktop logins like `claude login` / Codex CLI auth do not work in CI)
 | **openai** | OpenAI Agents SDK (`@openai/agents`) | `OPENAI_API_KEY` | Yes | `gpt-5.4-mini` |
 | **codex** | Codex SDK (`@openai/codex-sdk`) | `CODEX_API_KEY` | Yes in CI | `gpt-5.4-mini` |
 | **cursor** | Cursor SDK (`@cursor/sdk`) | `CURSOR_API_KEY` | Yes | `composer-2.5` |
-| **pi** | Pi coding agent (`@earendil-works/pi-coding-agent`) | `ZAI_API_KEY` | Yes in CI | `zai/glm-5.2` |
+| **pi** | Pi coding agent (`@earendil-works/pi-coding-agent`) | `TOGETHER_API_KEY` | Yes in CI | `together/zai-org/GLM-5.2` |
 
 Notes:
 
 - **Codex** is separate from the OpenAI provider. Locally it can use `~/.codex/auth.json`
   (ChatGPT login); in CI set `CODEX_API_KEY` (often the same key you use for the Codex CLI).
-- **Pi** routes models to many hosts. The default e2e model is **GLM-5.2** on Z.AI
-  (`zai/glm-5.2`). Override with `E2E_MODEL` — e.g. `together/moonshotai/Kimi-K2.6` with
-  `TOGETHER_API_KEY`, or `anthropic/claude-haiku-3-5` with `ANTHROPIC_API_KEY`.
+- **Pi** routes models to many hosts. The default e2e model is **GLM-5.2 on Together**
+  (`together/zai-org/GLM-5.2`), matching the in-app Pi key (`TOGETHER_API_KEY`). Override with
+  `E2E_MODEL` — e.g. `zai/glm-5.2` with `ZAI_API_KEY` for Z.AI direct.
 - Avoid **Claude Opus 4.8** in CI — the bundled Claude Agent SDK currently errors on
   extended thinking for that model. Haiku / Sonnet are fine.
 
@@ -40,10 +40,10 @@ ANTHROPIC_API_KEY   # claude
 OPENAI_API_KEY      # openai provider
 CODEX_API_KEY       # codex provider
 CURSOR_API_KEY      # cursor provider
-ZAI_API_KEY         # pi (default GLM-5.2 via Z.AI)
+TOGETHER_API_KEY    # pi (default GLM-5.2 on Together)
 ```
 
-`TOGETHER_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` can also
+`ZAI_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` can also
 drive Pi if you set `E2E_MODEL` to a matching `provider/model` id.
 
 Fork PRs from outside collaborators do not receive secrets unless you enable

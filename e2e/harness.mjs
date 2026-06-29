@@ -22,7 +22,7 @@ export const DEFAULT_MODELS = {
 	openai: 'gpt-5.4-mini',
 	codex: 'gpt-5.4-mini',
 	cursor: 'composer-2.5',
-	pi: 'zai/glm-5.2'
+	pi: 'together/zai-org/GLM-5.2'
 };
 
 /** Primary env var each provider needs in headless CI (no desktop login). */
@@ -31,7 +31,7 @@ export const PROVIDER_ENV_VARS = {
 	openai: 'OPENAI_API_KEY',
 	codex: 'CODEX_API_KEY',
 	cursor: 'CURSOR_API_KEY',
-	pi: 'ZAI_API_KEY'
+	pi: 'TOGETHER_API_KEY'
 };
 
 const ESSAY_CONTENT = `# Provider smoke test
@@ -55,8 +55,8 @@ export function modelForProvider(provider) {
 export function hasProviderCredentials(provider) {
 	if (provider === 'pi') {
 		return Boolean(
-			process.env.ZAI_API_KEY?.trim() ||
-				process.env.TOGETHER_API_KEY?.trim() ||
+			process.env.TOGETHER_API_KEY?.trim() ||
+				process.env.ZAI_API_KEY?.trim() ||
 				process.env.ANTHROPIC_API_KEY?.trim() ||
 				process.env.OPENAI_API_KEY?.trim() ||
 				process.env.GEMINI_API_KEY?.trim()

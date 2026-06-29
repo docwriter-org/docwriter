@@ -114,6 +114,21 @@ function buildPiTools(defs: ToolDefinition[]): any[] {
 	);
 }
 
+/** Resolve a Pi model id via pi-ai's catalog, with small fallbacks for
+ * models hosted by an inference API before pi-ai's generated list catches up. */
+function resolvePiModel(provider: string, modelId: string) {
+	const resolved = getModel(provider, modelId);
+	if (resolved?.id) return resolved;
+	// Together serves zai-org/GLM-5.2; pi-ai 0.80.x still lists only GLM-5.1.
+	if (provider === 'together' && modelId === 'zai-org/GLM-5.2') {
+		const template = getModel('together', 'zai-org/GLM-5.1');
+		if (template?.id) {
+			return { ...template, id: 'zai-org/GLM-5.2', name: 'GLM-5.2' };
+		}
+	}
+	return undefined;
+}
+
 export class PiProvider implements AgentProvider {
 	readonly id = 'pi' as const;
 	private session: any = null;
@@ -152,9 +167,7 @@ export class PiProvider implements AgentProvider {
 					slash === -1
 						? ['anthropic', options.model]
 						: [options.model.slice(0, slash), options.model.slice(slash + 1)];
-				const resolved = getModel(provider, modelId);
-				// getModel is permissive for unknown ids (returns a stub with no id);
-				// only use it if the lookup actually hit a real model.
+				const resolved = resolvePiModel(provider, modelId);
 				if (resolved?.id) sessionOpts.model = resolved;
 			} catch {
 				// Fall through to default model
