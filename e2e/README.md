@@ -25,9 +25,8 @@ Notes:
 
 - **Codex** is separate from the OpenAI provider. Locally it can use `~/.codex/auth.json`
   (ChatGPT login); in CI set `CODEX_API_KEY` (often the same key you use for the Codex CLI).
-- **Pi** routes models to many hosts. The default e2e model is **GLM-5.2 on Together**
-  (`together/zai-org/GLM-5.2`), matching the in-app Pi key (`TOGETHER_API_KEY`). Override with
-  `E2E_MODEL` — e.g. `zai/glm-5.2` with `ZAI_API_KEY` for Z.AI direct.
+- **Pi** default e2e model is **GLM-5.2 on Together** (`together/zai-org/GLM-5.2`)
+  via `TOGETHER_API_KEY` (same as the in-app Pi key). Override with `E2E_MODEL` if needed.
 - Avoid **Claude Opus 4.8** in CI — the bundled Claude Agent SDK currently errors on
   extended thinking for that model. Haiku / Sonnet are fine.
 

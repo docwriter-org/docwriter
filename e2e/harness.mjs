@@ -54,13 +54,7 @@ export function modelForProvider(provider) {
 
 export function hasProviderCredentials(provider) {
 	if (provider === 'pi') {
-		return Boolean(
-			process.env.TOGETHER_API_KEY?.trim() ||
-				process.env.ZAI_API_KEY?.trim() ||
-				process.env.ANTHROPIC_API_KEY?.trim() ||
-				process.env.OPENAI_API_KEY?.trim() ||
-				process.env.GEMINI_API_KEY?.trim()
-		);
+		return Boolean(process.env.TOGETHER_API_KEY?.trim());
 	}
 	const envVar = PROVIDER_ENV_VARS[provider];
 	if (!envVar) return false;
