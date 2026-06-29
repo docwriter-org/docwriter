@@ -155,6 +155,8 @@ export class ClaudeProvider implements AgentProvider {
 			includePartialMessages: true,
 			agentProgressSummaries: true,
 			effort: options.effort || 'low',
+			// Sonnet 4.6+ reject thinking.type.enabled; adaptive is required.
+			thinking: { type: 'adaptive' },
 			...(options.abortSignal ? { abortController: { signal: options.abortSignal, abort() { /* unused */ } } } : {}),
 			...(options.hooks ? { hooks: options.hooks } : {}),
 			...(canUseToolCb ? {

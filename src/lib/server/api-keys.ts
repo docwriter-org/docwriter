@@ -53,7 +53,8 @@ export const PROVIDER_KEYS: ProviderKeySpec[] = [
 		label: 'Codex',
 		envVar: 'CODEX_API_KEY',
 		required: false,
-		altAuthNote: 'Falls back to your Codex CLI login (`~/.codex/auth.json`) if no key is set.'
+		altAuthNote:
+			'Falls back to OPENAI_API_KEY or your Codex CLI login (`~/.codex/auth.json`) if no key is set.'
 	},
 	{ id: 'cursor', label: 'Cursor', envVar: 'CURSOR_API_KEY', required: true },
 	{
@@ -151,15 +152,13 @@ export interface ProviderKeyStatus extends ProviderKeySpec {
 
 export function getKeyStatus(): ProviderKeyStatus[] {
 	return PROVIDER_KEYS.map((spec) => {
-		const present = !!process.env[spec.envVar];
+		const present = !!process.env[spec.envVar] || (spec.id === 'codex' && !!process.env.OPENAI_API_KEY);
 		let usable = present;
 		let source: ProviderKeyStatus['source'] = present ? 'env' : null;
 		if (!usable) {
-			// Only the Codex provider falls back to the Codex CLI login; the
-			// OpenAI provider uses the OpenAI API directly (needs OPENAI_API_KEY).
-			if (spec.id === 'codex' && hasCodexLogin()) {
+			if (spec.id === 'codex' && (process.env.OPENAI_API_KEY || hasCodexLogin())) {
 				usable = true;
-				source = 'login';
+				source = process.env.OPENAI_API_KEY ? 'env' : 'login';
 			} else if (spec.id === 'claude' && hasClaudeLogin()) {
 				usable = true;
 				source = 'login';

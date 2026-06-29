@@ -24,8 +24,8 @@ jobs:
         run: rm -rf node_modules/@anthropic-ai/claude-agent-sdk-linux-x64-musl
       - run: npm run check
 
+  # One GitHub-hosted runner (container) per provider — fully isolated.
   provider-smoke:
-    needs: check
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -50,7 +50,6 @@ jobs:
           AGENT_TIMEOUT_MS: 180000
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
           TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
-        run: npm run test:e2e
+        run: node e2e/run-provider.mjs

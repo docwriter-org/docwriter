@@ -36,7 +36,7 @@ async function loadSdk() {
 		AuthStorage = sdk.AuthStorage;
 		ModelRegistry = sdk.ModelRegistry;
 
-		const ai = await import('@earendil-works/pi-ai');
+		const ai = await import('@earendil-works/pi-ai/compat');
 		getModel = ai.getModel;
 
 		const tb = await import('@sinclair/typebox');

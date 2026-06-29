@@ -18,7 +18,7 @@ export const PROVIDER_IDS = ['claude', 'openai', 'codex', 'cursor', 'pi'];
 
 /** Fast/cheap models per provider — override with E2E_MODEL. */
 export const DEFAULT_MODELS = {
-	claude: 'claude-haiku-4-5',
+	claude: 'claude-sonnet-4-6',
 	openai: 'gpt-5.4-mini',
 	codex: 'gpt-5.4-mini',
 	cursor: 'composer-2.5',
@@ -29,7 +29,7 @@ export const DEFAULT_MODELS = {
 export const PROVIDER_ENV_VARS = {
 	claude: 'ANTHROPIC_API_KEY',
 	openai: 'OPENAI_API_KEY',
-	codex: 'CODEX_API_KEY',
+	codex: 'OPENAI_API_KEY',
 	cursor: 'CURSOR_API_KEY',
 	pi: 'TOGETHER_API_KEY'
 };
@@ -55,6 +55,9 @@ export function modelForProvider(provider) {
 export function hasProviderCredentials(provider) {
 	if (provider === 'pi') {
 		return Boolean(process.env.TOGETHER_API_KEY?.trim());
+	}
+	if (provider === 'codex') {
+		return Boolean(process.env.OPENAI_API_KEY?.trim() || process.env.CODEX_API_KEY?.trim());
 	}
 	const envVar = PROVIDER_ENV_VARS[provider];
 	if (!envVar) return false;
@@ -179,7 +182,21 @@ export async function waitForAgentIdle(page, timeout = 30_000) {
 export async function openFile(page, label) {
 	const name = page.locator('.tree-name', { hasText: new RegExp(`^${label}$`) }).first();
 	await name.click();
-	await sleep(500);
+	await sleep(300);
+}
+
+/** Wait until the Yjs-backed editor has synced and the Agent wake button is enabled. */
+export async function waitForEditorReady(page, textSnippet = '', timeoutMs = 30_000) {
+	await page.waitForFunction(
+		(snippet) => {
+			const editor = document.querySelector('.tiptap-content');
+			const wake = document.querySelector('.header-agent-btn');
+			if (!editor || !wake || wake.disabled) return false;
+			return !snippet || (editor.textContent ?? '').includes(snippet);
+		},
+		textSnippet,
+		{ timeout: timeoutMs }
+	);
 }
 
 export async function wakeAgent(page) {
@@ -188,6 +205,11 @@ export async function wakeAgent(page) {
 	const agentPill = page.locator('.header-agent-btn').first();
 	if (!(await agentPill.count())) {
 		throw new Error('Agent wake-up button not found');
+	}
+	await agentPill.waitFor({ state: 'visible', timeout: 10_000 });
+	const disabled = await agentPill.isDisabled();
+	if (disabled) {
+		throw new Error('Agent wake-up button is still disabled (editor not synced?)');
 	}
 	await agentPill.click();
 }
