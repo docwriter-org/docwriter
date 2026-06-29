@@ -79,7 +79,7 @@ async function main() {
 
 		browser = await chromium.launch({ headless: true });
 		const context = await browser.newContext({ viewport: VIEWPORT });
-		await context.addInitScript(browserInitScript(provider, model));
+		await context.addInitScript(browserInitScript, { provider, model });
 		page = await context.newPage();
 
 		await page.goto(`http://127.0.0.1:${httpPort}`, { waitUntil: 'domcontentloaded' });

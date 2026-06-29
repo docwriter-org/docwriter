@@ -47,6 +47,10 @@ Fork PRs from outside collaborators do not receive secrets unless you enable
 
 ## Local usage
 
+Playwright `addInitScript` does not serialize closure variables — the harness
+passes `{ provider, model }` as explicit args so localStorage is set before the
+app boots (otherwise the client falls back to Claude Opus 4.8 and the API 400s).
+
 ```bash
 nvm use                    # Node 22.22.2
 npm ci

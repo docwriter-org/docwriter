@@ -139,17 +139,16 @@ export async function waitForKeyStatus(httpPort, provider, timeoutMs = 30_000) {
 	return null;
 }
 
-export function browserInitScript(provider, model) {
-	return () => {
-		localStorage.setItem('docwriter.dockExpanded', 'true');
-		localStorage.setItem('docwriter.showFilesPane', 'true');
-		localStorage.setItem('docwriter.selectedProvider', provider);
-		localStorage.setItem('docwriter.selectedModel', model);
-		localStorage.setItem(
-			'docwriter.selectedModelsByProvider',
-			JSON.stringify({ [provider]: model })
-		);
-	};
+/** Playwright init-script fn — must receive args via addInitScript(fn, args). */
+export function browserInitScript({ provider, model }) {
+	localStorage.setItem('docwriter.dockExpanded', 'true');
+	localStorage.setItem('docwriter.showFilesPane', 'true');
+	localStorage.setItem('docwriter.selectedProvider', provider);
+	localStorage.setItem('docwriter.selectedModel', model);
+	localStorage.setItem(
+		'docwriter.selectedModelsByProvider',
+		JSON.stringify({ [provider]: model })
+	);
 }
 
 export async function setDockExpanded(page, expanded) {
