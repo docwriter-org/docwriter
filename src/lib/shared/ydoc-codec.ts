@@ -140,7 +140,7 @@ export function applyEditToFragment(
 		// asking for it.
 		const fullText = normalizeTypography(paraTexts.join('\n'));
 		if (fullText.indexOf(oldString) < 0) return false;
-		const replaced = fullText.split(oldString).join(newString);
+		const replaced = fullText.split(oldString).join(normalizeTypography(newString));
 		if (replaced === fullText) return false;
 		const newParas = buildParagraphElements(replaced);
 		fragment.delete(0, fragment.length);
@@ -180,7 +180,7 @@ export function applyEditToFragment(
 
 	const before = paraTexts[firstAffected].slice(0, startInFirst);
 	const after = paraTexts[lastAffected].slice(endInLast);
-	const splicedText = before + newString + after;
+	const splicedText = before + normalizeTypography(newString) + after;
 	const newParas = buildParagraphElements(splicedText);
 	const count = lastAffected - firstAffected + 1;
 	fragment.delete(firstAffected, count);
@@ -195,7 +195,7 @@ export function seedYDoc(ydoc: Y.Doc, content: string): void {
 	const fragment = getFragment(ydoc);
 	if (fragment.length > 0) return;
 	if (!content) return;
-	fragment.insert(0, buildParagraphElements(content));
+	fragment.insert(0, buildParagraphElements(normalizeTypography(content)));
 }
 
 /** Replace the fragment's content wholesale. Callers must wrap this in
@@ -203,5 +203,5 @@ export function seedYDoc(ydoc: Y.Doc, content: string): void {
 export function replaceYDocText(ydoc: Y.Doc, content: string): void {
 	const fragment = getFragment(ydoc);
 	if (fragment.length > 0) fragment.delete(0, fragment.length);
-	if (content) fragment.insert(0, buildParagraphElements(content));
+	if (content) fragment.insert(0, buildParagraphElements(normalizeTypography(content)));
 }

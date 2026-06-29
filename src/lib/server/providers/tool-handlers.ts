@@ -26,7 +26,8 @@ import { readFileSync, existsSync } from 'fs';
 import * as Y from 'yjs';
 import {
 	getCommentsMap,
-	AGENT_ORIGIN
+	AGENT_ORIGIN,
+	normalizeTypography
 } from '$lib/shared/ydoc-codec';
 import type {
 	CommentMessage,
@@ -144,7 +145,9 @@ export function buildToolDefinitions(): ToolDefinition[] {
 					replace_all?: boolean; thread_id?: string;
 				};
 				const replaceAll = replace_all === true;
-				if (isScratchPath(path)) return toToolResult(editScratch(path, old_string, new_string, replaceAll));
+				const normOld = normalizeTypography(old_string);
+				const normNew = normalizeTypography(new_string);
+				if (isScratchPath(path)) return toToolResult(editScratch(path, normOld, normNew, replaceAll));
 
 				const opened = ensureWorkspaceTabOpen(path, { createIfMissing: false });
 				if (!opened.ok) return toToolResult(opened.error);
@@ -156,7 +159,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
 				let failure: string | null = null;
 				let appliedHits = 0;
 				const result = await runTabWrite(tabId, 'agent_edit_doc', (currentMd) => {
-					const hits = countOccurrences(currentMd, old_string);
+					const hits = countOccurrences(currentMd, normOld);
 					if (hits === 0) {
 						failure = `old_string not found in ${path}. The user may have edited this area — read_doc to see the current state and retry.`;
 						return null;
@@ -167,10 +170,10 @@ export function buildToolDefinitions(): ToolDefinition[] {
 					}
 					appliedHits = hits;
 					const afterMd = replaceAll
-						? currentMd.split(old_string).join(new_string)
-						: currentMd.replace(old_string, () => new_string);
+						? currentMd.split(normOld).join(normNew)
+						: currentMd.replace(normOld, () => normNew);
 					return {
-						operation: { type: 'edit' as const, oldString: old_string, newString: new_string, ...(replaceAll ? { replaceAll: true } : {}) },
+						operation: { type: 'edit' as const, oldString: normOld, newString: normNew, ...(replaceAll ? { replaceAll: true } : {}) },
 						afterMd
 					};
 				});
@@ -256,11 +259,12 @@ export function buildToolDefinitions(): ToolDefinition[] {
 			execute: async (input) => {
 				const { path, content } = input as { path: string; content: string };
 				if (isScratchPath(path)) return toToolResult(writeScratch(path, content));
+				const normalized = normalizeTypography(content);
 				const opened = ensureWorkspaceTabOpen(path, { createIfMissing: true });
 				if (!opened.ok) return toToolResult(opened.error);
 				const result = await runTabWrite(opened.tabId, 'agent_write_doc', () => ({
-					operation: { type: 'write' as const, content },
-					afterMd: content
+					operation: { type: 'write' as const, content: normalized },
+					afterMd: normalized
 				}));
 				if ('error' in result) {
 					return { isError: true, content: [{ type: 'text' as const, text: `write_doc failed: ${result.error}` }] };
