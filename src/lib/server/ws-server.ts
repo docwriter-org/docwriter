@@ -27,6 +27,7 @@ import {
 	applyEditToFragment
 } from '$lib/shared/ydoc-codec';
 import { applyPendingReviewRound } from '$lib/review-rounds';
+import { touchLastSeen } from '$lib/server/last-seen';
 import {
 	appendUpdate,
 	replayUpdatesInto,
@@ -314,6 +315,8 @@ export async function acceptTabRounds(
 		const deltaBytes = Y.encodeStateAsUpdate(ydoc, beforeStateVector);
 		const yjsUpdate = Buffer.from(deltaBytes).toString('base64');
 
+		touchLastSeen(tabId, ydoc);
+
 		return { acceptedCount: accepted.length, rounds: remaining, yjsUpdate };
 	});
 }
@@ -343,6 +346,7 @@ export async function rejectTabRounds(
 			}, USER_ORIGIN);
 			const deltaBytes = Y.encodeStateAsUpdate(ydoc, beforeStateVector);
 			const yjsUpdate = Buffer.from(deltaBytes).toString('base64');
+			touchLastSeen(tabId, ydoc);
 			return { rejectedCount: current.length, rounds: [], yjsUpdate };
 		}
 		const idx = current.findIndex((r) => r.id === roundId);
@@ -354,6 +358,7 @@ export async function rejectTabRounds(
 		const remaining = current.slice(0, idx).concat(current.slice(idx + 1));
 		const deltaBytes = Y.encodeStateAsUpdate(ydoc, beforeStateVector);
 		const yjsUpdate = Buffer.from(deltaBytes).toString('base64');
+		touchLastSeen(tabId, ydoc);
 		return { rejectedCount: 1, rounds: remaining, yjsUpdate };
 	});
 }
