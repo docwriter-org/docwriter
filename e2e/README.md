@@ -19,15 +19,15 @@ env vars (desktop logins like `claude login` / Codex CLI auth do not work in CI)
 | **openai** | OpenAI Agents SDK (`@openai/agents`) | `OPENAI_API_KEY` | Yes | `gpt-5.4-mini` |
 | **codex** | Codex SDK (`@openai/codex-sdk`) | `CODEX_API_KEY` | Yes in CI | `gpt-5.4-mini` |
 | **cursor** | Cursor SDK (`@cursor/sdk`) | `CURSOR_API_KEY` | Yes | `composer-2.5` |
-| **pi** | Pi coding agent (`@earendil-works/pi-coding-agent`) | `ANTHROPIC_API_KEY` *or* `TOGETHER_API_KEY` | At least one | `anthropic/claude-haiku-3-5` |
+| **pi** | Pi coding agent (`@earendil-works/pi-coding-agent`) | `TOGETHER_API_KEY` | Yes in CI | `together/moonshotai/Kimi-K2.6` |
 
 Notes:
 
 - **Codex** is separate from the OpenAI provider. Locally it can use `~/.codex/auth.json`
   (ChatGPT login); in CI set `CODEX_API_KEY` (often the same key you use for the Codex CLI).
-- **Pi** routes models to many hosts. The default e2e model uses Anthropic via
-  `ANTHROPIC_API_KEY`. For Together-hosted models (e.g. Kimi K2.6), set
-  `TOGETHER_API_KEY` and `E2E_MODEL=together/moonshotai/Kimi-K2.6`.
+- **Pi** routes models to many hosts. The default e2e model is Kimi K2.6 on Together
+  (same as the in-app Pi default). Override with `E2E_MODEL` — e.g.
+  `E2E_MODEL=anthropic/claude-haiku-3-5` if you only have `ANTHROPIC_API_KEY`.
 - Avoid **Claude Opus 4.8** in CI — the bundled Claude Agent SDK currently errors on
   extended thinking for that model. Haiku / Sonnet are fine.
 
@@ -36,13 +36,15 @@ Notes:
 Add these as **repository secrets** (Settings → Secrets and variables → Actions):
 
 ```
-ANTHROPIC_API_KEY   # claude + pi (default model)
+ANTHROPIC_API_KEY   # claude
 OPENAI_API_KEY      # openai provider
 CODEX_API_KEY       # codex provider
 CURSOR_API_KEY      # cursor provider
+TOGETHER_API_KEY    # pi (default Kimi K2.6 model)
 ```
 
-`TOGETHER_API_KEY` is optional unless you point Pi at a Together model.
+`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` can also drive Pi if you
+set `E2E_MODEL` to a matching `provider/model` id.
 
 Fork PRs from outside collaborators do not receive secrets unless you enable
 **Settings → Actions → General → Fork pull request workflows** to pass secrets
