@@ -94,11 +94,31 @@ export class CursorProvider implements AgentProvider {
 	// orphan earlier turns in conversation_events / the transcript viewer.
 	private sessionId: string | null = null;
 
+	/** Drop cached agent state (e.g. after "New session" clears sessionId). */
+	private resetAgent(): void {
+		if (this.agent?.close) {
+			try {
+				this.agent.close();
+			} catch {
+				/* ignore */
+			}
+		}
+		this.agent = null;
+		this.agentModel = null;
+		this.sessionId = null;
+	}
+
 	async *query(
 		options: ProviderQueryOptions,
 		tools: ToolDefinition[]
 	): AsyncIterable<ProviderEvent> {
 		await loadCursorSdk();
+
+		// Runtime session was cleared (Restart / New session) but this provider
+		// instance still holds the prior Cursor agent — reuse would 409.
+		if (!options.sessionId && this.sessionId) {
+			this.resetAgent();
+		}
 
 		const allTools = tools.length > 0 ? tools : buildToolDefinitions();
 
@@ -125,12 +145,30 @@ export class CursorProvider implements AgentProvider {
 			? `${options.systemPrompt}\n\n${options.prompt}`
 			: options.prompt;
 
-		const run = await this.agent.send(fullPrompt);
-
 		if (!this.sessionId) {
 			this.sessionId = options.sessionId || `cursor-${randomUUID()}`;
 		}
 		yield { type: 'session', sessionId: this.sessionId };
+
+		let run: any;
+		try {
+			run = await this.agent.send(fullPrompt);
+		} catch {
+			// Stale/busy agent from a prior run — recreate once and retry.
+			this.resetAgent();
+			this.agent = await Agent.create({
+				apiKey: process.env.CURSOR_API_KEY,
+				model: { id: model },
+				local: {
+					cwd: WORKSPACE_ROOT,
+					customTools
+				}
+			});
+			this.agentModel = model;
+			this.sessionId = options.sessionId || `cursor-${randomUUID()}`;
+			yield { type: 'session', sessionId: this.sessionId };
+			run = await this.agent.send(fullPrompt);
+		}
 
 		let toolCallCounter = 0;
 		for await (const event of run.stream()) {
