@@ -64,8 +64,10 @@ npm run test:e2e
 E2E_PROVIDER=claude npm run test:e2e
 
 # Override model / timeout
-E2E_PROVIDER=openai E2E_MODEL=gpt-5.4-mini AGENT_TIMEOUT_MS=180000 npm run test:e2e
+E2E_PROVIDER=openai E2E_MODEL=gpt-5.4-mini AGENT_TIMEOUT_MS=90000 npm run test:e2e
 ```
+
+Default per-test timeout is **90s** (`AGENT_TIMEOUT_MS`). E2e runs use **balanced** agency so directive edits complete reliably.
 
 ## GitHub Actions
 

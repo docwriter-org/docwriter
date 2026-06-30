@@ -254,6 +254,12 @@ export class PiProvider implements AgentProvider {
 			: options.prompt;
 
 		let promptError: Error | null = null;
+		const onAbort = () => {
+			done = true;
+			if (resolveWait) resolveWait();
+		};
+		options.abortSignal?.addEventListener('abort', onAbort, { once: true });
+
 		const promptPromise = session.prompt(fullPrompt).catch((err: unknown) => {
 			promptError = err instanceof Error ? err : new Error(String(err));
 			done = true;
@@ -261,6 +267,10 @@ export class PiProvider implements AgentProvider {
 		});
 
 		while (!done) {
+			if (options.abortSignal?.aborted) {
+				promptError = new Error('Render aborted');
+				break;
+			}
 			if (events.length === 0) {
 				await new Promise<void>((r) => { resolveWait = r; });
 				resolveWait = null;
@@ -274,6 +284,7 @@ export class PiProvider implements AgentProvider {
 			yield events.shift()!;
 		}
 
+		options.abortSignal?.removeEventListener('abort', onAbort);
 		unsubscribe();
 		await promptPromise;
 		session.dispose();

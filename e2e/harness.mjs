@@ -45,7 +45,7 @@ Closing paragraph stays unchanged.
 `;
 
 export function agentTimeoutMs() {
-	return parseInt(process.env.AGENT_TIMEOUT_MS ?? '', 10) || 120_000;
+	return parseInt(process.env.AGENT_TIMEOUT_MS ?? '', 10) || 90_000;
 }
 
 export function modelForProvider(provider) {
@@ -137,6 +137,20 @@ export async function waitForKeyStatus(httpPort, provider, timeoutMs = 30_000) {
 		await sleep(500);
 	}
 	return null;
+}
+
+/** Balanced agency makes directive smoke tests complete faster and more reliably. */
+export async function configureE2eAgent(httpPort) {
+	const res = await fetch(`http://127.0.0.1:${httpPort}/api/document`, {
+		method: 'PUT',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({
+			meta: { agentSettings: { agency: 'balanced', muted: false } }
+		})
+	});
+	if (!res.ok) {
+		throw new Error(`configureE2eAgent failed: HTTP ${res.status}`);
+	}
 }
 
 /** Playwright init-script fn — must receive args via addInitScript(fn, args). */

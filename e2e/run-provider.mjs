@@ -13,6 +13,7 @@ import {
 	VIEWPORT,
 	agentTimeoutMs,
 	browserInitScript,
+	configureE2eAgent,
 	findFreePort,
 	hasProviderCredentials,
 	modelForProvider,
@@ -76,6 +77,7 @@ async function main() {
 		if (!keyStatus?.usable) {
 			throw new Error(`Provider ${provider} not usable according to /api/keys`);
 		}
+		await configureE2eAgent(httpPort);
 
 		browser = await chromium.launch({ headless: true });
 		const context = await browser.newContext({ viewport: VIEWPORT });
