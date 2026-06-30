@@ -231,10 +231,9 @@ export class CodexProvider implements AgentProvider {
 		await loadSdk();
 		if (!this.client) {
 			if (!Codex) throw new Error('Codex SDK failed to load.');
-			// Separate from the OpenAI provider: Codex uses CODEX_API_KEY, or
-			// (when unset) the Codex CLI's own login at ~/.codex/auth.json.
+			// Codex SDK: CODEX_API_KEY, else OPENAI_API_KEY, else Codex CLI login.
 			this.client = new Codex({
-				apiKey: process.env.CODEX_API_KEY || undefined
+				apiKey: process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY || undefined
 			});
 		}
 		return this.client;

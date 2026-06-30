@@ -1,0 +1,55 @@
+name: Provider e2e
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: provider-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Prefer glibc Claude Agent SDK binary
+        run: rm -rf node_modules/@anthropic-ai/claude-agent-sdk-linux-x64-musl
+      - run: npm run check
+
+  # One GitHub-hosted runner (container) per provider — fully isolated.
+  provider-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [claude, openai, codex, cursor, pi]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Prefer glibc Claude Agent SDK binary
+        run: rm -rf node_modules/@anthropic-ai/claude-agent-sdk-linux-x64-musl
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium --with-deps
+      - name: Provider smoke (${{ matrix.provider }})
+        env:
+          E2E_PROVIDER: ${{ matrix.provider }}
+          E2E_REQUIRE_CREDENTIALS: '1'
+          AGENT_TIMEOUT_MS: 90000
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
+        run: node e2e/run-provider.mjs

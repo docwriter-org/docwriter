@@ -26,7 +26,9 @@
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"docs": "cd docs && npx -y mintlify dev --port 3333",
-		"docs:screenshots": "node docs/capture-screenshots.mjs"
+		"docs:screenshots": "node docs/capture-screenshots.mjs",
+		"test:e2e": "node e2e/provider-smoke.mjs",
+		"test:e2e:provider": "node e2e/run-provider.mjs"
 	},
 	"devDependencies": {
 		"@sveltejs/adapter-node": "^5.5.4",
@@ -46,8 +48,8 @@
 		"@anthropic-ai/claude-agent-sdk": "^0.2.92",
 		"@anthropic-ai/sdk": "^0.81.0",
 		"@cursor/sdk": "^1.0.18",
-		"@earendil-works/pi-ai": "^0.78.1",
-		"@earendil-works/pi-coding-agent": "^0.78.1",
+		"@earendil-works/pi-ai": "^0.80.2",
+		"@earendil-works/pi-coding-agent": "^0.80.2",
 		"@hocuspocus/provider": "^3.4.4",
 		"@hocuspocus/server": "^3.4.4",
 		"@openai/agents": "^0.11.6",
