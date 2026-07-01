@@ -1,4 +1,7 @@
 import { get, writable } from 'svelte/store';
+import {
+	isHiddenClaudeModel
+} from '$lib/shared/claude-models';
 import type {
 	Rule,
 	Action,
@@ -278,11 +281,11 @@ export const AVAILABLE_PROVIDERS: ProviderOption[] = [
 /** Newest-first static list, shown immediately on load and used as the
  * fallback whenever the live Models API can't be reached. Mirrors the server
  * fallback in `/api/models`. */
-export const FALLBACK_MODELS: ModelOption[] = [
-	{ id: 'claude-opus-4-8', label: 'Claude Opus 4.8', provider: 'claude' },
+const ALL_FALLBACK_MODELS: ModelOption[] = [
+	{ id: 'claude-opus-4-8', label: 'Claude Opus 4.8 (1M context)', provider: 'claude' },
 	{ id: 'claude-opus-4-7', label: 'Claude Opus 4.7', provider: 'claude' },
 	{ id: 'claude-opus-4-6', label: 'Claude Opus 4.6', provider: 'claude' },
-	{ id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', provider: 'claude' },
+	{ id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6 (1M context)', provider: 'claude' },
 	{ id: 'claude-opus-4-5', label: 'Claude Opus 4.5', provider: 'claude' },
 	{ id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5', provider: 'claude' },
 	{ id: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5', provider: 'claude' },
@@ -317,6 +320,7 @@ export const FALLBACK_MODELS: ModelOption[] = [
 	{ id: 'ollama/llama3.1', label: 'Llama 3.1 (Ollama)', provider: 'pi' },
 	{ id: 'ollama/qwen3', label: 'Qwen 3 (Ollama)', provider: 'pi' }
 ];
+export const FALLBACK_MODELS: ModelOption[] = ALL_FALLBACK_MODELS;
 
 const SELECTED_MODEL_KEY = 'docwriter.selectedModel';
 const SELECTED_PROVIDER_KEY = 'docwriter.selectedProvider';
@@ -377,6 +381,7 @@ function addStoredSelections(models: ModelOption[]): ModelOption[] {
 	const seen = new Set(next.map(modelKey));
 	for (const [provider, id] of Object.entries(selectedModelsByProvider)) {
 		if (!AVAILABLE_PROVIDERS.some((p) => p.id === provider)) continue;
+		if (provider === 'claude' && isHiddenClaudeModel(id)) continue;
 		const option = { id, label: id, provider };
 		const key = modelKey(option);
 		if (!seen.has(key)) {
@@ -415,16 +420,23 @@ function persistProviderModel(provider: string, id: string) {
 export const availableModels = writable<ModelOption[]>(addStoredSelections(FALLBACK_MODELS));
 
 const initialModel =
-	selectedModelsByProvider[validProvider] ?? fallbackModelForProvider(validProvider);
+	selectedModelsByProvider[validProvider] &&
+	!(validProvider === 'claude' && isHiddenClaudeModel(selectedModelsByProvider[validProvider]))
+		? selectedModelsByProvider[validProvider]
+		: fallbackModelForProvider(validProvider);
 export const selectedModel = writable<string>(initialModel);
 export const selectedProvider = writable<string>(validProvider);
 
 export function setSelectedModel(id: string) {
+	const provider = get(selectedProvider);
+	if (provider === 'claude' && isHiddenClaudeModel(id)) return;
 	selectedModel.set(id);
-	persistProviderModel(get(selectedProvider), id);
+	persistProviderModel(provider, id);
 }
 
 export function setCustomModel(id: string, provider: string) {
+	if (!AVAILABLE_PROVIDERS.some((p) => p.id === provider)) return;
+	if (provider === 'claude' && isHiddenClaudeModel(id)) return;
 	let existing: ModelOption[] = [];
 	availableModels.subscribe((v) => (existing = v))();
 	if (!existing.some((m) => m.id === id && m.provider === provider)) {
@@ -445,7 +457,10 @@ export function setSelectedProvider(id: string) {
 
 function selectModelForProvider(provider: string) {
 	const preferred = selectedModelsByProvider[provider];
-	if (preferred) {
+	if (
+		preferred &&
+		!(provider === 'claude' && isHiddenClaudeModel(preferred))
+	) {
 		selectedModel.set(preferred);
 		persistProviderModel(provider, preferred);
 		availableModels.update(addStoredSelections);

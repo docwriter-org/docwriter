@@ -11,7 +11,7 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { WORKSPACE_ROOT } from '$lib/server/document-files';
+import { getEffectiveDocwriterDir, getEffectiveRoot } from '$lib/server/document-files';
 import type {
 	AgentProvider,
 	ProviderEvent,
@@ -223,26 +223,24 @@ function usageEvent(usage: unknown): ProviderEvent {
 
 export class CodexProvider implements AgentProvider {
 	readonly id = 'codex' as const;
-	private client: any = null;
-	private thread: any = null;
-	private threadId: string | null = null;
 
-	private async getClient(): Promise<any> {
+	private async createClient(): Promise<any> {
 		await loadSdk();
-		if (!this.client) {
-			if (!Codex) throw new Error('Codex SDK failed to load.');
-			// Codex SDK: CODEX_API_KEY, else OPENAI_API_KEY, else Codex CLI login.
-			this.client = new Codex({
-				apiKey: process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY || undefined
-			});
-		}
-		return this.client;
+		if (!Codex) throw new Error('Codex SDK failed to load.');
+		const codexHome = join(getEffectiveDocwriterDir(), 'codex');
+		await mkdir(codexHome, { recursive: true });
+		// Prefer CODEX_API_KEY, but allow OPENAI_API_KEY for CI and local setups
+		// where Codex uses the same OpenAI credential.
+		return new Codex({
+			apiKey: process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY || undefined,
+			env: { ...process.env, CODEX_HOME: codexHome }
+		});
 	}
 
 	private async getThread(options: ProviderQueryOptions): Promise<any> {
-		const client = await this.getClient();
+		const client = await this.createClient();
 		const threadOptions = {
-			workingDirectory: WORKSPACE_ROOT,
+			workingDirectory: getEffectiveRoot(),
 			skipGitRepoCheck: true,
 			sandboxMode: 'read-only',
 			approvalPolicy: 'never',
@@ -251,15 +249,9 @@ export class CodexProvider implements AgentProvider {
 			webSearchMode: options.allowedTools?.includes('WebSearch') ? 'live' : 'disabled'
 		};
 
-		if (options.sessionId && options.sessionId !== this.threadId) {
-			this.thread = client.resumeThread(options.sessionId, threadOptions);
-			this.threadId = options.sessionId;
-			return this.thread;
-		}
-		if (!this.thread) {
-			this.thread = client.startThread(threadOptions);
-		}
-		return this.thread;
+		return options.sessionId
+			? client.resumeThread(options.sessionId, threadOptions)
+			: client.startThread(threadOptions);
 	}
 
 	async *query(
@@ -271,9 +263,10 @@ export class CodexProvider implements AgentProvider {
 		const toolMap = new Map(availableTools.map((toolDef) => [toolDef.name, toolDef]));
 		const thread = await this.getThread(options);
 		const images = await materializeImages(options.images);
+		let threadId = options.sessionId ?? null;
 
-		if (this.threadId) {
-			yield { type: 'session', sessionId: this.threadId };
+		if (threadId) {
+			yield { type: 'session', sessionId: threadId };
 		}
 
 		try {
@@ -289,7 +282,7 @@ export class CodexProvider implements AgentProvider {
 
 				for await (const event of events) {
 					if (event.type === 'thread.started') {
-						this.threadId = event.thread_id;
+						threadId = event.thread_id;
 						yield { type: 'session', sessionId: event.thread_id };
 					} else if (event.type === 'item.completed') {
 						const item = event.item as any;

@@ -18,8 +18,21 @@ interface MarkdownTable {
 	readonly alignments: readonly ('left' | 'center' | 'right')[];
 }
 
+interface MarkdownCodeBlock {
+	readonly id: string;
+	readonly key: string;
+	readonly language: string;
+	readonly languageOffset: number;
+	readonly opening: LineRange;
+	readonly sourceLines: readonly LineRange[];
+	readonly closing: LineRange;
+	readonly markerChar: '`' | '~';
+	readonly markerLength: number;
+}
+
 interface MarkdownRenderState {
 	readonly tables: readonly MarkdownTable[];
+	readonly codeBlocks: readonly MarkdownCodeBlock[];
 	readonly expandedTableIds: ReadonlySet<string>;
 }
 
@@ -144,6 +157,77 @@ function scanTables(doc: PMNode): MarkdownTable[] {
 	return tables;
 }
 
+function scanCodeBlocks(doc: PMNode): MarkdownCodeBlock[] {
+	const out: MarkdownCodeBlock[] = [];
+	let pos = 0;
+	let inBlock = false;
+	let opening: LineRange | null = null;
+	let markerChar: '`' | '~' = '`';
+	let markerLength = 3;
+	let language = '';
+	let languageOffset = -1;
+	let sourceLines: LineRange[] = [];
+	let rawLines: string[] = [];
+	let blockIndex = 0;
+
+	for (let i = 0; i < doc.childCount; i += 1) {
+		const child = doc.child(i);
+		const childEnd = pos + child.nodeSize;
+		if (child.type.name === 'paragraph') {
+			const text = child.textContent;
+			if (!inBlock) {
+				const open = text.match(/^(\s*)(`{3,}|~{3,})\s*(.*?)\s*$/);
+				if (open) {
+					const rawLanguage = open[3].trim();
+					markerChar = open[2][0] as '`' | '~';
+					markerLength = open[2].length;
+					language = rawLanguage;
+					inBlock = true;
+					opening = { from: pos, to: childEnd };
+					languageOffset = rawLanguage
+						? text.indexOf(rawLanguage, open[1].length + markerLength)
+						: -1;
+					sourceLines = [];
+					rawLines = [text];
+				}
+			} else {
+				const closeRe =
+					markerChar === '`'
+						? new RegExp(`^\\s*\`{${markerLength},}\\s*$`)
+						: new RegExp(`^\\s*~{${markerLength},}\\s*$`);
+				if (closeRe.test(text)) {
+					rawLines.push(text);
+					if (opening) {
+						const id = `code:${blockIndex}`;
+						out.push({
+							id,
+							key: `${id}:${hashString(rawLines.join('\n'))}`,
+							language,
+							languageOffset,
+							opening,
+							sourceLines,
+							closing: { from: pos, to: childEnd },
+							markerChar,
+							markerLength
+						});
+						blockIndex += 1;
+					}
+					inBlock = false;
+					opening = null;
+					languageOffset = -1;
+					sourceLines = [];
+					rawLines = [];
+				} else {
+					sourceLines.push({ from: pos, to: childEnd });
+					rawLines.push(text);
+				}
+			}
+		}
+		pos = childEnd;
+	}
+	return out.filter((block) => block.language.trim().toLowerCase() !== 'd3');
+}
+
 function appendInlineMarkdown(parent: HTMLElement, text: string): void {
 	let i = 0;
 	while (i < text.length) {
@@ -253,9 +337,19 @@ function renderTableSourceToggle(table: MarkdownTable, expanded: boolean, view: 
 function buildDecorations(state: MarkdownRenderState, doc: PMNode): DecorationSet {
 	const decorations: Decoration[] = [];
 	const tableLineStarts = new Set<number>();
+	const codeLineStarts = new Set<number>();
+	const codeFenceStarts = new Set<number>();
+	const codeCoveredStarts = new Set<number>();
+
+	for (const block of state.codeBlocks) {
+		codeCoveredStarts.add(block.opening.from);
+		codeCoveredStarts.add(block.closing.from);
+		for (const line of block.sourceLines) codeCoveredStarts.add(line.from);
+	}
 
 	for (const table of state.tables) {
 		if (table.insertAt > doc.content.size) continue;
+		if (table.sourceLines.some((line) => codeCoveredStarts.has(line.from))) continue;
 		const expanded = state.expandedTableIds.has(table.id);
 		const firstLine = table.sourceLines[0];
 		if (firstLine) {
@@ -286,11 +380,60 @@ function buildDecorations(state: MarkdownRenderState, doc: PMNode): DecorationSe
 		);
 	}
 
+	for (const block of state.codeBlocks) {
+		const lang = block.language || 'code';
+		const openingTextStart = block.opening.from + 1;
+		const closingTextStart = block.closing.from + 1;
+		const firstSource = block.sourceLines[0];
+		const lastSource = block.sourceLines[block.sourceLines.length - 1];
+		codeFenceStarts.add(block.opening.from);
+		codeFenceStarts.add(block.closing.from);
+		decorations.push(
+			Decoration.node(block.opening.from, block.opening.to, {
+				class: 'md-code-fence md-code-fence-open',
+				'data-code-lang': lang
+			}),
+			Decoration.inline(openingTextStart, openingTextStart + block.markerLength, {
+				class: 'md-code-fence-marker'
+			})
+		);
+		if (block.language && block.languageOffset >= 0) {
+			decorations.push(
+				Decoration.inline(
+					openingTextStart + block.languageOffset,
+					openingTextStart + block.languageOffset + block.language.length,
+					{ class: 'md-code-lang' }
+				)
+			);
+		}
+		for (const line of block.sourceLines) {
+			codeLineStarts.add(line.from);
+			const classes = ['md-code-block-line'];
+			if (line === firstSource) classes.push('md-code-block-line-first');
+			if (line === lastSource) classes.push('md-code-block-line-last');
+			if (block.sourceLines.length === 1) classes.push('md-code-block-line-single');
+			decorations.push(
+				Decoration.node(line.from, line.to, {
+					class: classes.join(' ')
+				})
+			);
+		}
+		decorations.push(
+			Decoration.node(block.closing.from, block.closing.to, {
+				class: 'md-code-fence md-code-fence-close'
+			}),
+			Decoration.inline(closingTextStart, closingTextStart + block.markerLength, {
+				class: 'md-code-fence-marker'
+			})
+		);
+	}
+
 	doc.descendants((node, pos) => {
 		if (node.type.name !== 'paragraph') return;
 		const text = node.textContent;
 		if (!text) return;
 		const start = pos + 1;
+		if (codeLineStarts.has(pos) || codeFenceStarts.has(pos)) return false;
 		if (tableLineStarts.has(pos)) {
 			addInlineDecorations(text, start, decorations);
 			return false;
@@ -504,6 +647,7 @@ export const MarkdownRender = Extension.create({
 				state: {
 					init: (_config, instance): MarkdownRenderState => ({
 						tables: scanTables(instance.doc),
+						codeBlocks: scanCodeBlocks(instance.doc),
 						expandedTableIds: new Set()
 					}),
 					apply(tr, prev): MarkdownRenderState {
@@ -511,9 +655,11 @@ export const MarkdownRender = Extension.create({
 						let next = prev;
 						if (tr.docChanged) {
 							const tables = scanTables(tr.doc);
+							const codeBlocks = scanCodeBlocks(tr.doc);
 							const tableIds = new Set(tables.map((table) => table.id));
 							next = {
 								tables,
+								codeBlocks,
 								expandedTableIds: new Set(
 									Array.from(prev.expandedTableIds).filter((id) => tableIds.has(id))
 								)

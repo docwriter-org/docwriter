@@ -51,17 +51,29 @@
 	let createDraft = $state<{ parentPath: string; kind: 'file' | 'folder'; value: string } | null>(
 		null
 	);
+	let treeEl: HTMLDivElement | null = $state(null);
 	let createInput: HTMLInputElement | null = $state(null);
+	let treeError = $state('');
 
 	async function fetchEntries(path: string): Promise<FileEntry[]> {
-		const res = await fetch(`/api/files?path=${encodeURIComponent(path)}`);
-		if (!res.ok) return [];
+		const res = await fetch(`/api/files?path=${encodeURIComponent(path)}`, {
+			credentials: 'same-origin'
+		});
+		if (!res.ok) {
+			throw new Error(`Failed to load files (${res.status})`);
+		}
 		const data = await res.json();
 		return Array.isArray(data.entries) ? data.entries : [];
 	}
 
 	async function loadRoot() {
-		rootEntries = await fetchEntries('');
+		try {
+			rootEntries = await fetchEntries('');
+			treeError = '';
+		} catch (e) {
+			treeError = e instanceof Error ? e.message : String(e);
+			if (rootEntries === null) rootEntries = [];
+		}
 	}
 
 	function entryMetaFor(path: string) {
@@ -77,11 +89,16 @@
 			nodeState[entry.path] = { ...cur, expanded: false };
 			return;
 		}
-		// Opening: lazy-load if we haven't fetched yet.
-		nodeState[entry.path] = { ...cur, expanded: true, loading: !cur.children };
-		if (!cur.children) {
+		// Opening: re-fetch so transient auth failures or provider-side
+		// migrations cannot leave a folder cached as empty forever.
+		nodeState[entry.path] = { ...cur, expanded: true, loading: true };
+		try {
 			const kids = await fetchEntries(entry.path);
 			nodeState[entry.path] = { expanded: true, loading: false, children: kids };
+			treeError = '';
+		} catch (e) {
+			treeError = e instanceof Error ? e.message : String(e);
+			nodeState[entry.path] = { ...cur, expanded: true, loading: false };
 		}
 	}
 
@@ -104,13 +121,24 @@
 		const expandedPaths = Object.keys(nodeState).filter(
 			(p) => p !== '' && nodeState[p]?.expanded
 		);
-		rootEntries = await fetchEntries('');
+		try {
+			rootEntries = await fetchEntries('');
+			treeError = '';
+		} catch (e) {
+			treeError = e instanceof Error ? e.message : String(e);
+		}
 		await Promise.all(
 			expandedPaths.map(async (p) => {
 				const cur = nodeState[p];
 				if (!cur) return;
-				const kids = await fetchEntries(p);
-				nodeState[p] = { ...cur, children: kids, loading: false };
+				try {
+					const kids = await fetchEntries(p);
+					nodeState[p] = { ...cur, children: kids, loading: false };
+					treeError = '';
+				} catch (e) {
+					treeError = e instanceof Error ? e.message : String(e);
+					nodeState[p] = { ...cur, loading: false };
+				}
 			})
 		);
 	}
@@ -169,19 +197,42 @@
 		};
 	});
 
+	$effect(() => {
+		function onDocumentMouseDown(e: MouseEvent) {
+			const target = e.target as Element | null;
+			if (!target) return;
+			if (treeEl?.contains(target)) return;
+			if (target.closest('.file-tree-menu')) return;
+			selectedPath = null;
+		}
+		document.addEventListener('mousedown', onDocumentMouseDown);
+		return () => document.removeEventListener('mousedown', onDocumentMouseDown);
+	});
+
 	/** Reload the children of a folder that's already expanded. Used after
 	 * create/rename/delete inside that folder. Finds the deepest cached
 	 * ancestor of `path` and re-fetches its children. */
 	async function refreshFolder(folderPath: string) {
 		if (folderPath === '') {
-			rootEntries = await fetchEntries('');
+			try {
+				rootEntries = await fetchEntries('');
+				treeError = '';
+			} catch (e) {
+				treeError = e instanceof Error ? e.message : String(e);
+			}
 			return;
 		}
 		const state = nodeState[folderPath];
 		if (state?.expanded) {
 			nodeState[folderPath] = { ...state, loading: true };
-			const kids = await fetchEntries(folderPath);
-			nodeState[folderPath] = { expanded: true, loading: false, children: kids };
+			try {
+				const kids = await fetchEntries(folderPath);
+				nodeState[folderPath] = { expanded: true, loading: false, children: kids };
+				treeError = '';
+			} catch (e) {
+				treeError = e instanceof Error ? e.message : String(e);
+				nodeState[folderPath] = { ...state, loading: false };
+			}
 		}
 	}
 
@@ -443,6 +494,7 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
+	bind:this={treeEl}
 	class="file-tree"
 	onmousedown={onTreePointerDown}
 	ondragover={onDragOverRoot}
@@ -464,6 +516,9 @@
 			</button>
 		</div>
 	</div>
+	{#if treeError}
+		<div class="tree-error">{treeError}</div>
+	{/if}
 	{#if rootEntries === null}
 		<div class="tree-empty">Loading…</div>
 	{:else if rootEntries.length === 0}
@@ -675,6 +730,16 @@
 		font-size: 12px;
 		padding: 2px 4px;
 	}
+	.tree-error {
+		margin: 2px 0 6px;
+		padding: 6px 8px;
+		border: 1px solid #f0c9c1;
+		border-radius: 6px;
+		background: #fff7f5;
+		color: #9d2d20;
+		font-size: 12px;
+		line-height: 1.35;
+	}
 	.tree-empty.indented {
 		padding-top: 2px;
 		padding-bottom: 4px;
@@ -698,9 +763,18 @@
 	.tree-row:hover {
 		background: var(--bg-hover);
 	}
-	.tree-row.selected {
+	.tree-row.internal:not(.active):not(:hover) {
+		color: var(--text-faint);
+		opacity: 0.72;
+	}
+	.tree-row.selected:not(.internal) {
 		background: var(--bg-hover);
 		color: var(--text);
+	}
+	.tree-row.selected.internal:hover {
+		background: var(--bg-hover);
+		color: var(--text);
+		opacity: 1;
 	}
 	.tree-row.active {
 		background: var(--accent-bg);

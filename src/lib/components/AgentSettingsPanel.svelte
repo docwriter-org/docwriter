@@ -2,36 +2,54 @@
 	import { agentSettings } from '$lib/stores';
 	import type { AgentSettings } from '$lib/types';
 
+	type Agency = AgentSettings['agency'];
+	type SettingsChange = { type: 'agency'; from: Agency; to: Agency };
+
 	interface Props {
-		onSettingsChange: (s: AgentSettings) => void;
+		onSettingsChange: (s: AgentSettings, change?: SettingsChange) => void | Promise<void>;
 	}
 	let { onSettingsChange }: Props = $props();
 
 	let settings: AgentSettings = $state({ agency: 'conservative', muted: false });
+	let previewAgency: Agency | null = $state(null);
 	agentSettings.subscribe((v) => (settings = v));
 
-	function updateSettings(patch: Partial<AgentSettings>) {
+	async function updateSettings(patch: Partial<AgentSettings>, change?: SettingsChange) {
 		const next: AgentSettings = { ...settings, ...patch };
 		agentSettings.set(next);
-		onSettingsChange(next);
+		await onSettingsChange(next, change);
 	}
 
 	// Keep internal `agency` name (matches AgentSettings type and AI
 	// literature) but surface "autonomy" in the UI — reads more naturally
 	// for writers.
-	const autonomyButtonLabels: Record<AgentSettings['agency'], string> = {
-		conservative: 'Low',
-		balanced: 'Medium',
-		aggressive: 'High'
+	const autonomyLevels: Agency[] = ['conservative', 'balanced', 'aggressive'];
+	const autonomyCopy: Record<Agency, { label: string; description: string }> = {
+		conservative: {
+			label: 'Low',
+			description:
+				'The agent acts only when you ask it to, or when something is clearly broken.'
+		},
+		balanced: {
+			label: 'Medium',
+			description:
+				'The agent can proactively create new comment threads. It does not make edits unless you ask.'
+		},
+		aggressive: {
+			label: 'High',
+			description:
+				'The agent can proactively create new comment threads and propose edits when it sees a useful improvement.'
+		}
 	};
-	const autonomyDescription: Record<AgentSettings['agency'], string> = {
-		conservative:
-			'The agent edits only when you ask it to, or when it finds an obvious typo or broken sentence. It will ignore prose that seems fine, even if it could be better.',
-		balanced:
-			'The agent will make one focused edit per round if it spots a clear problem — a clunky sentence, a confusing pronoun, a missing piece you asked for. It will not rewrite prose that is already working.',
-		aggressive:
-			'The agent actively looks for ways to improve the draft each round: tighten wordy passages, strengthen weak verbs, smooth out flow. It tries to preserve your voice but will not wait for permission.'
-	};
+	const visibleAgency = $derived(previewAgency ?? settings.agency);
+
+	function selectAgency(level: Agency) {
+		if (settings.agency === level) return;
+		void updateSettings(
+			{ agency: level },
+			{ type: 'agency', from: settings.agency, to: level }
+		);
+	}
 </script>
 
 <div class="settings-panel" role="dialog">
@@ -42,20 +60,26 @@
 	<div class="settings-section">
 		<div class="setting-label">Autonomy</div>
 		<div class="setting-hint">
-			How willing the agent is to edit on its own initiative.
+			How willing the agent is to edit on its own initiative. Hover an option to preview it. Click to change it.
 		</div>
 		<div class="agency-slider">
-			{#each ['conservative', 'balanced', 'aggressive'] as level}
+			{#each autonomyLevels as level}
 				<button
 					class="agency-btn"
 					class:active={settings.agency === level}
-					onclick={() => updateSettings({ agency: level as AgentSettings['agency'] })}
+					type="button"
+					aria-pressed={settings.agency === level}
+					onmouseenter={() => (previewAgency = level)}
+					onmouseleave={() => (previewAgency = null)}
+					onfocus={() => (previewAgency = level)}
+					onblur={() => (previewAgency = null)}
+					onclick={() => selectAgency(level)}
 				>
-					{autonomyButtonLabels[level as AgentSettings['agency']]}
+					{autonomyCopy[level].label}
 				</button>
 			{/each}
 		</div>
-		<div class="setting-detail">{autonomyDescription[settings.agency]}</div>
+		<div class="setting-detail">{autonomyCopy[visibleAgency].description}</div>
 	</div>
 
 </div>

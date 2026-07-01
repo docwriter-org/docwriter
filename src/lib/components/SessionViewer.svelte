@@ -28,8 +28,9 @@
 
 	interface Props {
 		onClose: () => void;
+		sessionId?: string | null;
 	}
-	let { onClose }: Props = $props();
+	let { onClose, sessionId: requestedSessionId = null }: Props = $props();
 
 	// ── Data model ────────────────────────────────────────────────────────────
 
@@ -61,6 +62,7 @@
 	type HistoryResponse = {
 		sessionId?: string | null;
 		raw?: unknown[];
+		rawFormat?: 'provider_native' | 'conversation_events';
 		messages?: unknown[];
 		systemPrompt?: string | null;
 		provider?: string | null;
@@ -83,7 +85,7 @@
 	};
 
 	let events = $state<SessionEvent[]>([]);
-	let sessionId = $state('');
+	let loadedSessionId = $state('');
 	let providerId = $state('claude');
 	let modelId = $state('');
 	let rawHistory = $state<unknown[]>([]);
@@ -269,7 +271,7 @@
 
 	function suggestedExportFilename(): string {
 		const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
-		const id = sessionId ? sessionId.slice(0, 12) : 'session';
+		const id = loadedSessionId ? loadedSessionId.slice(0, 12) : 'session';
 		return `docwriter-transcript-${safeFilePart(id)}-${stamp}.json`;
 	}
 
@@ -279,7 +281,7 @@
 			schema: 'docwriter.sessionTranscript.v1',
 			exportedAt: new Date().toISOString(),
 			session: {
-				id: sessionId || null,
+				id: loadedSessionId || null,
 				provider: providerId,
 				model: modelDisplay || null,
 				assistantLabel
@@ -373,9 +375,12 @@
 	onMount(async () => {
 		void fetchRules();
 		try {
-			const res = await fetch('/api/history');
+			const historyUrl = requestedSessionId
+				? `/api/history?session=${encodeURIComponent(requestedSessionId)}`
+				: '/api/history';
+			const res = await fetch(historyUrl);
 			const data = (await res.json()) as HistoryResponse;
-			sessionId = data.sessionId ?? '';
+			loadedSessionId = data.sessionId ?? '';
 			systemPrompt = typeof data.systemPrompt === 'string' ? data.systemPrompt : null;
 			// Prefer raw JSONL entries (direct file read, complete).
 			// Fall back to the SDK-wrapped `messages` array if raw is absent.
@@ -386,12 +391,12 @@
 			const raw = rawHistory;
 			const messages = sdkMessages;
 			const provider = providerId;
+			const rawFormat = data.rawFormat ?? (provider === 'claude' ? 'provider_native' : 'conversation_events');
 			assistantLabel = PROVIDER_LABELS[provider] ?? 'Assistant';
-			// Non-Claude providers persist DocWriter's own SSE event payloads
-			// (type: 'tool_call' | 'assistant_text' | …) rather than the Claude
-			// SDK's JSONL message shape, so they need their own parser.
+			// DocWriter's own conversation_events payloads use SSE event
+			// shapes. Provider-native Claude transcripts use Claude JSONL.
 			const parsed =
-				provider !== 'claude'
+				rawFormat === 'conversation_events'
 					? parseProviderEvents(raw)
 					: raw.length > 0
 						? parseRaw(raw)
@@ -710,8 +715,8 @@
 		<div class="topbar">
 			<div class="topbar-left">
 				<span class="topbar-title">Session transcript</span>
-				{#if sessionId}
-					<span class="topbar-sub" title={sessionId}>{sessionId.slice(0,8)}…</span>
+				{#if loadedSessionId}
+					<span class="topbar-sub" title={loadedSessionId}>{loadedSessionId.slice(0,8)}…</span>
 				{/if}
 				<button class="expand-all-btn" onclick={toggleExpandAll} title={allExpanded ? 'Collapse all' : 'Expand all tool calls'}>
 					{allExpanded ? 'Collapse all' : 'Expand all'}

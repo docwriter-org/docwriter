@@ -1,12 +1,16 @@
 import { json } from '@sveltejs/kit';
-import { createReadStream } from 'node:fs';
-import { createInterface } from 'node:readline';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
-import { existsSync } from 'node:fs';
 import type { RequestHandler } from './$types';
 import { getSessionId, getLastSystemPrompt } from '$lib/server/runtime-state';
-import { kvGet, dbGetConversationEvents } from '$lib/server/db-writes';
+import {
+	kvGet,
+	dbGetConversationEvents,
+	dbGetConversationSessionSummary
+} from '$lib/server/db-writes';
+import { getEffectiveRoot } from '$lib/server/document-files';
+import {
+	createProviderSessionStore,
+	loadProviderSessionEntries
+} from '$lib/server/provider-session-store';
 
 let _getSessionMessages: ((id: string, opts: any) => Promise<any>) | null = null;
 async function loadGetSessionMessages() {
@@ -20,83 +24,98 @@ async function loadGetSessionMessages() {
 	}
 }
 
-function encodeProjectPath(absPath: string): string {
-	return absPath.replace(/[^a-zA-Z0-9]/g, '-');
-}
-
-export const GET: RequestHandler = async () => {
+export const GET: RequestHandler = async ({ url }) => {
 	const systemPrompt = getLastSystemPrompt();
-	const sessionId = getSessionId();
-	const provider = kvGet('provider') || 'claude';
-	const model = kvGet('model') || null;
+	const requestedSessionId = url.searchParams.get('session');
+	const sessionId = requestedSessionId || getSessionId();
+	const requestedSummary = requestedSessionId
+		? dbGetConversationSessionSummary(requestedSessionId)
+		: null;
+	const provider = requestedSummary?.provider || kvGet('provider') || 'claude';
+	const model = requestedSummary?.model || kvGet('model') || null;
 
-	if (!sessionId) return json({ sessionId: null, raw: [], messages: [], systemPrompt, provider, model });
+	if (!sessionId) {
+		return json({
+			sessionId: null,
+			raw: [],
+			rawFormat: 'conversation_events',
+			messages: [],
+			systemPrompt,
+			provider,
+			model
+		});
+	}
+	const activeSessionId = sessionId;
 
-	// Non-Claude providers: load from the conversation_events DB table.
-	if (provider !== 'claude') {
-		const events = dbGetConversationEvents(sessionId);
+	function conversationEventsPayload() {
+		const events = dbGetConversationEvents(activeSessionId);
 		const raw = events.map((e) => {
 			try { return JSON.parse(e.data); } catch { return null; }
 		}).filter(Boolean);
-		return json({ sessionId, raw, messages: [], systemPrompt, provider, model });
+		return raw;
 	}
 
-	// Claude: try the direct JSONL path first.
-	const encodedCwd = encodeProjectPath(process.cwd());
-	const jsonlPath = join(homedir(), '.claude', 'projects', encodedCwd, `${sessionId}.jsonl`);
-
-	if (existsSync(jsonlPath)) {
-		try {
-			const raw = await readJsonlFile(jsonlPath);
-			return json({ sessionId, raw, systemPrompt, provider, model });
-		} catch (e) {
-			console.error('[history] raw JSONL read failed:', e);
-		}
+	// Non-Claude providers: load from the conversation_events DB table.
+	if (provider !== 'claude') {
+		return json({
+			sessionId,
+			raw: conversationEventsPayload(),
+			rawFormat: 'conversation_events',
+			messages: [],
+			systemPrompt,
+			provider,
+			model
+		});
 	}
 
-	// Fallback: SDK wrapper.
+	// Claude: read from the provider-native SessionStore mirror in SQLite.
+	// Local JSONL is just the SDK's write-through implementation detail, not
+	// our durable source.
+	const raw = loadProviderSessionEntries('claude', activeSessionId);
+	if (raw.length > 0) {
+		return json({
+			sessionId,
+			raw,
+			rawFormat: 'provider_native',
+			messages: [],
+			systemPrompt,
+			provider,
+			model
+		});
+	}
+
+	const workspaceRoot = getEffectiveRoot();
 	try {
 		const getSessionMessages = await loadGetSessionMessages();
 		if (getSessionMessages) {
 			const messages = await getSessionMessages(sessionId, {
-				dir: process.cwd(),
-				limit: 500
+				dir: workspaceRoot,
+				limit: 500,
+				sessionStore: createProviderSessionStore('claude')
 			});
-			return json({ sessionId, raw: [], messages, systemPrompt, provider, model });
+			if (Array.isArray(messages) && messages.length > 0) {
+				return json({
+					sessionId,
+					raw: [],
+					rawFormat: 'provider_native',
+					messages,
+					systemPrompt,
+					provider,
+					model
+				});
+			}
 		}
 	} catch (e) {
 		console.error('[history] getSessionMessages failed:', e);
 	}
 
-	// Final fallback: check conversation_events anyway (maybe provider was switched)
-	const events = dbGetConversationEvents(sessionId);
-	if (events.length > 0) {
-		const raw = events.map((e) => {
-			try { return JSON.parse(e.data); } catch { return null; }
-		}).filter(Boolean);
-		return json({ sessionId, raw, messages: [], systemPrompt, provider, model });
-	}
-
-	return json({ sessionId, raw: [], messages: [], systemPrompt, provider, model });
-};
-
-function readJsonlFile(filePath: string): Promise<unknown[]> {
-	return new Promise((resolve, reject) => {
-		const entries: unknown[] = [];
-		const rl = createInterface({
-			input: createReadStream(filePath, { encoding: 'utf8' }),
-			crlfDelay: Infinity
-		});
-		rl.on('line', (line) => {
-			const trimmed = line.trim();
-			if (!trimmed) return;
-			try {
-				entries.push(JSON.parse(trimmed));
-			} catch {
-				// Skip malformed lines
-			}
-		});
-		rl.on('close', () => resolve(entries));
-		rl.on('error', reject);
+	return json({
+		sessionId,
+		raw: conversationEventsPayload(),
+		rawFormat: 'conversation_events',
+		messages: [],
+		systemPrompt,
+		provider,
+		model
 	});
-}
+};
