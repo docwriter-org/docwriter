@@ -1,6 +1,8 @@
 import { redirect } from '@sveltejs/kit';
 import { IS_HOSTED_LANDING } from '$lib/server/deploy-mode';
 
+export const prerender = IS_HOSTED_LANDING;
+
 const PLAIN_WRITING_SKILL_REPO = 'shreyashankar/plain-writing-skill';
 
 async function fetchPlainWritingStars(): Promise<number | null> {
