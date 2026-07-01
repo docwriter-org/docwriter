@@ -19,11 +19,14 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
       - name: Merge main into landing
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin main landing
           git checkout landing
-          git merge origin/main -m "chore: merge main into landing"
+          node scripts/merge-main-into-landing.mjs
           git push origin landing
