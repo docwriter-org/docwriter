@@ -3,11 +3,18 @@
  * Merge origin/main into the current (landing) branch for CI.
  * Resolves recurring package.json conflicts by unioning landing-only
  * scripts/deps with main's updates, then regenerates package-lock.json.
+ * CI-owned files on main always win (merge script + sync workflow).
  */
 import { execSync } from 'node:child_process';
 import { unlinkSync, writeFileSync } from 'node:fs';
 
 const MERGE_MSG = 'chore: merge main into landing';
+
+/** Files maintained on main; landing should not fork these. */
+const MAIN_OWNED = new Set([
+	'scripts/merge-main-into-landing.mjs',
+	'.github/workflows/sync-landing.yml'
+]);
 
 function run(cmd, { inherit = false } = {}) {
 	return execSync(cmd, {
@@ -35,11 +42,21 @@ function mergePackageJson() {
 	writeFileSync('package.json', `${JSON.stringify(merged, null, '\t')}\n`);
 }
 
-function isPackageConflictOnly(conflicts) {
+function isAutoResolvable(conflicts) {
 	return (
 		conflicts.length > 0 &&
-		conflicts.every((f) => f === 'package.json' || f === 'package-lock.json')
+		conflicts.every(
+			(f) => f === 'package.json' || f === 'package-lock.json' || MAIN_OWNED.has(f)
+		)
 	);
+}
+
+function resolveMainOwned(conflicts) {
+	for (const file of conflicts) {
+		if (!MAIN_OWNED.has(file)) continue;
+		run(`git checkout --theirs -- ${file}`);
+		run(`git add ${file}`);
+	}
 }
 
 execSync('git fetch origin main landing', { stdio: 'inherit' });
@@ -48,20 +65,25 @@ try {
 	run(`git merge origin/main -m "${MERGE_MSG}"`, { inherit: true });
 } catch {
 	const conflicts = unmergedFiles();
-	if (!isPackageConflictOnly(conflicts)) {
+	if (!isAutoResolvable(conflicts)) {
 		console.error('Unhandled merge conflict(s):', conflicts.join(', ') || '(none)');
 		process.exit(1);
 	}
 
-	mergePackageJson();
-	try {
-		unlinkSync('package-lock.json');
-	} catch {
-		/* already absent */
+	resolveMainOwned(conflicts);
+
+	if (conflicts.some((f) => f === 'package.json' || f === 'package-lock.json')) {
+		mergePackageJson();
+		try {
+			unlinkSync('package-lock.json');
+		} catch {
+			/* already absent */
+		}
+		run('git add package.json');
+		run('git rm -f --cached package-lock.json 2>/dev/null || true');
+		run('npm install', { inherit: true });
+		run('git add package.json package-lock.json');
 	}
-	run('git add package.json');
-	run('git rm -f --cached package-lock.json 2>/dev/null || true');
-	run('npm install', { inherit: true });
-	run('git add package.json package-lock.json');
+
 	run(`git commit -m "${MERGE_MSG}"`, { inherit: true });
 }
