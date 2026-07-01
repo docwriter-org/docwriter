@@ -6,36 +6,88 @@
 
 	let signInHost = $state<HTMLDivElement>();
 	let clerk: ClerkType | null = null;
+	let unlisten: (() => void) | null = null;
 	let errorMessage = $state('');
 	let infoMessage = $state('');
 
-	function redirectTarget(): string {
-		const url = new URL(location.href);
-		const requested = url.searchParams.get('redirect_url');
-		if (!requested) return '/welcome';
-		try {
-			const target = new URL(requested, location.origin);
-			if (target.origin !== location.origin) return '/welcome';
-			return `${target.pathname}${target.search}${target.hash}` || '/welcome';
-		} catch {
-			return '/welcome';
+	const CLERK_TRANSIENT_PARAMS = [
+		'__clerk_handshake',
+		'__clerk_handshake_nonce',
+		'__clerk_help'
+	];
+
+	function defaultRedirectTarget(): string {
+		return env.PUBLIC_DOCWRITER_HOSTED === '1' ? '/' : '/welcome';
+	}
+
+	function forceRedirectTarget(): string | null {
+		return env.PUBLIC_DOCWRITER_HOSTED === '1' ? '/' : null;
+	}
+
+	function stripClerkTransientParams(url: URL): void {
+		for (const param of CLERK_TRANSIENT_PARAMS) {
+			url.searchParams.delete(param);
 		}
 	}
 
-	async function ensureAuthorized(clerkInstance: ClerkType): Promise<boolean> {
+	function localRedirectPath(value: string | null | undefined, fallback: string): string {
+		if (!value) return fallback;
+		try {
+			const target = new URL(value, location.origin);
+			if (target.origin !== location.origin) return fallback;
+			stripClerkTransientParams(target);
+			return `${target.pathname}${target.search}${target.hash}` || fallback;
+		} catch {
+			return fallback;
+		}
+	}
+
+	function redirectTarget(fallback: string): string {
+		const url = new URL(location.href);
+		const requested = url.searchParams.get('redirect_url');
+		return localRedirectPath(requested, fallback);
+	}
+
+	function redirectConfig() {
+		const fallback = defaultRedirectTarget();
+		const force = forceRedirectTarget();
+		return {
+			target: force ?? redirectTarget(fallback),
+			forceRedirectUrl: force,
+			fallbackRedirectUrl: fallback
+		};
+	}
+
+	type AuthorizationState = 'authorized' | 'signed-out' | 'forbidden';
+
+	async function authorizationState(clerkInstance: ClerkType): Promise<AuthorizationState> {
 		const res = await fetch('/api/auth/status');
-		if (!res.ok) return false;
+		if (!res.ok) return 'signed-out';
 		const body = (await res.json()) as { authenticated?: boolean; authorized?: boolean };
 		if (body.authenticated && !body.authorized) {
 			await clerkInstance.signOut();
 			errorMessage = 'This login is only for invited user study participants.';
-			return false;
+			return 'forbidden';
 		}
-		return body.authorized === true;
+		if (body.authorized === true) return 'authorized';
+		return 'signed-out';
+	}
+
+	function mountSignIn(config: ReturnType<typeof redirectConfig>): void {
+		if (!signInHost || !clerk) return;
+		clerk.mountSignIn(signInHost, {
+			fallbackRedirectUrl: config.fallbackRedirectUrl,
+			forceRedirectUrl: config.forceRedirectUrl,
+			routing: 'hash',
+			signUpFallbackRedirectUrl: config.fallbackRedirectUrl,
+			signUpForceRedirectUrl: config.forceRedirectUrl,
+			signUpUrl: '/sign-in'
+		});
 	}
 
 	onMount(async () => {
-		if (new URL(location.href).searchParams.get('denied') === '1') {
+		const url = new URL(location.href);
+		if (url.searchParams.get('denied') === '1') {
 			infoMessage = 'That account is not on the invite list for this study.';
 		}
 
@@ -46,28 +98,22 @@
 
 		try {
 			clerk = await createBrowserClerk(env.PUBLIC_CLERK_PUBLISHABLE_KEY);
-			const target = redirectTarget();
+			const config = redirectConfig();
 
 			if (clerk.user) {
-				if (await ensureAuthorized(clerk)) {
-					location.href = target;
+				if ((await authorizationState(clerk)) === 'authorized') {
+					location.href = config.target;
+					return;
 				}
-				return;
+				await clerk.signOut().catch(() => undefined);
 			}
 
-			if (signInHost) {
-				clerk.mountSignIn(signInHost, {
-					fallbackRedirectUrl: target,
-					forceRedirectUrl: target,
-					routing: 'hash',
-					signUpUrl: '/sign-in'
-				});
-			}
+			mountSignIn(config);
 
-			clerk.addListener(async (resources) => {
+			unlisten = clerk.addListener(async (resources) => {
 				if (!resources.user || !clerk) return;
-				if (await ensureAuthorized(clerk)) {
-					location.href = target;
+				if ((await authorizationState(clerk)) === 'authorized') {
+					location.href = config.target;
 				}
 			});
 		} catch (err) {
@@ -76,6 +122,7 @@
 	});
 
 	onDestroy(() => {
+		unlisten?.();
 		if (clerk && signInHost) clerk.unmountSignIn(signInHost);
 	});
 </script>
@@ -87,7 +134,7 @@
 <main class="auth-page">
 	<section class="auth-shell" aria-label="User study sign-in">
 		<div class="brand">
-			<div class="mark">D</div>
+			<img class="mark" src="/docwriter-mark.svg" alt="" />
 			<div>
 				<h1>DocWriter</h1>
 				<p>Sign in for the private user study.</p>
@@ -137,14 +184,8 @@
 	.mark {
 		width: 44px;
 		height: 44px;
-		display: grid;
-		place-items: center;
 		border-radius: 8px;
-		background: #1a1a1a;
-		color: white;
-		font-weight: 700;
-		font-size: 20px;
-		font-family: 'Lora', Georgia, serif;
+		display: block;
 	}
 
 	h1,

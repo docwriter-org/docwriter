@@ -1,5 +1,7 @@
 import { getDb } from '$lib/server/db';
 import { getEffectiveRoot } from '$lib/server/document-files';
+import { getCurrentUserId, runWithUser } from '$lib/server/request-context';
+import { isMultiTenant } from '$lib/server/workspace';
 
 type ListResult<T> = { items: readonly T[]; nextCursor?: string };
 type CursorRecord = Record<string, any>;
@@ -41,13 +43,15 @@ function seqForOffset(offset: string | null | undefined): number {
 
 export class DocWriterCursorLocalAgentStore {
 	private readonly projectKey: string;
+	private readonly boundUserId: string | null;
 
 	constructor() {
+		this.boundUserId = isMultiTenant() ? getCurrentUserId() : null;
 		this.projectKey = getEffectiveRoot();
 	}
 
 	private withContext<T>(fn: () => T): T {
-		return fn();
+		return this.boundUserId ? runWithUser(this.boundUserId, fn) : fn();
 	}
 
 	private getLatest(subpath: string): CursorRecord | null {

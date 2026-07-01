@@ -41,17 +41,21 @@ if (!IS_HOSTED_LANDING) {
 	// settingSource. Idempotent — only overwrites the built-in skill files.
 	installBundledSkills();
 
-	// Start the Hocuspocus WebSocket Y.Doc sync server on a separate port
-	// alongside Vite's HTTP server. Module-scope singleton guard keeps Vite
-	// HMR (which re-executes this file on save) from double-binding.
+	// In hosted mode, single-port WS and Clerk auth are implied.
+	const hosted = process.env.DOCWRITER_HOSTED === '1';
+	const singlePort = hosted || process.env.SINGLE_PORT_WS === '1';
 	const WS_PORT = parseInt(process.env.DOCWRITER_WS_PORT ?? '', 10) || 3001;
 	let wsServer: ReturnType<typeof createWsServer> | null = (globalThis as unknown as { __docwriterWsServer?: ReturnType<typeof createWsServer> }).__docwriterWsServer ?? null;
 	if (!wsServer) {
 		try {
 			wsServer = createWsServer(WS_PORT);
-			wsServer.listen();
+			if (!singlePort) {
+				wsServer.listen();
+				console.log(`[docwriter] Y.Doc sync listening on ws://localhost:${WS_PORT}`);
+			} else {
+				console.log(`[docwriter] Y.Doc sync ready (single-port mode)`);
+			}
 			(globalThis as unknown as { __docwriterWsServer?: ReturnType<typeof createWsServer> }).__docwriterWsServer = wsServer;
-			console.log(`[docwriter] Y.Doc sync listening on ws://localhost:${WS_PORT}`);
 		} catch (err) {
 			console.error('[docwriter] failed to start Y.Doc WebSocket server:', err);
 		}

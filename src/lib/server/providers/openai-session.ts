@@ -1,5 +1,7 @@
 import { getDb } from '$lib/server/db';
 import { getEffectiveRoot } from '$lib/server/document-files';
+import { getCurrentUserId, runWithUser } from '$lib/server/request-context';
+import { isMultiTenant } from '$lib/server/workspace';
 
 type AgentInputItem = Record<string, any>;
 type SessionHistoryMutation = {
@@ -38,14 +40,16 @@ function callIdForItem(item: AgentInputItem): string | null {
 export class DocWriterOpenAISession {
 	private readonly sessionId: string;
 	private readonly projectKey: string;
+	private readonly boundUserId: string | null;
 
 	constructor(sessionId: string) {
 		this.sessionId = sessionId;
+		this.boundUserId = isMultiTenant() ? getCurrentUserId() : null;
 		this.projectKey = getEffectiveRoot();
 	}
 
 	private withContext<T>(fn: () => T): T {
-		return fn();
+		return this.boundUserId ? runWithUser(this.boundUserId, fn) : fn();
 	}
 
 	async getSessionId(): Promise<string> {

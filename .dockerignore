@@ -1,0 +1,26 @@
+.git
+node_modules
+
+# Build outputs
+build
+.svelte-kit
+.output
+.vercel
+.netlify
+.wrangler
+
+# Local state and secrets
+.docwriter
+.env
+.env.*
+!.env.example
+!.env.test
+
+# Local editor/test artifacts
+.DS_Store
+Thumbs.db
+test-results
+playwright-report
+blob-report
+.playwright-mcp
+artifact_data

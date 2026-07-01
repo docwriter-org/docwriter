@@ -13,6 +13,7 @@
  *   - cold-start replay and file-seed carry SYSTEM_ORIGIN.
  */
 import { Server } from '@hocuspocus/server';
+import type { IncomingMessage } from 'node:http';
 import * as Y from 'yjs';
 import type { PendingReviewRound } from '$lib/types';
 import {
@@ -37,6 +38,13 @@ import {
 	purgeTabUpdates,
 	setLiveDocResolver
 } from './ydoc-persistence';
+import { isMultiTenant } from './workspace';
+import { runWithUser, getCurrentUserId } from './request-context';
+import { getClerkClient, isAuthorizedUser } from './clerk-auth';
+
+interface WsUserContext {
+	userId?: string;
+}
 
 function globalHolder() {
 	return globalThis as unknown as { __docwriterWsServer?: Server };
@@ -49,46 +57,122 @@ function currentServerInstanceId(): string {
 	);
 }
 
+/** In multi-tenant mode, doc names are `<userId>:<tabId>`. */
+function parseDocName(documentName: string): { userId: string | null; tabId: string } {
+	if (isMultiTenant()) {
+		const idx = documentName.indexOf(':');
+		if (idx > 0) {
+			return { userId: documentName.slice(0, idx), tabId: documentName.slice(idx + 1) };
+		}
+	}
+	return { userId: null, tabId: documentName };
+}
+
+function getContextUserId(context: unknown): string | null {
+	const value = (context as WsUserContext | null)?.userId;
+	return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function resolveDocContext(documentName: string, context?: unknown): { userId: string | null; tabId: string } {
+	const parsed = parseDocName(documentName);
+	return {
+		userId: parsed.userId ?? getContextUserId(context),
+		tabId: parsed.tabId
+	};
+}
+
+/** Run a function in the user's workspace context, or directly if single-user. */
+function inUserContext<T>(userId: string | null, fn: () => T): T {
+	return userId ? runWithUser(userId, fn) : fn();
+}
+
+function directConnectionContext(): WsUserContext | undefined {
+	const userId = isMultiTenant() ? getCurrentUserId() : null;
+	return userId ? { userId } : undefined;
+}
+
+function firstHeader(value: string | string[] | undefined): string | undefined {
+	return Array.isArray(value) ? value[0] : value;
+}
+
+function requestOrigin(request: IncomingMessage): string {
+	const origin = firstHeader(request.headers.origin);
+	if (origin) {
+		try {
+			return new URL(origin).origin;
+		} catch {
+			/* fall through to forwarded headers */
+		}
+	}
+	const proto = firstHeader(request.headers['x-forwarded-proto']) ?? 'http';
+	const host =
+		firstHeader(request.headers['x-forwarded-host']) ??
+		firstHeader(request.headers.host) ??
+		'localhost';
+	return new URL(`${proto}://${host}`).origin;
+}
+
 export function createWsServer(port: number): Server {
 	const server = new Server({
 		port,
 		quiet: true,
-		async onAuthenticate({ token }) {
-			// Require a matching instance id on every connect. The client
-			// fetches /api/session at mount time to populate sessionStorage
-			// with the current id before any WS provider is created, so a
-			// legitimate connect always has the right token. Rejecting empty
-			// tokens closes a race: if a mismatch handler clears sessionStorage
-			// and the provider auto-reconnects before the page reload completes,
-			// the reconnect would send an empty token and (under the previous
-			// `!token || token === expected` check) silently succeed —
-			// letting the stale in-memory Y.Doc sync up into the new workspace.
+		async onAuthenticate({ token, documentName, request }) {
+			if (isMultiTenant()) {
+				// Validate via Clerk using the session cookie from the upgrade request.
+				const clerkClient = getClerkClient();
+				if (!clerkClient) throw new Error('clerk-not-configured');
+				try {
+					const origin = requestOrigin(request);
+					const url = new URL(request.url || '/', origin);
+					const reqObj = new Request(url, { headers: request.headers as Record<string, string> });
+					const state = await clerkClient.authenticateRequest(reqObj, {
+						authorizedParties: [origin]
+					});
+					if (!state.isAuthenticated) throw new Error('not-authenticated');
+					const auth = state.toAuth();
+					if (!auth.userId) throw new Error('no-user');
+					const allowed = await isAuthorizedUser(clerkClient, auth.userId);
+					if (!allowed) throw new Error('unauthorized');
+					const { userId: docUserId } = parseDocName(documentName);
+					if (!docUserId) throw new Error('missing-user-prefix');
+					if (docUserId !== auth.userId) throw new Error('user-mismatch');
+					return { userId: auth.userId };
+				} catch (err) {
+					console.error('[onAuthenticate] multi-tenant auth error:', err);
+					throw new Error('auth-failed');
+				}
+			}
 			const expected = currentServerInstanceId();
 			if (token && token === expected) return;
 			throw new Error('server-instance-mismatch');
 		},
-		async onLoadDocument({ documentName: tabId, document }) {
+		async onLoadDocument({ documentName, document, context }) {
+			const { userId, tabId } = resolveDocContext(documentName, context);
 			const ydoc = document as unknown as Y.Doc;
 			const fragment = ydoc.getXmlFragment(FRAGMENT_NAME);
 			if (fragment.length === 0) {
-				replayUpdatesInto(ydoc, tabId);
+				inUserContext(userId, () => replayUpdatesInto(ydoc, tabId));
 			}
 			return document;
 		},
-		async afterUnloadDocument({ documentName: tabId }) {
-			clearDirty(tabId);
+		async afterUnloadDocument({ documentName }) {
+			const { userId, tabId } = parseDocName(documentName);
+			inUserContext(userId, () => clearDirty(tabId));
 		},
-		async onChange({ documentName: tabId, update, transactionOrigin }) {
+		async onChange({ documentName, update, transactionOrigin, context }) {
+			const { userId, tabId } = resolveDocContext(documentName, context);
 			const origin = typeof transactionOrigin === 'string' ? transactionOrigin : USER_ORIGIN;
-			appendUpdate(tabId, update, origin);
-			markTabDirty(tabId);
+			inUserContext(userId, () => {
+				appendUpdate(tabId, update, origin);
+				markTabDirty(tabId);
+			});
 		}
 	});
 
 	// Wire the dirty-flush resolver so the global flush loop can find the
 	// live doc for a tab without reaching back into this file.
-	setLiveDocResolver((tabId) => {
-		const live = server.hocuspocus.documents.get(tabId);
+	setLiveDocResolver((tabId, userId) => {
+		const live = server.hocuspocus.documents.get(docNameForTab(tabId, userId));
 		return (live as unknown as Y.Doc) ?? null;
 	});
 
@@ -96,10 +180,18 @@ export function createWsServer(port: number): Server {
 	return server;
 }
 
+/** Map a bare tabId to the Hocuspocus document name for the current user. */
+function docNameForTab(tabId: string, userId = getCurrentUserId()): string {
+	if (isMultiTenant()) {
+		if (userId) return `${userId}:${tabId}`;
+	}
+	return tabId;
+}
+
 function getLiveDocument(tabId: string): Y.Doc | null {
 	const server = globalHolder().__docwriterWsServer;
 	if (!server) return null;
-	const doc = server.hocuspocus.documents.get(tabId);
+	const doc = server.hocuspocus.documents.get(docNameForTab(tabId));
 	return (doc as unknown as Y.Doc) ?? null;
 }
 
@@ -129,7 +221,10 @@ async function withLiveDoc<T>(
 ): Promise<T> {
 	const server = globalHolder().__docwriterWsServer;
 	if (server?.hocuspocus) {
-		const direct = await server.hocuspocus.openDirectConnection(tabId);
+		const direct = await server.hocuspocus.openDirectConnection(
+			docNameForTab(tabId),
+			directConnectionContext()
+		);
 		try {
 			let result!: T;
 			await direct.transact((document) => {
@@ -406,20 +501,21 @@ export async function setThreadResolution(
  * stale updates from SQLite and silently resurrect the deleted content. */
 export async function destroyTabState(tabId: string): Promise<void> {
 	const server = globalHolder().__docwriterWsServer;
+	const name = docNameForTab(tabId);
 	if (server?.hocuspocus) {
 		try {
-			server.hocuspocus.closeConnections(tabId);
+			server.hocuspocus.closeConnections(name);
 		} catch (err) {
 			console.error(`[docwriter] closeConnections failed for "${tabId}":`, err);
 		}
-		const doc = server.hocuspocus.documents.get(tabId);
+		const doc = server.hocuspocus.documents.get(name);
 		if (doc) {
 			try {
 				await server.hocuspocus.unloadDocument(doc);
 			} catch (err) {
 				console.error(`[docwriter] unloadDocument failed for "${tabId}":`, err);
 			}
-			server.hocuspocus.documents.delete(tabId);
+			server.hocuspocus.documents.delete(name);
 		}
 	}
 	purgeTabUpdates(tabId);

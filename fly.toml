@@ -1,0 +1,29 @@
+app = 'docwriter-app'
+primary_region = 'sjc'
+
+[build]
+  dockerfile = 'Dockerfile'
+
+[env]
+  NODE_ENV = 'production'
+  DOCWRITER_ROOT = '/data'
+  DOCWRITER_HOSTED = '1'
+  PUBLIC_DOCWRITER_HOSTED = '1'
+  DOCWRITER_RUNNER_URL = 'https://docwriter-runner.fly.dev'
+  ORIGIN = 'https://app.docwriter.org'
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = 'suspend'
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1
+
+[[mounts]]
+  source = 'docwriter_data'
+  destination = '/data'

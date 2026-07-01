@@ -22,7 +22,7 @@ markdown in a Tiptap editor. The editor state for every open tab is a CRDT
 is a synced client. An agent proposes edits by mutating the server Y.Doc
 directly through custom MCP tools. Every mutation reaches the browser over
 a WebSocket as an atomic Yjs update and appears in the UI as a reviewable
-round. The data model is flat markdown — no atoms, no blocks, no pins.
+round. The data model is flat markdown - no atoms, no blocks, no pins.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system.
 
@@ -30,7 +30,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system.
 
 **The server owns the Y.Doc.** Clients connect to a Hocuspocus WebSocket
 and sync the same per-tab `Y.Doc` the agent is editing. Every Yjs update
-— user keystroke, agent edit, review-map change — appends to the
+- user keystroke, agent edit, review-map change - appends to the
 `yjs_updates` table in `.docwriter/docwriter.db` with its original Yjs
 origin. SQLite is the persistence layer; `document.md` is a debounced
 markdown backup for portability and git, not the source of truth. There
@@ -53,11 +53,13 @@ project-root/
                          (dual-written for portability)
     agent/scratch/     ← agent scratch workspace (lazy-created on first
                          scratch write; cleared on "New session")
+    provider-cache/    ← provider-native cache/state, e.g. Claude SDK's
+                         required local JSONL mirror
 ```
 
 No per-tab shadows (`.docwriter/agent/<tabId>`), no IndexedDB, no
 in-browser persistence. A fresh browser paints only after the WebSocket's
-first `synced` event — on localhost this is sub-20ms.
+first `synced` event - on localhost this is sub-20ms.
 
 ## Three-pane layout
 
@@ -81,12 +83,12 @@ cards live in the **right** column, not the left.
 
 1. Build a multi-tab prompt:
    - Every tab: header (path + active marker) + diff vs `kv['last_seen:<tabId>']` if it changed, else "unchanged" note. No tab content is ever inlined; the agent calls `read_doc(path)` on demand.
-   - First-render tab (no `last_seen`): path only — agent must `read_doc` to see content.
+   - First-render tab (no `last_seen`): path only - agent must `read_doc` to see content.
    Agency guidance (`conservative` / `balanced` / `aggressive`) rewires
    the "how to decide whether to edit" section.
 2. `query()` runs with two MCP servers:
-   - `docwriter` — `propose_rule` / `propose_hook` (user-review tools).
-   - `docwriter-doc` — `edit_doc` / `read_doc` / `write_doc` on tab paths;
+   - `docwriter` - `propose_rule` / `propose_hook` (user-review tools).
+   - `docwriter-doc` - `edit_doc` / `read_doc` / `write_doc` on tab paths;
      these route scratch paths to plain filesystem I/O and tab paths to
      `DirectConnection.transact` against the live Hocuspocus document.
    Built-in `Edit` / `Write` / `Read` remain available for files outside
@@ -100,7 +102,7 @@ cards live in the **right** column, not the left.
 4. Hocuspocus syncs the combined update to every connected browser over
    WebSocket. The review card appears next to the Tiptap cursor.
 5. SSE stream emits `tool_call_start`, `tool_call`, `assistant_text`,
-   `result` — drives the HistoryPane. The `result` event does NOT carry
+   `result` - drives the HistoryPane. The `result` event does NOT carry
    markdown anymore; there's nothing to apply on the client.
 6. After render completes, update `kv['last_seen:<tabId>']` to the current
    markdown for every tab the agent saw, so the next render's diff block
@@ -108,7 +110,7 @@ cards live in the **right** column, not the left.
 
 ## Agent reconciliation
 
-There is none — in the old sense. Agent edits flow as CRDT ops directly
+There is none - in the old sense. Agent edits flow as CRDT ops directly
 through the live Hocuspocus document; the browser receives them like any
 other remote update. No client-side 3-way merge, no clone-and-diff, no
 rolling baselines. User keystrokes typed during a render converge with
@@ -125,7 +127,7 @@ ops fall back to wholesale `replaceYDocText`. Both paths run in a single
 
 Because Accept's blast radius is bounded to the affected paragraphs,
 the client doesn't need to disconnect + remount the editor to avoid
-clobbering concurrent typing — the Yjs sync delivers the surgical
+clobbering concurrent typing - the Yjs sync delivers the surgical
 update over the existing WebSocket and ProseMirror re-renders only the
 touched range. `acceptAgentEdit` / `rejectAgentEdit` in `+page.svelte`
 just POST to `/api/document` and let the sync handle the UI update.
@@ -140,9 +142,9 @@ agent-origin transactions from user typing.
 
 `AgentSettings` in `src/lib/types.ts`, persisted to `.docwriter/state.json`
 (JSON mirror) and dual-written into the SQLite `kv` / rules tables:
-- **autonomy** (`agency: 'conservative' | 'balanced' | 'aggressive'`) —
+- **autonomy** (`agency: 'conservative' | 'balanced' | 'aggressive'`) -
   prompt rewiring.
-- **trackChanges** — review mode on/off. (Track-changes off bypasses the
+- **trackChanges** - review mode on/off. (Track-changes off bypasses the
   pending-round UI; edits still flow through `AGENT_ORIGIN` so Undo
   continues to isolate them.)
 
@@ -185,14 +187,14 @@ the mascot card).
   copies state out of the registry Y.Doc into Hocuspocus's own
   `Document`. Once a client has connected, the registry Y.Doc goes stale.
   Server code that wants to mutate a tab MUST go through
-  `server.hocuspocus.openDirectConnection(tabId)` — not
+  `server.hocuspocus.openDirectConnection(tabId)` - not
   `getTabYDoc(tabId).ydoc`. The registry's sole remaining job is
   cold-start hydration before any client connects.
 - **UndoManager construction order.** In `ydoc-registry.ts`, the
   `Y.UndoManager` is constructed BEFORE `replayUpdatesInto` runs so that
   every replayed `ydoc.transact(..., origin)` fires through the
   UndoManager's observer with its original origin. Swap the order and
-  the stack is empty on every cold start — Reject silently does nothing.
+  the stack is empty on every cold start - Reject silently does nothing.
 - **Tiptap-markdown escapes brackets.** The markdown serializer escapes
   `[` → `\[` when serializing the Y.Doc. `read_doc` returns those
   escaped forms, and `edit_doc`'s `old_string` must also be escaped if

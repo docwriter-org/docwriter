@@ -1,19 +1,36 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { getProvider, listAllModels } from '$lib/server/providers';
-import type { ProviderId } from '$lib/server/providers/types';
+import type { ProviderId, ProviderModelOption } from '$lib/server/providers/types';
+import {
+	HOSTED_CLAUDE_DEFAULT_MODEL,
+	isHostedSelectableClaudeModel
+} from '$lib/shared/claude-models';
 
 export type ModelOption = { id: string; label: string; provider?: string };
 
 const cache = new Map<string, { models: ModelOption[]; defaultModel: string }>();
 
-function defaultModelFor(models: ModelOption[]): string {
+function isHostedProviderLocked(): boolean {
+	return process.env.DOCWRITER_HOSTED === '1' || process.env.PUBLIC_DOCWRITER_HOSTED === '1';
+}
+
+function defaultModelFor(models: ModelOption[], hostedProviderLocked: boolean): string {
+	if (hostedProviderLocked) {
+		return (
+			models.find((m) => m.id === HOSTED_CLAUDE_DEFAULT_MODEL)?.id ??
+			models.find((m) => isHostedSelectableClaudeModel(m.id) && m.id.includes('sonnet'))?.id ??
+			models.find((m) => isHostedSelectableClaudeModel(m.id))?.id ??
+			HOSTED_CLAUDE_DEFAULT_MODEL
+		);
+	}
 	return models.find((m) => m.id.includes('opus'))?.id ?? models[0]?.id ?? 'opus';
 }
 
 export const GET: RequestHandler = async ({ url }) => {
-	const providerParam = url.searchParams.get('provider');
-	const allProviders = url.searchParams.get('all') === 'true';
+	const hostedProviderLocked = isHostedProviderLocked();
+	const providerParam = hostedProviderLocked ? 'claude' : url.searchParams.get('provider');
+	const allProviders = !hostedProviderLocked && url.searchParams.get('all') === 'true';
 	const cacheKey = allProviders ? '__all__' : (providerParam || 'claude');
 
 	if (cache.has(cacheKey)) return json(cache.get(cacheKey));
@@ -34,7 +51,7 @@ export const GET: RequestHandler = async ({ url }) => {
 			return json({ models: [], defaultModel: 'opus' });
 		}
 
-		const result = { models, defaultModel: defaultModelFor(models) };
+		const result = { models, defaultModel: defaultModelFor(models, hostedProviderLocked) };
 		cache.set(cacheKey, result);
 		return json(result);
 	} catch {

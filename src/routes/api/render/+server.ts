@@ -6,9 +6,10 @@ import { getProvider } from '$lib/server/providers';
 import type { ProviderId, ProviderEvent } from '$lib/server/providers/types';
 import { buildToolDefinitions, TOOL_NAMES } from '$lib/server/providers/tool-handlers';
 import {
-	AGENT_SCRATCH_DIR,
 	isValidTabId,
-	tabFile
+	tabFile,
+	getEffectiveRoot,
+	getEffectiveScratchDir
 } from '$lib/server/document-files';
 import {
 	readHooks,
@@ -17,7 +18,15 @@ import {
 	type HookEvent
 } from '$lib/server/hooks-config';
 import { runHookCommand, type HookRunEmitter } from '$lib/server/hook-runner';
-import { getSessionId, setSessionId, setLastSystemPrompt, getTabsState } from '$lib/server/runtime-state';
+import {
+	getSessionId,
+	setSessionId,
+	setSessionOwner,
+	getSessionProvider,
+	getSessionModel,
+	setLastSystemPrompt,
+	getTabsState
+} from '$lib/server/runtime-state';
 import { readMeta } from '$lib/server/document-io';
 import { kvGet, kvSet, dbAppendConversationEvent } from '$lib/server/db-writes';
 import { readCommentThreads, readReviewRounds } from '$lib/shared/ydoc-codec';
@@ -32,9 +41,15 @@ import {
 	EDIT_DOC_TOOL_NAME,
 	READ_DOC_TOOL_NAME,
 	WRITE_DOC_TOOL_NAME,
+	COMMENT_DOC_TOOL_NAME,
 	REPLY_TO_COMMENT_TOOL_NAME,
 	setActiveFeedbackThreadId
 } from '$lib/server/mcp-doc-tools';
+import {
+	HOSTED_CLAUDE_DEFAULT_MODEL,
+	isHiddenClaudeModel,
+	isHostedSelectableClaudeModel
+} from '$lib/shared/claude-models';
 
 /** Read the live authoritative markdown for a tab, including any pending
  * review rounds materialized on top. Prefers the Hocuspocus in-memory
@@ -110,7 +125,6 @@ function readLiveTabPendingEditThreadIds(tabId: string): Set<string> {
 
 const GENERIC_WAKEUP_MESSAGE =
 	'The user clicked Wake-up without a specific request. Decide what (if anything) to do per the agency guidance above.';
-const WORKSPACE_ROOT = resolve(process.env.DOCWRITER_ROOT || process.cwd());
 
 interface ImageAttachmentPayload {
 	mediaType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
@@ -125,7 +139,12 @@ const KV_LAST_REFS = 'last_render:refs';
 const KV_LAST_AGENCY = 'last_render:agency';
 
 function normalizeToolPath(pathLike: string): string {
-	return normalize(resolve(WORKSPACE_ROOT, pathLike));
+	return normalize(resolve(getEffectiveRoot(), pathLike));
+}
+
+function isMissingClaudeConversationError(err: unknown): boolean {
+	const message = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+	return /No conversation found with session ID/i.test(message);
 }
 
 /** Recognized inline-directive delimiters. The user can wrap notes for
@@ -250,11 +269,19 @@ interface QueryRoundOutcome {
  * message content. Without this split, every render was re-sending ~5KB of
  * boilerplate and burning context + tokens. */
 function buildSystemPrompt(): string {
+	const scratchDir = getEffectiveScratchDir();
+	const hosted = isHostedDeployment();
 	const meta = readMeta();
 	const ruleTexts = meta.rules.map((r) => r.text);
 	const rulesBlock = ruleTexts.length > 0
 		? ruleTexts.map((t, i) => `${i + 1}. ${t}`).join('\n')
 		: 'None.';
+	const shellInstruction = hosted
+		? `- Hosted Bash runs through \`run_bash({ command, timeout_ms? })\`, not the built-in Bash tool. It runs from \`/workspace\` against a temporary copy of the user's workspace plus scratch at \`.docwriter/agent/scratch/\`. Use relative paths. HTTP/HTTPS network is available. Put scripts, generated files, and artifacts you want to keep under \`.docwriter/agent/scratch/\`. Each run is also logged under \`.docwriter/agent/outputs/\`. Changed scratch files are copied back; changed workspace files are reported but not written back. Use \`edit_doc\` / \`write_doc\` to propose document changes.`
+		: `- The built-in \`Edit\` / \`Write\` tools are restricted to your scratch workspace under \`${scratchDir}/\`. Use built-in \`Read\` / \`Glob\` / \`Grep\` freely anywhere in the workspace. The built-in \`Read\` tool can read image files (PNG, JPEG, GIF, WebP, etc.) — it returns them as image content blocks you can see and describe. Use it when the user references an image in the workspace.`;
+	const scratchInstruction = hosted
+		? `  2. **Your scratch space** at \`${scratchDir}/\` — any path under here. Use it for drafts, outlines, notes-to-self, intermediate passes, and files produced by \`run_bash\`. In hosted DocWriter, shell commands run in an isolated copy and only changed scratch files are copied back. Bash run logs are saved under \`.docwriter/agent/outputs/\`. Scratch and outputs are not surfaced to the user; scratch persists across rounds in the same session and is wiped on "New session". Think of scratch as your working memory.`
+		: `  2. **Your scratch space** at \`${scratchDir}/\` — any path under here. Use it for drafts, outlines, notes-to-self, intermediate passes. Either \`edit_doc\` / \`write_doc\` (they fall through to plain file I/O on scratch paths) or the built-in \`Edit\` / \`Write\` tools work. Not surfaced to the user; persists across rounds in the same session; wiped on "New session". Think of it as your working memory.`;
 
 	return `# Who you are
 
@@ -267,7 +294,7 @@ You are the user's writing collaborator — a sharp, opinionated editor and occa
 - **Be surgical.** Touch the minimum prose needed to fix the thing the user actually flagged. If a sentence is broken, fix that sentence — don't repaint the surrounding paragraph because the new sentence "feels different now."
 - **Concrete beats abstract; specific beats general.** When you do generate prose, prefer load-bearing verbs over adjective stacks, named things over categories, examples over claims. If you find yourself writing "various", "several", "a number of", "important", "powerful", "robust" — stop and replace with the specific thing.
 - **No AI smell, ever.** Avoid em-dashes-as-default-punctuation, "It's not just X, it's Y", "Let's dive in", "delve into", "navigating the landscape of", "tapestry", "moreover/furthermore" stitching, "Certainly!"/"Absolutely!" openers, hedge-stacking ("might potentially possibly"), three-item rule-of-threes rhythm, hollow superlatives ("incredibly powerful", "truly remarkable"), throat-clearing intros, summary paragraphs that restate what you just said, and "in conclusion"-style endings. These are tells that turn writing into LLM output. The user will notice.
-- **When in doubt, ask instead of editing.** If you're guessing about the user's intent, ask via \`AskUserQuestion\` — or, if the user has already opened a thread on this passage, reply there with \`reply_to_comment\`. Don't generate prose to fill the gap, and don't fabricate a comment thread (you can't open new ones — only the user can).
+- **When in doubt, ask instead of editing.** If you're guessing about the user's intent, ask via \`AskUserQuestion\`; if there is an existing thread, reply there with \`reply_to_comment\`; if Medium or High autonomy allows a new comment and you have exact anchor text, use \`comment_doc\`. Don't generate prose to fill the gap.
 
 ## File formats
 
@@ -280,11 +307,11 @@ Every file is treated as raw text — including \`.md\` / \`.markdown\`. The edi
 - \`write_doc({ path, content })\` replaces the full content. If the file doesn't exist, write_doc creates it and opens it as a new tab (no review round for brand-new files). If the file exists, the write lands as a pending review proposal.
 - \`read_doc(path)\` returns the current content of any workspace file. For an open tab, it's review-aware: the newest pending proposal if one exists, otherwise the committed content. For a workspace file that isn't currently a tab, it just reads the file from disk. Use it freely on any path the user mentions — don't pre-check whether the file is open.
 - Each \`edit_doc\` / \`write_doc\` call on an existing file creates or updates a reviewable proposal round in the outline. The live document changes only when the user accepts that proposal.
-- The built-in \`Edit\` / \`Write\` tools are restricted to your scratch workspace under \`${AGENT_SCRATCH_DIR}/\`. Use built-in \`Read\` / \`Glob\` / \`Grep\` freely anywhere in the workspace. The built-in \`Read\` tool can read image files (PNG, JPEG, GIF, WebP, etc.) — it returns them as image content blocks you can see and describe. Use it when the user references an image in the workspace.
+${shellInstruction}
 - Preserve the user's voice — don't rewrite sentences that aren't broken.
 - Do NOT create new tab files. Only edit the files listed above.
 - If the user's message is about the active file, prefer editing that one. Edit other files when the request genuinely spans them.
-- **Never use assistant text for substantive output.** Users do not read the agent history pane — it's a debug log, not a communication channel. Anything you want the user to actually see (an answer to their question, a discussion, a proposed direction, a "here's what I'd do" reflection, a follow-up question, a caveat) goes in a comment thread they opened, via \`reply_to_comment\` on the thread's \`thread_id\`. **You cannot start a new thread — that's the user's prerogative.** If there's no thread on the passage you want to discuss, you have three options: (1) make the edit and let the diff speak for itself, (2) call \`AskUserQuestion\` if you genuinely can't decide, or (3) stay silent. Assistant text should be empty, or at most a one-line ack like "Done." — and even then, prefer no text at all (the review cards / comment threads speak for themselves).
+- **Never use assistant text for substantive output.** Users do not read the agent history pane — it's a debug log, not a communication channel. Anything you want the user to actually see (an answer, discussion, proposed direction, follow-up question, caveat, or editorial note) belongs in the document surface: \`reply_to_comment\` for an existing thread, \`comment_doc\` for a new comment thread when autonomy permits, or \`edit_doc\` / \`write_doc\` for a reviewable edit. Assistant text should be empty, or at most a one-line ack like "Done." — and even then, prefer no text at all.
 
 ## When to ask instead of edit
 
@@ -292,9 +319,9 @@ If the request is genuinely ambiguous and has multiple reasonable directions (to
 
 ## When to reply on a comment thread instead of edit
 
-You have \`reply_to_comment\` (\`mcp__docwriter-doc__reply_to_comment\`). It posts a reply on a comment thread the **user** has already opened — similar to Google Docs comments. The user can reply, resolve the thread, or click "Approve & propose edit" on your reply to apply a change in a later turn.
+You have \`reply_to_comment\` (\`mcp__docwriter-doc__reply_to_comment\`). It posts a reply on an existing comment thread — similar to Google Docs comments. The user can reply, resolve the thread, or click "Approve & propose edit" on your reply to apply a change in a later turn.
 
-**You cannot open new threads.** Only the user can start a thread (typically by giving feedback on a passage; the system opens the thread on their behalf and shows you its \`thread_id\`). If there's no thread for what you want to say, do not invent one — edit, ask via \`AskUserQuestion\`, or stay silent.
+You also have \`comment_doc\` (\`mcp__docwriter-doc__comment_doc\`). It creates a new comment thread without changing the document. Use it only when the autonomy level permits proactive comments, or when the user explicitly asks you to leave a comment.
 
 Reply WHEN there is an existing thread for the passage AND:
 
@@ -303,22 +330,31 @@ Reply WHEN there is an existing thread for the passage AND:
 - The right next step is *a discussion*, not a change. You want to share a perspective, ask a follow-up, or propose a direction before committing to an edit.
 - The user flagged a passage but didn't say what to do with it.
 
+Start a NEW comment with \`comment_doc\` WHEN:
+
+- The current autonomy is Medium or High, or the user explicitly asked you to leave a comment.
+- You can anchor the comment to exact current document text via \`anchor_text\`. Read the document first if needed.
+- The comment is useful on its own: a concern, question, suggested direction, or editorial judgment the user should see before any edit.
+- You are not just narrating a change you already made. Edits and review cards speak for themselves.
+
+Keep proactive comments sparse. Prefer one high-value comment per turn unless the user asked for a review pass.
+
 Do NOT reply WHEN:
 
 - The user asked for a concrete change ("too verbose", "fix this typo", "rewrite for clarity"). Call \`edit_doc\` directly.
 - The feedback is actionable enough to edit in \`[mode: auto]\` ("awk", "unclear", "too wordy", "tighten this", "make this land"). Call \`edit_doc\` and do not also reply.
 - You're just narrating what you already edited. Review cards speak for themselves.
-- There's no relevant existing thread. You cannot create one.
+- There is no relevant existing thread AND the current autonomy level does not permit a new \`comment_doc\` comment.
 
 **The thread already has a pending edit (flagged "has a pending edit" in the Open threads list).** This is the common case and it has a strong default: the user opened/replied on this thread to react to an edit you proposed. Their reply is almost always feedback to act on — "not punchy", "too long", "try again", "more X", "still not right", "do it", "go ahead". In all of these, call \`edit_doc\` with this thread's \`thread_id\` to propose a REVISED edit that addresses the feedback (it supersedes the current one). Do NOT reply with conversational text like "Glad that landed!" or "resolve when you're ready" — that is not a substantive response to feedback on an edit. Reply on a pending-edit thread ONLY when the user is purely asking a question they expect a worded answer to ("why did you cut that?", "what's the difference?") and is clearly NOT requesting a change. When the feedback is contradictory or you genuinely can't tell what change they want, prefer \`AskUserQuestion\` over a chit-chat reply.
 
-Mode override: the user can attach an explicit routing hint to a feedback message — **[mode: auto|edit|discuss]**. When you see \`[mode: edit]\`, do NOT call \`reply_to_comment\`; call \`edit_doc\`. When you see \`[mode: discuss]\`, do NOT call \`edit_doc\`; reply on the user's thread for that feedback via \`reply_to_comment\`. When you see \`[mode: auto]\` or no mode tag, use your judgment per the rules above: if the feedback can be resolved with a concrete edit, edit only; if the user is asking for judgment or discussion AND a thread exists, reply only. Do not combine \`edit_doc\` and \`reply_to_comment\` for the same feedback unless the user explicitly asks for both.
+Mode override: the user can attach an explicit routing hint to a feedback message — **[mode: auto|edit|discuss]**. When you see \`[mode: edit]\`, do NOT call \`reply_to_comment\`; call \`edit_doc\`. When you see \`[mode: discuss]\`, do NOT call \`edit_doc\`; reply on the user's thread for that feedback via \`reply_to_comment\`, or use \`comment_doc\` if there is no thread and autonomy permits a new comment. When you see \`[mode: auto]\` or no mode tag, use your judgment per the rules above: if the feedback can be resolved with a concrete edit, edit only; if the user is asking for judgment or discussion, comment only. Do not combine \`edit_doc\` and a comment for the same feedback unless the user explicitly asks for both.
 
 When replying:
 
 - Speak in first person ("I'd cut the second clause …", "I think this works — the only snag is …"). Don't narrate as a third party.
 - Keep replies to a few sentences. The thread is for conversation, not essays.
-- If you want to sketch a concrete edit for the user to approve, pass \`proposed_edit\` — the UI turns it into an "Approve & propose edit" button.
+- If the user directly asked for an edit, or autonomy is High, you may sketch a concrete edit for the user to approve by passing \`proposed_edit\` — the UI turns it into an "Approve & propose edit" button. In Medium autonomy, do not add proactive \`proposed_edit\` values.
 - Always pass the existing thread's \`thread_id\`. Open thread transcripts are listed under each tab.
 
 When the same user message carries both a clear directive AND ambient uncertainty ("rewrite this — actually, idk, what do you think?"), lean toward replying first (if there's a thread) and offering the edit in \`proposed_edit\`. Cheap to apply later, costly to rewrite past prose the user isn't sure they want rewritten. (This does NOT apply when the thread already has a pending edit — there, feedback means revise the edit, per the rule above.)
@@ -328,7 +364,8 @@ When the same user message carries both a clear directive AND ambient uncertaint
 - **Read**: anywhere in the workspace. Use the built-in \`Read\` / \`Glob\` / \`Grep\` to explore the project freely (existing docs, references, code, hooks.json, whatever helps). For the open tabs shown in each user turn, prefer \`read_doc(path)\` — it returns the current review-aware content instead of whatever is on disk.
 - **Write / Edit** has two channels:
   1. **Workspace files** — use \`edit_doc\` / \`write_doc\` with the path as \`path\`. These auto-open the file as a tab if needed and create pending review rounds on existing content; brand-new files created via \`write_doc\` land as a new tab directly. The built-in \`Edit\` / \`Write\` tools are blocked outside scratch for this reason.
-  2. **Your scratch space** at \`${AGENT_SCRATCH_DIR}/\` — any path under here. Use it for drafts, outlines, notes-to-self, intermediate passes. Either \`edit_doc\` / \`write_doc\` (they fall through to plain file I/O on scratch paths) or the built-in \`Edit\` / \`Write\` tools work. Not surfaced to the user; persists across rounds in the same session; wiped on "New session". Think of it as your working memory.
+${scratchInstruction}
+- **Comments** are visible document annotations, not text edits. Use \`comment_doc\` to create a new comment thread when autonomy permits. Use \`reply_to_comment\` to respond inside an existing thread. Both write to the document's comment state and appear in the UI.
 - For adding **hooks** → call \`propose_hook\`. For **rules** → \`propose_rule\`. For **skills** → call \`add_skill\` when the user gives a GitHub URL or local skill path. If the user describes a desired skill in plain language but gives no source, use \`AskUserQuestion\` or explain what source/path you need. Don't try to edit \`.docwriter/hooks.json\`, \`.docwriter/skills.json\`, \`.claude/skills\`, or \`.agents/skills\` directly.
 - For review state mutations — accepting/rejecting pending edits or resolving/reopening comment threads — call \`review_action\` ONLY when the user's current message explicitly asks you to perform that action. Never accept, reject, resolve, or reopen as part of normal writing assistance.
 
@@ -403,11 +440,13 @@ Per-turn prompts may include a \`## Rules update\` block when rules have been ad
 
 ## How to decide whether to edit
 
-Your agency level governs how proactive you are. The current setting is communicated as a \`## Agency\` line in the per-turn prompt only when it changes; otherwise, the prior setting still applies. The three levels:
+Your autonomy level governs what you may do without a direct request. The current setting is communicated as an \`Autonomy: ...\` line in the per-turn prompt only when it changes; otherwise, the prior setting still applies. The three levels:
 
-- **conservative** — Default to NO edits. The user is often just writing their own text. The right action most of the time is to stop without editing any file. Only make an edit if ONE of these is clearly true: (1) a file contains an inline directive — \`[[ note ]]\`, \`(( note ))\`, or \`<< note >>\` — follow it and delete the directive text, (2) a diff on a tab shows the user added something that needs a specific fix (typo, broken sentence, missing content they explicitly asked for), or (3) the user's explicit message asks for an edit. If none apply, exit without editing. Do NOT polish, do NOT reword, do NOT "improve" prose that is already fine. Do NOT make tiny stylistic tweaks on unchanged text. When in doubt, do nothing.
-- **balanced** — Make one focused improvement per round on whichever file clearly needs it. Don't tweak prose that's already fine; don't ignore obvious problems. Make an edit if ONE of these is true: (1) a file contains an inline directive (\`[[ ... ]]\`, \`(( ... ))\`, or \`<< ... >>\`) — follow it and delete the directive text, (2) a diff on a tab shows the user added something that needs a specific fix, (3) the user's explicit message asks for an edit, or (4) a sentence or passage has a clear correctness or clarity problem (broken grammar, confusing pronoun, a claim that contradicts earlier text). If none apply, stop without editing.
-- **aggressive** — Be proactive. Look for meaningful improvements — tighten wordy passages, clarify ambiguous sentences, strengthen weak verbs, improve flow between paragraphs. Default to MAKING an edit each round; only skip if every file is already clearly good and no directive asks for work. Good reasons to edit: (1) an inline directive (\`[[ ... ]]\`, \`(( ... ))\`, or \`<< ... >>\`), (2) a user diff that needs a fix, (3) the user's explicit message asks for an edit, or (4) a clear stylistic or clarity improvement you'd make if this were your own draft. Still respect the user's voice — tighten, don't rewrite from scratch.
+- **conservative / Low** — Wait for a clear reason to act. You may edit when ONE of these is true: (1) the user explicitly asks for an edit, (2) a file contains an inline directive — \`[[ note ]]\`, \`(( note ))\`, or \`<< note >>\` — follow it and delete the directive text, or (3) the text has an obvious typo, broken sentence, or missing content the user clearly asked for. You may reply on an existing comment thread when the user directly asked for discussion there. Do NOT proactively comment. Do NOT polish, reword, or improve prose that is already fine. When in doubt, do nothing.
+- **balanced / Medium** — Same edit permissions as Low, plus new comment threads. You may proactively create new comment threads with \`comment_doc\` when a comment would help. You may also reply on existing comment threads and ask focused questions. Do NOT make unsolicited document edits. Do NOT include \`proposed_edit\` unless the user asked for an edit. If there is no useful comment to leave and no direct request, stay silent.
+- **aggressive / High** — New comment threads and proactive reviewable edits. You may proactively create new comment threads, reply on existing comment threads, ask focused questions, and call \`edit_doc\` / \`write_doc\` when you see a meaningful improvement: tightening wordy passages, clarifying ambiguous sentences, fixing flow, or correcting clear problems. Default to proposing one useful reviewable edit or comment when the draft would genuinely benefit; skip only when the text is already working. Still respect the user's voice — tighten, don't rewrite from scratch.
+
+Comments means \`reply_to_comment\` on an existing thread or \`comment_doc\` for a new comment thread. In Medium autonomy, the agent may start new comment threads with \`comment_doc\`. Do not make unsolicited edits. In High autonomy, choose whichever is more useful: a comment for discussion or a reviewable edit for a concrete improvement.
 
 ## Reading file content
 
@@ -571,7 +610,7 @@ function buildMultiTabPrompt(
 	if (rulesDelta) sections.push(rulesDelta);
 
 	if (currentAgency !== priorAgency) {
-		sections.push(`Agency: ${currentAgency}`);
+		sections.push(`Autonomy: ${currentAgency}`);
 	}
 
 	sections.push(`## Request\n\n${userMessage}`);
@@ -594,6 +633,7 @@ function buildMultiTabPrompt(
  * namespaced as `mcp__<serverName>__<toolName>`. */
 const PROPOSE_RULE_TOOL_NAME = 'mcp__docwriter__propose_rule';
 const PROPOSE_HOOK_TOOL_NAME = 'mcp__docwriter__propose_hook';
+const RUN_BASH_TOOL_NAME = 'mcp__docwriter__run_bash';
 /** Built-in SDK tool for multiple-choice user clarification questions.
  * We intercept it in canUseTool, surface the questions to the browser
  * via an SSE event, and resolve the canUseTool promise with the user's
@@ -606,6 +646,10 @@ const ASK_USER_TOOL_NAME = 'AskUserQuestion';
  * through, the SDK auto-approves and the agent immediately starts
  * executing edits — defeating the entire point of plan mode. */
 const EXIT_PLAN_MODE_TOOL_NAME = 'ExitPlanMode';
+
+function isHostedDeployment(): boolean {
+	return process.env.DOCWRITER_HOSTED === '1' || process.env.PUBLIC_DOCWRITER_HOSTED === '1';
+}
 
 // Hook runner extracted to $lib/server/hook-runner so the manual-run
 // /api/hooks/run endpoint can reuse the same spawn/emit logic.
@@ -717,17 +761,45 @@ export const POST: RequestHandler = async ({ request }) => {
 			images?: ImageAttachmentPayload[];
 			provider?: string;
 		};
-		const providerId = (providerIdRaw || 'claude') as ProviderId;
-		// Switching providers invalidates the persisted session id: each
-		// provider mints ids in its own format (Claude wants a UUID, OpenAI
-		// uses `openai-…`, etc.) and can't resume another's. Clear it so the
-		// new provider starts a fresh session instead of trying to --resume a
-		// foreign id (which errors).
-		const prevProvider = kvGet('provider');
-		if (prevProvider && prevProvider !== providerId) {
+		const hostedProviderLocked = isHostedDeployment();
+		const providerId = (hostedProviderLocked ? 'claude' : (providerIdRaw || 'claude')) as ProviderId;
+		const configuredDefaultModel = process.env.DOCWRITER_DEFAULT_MODEL || undefined;
+		const hostedDefaultModel =
+			configuredDefaultModel &&
+			configuredDefaultModel.startsWith('claude-') &&
+			!isHiddenClaudeModel(configuredDefaultModel) &&
+			isHostedSelectableClaudeModel(configuredDefaultModel)
+				? configuredDefaultModel
+				: HOSTED_CLAUDE_DEFAULT_MODEL;
+		const requestedModel = model || configuredDefaultModel || hostedDefaultModel;
+		const resolvedModel =
+			hostedProviderLocked
+				? requestedModel &&
+					requestedModel.startsWith('claude-') &&
+					!isHiddenClaudeModel(requestedModel) &&
+					isHostedSelectableClaudeModel(requestedModel)
+					? requestedModel
+					: hostedDefaultModel
+				: requestedModel;
+		const modelKey = resolvedModel ?? '';
+		const sessionModelKey = modelKey;
+
+		// Session resume belongs to the provider/model pair that created it.
+		// The UI's selected provider/model still live in `provider` / `model`;
+		// these owner keys are only for deciding whether `sessionId` is safe to
+		// pass back into a provider SDK.
+		const previousSessionProvider = getSessionProvider() ?? kvGet('provider');
+		const previousSessionModel = getSessionModel() ?? kvGet('model') ?? '';
+		let currentSessionId = getSessionId();
+		if (
+			currentSessionId &&
+			(previousSessionProvider !== providerId || previousSessionModel !== sessionModelKey)
+		) {
 			setSessionId('');
+			currentSessionId = null;
 		}
 		kvSet('provider', providerId);
+		kvSet('model', modelKey);
 
 		const allTabIds = getTabsState().order;
 		// `active` is nullable: the user can message the agent with zero tabs
@@ -757,7 +829,6 @@ export const POST: RequestHandler = async ({ request }) => {
 			pendingEditThreadIds: [...readLiveTabPendingEditThreadIds(id)]
 		}));
 
-		const currentSessionId = getSessionId();
 		const isImplicitWakeup = !userMessage && !warmup;
 		const activeTabInfo = tabsForPrompt.find((info) => info.tabId === active) ?? null;
 		const activeInlineDirectives = activeTabInfo
@@ -815,7 +886,7 @@ export const POST: RequestHandler = async ({ request }) => {
 							`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`
 						)
 					);
-					if (providerId !== 'claude' && persistableEvents.has(event)) {
+					if (persistableEvents.has(event)) {
 						// Only persist once the session id is established (the
 						// provider yields `session` first, and the handler sets it
 						// before send()). Using a throwaway fallback id would split
@@ -831,10 +902,7 @@ export const POST: RequestHandler = async ({ request }) => {
 				const hooks = buildHooks(emitHookRun);
 
 				try {
-					const resolvedModel =
-						model || process.env.DOCWRITER_DEFAULT_MODEL || undefined;
-					kvSet('model', resolvedModel ?? '');
-					currentModelForTranscript = resolvedModel ?? '';
+					currentModelForTranscript = modelKey;
 
 					const provider = await getProvider(providerId);
 					const tools = buildToolDefinitions();
@@ -865,6 +933,12 @@ export const POST: RequestHandler = async ({ request }) => {
 							};
 						}
 						if (!warmup) {
+							if (hostedProviderLocked && toolName === 'Bash') {
+								return {
+									behavior: 'deny' as const,
+									message: 'Hosted DocWriter uses `run_bash` for shell commands. Built-in Bash is disabled.'
+								};
+							}
 							if (toolName === 'Read') {
 								const matched = findReferencedOpenTabPath(toolInput?.file_path, openTabPaths);
 								if (matched) {
@@ -885,7 +959,8 @@ export const POST: RequestHandler = async ({ request }) => {
 							}
 							if (toolName === 'Edit' || toolName === 'Write') {
 								const target = typeof toolInput?.file_path === 'string' ? toolInput.file_path : '';
-								const underScratch = target === AGENT_SCRATCH_DIR || target.startsWith(AGENT_SCRATCH_DIR + '/') || target.includes('.docwriter/agent/scratch/');
+								const scratchDir = getEffectiveScratchDir();
+								const underScratch = target === scratchDir || target.startsWith(scratchDir + '/') || target.includes('.docwriter/agent/scratch/');
 								if (!underScratch) {
 									return { behavior: 'deny' as const, message: 'Built-in Edit / Write are restricted to your scratch directory. Use `edit_doc` or `write_doc` instead.' };
 								}
@@ -914,21 +989,31 @@ export const POST: RequestHandler = async ({ request }) => {
 						'Read', 'Bash', 'Glob', 'Grep', 'WebSearch', 'WebFetch', 'Agent',
 						'mcp__docwriter__propose_rule', 'mcp__docwriter__propose_hook', 'mcp__docwriter__add_skill', 'mcp__docwriter__review_action',
 						'AskUserQuestion', 'ExitPlanMode',
-						EDIT_DOC_TOOL_NAME, READ_DOC_TOOL_NAME, WRITE_DOC_TOOL_NAME, REPLY_TO_COMMENT_TOOL_NAME,
-						'edit_doc', 'read_doc', 'write_doc', 'reply_to_comment', 'list_threads',
+						EDIT_DOC_TOOL_NAME, READ_DOC_TOOL_NAME, WRITE_DOC_TOOL_NAME, COMMENT_DOC_TOOL_NAME, REPLY_TO_COMMENT_TOOL_NAME,
+						'edit_doc', 'read_doc', 'write_doc', 'comment_doc', 'reply_to_comment', 'list_threads',
 						'propose_rule', 'propose_hook', TOOL_NAMES.READ_SKILL, TOOL_NAMES.ADD_SKILL, TOOL_NAMES.REVIEW_ACTION
+					];
+					const hostedAllowedTools = [
+						...fullAllowedTools.filter((name) => name !== 'Bash'),
+						RUN_BASH_TOOL_NAME,
+						'run_bash'
 					];
 					const allowedTools = warmup
 						? ['Read', 'Glob', 'WebSearch', 'WebFetch']
 						: planMode
 							? planAllowedTools
-							: fullAllowedTools;
+							: hostedProviderLocked
+								? hostedAllowedTools
+								: fullAllowedTools;
 
-					// Persist the user's message into the transcript exactly once,
-					// the moment the session id is known (see the session handler
-					// below). Non-Claude providers only — Claude logs it in its
-					// own JSONL transcript.
+					// Persist the user's message into DocWriter's lightweight
+					// transcript exactly once, the moment the provider session id
+					// is known. Provider-native resumable SDK transcripts, when
+					// available, are stored separately through
+					// provider-session-store.ts; this table remains useful as a
+					// provider-agnostic history fallback.
 					let userMsgPersisted = false;
+					let resumableSessionId: string | null = currentSessionId;
 
 					async function runQueryRound(
 						roundPrompt: string,
@@ -940,20 +1025,24 @@ export const POST: RequestHandler = async ({ request }) => {
 							input: Record<string, unknown>;
 						}>();
 
-						for await (const event of provider.query({
-							prompt: roundPrompt,
-							systemPrompt: systemPromptBlock,
-							model: resolvedModel,
-							sessionId: getSessionId() || currentSessionId || undefined,
-							planMode: !!planMode,
-							warmup: !!warmup,
-							allowedTools,
-							canUseTool,
-							abortSignal: abortController.signal,
-							images: roundImages,
-							effort: 'low',
-							hooks
-						}, tools)) {
+						let retriedWithoutResume = false;
+						for (;;) {
+							const sessionIdForRound = getSessionId() || resumableSessionId || undefined;
+							try {
+								for await (const event of provider.query({
+									prompt: roundPrompt,
+									systemPrompt: systemPromptBlock,
+									model: resolvedModel,
+									sessionId: sessionIdForRound,
+									planMode: !!planMode,
+									warmup: !!warmup,
+									allowedTools,
+									canUseTool,
+									abortSignal: abortController.signal,
+									images: roundImages,
+									effort: 'low',
+									hooks
+								}, tools)) {
 							// Track mutation tool usage
 							if (event.type === 'tool_call_start' && mutationToolNames.has(event.tool_name)) {
 								usedDocMutationTool = true;
@@ -973,7 +1062,9 @@ export const POST: RequestHandler = async ({ request }) => {
 							// lands in the same bucket /api/history reads back.
 							if (event.type === 'session') {
 								setSessionId(event.sessionId);
-								if (providerId !== 'claude' && userMessage && !userMsgPersisted) {
+								setSessionOwner(providerId, sessionModelKey);
+								resumableSessionId = event.sessionId;
+								if (userMessage && !userMsgPersisted) {
 									userMsgPersisted = true;
 									dbAppendConversationEvent(event.sessionId, providerId, 'user_message', JSON.stringify({
 										type: 'user_message', text: userMessage, timestamp: renderStart
@@ -991,6 +1082,26 @@ export const POST: RequestHandler = async ({ request }) => {
 									toolName: toolCall?.toolName ?? '',
 									toolInput: toolCall?.input
 								});
+							}
+						}
+								break;
+							} catch (err) {
+								if (
+									providerId === 'claude' &&
+									!retriedWithoutResume &&
+									sessionIdForRound &&
+									isMissingClaudeConversationError(err)
+								) {
+									retriedWithoutResume = true;
+									setSessionId('');
+									resumableSessionId = null;
+									send('sdk_status', {
+										status: 'cleared_stale_session',
+										compactResult: 'Claude session was missing locally; starting a fresh conversation.'
+									});
+									continue;
+								}
+								throw err;
 							}
 						}
 

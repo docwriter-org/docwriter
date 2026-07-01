@@ -5,8 +5,15 @@ const ONE_M_CONTEXT_CLAUDE_MODEL_PREFIXES = [
 	'claude-sonnet-4-6'
 ];
 
+export const HOSTED_CLAUDE_DEFAULT_MODEL = 'claude-sonnet-4-6';
+export const HOSTED_CLAUDE_MODEL_NOTE = 'Other models are available when self-hosting DocWriter.';
+
 export function isHiddenClaudeModel(id: string, label = id): boolean {
 	return HIDDEN_CLAUDE_MODEL_PATTERNS.some((pattern) => pattern.test(id) || pattern.test(label));
+}
+
+export function isHostedSelectableClaudeModel(id: string): boolean {
+	return id.startsWith('claude-sonnet-') || id.startsWith('claude-haiku-');
 }
 
 export function isOneMillionContextClaudeModel(

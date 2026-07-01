@@ -23,12 +23,17 @@
 	import HooksPanel from '$lib/components/HooksPanel.svelte';
 	import SkillsPanel from '$lib/components/SkillsPanel.svelte';
 	import ApiKeysPanel from '$lib/components/ApiKeysPanel.svelte';
+	import HostedAccountButton from '$lib/components/HostedAccountButton.svelte';
 	import CustomModelDialog from '$lib/components/CustomModelDialog.svelte';
 	import SessionBrowser from '$lib/components/SessionBrowser.svelte';
 	import { themes, applyTheme } from '$lib/themes';
 	import { unifiedLineDiff } from '$lib/diff';
 	import { materializePendingReviewRounds } from '$lib/review-rounds';
 	import { serializeFragment as plainTextFromFragment } from '$lib/shared/ydoc-codec';
+	import {
+		HOSTED_CLAUDE_MODEL_NOTE,
+		isHostedSelectableClaudeModel
+	} from '$lib/shared/claude-models';
 
 	/** Turn a submit trigger into a compact description for the history
 	 * pane. Full text of long prompts (including feedback-on-passage quotes)
@@ -80,7 +85,8 @@
 		renameTab,
 		reconcileServerInstance,
 		applyUpdateToTab,
-		pauseTabSync
+		pauseTabSync,
+		setYDocUserId
 	} from '$lib/yjs-doc';
 	import type { Editor } from '@tiptap/core';
 	import {
@@ -100,7 +106,9 @@
 		setCustomModel,
 		selectedProvider,
 		setSelectedProvider,
+		ALL_PROVIDERS,
 		AVAILABLE_PROVIDERS,
+		PROVIDER_LOCKED_TO_CLAUDE,
 		availableModels,
 		loadAvailableModels,
 		type ModelOption,
@@ -2030,12 +2038,33 @@
 				{
 					kind: 'submenu',
 					label: 'Provider',
-					items: AVAILABLE_PROVIDERS.map((p) => ({
-						kind: 'action' as const,
-						label: p.label,
-						checked: currentProvider === p.id,
-						onClick: () => setSelectedProvider(p.id)
-					}))
+					items: [
+						...(PROVIDER_LOCKED_TO_CLAUDE
+							? ALL_PROVIDERS.map((p) => ({
+								kind: 'action' as const,
+								label: p.label,
+								checked: currentProvider === p.id,
+								disabled: p.id !== 'claude',
+								onClick: () => setSelectedProvider(p.id)
+							}))
+							: AVAILABLE_PROVIDERS.map((p) => ({
+								kind: 'action' as const,
+								label: p.label,
+								checked: currentProvider === p.id,
+								onClick: () => setSelectedProvider(p.id)
+							}))),
+						...(PROVIDER_LOCKED_TO_CLAUDE
+							? [
+									{ kind: 'divider' as const },
+									{
+										kind: 'action' as const,
+										label: 'Other providers are available when self-hosting.',
+										disabled: true,
+										onClick: () => {}
+									}
+								]
+							: [])
+					]
 				},
 				{
 					kind: 'submenu',
@@ -2045,17 +2074,33 @@
 							kind: 'action' as const,
 							label: m.label,
 							checked: model === m.id,
+							disabled:
+								PROVIDER_LOCKED_TO_CLAUDE &&
+								(m.provider ?? currentProvider) === 'claude' &&
+								!isHostedSelectableClaudeModel(m.id),
 							onClick: () => setSelectedModel(m.id)
 						})),
-						{ kind: 'divider' as const },
-						{
-							kind: 'action' as const,
-							label: 'Custom model…',
-							checked: false,
-							onClick: () => {
-								customModelOpen = true;
-							}
-						}
+						...(PROVIDER_LOCKED_TO_CLAUDE
+							? [
+									{ kind: 'divider' as const },
+									{
+										kind: 'action' as const,
+										label: HOSTED_CLAUDE_MODEL_NOTE,
+										disabled: true,
+										onClick: () => {}
+									}
+								]
+							: [
+									{ kind: 'divider' as const },
+									{
+										kind: 'action' as const,
+										label: 'Custom model…',
+										checked: false,
+										onClick: () => {
+											customModelOpen = true;
+										}
+									}
+								])
 					]
 				},
 				{ kind: 'panel', label: 'API keys', panelKey: 'apiKeys' },
@@ -2179,6 +2224,9 @@
 			const res = await fetch('/api/session');
 			if (!res.ok) return;
 			const data = await res.json();
+			if ('userId' in data) {
+				setYDocUserId(typeof data.userId === 'string' ? data.userId : null);
+			}
 			if (typeof data.serverInstanceId === 'string') {
 				const prior =
 					typeof window !== 'undefined'
@@ -2795,12 +2843,19 @@
 			setSelectedProvider(session.provider);
 		}
 		if (!session.model) return;
+		if (
+			PROVIDER_LOCKED_TO_CLAUDE &&
+			session.provider === 'claude' &&
+			!isHostedSelectableClaudeModel(session.model)
+		) {
+			return;
+		}
 		const knownModel = modelOptions.some(
 			(m) => m.id === session.model && (!m.provider || m.provider === session.provider)
 		);
 		if (knownModel) {
 			setSelectedModel(session.model);
-		} else {
+		} else if (!PROVIDER_LOCKED_TO_CLAUDE) {
 			setCustomModel(session.model, session.provider);
 		}
 	}
@@ -2846,6 +2901,9 @@
 					apiKeys: apiKeysPanelSnippet
 				}}
 			/>
+		</div>
+		<div class="header-right">
+			<HostedAccountButton />
 		</div>
 	</header>
 
@@ -3066,6 +3124,13 @@
 		align-items: center;
 		gap: 8px;
 		flex: 1;
+	}
+	.header-right {
+		display: flex;
+		align-items: center;
+		justify-content: flex-end;
+		flex: 0 0 auto;
+		min-width: 32px;
 	}
 	.logo {
 		flex-shrink: 0;

@@ -18,6 +18,8 @@ import { dirname } from 'path';
 import * as Y from 'yjs';
 import { getDb } from './db';
 import { tabFile } from './document-files';
+import { getCurrentUserId, runWithUser } from './request-context';
+import { isMultiTenant } from './workspace';
 import { serializeYDoc, seedYDoc, SYSTEM_ORIGIN } from '$lib/shared/ydoc-codec';
 
 /** Filesystem mtime can lag our `Date.now()` row-insert by a few hundred ms
@@ -128,7 +130,7 @@ export function compactTab(tabId: string) {
 const FLUSH_TICK_MS = 500;
 const dirtyTabs = new Set<string>();
 let flushTimer: NodeJS.Timeout | null = null;
-let resolveLiveDoc: ((tabId: string) => Y.Doc | null) | null = null;
+let resolveLiveDoc: ((tabId: string, userId: string | null) => Y.Doc | null) | null = null;
 /** Last committed markdown we wrote to each tab's file. Lets writeTabFile skip
  * a no-op rewrite: a pending review round (agent proposal) marks the tab dirty
  * but does NOT change the committed fragment, so its serialization is
@@ -142,25 +144,46 @@ const lastWrittenContent = new Map<string, string>();
  * needing the file-path → tabId inverse mapping. */
 const lastWrittenByPath = new Map<string, string>();
 
-export function setLiveDocResolver(resolver: (tabId: string) => Y.Doc | null) {
+const DIRTY_KEY_SEPARATOR = '\u0000';
+
+function currentUserId(): string | null {
+	return isMultiTenant() ? getCurrentUserId() : null;
+}
+
+function dirtyKey(tabId: string, userId = currentUserId()): string {
+	return `${userId ?? ''}${DIRTY_KEY_SEPARATOR}${tabId}`;
+}
+
+function parseDirtyKey(key: string): { userId: string | null; tabId: string } {
+	const idx = key.indexOf(DIRTY_KEY_SEPARATOR);
+	if (idx === -1) return { userId: null, tabId: key };
+	const userId = key.slice(0, idx);
+	return { userId: userId || null, tabId: key.slice(idx + DIRTY_KEY_SEPARATOR.length) };
+}
+
+function inUserContext<T>(userId: string | null, fn: () => T): T {
+	return userId ? runWithUser(userId, fn) : fn();
+}
+
+export function setLiveDocResolver(resolver: (tabId: string, userId: string | null) => Y.Doc | null) {
 	resolveLiveDoc = resolver;
 }
 
 export function markTabDirty(tabId: string) {
-	dirtyTabs.add(tabId);
+	dirtyTabs.add(dirtyKey(tabId));
 	if (flushTimer) return;
 	flushTimer = setTimeout(runFlushTick, FLUSH_TICK_MS);
 }
 
 function runFlushTick() {
 	flushTimer = null;
-	const tabs = Array.from(dirtyTabs);
+	const tabs = Array.from(dirtyTabs).map(parseDirtyKey);
 	dirtyTabs.clear();
-	for (const tabId of tabs) {
-		const ydoc = resolveLiveDoc?.(tabId);
+	for (const { userId, tabId } of tabs) {
+		const ydoc = resolveLiveDoc?.(tabId, userId);
 		if (!ydoc) continue;
 		try {
-			writeTabFile(tabId, ydoc);
+			inUserContext(userId, () => writeTabFile(tabId, ydoc));
 		} catch (err) {
 			console.error(`[docwriter] flush failed for tab "${tabId}":`, err);
 		}
@@ -169,14 +192,15 @@ function runFlushTick() {
 
 function writeTabFile(tabId: string, ydoc: Y.Doc) {
 	const content = serializeYDoc(ydoc);
+	const key = dirtyKey(tabId);
 	// Skip no-op rewrites: a pending review round dirties the tab without
 	// changing the committed text, and rewriting would bump mtime → CLI
 	// watcher reload → tab remount → the open comment thread closes.
-	if (lastWrittenContent.get(tabId) === content) return;
+	if (lastWrittenContent.get(key) === content) return;
 	const path = tabFile(tabId);
 	mkdirSync(dirname(path), { recursive: true });
 	writeFileSync(path, content);
-	lastWrittenContent.set(tabId, content);
+	lastWrittenContent.set(key, content);
 	lastWrittenByPath.set(path, content);
 }
 
@@ -197,7 +221,7 @@ export function isOwnFlushEcho(absPath: string): boolean {
 
 /** Synchronously flush one tab. Clears its pending dirty flag. */
 export function flushMarkdownNow(tabId: string, ydoc: Y.Doc) {
-	dirtyTabs.delete(tabId);
+	dirtyTabs.delete(dirtyKey(tabId));
 	try {
 		writeTabFile(tabId, ydoc);
 	} catch (err) {
@@ -206,15 +230,15 @@ export function flushMarkdownNow(tabId: string, ydoc: Y.Doc) {
 }
 
 export function clearDirty(tabId: string) {
-	dirtyTabs.delete(tabId);
+	dirtyTabs.delete(dirtyKey(tabId));
 }
 
 /** Drop all persisted Yjs state for a tab. Called when the user deletes the
  * underlying file — otherwise the stale updates would replay on reopen and
  * resurrect the old content. */
 export function purgeTabUpdates(tabId: string) {
-	dirtyTabs.delete(tabId);
-	lastWrittenContent.delete(tabId);
+	dirtyTabs.delete(dirtyKey(tabId));
+	lastWrittenContent.delete(dirtyKey(tabId));
 	lastWrittenByPath.delete(tabFile(tabId));
 	getDb().prepare(`DELETE FROM yjs_updates WHERE tab_id = ?`).run(tabId);
 }

@@ -43,8 +43,10 @@ import type {
 	PendingReviewOperation,
 	PendingReviewRound
 } from '$lib/types';
-import { isValidTabId, tabFile, WORKSPACE_ROOT } from './document-files';
+import { isValidTabId, tabFile, WORKSPACE_ROOT, getEffectiveRoot } from './document-files';
 import { resolveWorkspacePath } from './workspace-path';
+import { isMultiTenant } from './workspace';
+import { getCurrentUserId } from './request-context';
 import { getTabsState, setTabsState } from './runtime-state';
 import { writeTextAtomic } from './file-utils';
 
@@ -78,19 +80,38 @@ export function countOccurrences(haystack: string, needle: string): number {
  * method on the inner `Hocuspocus`, not the `Server` wrapper. Returns null
  * if it isn't up (development-time misconfiguration, not a tool-call
  * runtime condition). */
+/** In multi-tenant mode, Hocuspocus doc names are `<userId>:<tabId>`. */
+function hocuspocusDocName(tabId: string): string {
+	if (isMultiTenant()) {
+		const userId = getCurrentUserId();
+		if (userId) return `${userId}:${tabId}`;
+	}
+	return tabId;
+}
+
+function hocuspocusContext(): { userId: string } | undefined {
+	const userId = isMultiTenant() ? getCurrentUserId() : null;
+	return userId ? { userId } : undefined;
+}
+
 export function getHocuspocus(): { openDirectConnection: (name: string) => Promise<{ transact: (cb: (doc: Document) => void | Promise<void>) => Promise<void>; disconnect: () => Promise<void> }> } | null {
 	const holder = globalThis as unknown as { __docwriterWsServer?: unknown };
 	const server = holder.__docwriterWsServer as
 		| {
 				hocuspocus?: {
-					openDirectConnection: (name: string) => Promise<{
+					openDirectConnection: (name: string, context?: unknown) => Promise<{
 						transact: (cb: (doc: Document) => void | Promise<void>) => Promise<void>;
 						disconnect: () => Promise<void>;
 					}>;
 				};
 		  }
 		| undefined;
-	return server?.hocuspocus ?? null;
+	if (!server?.hocuspocus) return null;
+	const inner = server.hocuspocus;
+	return {
+		openDirectConnection: (name: string) =>
+			inner.openDirectConnection(hocuspocusDocName(name), hocuspocusContext())
+	};
 }
 
 interface TabWriteResult {
@@ -358,6 +379,41 @@ function createAgentEditThread(doc: Y.Doc, oldString: string, occurrenceIndex: n
 	return threadId;
 }
 
+function createAgentCommentThread(
+	doc: Y.Doc,
+	anchorText: string,
+	occurrenceIndex: number,
+	message: string,
+	proposedEdit?: { old_string: string; new_string: string }
+): string {
+	const threadId = 'thread_' + cryptoRandomId();
+	const now = Date.now();
+	const thread: CommentThread = {
+		id: threadId,
+		anchor: { quote: anchorText, occurrenceIndex },
+		messages: [
+			{
+				id: 'msg_' + cryptoRandomId(),
+				author: 'agent',
+				text: message,
+				timestamp: now,
+				...(proposedEdit
+					? {
+							proposedEdit: {
+								oldString: proposedEdit.old_string,
+								newString: proposedEdit.new_string
+							}
+						}
+					: {})
+			}
+		],
+		resolved: false,
+		createdAt: now
+	};
+	getCommentsMap(doc).set(threadId, thread);
+	return threadId;
+}
+
 // ---- Auto-open-as-tab -----------------------------------------------------
 
 /** Convert a user-supplied `path` (absolute or relative) into a workspace-
@@ -366,7 +422,7 @@ function createAgentEditThread(doc: Y.Doc, oldString: string, occurrenceIndex: n
 export function pathToTabId(path: string): string | null {
 	let candidate: string;
 	if (isAbsolute(path)) {
-		const rel = relative(WORKSPACE_ROOT, path);
+		const rel = relative(getEffectiveRoot(), path);
 		if (!rel || rel.startsWith('..') || isAbsolute(rel)) return null;
 		candidate = rel;
 	} else {
@@ -727,7 +783,7 @@ const writeDocTool = tool(
 	}
 );
 
-// ---- reply_to_comment ---------------------------------------------------
+// ---- comment_doc / reply_to_comment -------------------------------------
 
 /** Write a comment thread (new or reply) onto a tab's Y.Map('comments').
  * Runs inside a DirectConnection transaction so the update streams to all
@@ -755,9 +811,87 @@ export async function runCommentWrite(
 	return result;
 }
 
+const commentDocTool = tool(
+	'comment_doc',
+	'Create a new agent comment thread anchored to existing text in a workspace document. Use this for Medium autonomy when you want to create a comment thread without changing the document, or for High autonomy when a comment is better than an edit. The comment is visible to the user in the document gutter. It does not change the document text.',
+	{
+		file_path: z
+			.string()
+			.describe(
+				'Workspace-relative path (e.g. "drafts/chapter-1.md") or absolute path inside the workspace. Must be an existing file.'
+			),
+		anchor_text: z
+			.string()
+			.describe(
+				'Exact text in the current document to anchor the comment to. Prefer a short unique passage, usually one sentence or clause.'
+			),
+		message: z
+			.string()
+			.describe(
+				'The comment text. Say the useful point directly. Keep it short.'
+			),
+		occurrence_index: z
+			.number()
+			.int()
+			.min(0)
+			.optional()
+			.describe(
+				'Zero-based occurrence to anchor when anchor_text appears more than once. Omit only when anchor_text is unique.'
+			),
+		proposed_edit: z
+			.object({
+				old_string: z.string(),
+				new_string: z.string()
+			})
+			.optional()
+			.describe(
+				'Optional concrete edit the user can approve from the comment. Do not use this in Medium autonomy unless the user directly asked for an edit.'
+			)
+	},
+	async ({ file_path, anchor_text, message, occurrence_index, proposed_edit }) => {
+		if (isScratchPath(file_path)) {
+			return toolError('comment_doc cannot be used on scratch paths — only on workspace files.');
+		}
+		const opened = ensureWorkspaceTabOpen(file_path, { createIfMissing: false });
+		if (!opened.ok) return opened.error;
+
+		const anchorText = anchor_text.trim();
+		const trimmedMessage = message.trim();
+		if (!anchorText) return toolError('comment_doc requires non-empty anchor_text.');
+		if (!trimmedMessage) return toolError('comment_doc requires a non-empty message.');
+
+		let threadId = '';
+		const outcome = await runCommentWrite(opened.tabId, (doc) => {
+			const liveText = serializeYDoc(doc);
+			const hits = countOccurrences(liveText, anchorText);
+			if (hits === 0) {
+				return { ok: false, error: `anchor_text was not found in ${file_path}. Call read_doc and retry with exact current text.` };
+			}
+			if (hits > 1 && occurrence_index === undefined) {
+				return { ok: false, error: `anchor_text matches ${hits} locations in ${file_path}. Pass occurrence_index to choose one.` };
+			}
+			const occurrence = occurrence_index ?? 0;
+			if (occurrence >= hits) {
+				return { ok: false, error: `occurrence_index ${occurrence} is out of range; anchor_text appears ${hits} time${hits === 1 ? '' : 's'}.` };
+			}
+			threadId = createAgentCommentThread(
+				doc,
+				anchorText,
+				occurrence,
+				trimmedMessage,
+				proposed_edit
+			);
+			return { ok: true };
+		});
+
+		if (!outcome.ok) return toolError(outcome.error);
+		return toolText(`Commented on ${file_path} in thread ${threadId}.`);
+	}
+);
+
 const replyToCommentTool = tool(
 	'reply_to_comment',
-	'Reply on an existing comment thread the user has opened. Use this when the user\'s feedback is open-ended, exploratory, or unsure ("what do you think", "idk", "is this right?", "maybe X?"), or when they ask a question that doesn\'t demand an immediate edit. Say what you think, optionally sketch an edit in `proposed_edit` (the user can approve it to apply later). You CANNOT open new threads — only the user can start a thread. If there is no relevant thread for what you want to say, prefer `edit_doc`, `AskUserQuestion`, or staying silent over forcing a thread.',
+	'Reply on an existing comment thread. Use this when the user\'s feedback is open-ended, exploratory, or unsure ("what do you think", "idk", "is this right?", "maybe X?"), or when they ask a question that doesn\'t demand an immediate edit. Say what you think. Include `proposed_edit` only when the user directly asked for an edit or autonomy is High. To start a new agent-authored comment thread, use `comment_doc` instead.',
 	{
 		file_path: z
 			.string()
@@ -767,7 +901,7 @@ const replyToCommentTool = tool(
 		thread_id: z
 			.string()
 			.describe(
-				'Id of the existing thread to reply on (from the "Open comment threads" prompt block). Required: agents cannot open new threads.'
+				'Id of the existing thread to reply on (from the "Open comment threads" prompt block). Use comment_doc when you need a new thread.'
 			),
 		message: z
 			.string()
@@ -893,12 +1027,13 @@ const listThreadsTool = tool(
 export const docToolsMcp = createSdkMcpServer({
 	name: 'docwriter-doc',
 	version: '0.0.1',
-	tools: [editDocTool, readDocTool, writeDocTool, replyToCommentTool, listThreadsTool]
+	tools: [editDocTool, readDocTool, writeDocTool, commentDocTool, replyToCommentTool, listThreadsTool]
 });
 
 /** SDK-namespaced tool names (what appears in stream events). */
 export const EDIT_DOC_TOOL_NAME = 'mcp__docwriter-doc__edit_doc';
 export const READ_DOC_TOOL_NAME = 'mcp__docwriter-doc__read_doc';
 export const WRITE_DOC_TOOL_NAME = 'mcp__docwriter-doc__write_doc';
+export const COMMENT_DOC_TOOL_NAME = 'mcp__docwriter-doc__comment_doc';
 export const REPLY_TO_COMMENT_TOOL_NAME = 'mcp__docwriter-doc__reply_to_comment';
 export const LIST_THREADS_TOOL_NAME = 'mcp__docwriter-doc__list_threads';
