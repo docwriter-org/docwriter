@@ -14,15 +14,29 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
 
-const PORT = Number(process.env.PORT || 3000);
-const TOKEN = process.env.RUNNER_SHARED_TOKEN || '';
-const DEFAULT_TIMEOUT_MS = 30_000;
-const MAX_TIMEOUT_MS = 120_000;
-const DEFAULT_MAX_OUTPUT_BYTES = 12_000;
-const DEFAULT_MAX_RETURN_FILES = 100;
-const DEFAULT_MAX_RETURN_BYTES = 8 * 1024 * 1024;
-const SCRATCH_REL = '.docwriter/agent/scratch';
-const CACHE_PATH_PATTERNS = [
+const MIB = 1024 * 1024;
+
+// The runner is a separate execution boundary. The app may request smaller
+// per-run limits, but the runner enforces these ceilings before returning
+// output or copied files.
+const RUNNER = {
+	port: positiveInt(process.env.PORT, 3000),
+	token: process.env.RUNNER_SHARED_TOKEN || process.env.DOCWRITER_RUNNER_TOKEN || '',
+	scratchRel: '.docwriter/agent/scratch',
+	maxRequestBytes: 32 * MIB,
+	defaultTimeoutMs: 30_000,
+	maxTimeoutMs: 120_000,
+	defaultOutputBytes: 12_000,
+	maxOutputBytes: 128 * 1024,
+	defaultReturnFiles: 100,
+	maxReturnFiles: 500,
+	defaultReturnBytes: 8 * MIB,
+	maxReturnBytes: 32 * MIB
+};
+
+// Ignore runtime caches when reporting changed files. They are implementation
+// noise from package managers, Python, Rust, and test tools, not user outputs.
+const IGNORED_RETURN_PATH_PATTERNS = [
 	/^Library\/Caches\//,
 	/^\.cache\//,
 	/^\.npm\//,
@@ -37,6 +51,11 @@ const CACHE_PATH_PATTERNS = [
 	/\.pyc$/,
 	/\.pyo$/
 ];
+
+function positiveInt(value, fallback) {
+	const number = Number(value);
+	return Number.isFinite(number) && number > 0 ? Math.floor(number) : fallback;
+}
 
 function json(res, status, body) {
 	const payload = Buffer.from(JSON.stringify(body));
@@ -54,10 +73,10 @@ function safeEqual(a, b) {
 }
 
 function authorized(req) {
-	if (!TOKEN) return process.env.NODE_ENV !== 'production';
+	if (!RUNNER.token) return process.env.NODE_ENV !== 'production';
 	const header = req.headers.authorization || '';
 	const token = header.startsWith('Bearer ') ? header.slice('Bearer '.length) : '';
-	return !!token && safeEqual(token, TOKEN);
+	return !!token && safeEqual(token, RUNNER.token);
 }
 
 function readJson(req) {
@@ -66,7 +85,7 @@ function readJson(req) {
 		let total = 0;
 		req.on('data', (chunk) => {
 			total += chunk.length;
-			if (total > 32 * 1024 * 1024) {
+			if (total > RUNNER.maxRequestBytes) {
 				reject(new Error('Request too large'));
 				req.destroy();
 				return;
@@ -146,7 +165,7 @@ function collectChangedFiles(root, before, limits) {
 			if (!entry.isFile()) continue;
 			const rel = relative(root, abs).split(sep).join('/');
 			if (!isSafeRelPath(rel)) continue;
-			if (CACHE_PATH_PATTERNS.some((pattern) => pattern.test(rel))) continue;
+			if (IGNORED_RETURN_PATH_PATTERNS.some((pattern) => pattern.test(rel))) continue;
 			const stat = lstatSync(abs);
 			const sha256 = hashFile(abs);
 			if (before.get(rel) === sha256) continue;
@@ -261,21 +280,27 @@ async function handleRun(req, res) {
 
 	const timeoutMs = Math.max(
 		1000,
-		Math.min(MAX_TIMEOUT_MS, Number(body.timeoutMs) || DEFAULT_TIMEOUT_MS)
+		Math.min(RUNNER.maxTimeoutMs, Number(body.timeoutMs) || RUNNER.defaultTimeoutMs)
 	);
 	const maxOutputBytes = Math.max(
 		1000,
-		Math.min(128 * 1024, Number(body.maxOutputBytes) || DEFAULT_MAX_OUTPUT_BYTES)
+		Math.min(RUNNER.maxOutputBytes, Number(body.maxOutputBytes) || RUNNER.defaultOutputBytes)
 	);
 	const limits = {
-		maxReturnFiles: Math.max(1, Math.min(500, Number(body.maxReturnFiles) || DEFAULT_MAX_RETURN_FILES)),
-		maxReturnBytes: Math.max(1024, Math.min(32 * 1024 * 1024, Number(body.maxReturnBytes) || DEFAULT_MAX_RETURN_BYTES))
+		maxReturnFiles: Math.max(
+			1,
+			Math.min(RUNNER.maxReturnFiles, Number(body.maxReturnFiles) || RUNNER.defaultReturnFiles)
+		),
+		maxReturnBytes: Math.max(
+			1024,
+			Math.min(RUNNER.maxReturnBytes, Number(body.maxReturnBytes) || RUNNER.defaultReturnBytes)
+		)
 	};
 
 	const workspace = mkdtempSync(join(tmpdir(), 'docwriter-runner-'));
 	try {
 		writeBundle(workspace, Array.isArray(body.files) ? body.files : []);
-		mkdirSync(join(workspace, SCRATCH_REL), { recursive: true });
+		mkdirSync(join(workspace, RUNNER.scratchRel), { recursive: true });
 		const before = snapshotFiles(workspace);
 		const run = await runCommand(workspace, command, timeoutMs, maxOutputBytes);
 		const changed = collectChangedFiles(workspace, before, limits);
@@ -299,6 +324,6 @@ const server = createServer((req, res) => {
 	json(res, 404, { error: 'Not found' });
 });
 
-server.listen(PORT, '0.0.0.0', () => {
-	console.log(`[docwriter-runner] listening on :${PORT}`);
+server.listen(RUNNER.port, '0.0.0.0', () => {
+	console.log(`[docwriter-runner] listening on :${RUNNER.port}`);
 });

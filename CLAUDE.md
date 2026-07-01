@@ -22,7 +22,7 @@ markdown in a Tiptap editor. The editor state for every open tab is a CRDT
 is a synced client. An agent proposes edits by mutating the server Y.Doc
 directly through custom MCP tools. Every mutation reaches the browser over
 a WebSocket as an atomic Yjs update and appears in the UI as a reviewable
-round. The data model is flat markdown - no atoms, no blocks, no pins.
+round. The data model is flat markdown plus comments and review rounds.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system.
 

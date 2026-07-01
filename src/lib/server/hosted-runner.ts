@@ -16,14 +16,20 @@ import {
 } from './document-files';
 import { isMultiTenant } from './workspace';
 
-const SCRATCH_REL = '.docwriter/agent/scratch';
-const DEFAULT_TIMEOUT_MS = 30_000;
-const MAX_TIMEOUT_MS = 120_000;
-const DEFAULT_MAX_FILE_BYTES = 2 * 1024 * 1024;
-const DEFAULT_MAX_BUNDLE_BYTES = 16 * 1024 * 1024;
-const DEFAULT_MAX_FILES = 800;
-const OUTPUT_TEXT_LIMIT = 12_000;
-const OUTPUTS_REL = '.docwriter/agent/outputs';
+const MIB = 1024 * 1024;
+
+const RUNNER = {
+	scratchRel: '.docwriter/agent/scratch',
+	outputsRel: '.docwriter/agent/outputs',
+	defaultTimeoutMs: 30_000,
+	maxTimeoutMs: 120_000,
+	defaultMaxFileBytes: 2 * MIB,
+	defaultMaxBundleBytes: 16 * MIB,
+	defaultMaxFiles: 800,
+	defaultOutputBytes: 12_000,
+	defaultReturnFiles: 100,
+	defaultReturnBytes: 8 * MIB
+};
 
 type BundleFile = {
 	path: string;
@@ -128,16 +134,16 @@ function collectTree(
 function collectBundle(): { files: BundleFile[]; skippedByLimit: boolean } {
 	const root = getEffectiveRoot();
 	const limits = {
-		maxFiles: envInt('DOCWRITER_RUNNER_MAX_FILES', DEFAULT_MAX_FILES),
-		maxFileBytes: envInt('DOCWRITER_RUNNER_MAX_FILE_BYTES', DEFAULT_MAX_FILE_BYTES),
-		maxBundleBytes: envInt('DOCWRITER_RUNNER_MAX_BUNDLE_BYTES', DEFAULT_MAX_BUNDLE_BYTES)
+		maxFiles: envInt('DOCWRITER_RUNNER_MAX_FILES', RUNNER.defaultMaxFiles),
+		maxFileBytes: envInt('DOCWRITER_RUNNER_MAX_FILE_BYTES', RUNNER.defaultMaxFileBytes),
+		maxBundleBytes: envInt('DOCWRITER_RUNNER_MAX_BUNDLE_BYTES', RUNNER.defaultMaxBundleBytes)
 	};
 	const files: BundleFile[] = [];
 	let bytes = collectTree(root, root, '', limits, files);
 
 	const scratchDir = getEffectiveScratchDir();
 	if (existsSync(scratchDir) && isWithin(scratchDir, root)) {
-		bytes += collectTree(root, scratchDir, SCRATCH_REL, limits, files);
+		bytes += collectTree(root, scratchDir, RUNNER.scratchRel, limits, files);
 	}
 
 	return {
@@ -147,9 +153,9 @@ function collectBundle(): { files: BundleFile[]; skippedByLimit: boolean } {
 }
 
 function writeReturnedScratchFile(root: string, file: RunnerResponseFile): boolean {
-	if (!file.path.startsWith(SCRATCH_REL + '/') || !isSafeRelPath(file.path)) return false;
+	if (!file.path.startsWith(RUNNER.scratchRel + '/') || !isSafeRelPath(file.path)) return false;
 	const abs = resolve(root, file.path);
-	const scratch = resolve(root, SCRATCH_REL);
+	const scratch = resolve(root, RUNNER.scratchRel);
 	if (!isWithin(abs, scratch)) return false;
 	mkdirSync(dirname(abs), { recursive: true });
 	writeFileSync(abs, Buffer.from(file.dataBase64, 'base64'));
@@ -179,7 +185,7 @@ function writeRunLog(args: {
 			.update(`${now.toISOString()}\n${args.command}`)
 			.digest('hex')
 			.slice(0, 8);
-		const relPath = `${OUTPUTS_REL}/run-${timestampForPath(now)}-${id}.md`;
+		const relPath = `${RUNNER.outputsRel}/run-${timestampForPath(now)}-${id}.md`;
 		const absPath = join(getEffectiveDocwriterDir(), 'agent', 'outputs', relPath.split('/').pop()!);
 		mkdirSync(dirname(absPath), { recursive: true });
 		const exit = args.response.timedOut
@@ -219,8 +225,8 @@ function writeRunLog(args: {
 
 function clip(text: string | undefined): string {
 	if (!text) return '';
-	return text.length > OUTPUT_TEXT_LIMIT
-		? `${text.slice(0, OUTPUT_TEXT_LIMIT)}\n...[truncated]`
+	return text.length > RUNNER.defaultOutputBytes
+		? `${text.slice(0, RUNNER.defaultOutputBytes)}\n...[truncated]`
 		: text;
 }
 
@@ -240,14 +246,14 @@ function formatResult(
 		lines.push('Some files were skipped because the bundle limit was reached.');
 	}
 	if (copiedScratchFiles > 0) {
-		lines.push(`Copied ${copiedScratchFiles} changed scratch file${copiedScratchFiles === 1 ? '' : 's'} back to ${SCRATCH_REL}/.`);
+		lines.push(`Copied ${copiedScratchFiles} changed scratch file${copiedScratchFiles === 1 ? '' : 's'} back to ${RUNNER.scratchRel}/.`);
 	}
 	if (logPath) {
 		lines.push(`Saved run log to \`${logPath}\`.`);
 	}
 
 	const changed = response.changedPaths ?? [];
-	const nonScratchChanges = changed.filter((path) => !path.startsWith(SCRATCH_REL + '/'));
+	const nonScratchChanges = changed.filter((path) => !path.startsWith(RUNNER.scratchRel + '/'));
 	if (nonScratchChanges.length > 0) {
 		lines.push(
 			`Sandbox changed ${nonScratchChanges.length} workspace file${nonScratchChanges.length === 1 ? '' : 's'} outside scratch. Those changes were not written back. Use edit_doc/write_doc to propose document changes.`
@@ -297,8 +303,8 @@ export async function runHostedBash(input: {
 	const requestedTimeout =
 		typeof input.timeout_ms === 'number' && Number.isFinite(input.timeout_ms)
 			? Math.floor(input.timeout_ms)
-			: DEFAULT_TIMEOUT_MS;
-	const timeoutMs = Math.max(1000, Math.min(MAX_TIMEOUT_MS, requestedTimeout));
+			: RUNNER.defaultTimeoutMs;
+	const timeoutMs = Math.max(1000, Math.min(RUNNER.maxTimeoutMs, requestedTimeout));
 	const bundle = collectBundle();
 	const controller = new AbortController();
 	const abortTimer = setTimeout(() => controller.abort(), timeoutMs + 15_000);
@@ -315,9 +321,9 @@ export async function runHostedBash(input: {
 			body: JSON.stringify({
 				command,
 				timeoutMs,
-				maxOutputBytes: envInt('DOCWRITER_RUNNER_MAX_OUTPUT_BYTES', OUTPUT_TEXT_LIMIT),
-				maxReturnFiles: envInt('DOCWRITER_RUNNER_MAX_RETURN_FILES', 100),
-				maxReturnBytes: envInt('DOCWRITER_RUNNER_MAX_RETURN_BYTES', 8 * 1024 * 1024),
+				maxOutputBytes: envInt('DOCWRITER_RUNNER_MAX_OUTPUT_BYTES', RUNNER.defaultOutputBytes),
+				maxReturnFiles: envInt('DOCWRITER_RUNNER_MAX_RETURN_FILES', RUNNER.defaultReturnFiles),
+				maxReturnBytes: envInt('DOCWRITER_RUNNER_MAX_RETURN_BYTES', RUNNER.defaultReturnBytes),
 				files: bundle.files
 			}),
 			signal: controller.signal
