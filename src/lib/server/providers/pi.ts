@@ -14,8 +14,9 @@ import type {
 	ToolDefinition
 } from './types';
 import { buildToolDefinitions } from './tool-handlers';
-import { randomUUID } from 'node:crypto';
-import { WORKSPACE_ROOT } from '$lib/server/document-files';
+import { mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
+import { getEffectiveDocwriterDir, getEffectiveRoot } from '$lib/server/document-files';
 
 let sdkLoaded = false;
 let createAgentSession: any = null;
@@ -131,10 +132,6 @@ function resolvePiModel(provider: string, modelId: string) {
 
 export class PiProvider implements AgentProvider {
 	readonly id = 'pi' as const;
-	private session: any = null;
-	// Stable across renders so the transcript accumulates under one session id
-	// (Pi mints a fresh session.sessionId each render).
-	private sessionId: string | null = null;
 
 	async *query(
 		options: ProviderQueryOptions,
@@ -144,13 +141,29 @@ export class PiProvider implements AgentProvider {
 
 		const allTools = tools.length > 0 ? tools : buildToolDefinitions();
 		const piTools = buildPiTools(allTools);
+		const cwd = getEffectiveRoot();
+		const piDir = join(getEffectiveDocwriterDir(), 'pi');
+		const sessionDir = join(piDir, 'sessions');
+		await mkdir(sessionDir, { recursive: true });
 
-		const authStorage = AuthStorage.create();
-		const modelRegistry = ModelRegistry.create(authStorage);
+		const authStorage = AuthStorage.create(join(piDir, 'auth.json'));
+		const modelRegistry = ModelRegistry.create(authStorage, join(piDir, 'models.json'));
+		let sessionManager: any;
+		let resumeFailed = false;
+		if (options.sessionId) {
+			try {
+				sessionManager = SessionManager.open(options.sessionId, sessionDir, cwd);
+			} catch {
+				resumeFailed = true;
+			}
+		}
+		if (!sessionManager) {
+			sessionManager = SessionManager.create(cwd, sessionDir);
+		}
 
 		const sessionOpts: any = {
-			cwd: WORKSPACE_ROOT,
-			sessionManager: SessionManager.inMemory(),
+			cwd,
+			sessionManager,
 			authStorage,
 			modelRegistry,
 			customTools: piTools,
@@ -175,12 +188,14 @@ export class PiProvider implements AgentProvider {
 		}
 
 		const { session } = await createAgentSession(sessionOpts);
-		this.session = session;
-
-		if (!this.sessionId) {
-			this.sessionId = options.sessionId || `pi-${randomUUID()}`;
+		if (resumeFailed) {
+			yield {
+				type: 'sdk_status',
+				status: 'cleared_stale_session',
+				compactResult: 'Pi session was missing locally; starting a fresh conversation.'
+			};
 		}
-		yield { type: 'session', sessionId: this.sessionId };
+		yield { type: 'session', sessionId: sessionManager.getSessionId() };
 
 		const events: ProviderEvent[] = [];
 		let resolveWait: (() => void) | null = null;
@@ -288,7 +303,6 @@ export class PiProvider implements AgentProvider {
 		unsubscribe();
 		await promptPromise;
 		session.dispose();
-		this.session = null;
 		// Surface a prompt failure (e.g. missing API key) so the render endpoint
 		// emits an `error` event instead of completing as a silent no-op.
 		if (promptError) throw promptError;

@@ -1,7 +1,7 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { getProvider, listAllModels } from '$lib/server/providers';
-import type { ProviderId, ProviderModelOption } from '$lib/server/providers/types';
+import type { ProviderId } from '$lib/server/providers/types';
 
 export type ModelOption = { id: string; label: string; provider?: string };
 

@@ -25,6 +25,7 @@ import { isScratchPath, resolveTabFromPath, isOpenTab } from '$lib/server/path-r
 import { readFileSync, existsSync } from 'fs';
 import * as Y from 'yjs';
 import {
+	serializeYDoc,
 	getCommentsMap,
 	AGENT_ORIGIN,
 	normalizeTypography
@@ -382,8 +383,89 @@ export function buildToolDefinitions(): ToolDefinition[] {
 			execute: async () => ({ content: [{ type: 'text' as const, text: 'Hook proposal sent to the user for review.' }] })
 		},
 		{
+			name: 'comment_doc',
+			description:
+				'Create a new agent comment thread anchored to existing text in a workspace document. It does not change document text. In Medium autonomy, use this to create comment threads on your own, but do not propose edits unless asked.',
+			inputSchema: {
+				type: 'object',
+				properties: {
+					path: { type: 'string', description: 'Workspace-relative tab id or absolute path.' },
+					anchor_text: { type: 'string', description: 'Exact current document text to anchor the comment to.' },
+					message: { type: 'string', description: 'The comment text.' },
+					occurrence_index: { type: 'number', description: 'Zero-based occurrence when anchor_text appears more than once.' },
+					proposed_edit: {
+						type: 'object',
+						description:
+							'Optional concrete edit the user can approve. Use only when the user directly asked for an edit or autonomy is High.',
+						properties: { old_string: { type: 'string' }, new_string: { type: 'string' } },
+						required: ['old_string', 'new_string']
+					}
+				},
+				required: ['path', 'anchor_text', 'message']
+			},
+			execute: async (input) => {
+				const { path, anchor_text, message: msg, occurrence_index, proposed_edit } = input as {
+					path: string;
+					anchor_text: string;
+					message: string;
+					occurrence_index?: number;
+					proposed_edit?: { old_string: string; new_string: string };
+				};
+				if (isScratchPath(path)) return { isError: true, content: [{ type: 'text' as const, text: 'comment_doc cannot be used on scratch paths.' }] };
+				const opened = ensureWorkspaceTabOpen(path, { createIfMissing: false });
+				if (!opened.ok) return toToolResult(opened.error);
+				const anchorText = anchor_text.trim();
+				const trimmedMessage = msg.trim();
+				if (!anchorText) return { isError: true, content: [{ type: 'text' as const, text: 'comment_doc requires non-empty anchor_text.' }] };
+				if (!trimmedMessage) return { isError: true, content: [{ type: 'text' as const, text: 'comment_doc requires a non-empty message.' }] };
+				let threadId = '';
+				const outcome = await runCommentWrite(opened.tabId, (doc) => {
+					const liveText = serializeYDoc(doc);
+					const hits = countOccurrences(liveText, anchorText);
+					if (hits === 0) {
+						return { ok: false as const, error: `anchor_text was not found in ${path}.` };
+					}
+					if (hits > 1 && occurrence_index === undefined) {
+						return { ok: false as const, error: `anchor_text matches ${hits} locations in ${path}. Pass occurrence_index to choose one.` };
+					}
+					const occurrence = occurrence_index ?? 0;
+					if (!Number.isInteger(occurrence) || occurrence < 0 || occurrence >= hits) {
+						return { ok: false as const, error: `occurrence_index ${occurrence} is out of range; anchor_text appears ${hits} time${hits === 1 ? '' : 's'}.` };
+					}
+					const commentsMap = getCommentsMap(doc);
+					const now = Date.now();
+					threadId = 'thread_' + cryptoRandomId();
+					const thread: CommentThread = {
+						id: threadId,
+						anchor: { quote: anchorText, occurrenceIndex: occurrence },
+						messages: [{
+							id: 'msg_' + cryptoRandomId(),
+							author: 'agent',
+							text: trimmedMessage,
+							timestamp: now,
+							...(proposed_edit
+								? {
+										proposedEdit: {
+											oldString: proposed_edit.old_string,
+											newString: proposed_edit.new_string
+										}
+									}
+								: {})
+						}],
+						resolved: false,
+						createdAt: now
+					};
+					doc.transact(() => commentsMap.set(threadId, thread), AGENT_ORIGIN);
+					return { ok: true as const };
+				});
+				if (!outcome.ok) return { isError: true, content: [{ type: 'text' as const, text: outcome.error }] };
+				return { content: [{ type: 'text' as const, text: `Commented on ${path} in thread ${threadId}.` }] };
+			}
+		},
+		{
 			name: 'reply_to_comment',
-			description: 'Reply on an existing comment thread.',
+			description:
+				'Reply on an existing comment thread. Include proposed_edit only when the user directly asked for an edit or autonomy is High.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -485,6 +567,7 @@ export const TOOL_NAMES = {
 	REVIEW_ACTION: 'review_action',
 	PROPOSE_RULE: 'propose_rule',
 	PROPOSE_HOOK: 'propose_hook',
+	COMMENT_DOC: 'comment_doc',
 	REPLY_TO_COMMENT: 'reply_to_comment',
 	LIST_THREADS: 'list_threads'
 } as const;

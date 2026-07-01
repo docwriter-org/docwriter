@@ -85,6 +85,45 @@ const MIGRATIONS: Array<{ version: number; sql: string }> = [
 			);
 			CREATE INDEX IF NOT EXISTS conv_events_session ON conversation_events(session);
 		`
+	},
+	{
+		version: 4,
+		sql: `
+			CREATE TABLE IF NOT EXISTS provider_session_entries (
+				id          INTEGER PRIMARY KEY AUTOINCREMENT,
+				provider    TEXT NOT NULL,
+				project_key TEXT NOT NULL,
+				session_id  TEXT NOT NULL,
+				subpath     TEXT NOT NULL DEFAULT '',
+				entry_json  TEXT NOT NULL,
+				created     INTEGER NOT NULL
+			);
+			CREATE INDEX IF NOT EXISTS provider_session_entries_lookup
+				ON provider_session_entries(provider, project_key, session_id, subpath, id);
+			CREATE INDEX IF NOT EXISTS provider_session_entries_project
+				ON provider_session_entries(provider, project_key, session_id, created);
+		`
+	},
+	{
+		version: 5,
+		// Reserved so local databases that briefly saw the old v4/v5 sequence
+		// do not get confused by a reused migration number.
+		sql: `SELECT 1;`
+	},
+	{
+		version: 6,
+		sql: `
+			CREATE TABLE IF NOT EXISTS conversation_sessions (
+				id       TEXT PRIMARY KEY,
+				provider TEXT NOT NULL,
+				model    TEXT NOT NULL DEFAULT '',
+				created  INTEGER NOT NULL,
+				updated  INTEGER NOT NULL,
+				status   TEXT NOT NULL DEFAULT 'active'
+			);
+			CREATE INDEX IF NOT EXISTS conversation_sessions_updated
+				ON conversation_sessions(updated);
+		`
 	}
 ];
 

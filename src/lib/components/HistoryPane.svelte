@@ -36,6 +36,48 @@
 	let entries: HistoryEntry[] = $state([]);
 	agentHistory.subscribe((v) => (entries = v));
 
+	let entriesEl: HTMLDivElement | null = $state(null);
+	const fadingRows = new Set<HTMLElement>();
+	let fadeRaf = 0;
+
+	function clamp(n: number, min: number, max: number): number {
+		return Math.max(min, Math.min(max, n));
+	}
+
+	function updateRowFades() {
+		fadeRaf = 0;
+		if (!entriesEl) return;
+		const container = entriesEl.getBoundingClientRect();
+		if (container.height <= 0) return;
+		const fullOpacityUntil = container.top + clamp(container.height * 0.46, 220, 360);
+		const fadeDistance = clamp(container.height * 0.36, 180, 300);
+
+		for (const row of fadingRows) {
+			if (!entriesEl.contains(row)) continue;
+			const rect = row.getBoundingClientRect();
+			const center = rect.top + rect.height / 2;
+			const fadeProgress = (center - fullOpacityUntil) / fadeDistance;
+			const opacity = clamp(1 - fadeProgress, 0.24, 1);
+			row.style.setProperty('--history-row-opacity', opacity.toFixed(3));
+		}
+	}
+
+	function scheduleRowFadeUpdate() {
+		if (typeof window === 'undefined' || fadeRaf) return;
+		fadeRaf = window.requestAnimationFrame(updateRowFades);
+	}
+
+	function fadeHistoryRow(node: HTMLElement) {
+		fadingRows.add(node);
+		scheduleRowFadeUpdate();
+		return {
+			destroy() {
+				fadingRows.delete(node);
+				node.style.removeProperty('--history-row-opacity');
+				scheduleRowFadeUpdate();
+			}
+		};
+	}
 
 	let cost = $state<SessionCost>({
 		totalCostUsd: 0,
@@ -92,6 +134,18 @@
 		tickHandle = setInterval(() => {
 			nowTick = Date.now();
 		}, 30_000);
+
+		const resizeObserver =
+			typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(scheduleRowFadeUpdate);
+		if (entriesEl) resizeObserver?.observe(entriesEl);
+		window.addEventListener('resize', scheduleRowFadeUpdate);
+		scheduleRowFadeUpdate();
+
+		return () => {
+			resizeObserver?.disconnect();
+			window.removeEventListener('resize', scheduleRowFadeUpdate);
+			if (fadeRaf) window.cancelAnimationFrame(fadeRaf);
+		};
 	});
 	onDestroy(() => {
 		if (tickHandle) clearInterval(tickHandle);
@@ -339,7 +393,7 @@
 					class="header-pill-btn icon-only"
 					onclick={() => (transcriptOpen = true)}
 					aria-label="Transcript"
-					use:tooltip={'Open the session transcript. Shows every user message, agent response, tool call, and result in this session, with filters and search.'}
+					use:tooltip={'Open the current session transcript. Shows user messages, agent responses, tool calls, and tool results.'}
 				>
 					<MessagesSquare size={12} />
 				</button>
@@ -350,7 +404,7 @@
 					use:tooltip={"New agent session. Starts a fresh conversation with the agent. Workspace files, comment threads, rules, hooks, and settings all stay the same. Only the agent's conversation history resets."}
 				>
 					<RotateCcw size={12} />
-					<span>Restart</span>
+					<span>New session</span>
 				</button>
 				{#if onCollapse}
 					<button
@@ -366,7 +420,13 @@
 		{/if}
 	</div>
 
-	<div class="entries" class:muted-veil={muted} aria-hidden={muted}>
+	<div
+		class="entries"
+		class:muted-veil={muted}
+		aria-hidden={muted}
+		bind:this={entriesEl}
+		onscroll={scheduleRowFadeUpdate}
+	>
 		{#if pinnedTurn}
 			<div class="pinned-turn-card">
 				<div
@@ -395,6 +455,7 @@
 		{#each displayed as entry, idx (((entry as { _key?: number })._key) ?? `${entry.timestamp}-${idx}`)}
 			<div
 				class="entry-slot"
+				use:fadeHistoryRow
 				in:fly|local={{ y: -4, duration: 180, easing: cubicOut }}
 				animate:flip={{ duration: 220, easing: cubicOut }}
 			>
@@ -479,7 +540,7 @@
 					</summary>
 					<div class="assistant-body">{@html renderMarkdown(entry.text)}</div>
 				</details>
-			{:else if entry.type === 'assistant_thinking'}
+			{:else if entry.type === 'assistant_thinking' && entry.text.trim()}
 				<details class="entry thinking-text">
 					<summary class="assistant-summary">
 						<Bot size={11} color="#6366f1" />
@@ -749,7 +810,7 @@
 	}
 	/* Shared pill-button chrome — applied to all 3 action buttons in
 	 * the trailing group (Wake from AgentDock, Send from AgentDock,
-	 * Restart from this component). Icon + text label, ghost until
+	 * New session from this component). Icon + text label, ghost until
 	 * hovered. :global() so the AgentDock's buttons inherit it. */
 	/* ShineBorder (BorderBeam) inline so it sits flush in the flex row. */
 	.pane-header :global(.bb-host) {
@@ -1209,6 +1270,13 @@
 		 * `in:fly|local` handles entry, `animate:flip` handles smooth
 		 * repositioning when older entries shift down. */
 		margin-bottom: 4px;
+		opacity: var(--history-row-opacity, 1);
+		transition: opacity 160ms ease;
+		will-change: opacity;
+	}
+	.entry-slot:hover,
+	.entry-slot:focus-within {
+		opacity: 1;
 	}
 	.entry-time {
 		margin-left: 8px;

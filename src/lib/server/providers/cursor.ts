@@ -12,8 +12,8 @@ import type {
 	ToolDefinition
 } from './types';
 import { buildToolDefinitions } from './tool-handlers';
-import { randomUUID } from 'node:crypto';
-import { WORKSPACE_ROOT } from '$lib/server/document-files';
+import { getEffectiveRoot } from '$lib/server/document-files';
+import { DocWriterCursorLocalAgentStore } from './cursor-store';
 
 /** Cursor wraps custom-tool results in a synthetic-MCP envelope, e.g.
  * `{status, value:{content:[{text:{text:"…"}}], isError}}` or
@@ -87,38 +87,12 @@ function buildCustomTools(
 
 export class CursorProvider implements AgentProvider {
 	readonly id = 'cursor' as const;
-	private agent: any = null;
-	private agentModel: string | null = null;
-	// Stable across renders so the persisted transcript accumulates under one
-	// session id. Cursor's per-send `run.id` changes every render, which would
-	// orphan earlier turns in conversation_events / the transcript viewer.
-	private sessionId: string | null = null;
-
-	/** Drop cached agent state (e.g. after "New session" clears sessionId). */
-	private resetAgent(): void {
-		if (this.agent?.close) {
-			try {
-				this.agent.close();
-			} catch {
-				/* ignore */
-			}
-		}
-		this.agent = null;
-		this.agentModel = null;
-		this.sessionId = null;
-	}
 
 	async *query(
 		options: ProviderQueryOptions,
 		tools: ToolDefinition[]
 	): AsyncIterable<ProviderEvent> {
 		await loadCursorSdk();
-
-		// Runtime session was cleared (Restart / New session) but this provider
-		// instance still holds the prior Cursor agent — reuse would 409.
-		if (!options.sessionId && this.sessionId) {
-			this.resetAgent();
-		}
 
 		const allTools = tools.length > 0 ? tools : buildToolDefinitions();
 
@@ -128,47 +102,46 @@ export class CursorProvider implements AgentProvider {
 		});
 
 		const model = options.model || 'composer-2.5';
+		const cwd = getEffectiveRoot();
+		const store = new DocWriterCursorLocalAgentStore();
+		const agentOptions = {
+			apiKey: process.env.CURSOR_API_KEY,
+			model: { id: model },
+			local: {
+				cwd,
+				store,
+				customTools
+			}
+		};
 
-		if (!this.agent || this.agentModel !== model) {
-			this.agent = await Agent.create({
-				apiKey: process.env.CURSOR_API_KEY,
-				model: { id: model },
-				local: {
-					cwd: WORKSPACE_ROOT,
-					customTools
-				}
-			});
-			this.agentModel = model;
+		let agent: any = null;
+		let resumeFailed = false;
+		if (options.sessionId) {
+			try {
+				agent = await Agent.resume(options.sessionId, agentOptions);
+			} catch {
+				resumeFailed = true;
+			}
 		}
+		if (!agent) agent = await Agent.create(agentOptions);
 
 		const fullPrompt = options.systemPrompt
 			? `${options.systemPrompt}\n\n${options.prompt}`
 			: options.prompt;
 
-		if (!this.sessionId) {
-			this.sessionId = options.sessionId || `cursor-${randomUUID()}`;
+		if (resumeFailed) {
+			yield {
+				type: 'sdk_status',
+				status: 'cleared_stale_session',
+				compactResult: 'Cursor agent was missing locally; starting a fresh conversation.'
+			};
 		}
-		yield { type: 'session', sessionId: this.sessionId };
+		yield { type: 'session', sessionId: agent.agentId };
 
-		let run: any;
-		try {
-			run = await this.agent.send(fullPrompt);
-		} catch {
-			// Stale/busy agent from a prior run — recreate once and retry.
-			this.resetAgent();
-			this.agent = await Agent.create({
-				apiKey: process.env.CURSOR_API_KEY,
-				model: { id: model },
-				local: {
-					cwd: WORKSPACE_ROOT,
-					customTools
-				}
-			});
-			this.agentModel = model;
-			this.sessionId = options.sessionId || `cursor-${randomUUID()}`;
-			yield { type: 'session', sessionId: this.sessionId };
-			run = await this.agent.send(fullPrompt);
-		}
+		const run = await agent.send(fullPrompt, {
+			model: { id: model },
+			local: { customTools }
+		});
 
 		let toolCallCounter = 0;
 		for await (const event of run.stream()) {

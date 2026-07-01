@@ -13,7 +13,7 @@ import { dirname, basename, isAbsolute, join, resolve } from 'path';
 import { execFileSync } from 'child_process';
 import { homedir, tmpdir } from 'os';
 import { parse as parseYaml } from 'yaml';
-import { DOCWRITER_DIR, WORKSPACE_ROOT, ensureDocWriterDir } from './document-files';
+import { ensureDocWriterDir, getEffectiveDocwriterDir, getEffectiveRoot } from './document-files';
 import { writeJsonAtomic } from './file-utils';
 import hooksCreatorSkill from './skills/hooks-creator/SKILL.md?raw';
 import plainWritingSkill from './skills/plain-writing/SKILL.md?raw';
@@ -24,12 +24,24 @@ const hooksCreatorExamples = import.meta.glob(
 	{ query: '?raw', import: 'default', eager: true }
 ) as Record<string, string>;
 
-const SKILLS_FILE = join(DOCWRITER_DIR, 'skills.json');
-const CUSTOM_SKILLS_DIR = join(DOCWRITER_DIR, 'skills');
-const CLAUDE_SKILLS_DIR = join(WORKSPACE_ROOT, '.claude', 'skills');
-const AGENTS_SKILLS_DIR = join(WORKSPACE_ROOT, '.agents', 'skills');
-const NATIVE_SKILL_DIRS = [CLAUDE_SKILLS_DIR, AGENTS_SKILLS_DIR];
 const BUNDLED_MARKER = '.docwriter-bundled-skill';
+
+function skillsFile(): string {
+	return join(getEffectiveDocwriterDir(), 'skills.json');
+}
+
+function customSkillsDir(): string {
+	return join(getEffectiveDocwriterDir(), 'skills');
+}
+
+function nativeSkillDirs(): string[] {
+	const root = getEffectiveRoot();
+	return [join(root, '.claude', 'skills'), join(root, '.agents', 'skills')];
+}
+
+function agentsSkillsDir(): string {
+	return join(getEffectiveRoot(), '.agents', 'skills');
+}
 
 export interface SkillConfig {
 	disabledBundled: string[];
@@ -115,9 +127,10 @@ function normalizeConfig(raw: unknown): SkillConfig {
 
 export function readSkillsConfig(): SkillConfig {
 	ensureDocWriterDir();
-	if (!existsSync(SKILLS_FILE)) return { ...DEFAULT_CONFIG, customSkills: [] };
+	const path = skillsFile();
+	if (!existsSync(path)) return { ...DEFAULT_CONFIG, customSkills: [] };
 	try {
-		return normalizeConfig(JSON.parse(readFileSync(SKILLS_FILE, 'utf-8')));
+		return normalizeConfig(JSON.parse(readFileSync(path, 'utf-8')));
 	} catch {
 		return { ...DEFAULT_CONFIG, customSkills: [] };
 	}
@@ -125,7 +138,7 @@ export function readSkillsConfig(): SkillConfig {
 
 function writeSkillsConfig(config: SkillConfig) {
 	ensureDocWriterDir();
-	writeJsonAtomic(SKILLS_FILE, normalizeConfig(config));
+	writeJsonAtomic(skillsFile(), normalizeConfig(config));
 }
 
 function stripFrontmatter(raw: string): { frontmatter: Record<string, unknown>; body: string } {
@@ -200,7 +213,7 @@ function copySkillDir(sourceDir: string, targetDir: string) {
 }
 
 export function syncSkillInstallations(config = readSkillsConfig()) {
-	for (const nativeDir of NATIVE_SKILL_DIRS) {
+	for (const nativeDir of nativeSkillDirs()) {
 		mkdirSync(nativeDir, { recursive: true });
 
 		for (const bundled of BUNDLED_SKILLS) {
@@ -225,6 +238,7 @@ export function syncSkillInstallations(config = readSkillsConfig()) {
 
 export function listSkills(): { skills: SkillSummary[]; nativeDirs: string[] } {
 	const config = readSkillsConfig();
+	const dirs = nativeSkillDirs();
 	const disabled = new Set(config.disabledBundled);
 	const skills: SkillSummary[] = BUNDLED_SKILLS.map((skill) => {
 		const meta = parseBundledMetadata(skill);
@@ -234,7 +248,7 @@ export function listSkills(): { skills: SkillSummary[]; nativeDirs: string[] } {
 			description: meta.description,
 			enabled: !disabled.has(skill.id),
 			origin: 'bundled' as const,
-			path: join(CLAUDE_SKILLS_DIR, skill.id),
+			path: join(dirs[0], skill.id),
 			source: skill.source
 		};
 	});
@@ -266,7 +280,7 @@ export function listSkills(): { skills: SkillSummary[]; nativeDirs: string[] } {
 		});
 	}
 
-	return { skills, nativeDirs: NATIVE_SKILL_DIRS };
+	return { skills, nativeDirs: dirs };
 }
 
 export function setSkillEnabled(id: string, enabled: boolean): SkillConfig {
@@ -291,10 +305,10 @@ export function removeCustomSkill(id: string): SkillConfig {
 	const removed = config.customSkills.find((s) => s.id === id);
 	config.customSkills = config.customSkills.filter((s) => s.id !== id);
 	writeSkillsConfig(config);
-	if (removed?.path.startsWith(CUSTOM_SKILLS_DIR)) {
+	if (removed?.path.startsWith(customSkillsDir())) {
 		rmSync(removed.path, { recursive: true, force: true });
 	}
-	for (const nativeDir of NATIVE_SKILL_DIRS) {
+	for (const nativeDir of nativeSkillDirs()) {
 		rmSync(join(nativeDir, id), { recursive: true, force: true });
 	}
 	syncSkillInstallations(config);
@@ -336,7 +350,7 @@ function uniqueSkillId(base: string, config: SkillConfig): string {
 
 function resolveLocalSource(source: string): string {
 	const expanded = expandHome(source.trim());
-	return isAbsolute(expanded) ? expanded : resolve(WORKSPACE_ROOT, expanded);
+	return isAbsolute(expanded) ? expanded : resolve(getEffectiveRoot(), expanded);
 }
 
 function cloneGitHubSkill(source: string): string {
@@ -367,8 +381,9 @@ export function addCustomSkill(source: string): SkillConfig {
 	}
 	const meta = parseSkillMetadata(skillPath, basename(sourceDir));
 	const id = uniqueSkillId(meta.name || basename(sourceDir), config);
-	const target = join(CUSTOM_SKILLS_DIR, id);
-	mkdirSync(CUSTOM_SKILLS_DIR, { recursive: true });
+	const targetDir = customSkillsDir();
+	const target = join(targetDir, id);
+	mkdirSync(targetDir, { recursive: true });
 	copySkillDir(sourceDir, target);
 	config.customSkills = [
 		...config.customSkills,
@@ -392,7 +407,7 @@ export function readEnabledSkill(nameOrId: string): { name: string; path: string
 			if (!file) return null;
 			return {
 				name: skill.name,
-				path: join(AGENTS_SKILLS_DIR, skill.id, 'SKILL.md'),
+				path: join(agentsSkillsDir(), skill.id, 'SKILL.md'),
 				content: file.content
 			};
 		}

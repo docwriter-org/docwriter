@@ -32,7 +32,7 @@
 		loading = true;
 		errorText = '';
 		try {
-			const res = await fetch('/api/skills');
+			const res = await fetch('/api/skills', { credentials: 'same-origin' });
 			const data = await res.json();
 			if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
 			skills = Array.isArray(data?.skills) ? data.skills : [];
@@ -55,6 +55,7 @@
 		try {
 			const res = await fetch('/api/skills', {
 				method: 'PUT',
+				credentials: 'same-origin',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ id: skill.id, enabled: !skill.enabled })
 			});
@@ -125,6 +126,7 @@
 		try {
 			const res = await fetch('/api/skills', {
 				method: 'POST',
+				credentials: 'same-origin',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ source: resolved })
 			});
@@ -145,7 +147,8 @@
 		errorText = '';
 		try {
 			const res = await fetch(`/api/skills?id=${encodeURIComponent(skill.id)}`, {
-				method: 'DELETE'
+				method: 'DELETE',
+				credentials: 'same-origin'
 			});
 			const data = await res.json();
 			if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
