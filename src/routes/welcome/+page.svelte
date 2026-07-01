@@ -85,6 +85,8 @@
 	let agentActive = $derived(agentStruck && phase <= 2);
 	let showDirectiveCaret = $derived(phase === 0);
 	let showUserCaret = $derived(phase === 1);
+
+	const APP_URL = 'https://app.docwriter.org';
 </script>
 
 <svelte:head>
@@ -99,7 +101,7 @@
 			<span>DocWriter</span>
 		</a>
 		<div class="nav-right">
-			<a href="/sign-in" class="nav-link">User study login</a>
+			<a href={APP_URL} class="nav-link">User study login</a>
 		</div>
 	</nav>
 

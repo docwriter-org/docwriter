@@ -248,7 +248,7 @@ export async function maybeHandleClerkAuth(
 		if (event.url.pathname.startsWith('/api/') && !acceptsHtml(event.request)) {
 			return json({ error: 'Unauthorized' }, { status: 401 });
 		}
-		if (event.url.pathname === '/') {
+		if (event.url.pathname === '/' && IS_HOSTED_LANDING) {
 			return Response.redirect(new URL('/welcome', event.url.origin), 303);
 		}
 		const redirectUrl = new URL(signInUrl(event));
