@@ -4,6 +4,7 @@ import {
 	dbReplaceRecentActions,
 	dbReplaceRules,
 	dbSetAgentSettings,
+	dbSetSessionOwner,
 	dbSetSessionId,
 	dbSetEditorSoftWrap,
 	dbSetTheme,
@@ -83,6 +84,18 @@ export function getSessionId(): string | null {
 
 export function setSessionId(sessionId: string) {
 	dbSetSessionId(sessionId);
+}
+
+export function getSessionProvider(): string | null {
+	return kvGet('sessionProvider');
+}
+
+export function getSessionModel(): string | null {
+	return kvGet('sessionModel');
+}
+
+export function setSessionOwner(provider: string, model: string) {
+	dbSetSessionOwner(provider, model);
 }
 
 export function clearSessionState() {

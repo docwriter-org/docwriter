@@ -13,7 +13,7 @@ import {
 	getTheme,
 	setTheme
 } from '$lib/server/runtime-state';
-import { AGENT_SCRATCH_DIR } from '$lib/server/document-files';
+import { getEffectiveScratchDir } from '$lib/server/document-files';
 import { existsSync, readdirSync, rmSync } from 'fs';
 import { join } from 'path';
 
@@ -39,14 +39,15 @@ export const PUT: RequestHandler = async ({ request }) => {
 
 export const DELETE: RequestHandler = async () => {
 	clearSessionState();
+	const scratchDir = getEffectiveScratchDir();
 	// Empty the scratch dir's contents on New session so the next run
 	// starts with a clean slate (no stale drafts or notes from the prior
 	// conversation), but keep the dir itself so it stays visible in the
 	// filesystem sidebar instead of disappearing and reappearing on first
 	// agent write.
-	if (existsSync(AGENT_SCRATCH_DIR)) {
-		for (const entry of readdirSync(AGENT_SCRATCH_DIR)) {
-			rmSync(join(AGENT_SCRATCH_DIR, entry), { recursive: true, force: true });
+	if (existsSync(scratchDir)) {
+		for (const entry of readdirSync(scratchDir)) {
+			rmSync(join(scratchDir, entry), { recursive: true, force: true });
 		}
 	}
 	return json({ ok: true });

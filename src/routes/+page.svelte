@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
 	import type * as Y from 'yjs';
-	import { ScrollText, PanelLeftClose, PanelLeftOpen } from 'lucide-svelte';
 	import MenuBar, { type MenuSpec } from '$lib/components/MenuBar.svelte';
 	import OutlinePane from '$lib/components/OutlinePane.svelte';
 	import FileTree from '$lib/components/FileTree.svelte';
@@ -25,6 +24,7 @@
 	import SkillsPanel from '$lib/components/SkillsPanel.svelte';
 	import ApiKeysPanel from '$lib/components/ApiKeysPanel.svelte';
 	import CustomModelDialog from '$lib/components/CustomModelDialog.svelte';
+	import SessionBrowser from '$lib/components/SessionBrowser.svelte';
 	import { themes, applyTheme } from '$lib/themes';
 	import { unifiedLineDiff } from '$lib/diff';
 	import { materializePendingReviewRounds } from '$lib/review-rounds';
@@ -128,6 +128,19 @@
 	import TabBar from '$lib/components/TabBar.svelte';
 	import type { AgentSettings, CommentThread, HistoryEntry, ImageAttachment, PendingReviewRound, ProposedRule, ProposedHook } from '$lib/types';
 	import type { MaterializedPendingReviewRound } from '$lib/review-rounds';
+
+	type AgentSettingsChange = {
+		type: 'agency';
+		from: AgentSettings['agency'];
+		to: AgentSettings['agency'];
+	};
+
+	type AgentSessionForSwitch = {
+		id: string;
+		provider: string;
+		model: string;
+		isCurrent?: boolean;
+	};
 
 	type EditorRef = {
 		getEditor: () => Editor | undefined;
@@ -833,6 +846,49 @@
 		}
 	}
 
+	const autonomyChangeCopy: Record<
+		AgentSettings['agency'],
+		{ label: string; instruction: string }
+	> = {
+		conservative: {
+			label: 'Low',
+			instruction:
+				'Low autonomy means you should act only when the user asks, or when something is clearly broken. Do not create proactive comments or edits.'
+		},
+		balanced: {
+			label: 'Medium',
+			instruction:
+				'Medium autonomy means you may proactively create new comment threads. Do not edit unless the user asks.'
+		},
+		aggressive: {
+			label: 'High',
+			instruction:
+				'High autonomy means you may proactively create new comment threads and propose reviewable edits when you see a meaningful improvement.'
+		}
+	};
+
+	const autonomyRank: Record<AgentSettings['agency'], number> = {
+		conservative: 0,
+		balanced: 1,
+		aggressive: 2
+	};
+
+	function buildAutonomyChangeMessage(change: AgentSettingsChange): string {
+		const copy = autonomyChangeCopy[change.to];
+		const wentUp = autonomyRank[change.to] > autonomyRank[change.from];
+		if (wentUp) {
+			return `Autonomy changed to ${copy.label}. ${copy.instruction} Review the current open document under this new policy now. If this policy allows a useful comment or edit, create it in the document. If there is nothing useful to do, keep the response brief.`;
+		}
+		return `Autonomy changed to ${copy.label}. ${copy.instruction} Use this policy from now on. Do not start new proactive work solely because autonomy was lowered.`;
+	}
+
+	async function handleAgentSettingsChange(next: AgentSettings, change?: AgentSettingsChange) {
+		await persistAgentSettings(next);
+		if (change?.type === 'agency') {
+			void submit(buildAutonomyChangeMessage(change));
+		}
+	}
+
 	function isAcceptedEditsMessage(trigger?: string): boolean {
 		return /^Accepted (?:all )?\d+ agent edit/.test(trigger ?? '');
 	}
@@ -1069,12 +1125,17 @@
 							return [...h, { type: 'assistant_text', timestamp: Date.now(), text: parsed.text, _key: nextHistoryKey() } as HistoryEntry];
 						});
 					} else if (event === 'assistant_thinking') {
+						const text = typeof parsed.text === 'string' ? parsed.text : '';
+						if (!text) {
+							continue;
+						}
 						agentHistory.update((h) => {
 							const last = h[h.length - 1];
 							if (last && last.type === 'assistant_thinking') {
-								return [...h.slice(0, -1), { ...last, text: last.text + parsed.text }];
+								return [...h.slice(0, -1), { ...last, text: last.text + text }];
 							}
-							return [...h, { type: 'assistant_thinking', timestamp: Date.now(), text: parsed.text, _key: nextHistoryKey() } as HistoryEntry];
+							if (!text.trim()) return h;
+							return [...h, { type: 'assistant_thinking', timestamp: Date.now(), text, _key: nextHistoryKey() } as HistoryEntry];
 						});
 					} else if (event === 'sdk_status') {
 						if (parsed.status !== 'compacting' && !parsed.compactResult && !parsed.error) {
@@ -1152,6 +1213,7 @@
 							];
 						});
 					} else if (event === 'result') {
+						if (!success) continue;
 						// Agent-applied edits arrive over Hocuspocus WebSocket
 						// sync: `mcp__docwriter-doc__edit_doc` and `write_doc`
 						// on the server transact directly against the live
@@ -1913,6 +1975,7 @@
 
 	/** Custom-model dialog (replaces the old window.prompt). */
 	let customModelOpen = $state(false);
+	let sessionsOpen = $state(false);
 
 	let themeName = $state('light');
 	selectedTheme.subscribe((v) => (themeName = v));
@@ -1989,7 +2052,9 @@
 							kind: 'action' as const,
 							label: 'Custom model…',
 							checked: false,
-							onClick: () => (customModelOpen = true)
+							onClick: () => {
+								customModelOpen = true;
+							}
 						}
 					]
 				},
@@ -2026,6 +2091,13 @@
 				{ kind: 'panel', label: 'Hooks', panelKey: 'hooks' },
 				{ kind: 'divider' },
 				{
+					kind: 'action',
+					label: 'Sessions',
+					onClick: () => {
+						sessionsOpen = true;
+					}
+				},
+				{
 					kind: 'submenu',
 					label: 'History detail',
 					items: [
@@ -2054,8 +2126,7 @@
 					label: 'Files pane',
 					checked: filesVisible,
 					onClick: () => showFilesPane.set(!filesVisible)
-				},
-				{ kind: 'action', label: 'New session', onClick: () => void newSession() }
+				}
 			]
 		}
 	]);
@@ -2086,10 +2157,6 @@
 
 	function resizeFileTree(deltaY: number) {
 		fileTreeHeight = clampFileTreeHeight(fileTreeHeight - deltaY);
-	}
-
-	function toggleSidebar() {
-		showSidebar.set(!sidebarVisible);
 	}
 
 	let docLoaded = $state(false);
@@ -2395,72 +2462,323 @@
 		window.addEventListener('message', handler);
 	}
 
-	/** Pull the last session's messages from the SDK and convert them into
-	 * HistoryEntry rows matching what we show live. Best-effort: if the
+	function textFromMessageContent(content: unknown): string {
+		if (typeof content === 'string') return content;
+		if (!Array.isArray(content)) return '';
+		let text = '';
+		for (const block of content) {
+			if (
+				block &&
+				typeof block === 'object' &&
+				'type' in block &&
+				(block as { type?: unknown }).type === 'text' &&
+				typeof (block as { text?: unknown }).text === 'string'
+			) {
+				text += (block as { text: string }).text;
+			}
+		}
+		return text;
+	}
+
+	function descriptionFromPrompt(text: string): string {
+		const trimmed = text.trim();
+		if (!trimmed) return shortDescription(undefined);
+		const wantIdx = trimmed.indexOf('## What the user wants');
+		const rulesIdx = trimmed.indexOf('## Rules to obey');
+		let trigger = trimmed.slice(0, 200);
+		if (wantIdx >= 0 && rulesIdx > wantIdx) {
+			trigger = trimmed
+				.slice(wantIdx + '## What the user wants'.length, rulesIdx)
+				.trim();
+		}
+		return shortDescription(trigger || undefined);
+	}
+
+	function attachRestoredToolResult(
+		entries: HistoryEntry[],
+		toolUseId: string,
+		result: string,
+		isError: boolean
+	): boolean {
+		if (!toolUseId) return false;
+		for (let i = entries.length - 1; i >= 0; i -= 1) {
+			const entry = entries[i];
+			if (entry.type === 'tool_call' && entry.tool_use_id === toolUseId) {
+				entries[i] = { ...entry, result, isError };
+				return true;
+			}
+		}
+		return false;
+	}
+
+	function attachRestoredToolInput(
+		entries: HistoryEntry[],
+		toolUseId: string,
+		input: Record<string, unknown>
+	): boolean {
+		if (!toolUseId) return false;
+		for (let i = entries.length - 1; i >= 0; i -= 1) {
+			const entry = entries[i];
+			if (entry.type === 'tool_call' && entry.tool_use_id === toolUseId) {
+				entries[i] = { ...entry, input };
+				return true;
+			}
+		}
+		return false;
+	}
+
+	function extractToolResultBlock(block: Record<string, unknown>): {
+		toolUseId: string;
+		result: string;
+		isError: boolean;
+	} {
+		const content = block.content;
+		let result = '';
+		if (typeof content === 'string') {
+			result = content;
+		} else if (Array.isArray(content)) {
+			for (const item of content) {
+				if (
+					item &&
+					typeof item === 'object' &&
+					(item as { type?: unknown }).type === 'text' &&
+					typeof (item as { text?: unknown }).text === 'string'
+				) {
+					result += (item as { text: string }).text;
+				}
+			}
+		}
+		return {
+			toolUseId: typeof block.tool_use_id === 'string' ? block.tool_use_id : '',
+			result,
+			isError: block.is_error === true
+		};
+	}
+
+	function restoreFromClaudeRaw(raw: unknown[]): HistoryEntry[] {
+		const restored: HistoryEntry[] = [];
+		for (const entry of raw) {
+			if (!entry || typeof entry !== 'object') continue;
+			const e = entry as Record<string, unknown>;
+			const msg = e.message as Record<string, unknown> | undefined;
+			if (e.type === 'user' && msg) {
+				const content = msg.content;
+				const text = textFromMessageContent(content);
+				if (text.trim()) {
+					restored.push({
+						type: 'user_action',
+						timestamp: 0,
+						description: descriptionFromPrompt(text)
+					});
+				}
+				if (Array.isArray(content)) {
+					for (const block of content) {
+						if (
+							block &&
+							typeof block === 'object' &&
+							(block as { type?: unknown }).type === 'tool_result'
+						) {
+							const toolResult = extractToolResultBlock(block as Record<string, unknown>);
+							attachRestoredToolResult(
+								restored,
+								toolResult.toolUseId,
+								toolResult.result,
+								toolResult.isError
+							);
+						}
+					}
+				}
+				continue;
+			}
+			if (e.type !== 'assistant' || !msg || !Array.isArray(msg.content)) continue;
+			for (const block of msg.content) {
+				if (!block || typeof block !== 'object') continue;
+				const b = block as Record<string, unknown>;
+				if (b.type === 'text' && typeof b.text === 'string' && b.text.trim()) {
+					restored.push({
+						type: 'assistant_text',
+						timestamp: 0,
+						text: b.text
+					});
+				} else if (b.type === 'thinking' && typeof b.thinking === 'string' && b.thinking.trim()) {
+					restored.push({
+						type: 'assistant_thinking',
+						timestamp: 0,
+						text: b.thinking
+					});
+				} else if (b.type === 'tool_use' && typeof b.name === 'string') {
+					restored.push({
+						type: 'tool_call',
+						timestamp: 0,
+						tool_name: b.name,
+						tool_use_id: typeof b.id === 'string' ? b.id : undefined,
+						input: (b.input as Record<string, unknown>) || {}
+					});
+				}
+			}
+		}
+		return restored;
+	}
+
+	function restoreFromProviderEvents(raw: unknown[]): HistoryEntry[] {
+		const restored: HistoryEntry[] = [];
+		const flushText = (() => {
+			let current:
+				| { type: 'assistant_text' | 'assistant_thinking'; text: string }
+				| null = null;
+			return {
+				add(type: 'assistant_text' | 'assistant_thinking', text: string) {
+					if (!text) return;
+					if (current?.type === type) {
+						current.text += text;
+						return;
+					}
+					this.flush();
+					current = { type, text };
+				},
+				flush() {
+					if (current && current.text.trim()) {
+						restored.push({
+							type: current.type,
+							timestamp: 0,
+							text: current.text
+						});
+					}
+					current = null;
+				}
+			};
+		})();
+
+		for (const entry of raw) {
+			if (!entry || typeof entry !== 'object') continue;
+			const e = entry as Record<string, unknown>;
+			const type = typeof e.type === 'string' ? e.type : '';
+			if (type === 'assistant_text' || type === 'assistant_thinking') {
+				flushText.add(
+					type === 'assistant_text' ? 'assistant_text' : 'assistant_thinking',
+					typeof e.text === 'string' ? e.text : ''
+				);
+				continue;
+			}
+			flushText.flush();
+			if (type === 'user_message') {
+				const text = typeof e.text === 'string' ? e.text : '';
+				if (text.trim()) {
+					restored.push({
+						type: 'user_action',
+						timestamp: 0,
+						description: shortDescription(text)
+					});
+				}
+			} else if (type === 'tool_call') {
+				const toolUseId = typeof e.tool_use_id === 'string' ? e.tool_use_id : '';
+				const input = (e.input as Record<string, unknown>) || {};
+				if (!attachRestoredToolInput(restored, toolUseId, input)) {
+					restored.push({
+						type: 'tool_call',
+						timestamp: 0,
+						tool_name: typeof e.tool_name === 'string' ? e.tool_name : 'unknown',
+						tool_use_id: toolUseId || undefined,
+						input
+					});
+				}
+			} else if (type === 'tool_call_start') {
+				restored.push({
+					type: 'tool_call',
+					timestamp: 0,
+					tool_name: typeof e.tool_name === 'string' ? e.tool_name : 'unknown',
+					tool_use_id: typeof e.tool_use_id === 'string' ? e.tool_use_id : undefined,
+					input: {}
+				});
+			} else if (type === 'tool_result') {
+				const toolUseId = typeof e.tool_use_id === 'string' ? e.tool_use_id : '';
+				const result = typeof e.text === 'string' ? e.text : '';
+				const isError = e.is_error === true;
+				if (!attachRestoredToolResult(restored, toolUseId, result, isError)) {
+					restored.push({
+						type: 'tool_call',
+						timestamp: 0,
+						tool_name: 'tool_result',
+						tool_use_id: toolUseId || undefined,
+						input: {},
+						result,
+						isError
+					});
+				}
+			} else if (type === 'error') {
+				const text = typeof e.error === 'string' ? e.error : 'Agent error';
+				restored.push({
+					type: 'notification',
+					timestamp: 0,
+					text,
+					priority: 'high'
+				});
+			}
+		}
+		flushText.flush();
+		return restored;
+	}
+
+	function restoreFromSdkMessages(messages: unknown[]): HistoryEntry[] {
+		const restored: HistoryEntry[] = [];
+		for (const m of messages) {
+			if (!m || typeof m !== 'object') continue;
+			const entry = m as Record<string, unknown>;
+			const msg = entry.message as Record<string, unknown> | undefined;
+			if (!msg) continue;
+			if (entry.type === 'user') {
+				const text = textFromMessageContent(msg.content);
+				if (!text.trim()) continue;
+				restored.push({
+					type: 'user_action',
+					timestamp: 0,
+					description: descriptionFromPrompt(text)
+				});
+			} else if (entry.type === 'assistant' && Array.isArray(msg.content)) {
+				for (const block of msg.content) {
+					if (!block || typeof block !== 'object') continue;
+					const b = block as Record<string, unknown>;
+					if (b.type === 'text' && typeof b.text === 'string' && b.text.trim()) {
+						restored.push({
+							type: 'assistant_text',
+							timestamp: 0,
+							text: b.text
+						});
+					} else if (b.type === 'tool_use' && typeof b.name === 'string') {
+						restored.push({
+							type: 'tool_call',
+							timestamp: 0,
+							tool_name: b.name,
+							input: (b.input as Record<string, unknown>) || {}
+						});
+					}
+				}
+			}
+		}
+		return restored;
+	}
+
+	/** Pull the last session's messages from durable history and convert them
+	 * into HistoryEntry rows matching what we show live. Best-effort: if the
 	 * endpoint fails or the session is empty, we leave the pane empty. */
 	async function restoreAgentHistory() {
 		try {
 			const res = await fetch('/api/history');
 			const data = await res.json();
-			if (!Array.isArray(data.messages) || data.messages.length === 0) return;
-			const restored: HistoryEntry[] = [];
-			for (const m of data.messages) {
-				const msg = m?.message;
-				if (!msg) continue;
-				if (m.type === 'user') {
-					// User messages can be strings or arrays of content blocks.
-					// The agent's prompt lives here as free text.
-					const content = msg.content;
-					let text = '';
-					if (typeof content === 'string') {
-						text = content;
-					} else if (Array.isArray(content)) {
-						for (const block of content) {
-							if (block?.type === 'text' && typeof block.text === 'string') {
-								text += block.text;
-							}
-						}
-					}
-					if (!text.trim()) continue;
-					// The full prompt is huge; surface a single "Submitted"-style line
-					// with the raw prompt tucked behind an expand for parity with
-					// live submits. The "What the user wants" section is the useful bit.
-					const wantIdx = text.indexOf('## What the user wants');
-					const rulesIdx = text.indexOf('## Rules to obey');
-					let trigger = text.trim().slice(0, 200);
-					if (wantIdx >= 0 && rulesIdx > wantIdx) {
-						trigger = text
-							.slice(wantIdx + '## What the user wants'.length, rulesIdx)
-							.trim();
-					}
-					restored.push({
-						type: 'user_action',
-						timestamp: 0,
-						description: shortDescription(trigger || undefined)
-					});
-				} else if (m.type === 'assistant' && Array.isArray(msg.content)) {
-					for (const block of msg.content) {
-						if (block?.type === 'text' && typeof block.text === 'string' && block.text.trim()) {
-							restored.push({
-								type: 'assistant_text',
-								timestamp: 0,
-								text: block.text
-							});
-						} else if (block?.type === 'tool_use' && typeof block.name === 'string') {
-							restored.push({
-								type: 'tool_call',
-								timestamp: 0,
-								tool_name: block.name,
-								input: (block.input as Record<string, unknown>) || {}
-							});
-						}
-					}
-				}
-			}
-			// The SDK transcript can contain hundreds of messages from every
+			const provider = typeof data.provider === 'string' ? data.provider : 'claude';
+			const raw = Array.isArray(data.raw) ? data.raw : [];
+			const messages = Array.isArray(data.messages) ? data.messages : [];
+			const restored =
+				raw.length > 0
+					? provider === 'claude'
+						? restoreFromClaudeRaw(raw)
+						: restoreFromProviderEvents(raw)
+					: restoreFromSdkMessages(messages);
+
+			// The transcript can contain hundreds of messages from every
 			// resumed session. Trim to the tail — most users care about "what
 			// did the agent just do" not "everything ever." If they want more
-			// they can scroll up in the SDK's raw files.
+			// they can open the session transcript.
 			const MAX_RESTORED = 20;
 			const tail = restored.slice(-MAX_RESTORED);
 			if (tail.length > 0) agentHistory.set(tail);
@@ -2468,13 +2786,53 @@
 			console.error('Failed to restore agent history:', e);
 		}
 	}
+
+	function adoptSessionSelection(session: AgentSessionForSwitch) {
+		if (!session.provider || !AVAILABLE_PROVIDERS.some((p) => p.id === session.provider)) {
+			return;
+		}
+		if (currentProvider !== session.provider) {
+			setSelectedProvider(session.provider);
+		}
+		if (!session.model) return;
+		const knownModel = modelOptions.some(
+			(m) => m.id === session.model && (!m.provider || m.provider === session.provider)
+		);
+		if (knownModel) {
+			setSelectedModel(session.model);
+		} else {
+			setCustomModel(session.model, session.provider);
+		}
+	}
+
+	async function switchAgentSession(session: AgentSessionForSwitch) {
+		if (session.isCurrent) return;
+		if (rendering) cancelRender();
+		const res = await fetch('/api/sessions', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ sessionId: session.id })
+		});
+		const data = await res.json().catch(() => ({}));
+		if (!res.ok || !data?.ok) {
+			throw new Error(data?.message || `HTTP ${res.status}`);
+		}
+		agentHistory.set([]);
+		resetSessionCost();
+		proposedRules.set([]);
+		proposedHooks.set([]);
+		pendingUserQuestions.set([]);
+		pendingPlanProposals.set([]);
+		adoptSessionSelection(data.session ?? session);
+		await restoreAgentHistory();
+	}
 </script>
 
 <div class="app">
 	<header class="header">
 		<div class="header-left">
 			<span class="logo" aria-hidden="true">
-				<ScrollText size={22} strokeWidth={1.8} color="#7c3aed" />
+				<img src="/docwriter-mark.svg" alt="" />
 			</span>
 			<div class="app-title">DocWriter</div>
 			<MenuBar
@@ -2488,22 +2846,6 @@
 					apiKeys: apiKeysPanelSnippet
 				}}
 			/>
-		</div>
-		<div class="header-right">
-			<button
-				class="header-toggle"
-				type="button"
-				onclick={toggleSidebar}
-				aria-pressed={sidebarVisible}
-				title={sidebarVisible ? 'Hide sidebar' : 'Show sidebar'}
-			>
-				{#if sidebarVisible}
-					<PanelLeftClose size={15} />
-				{:else}
-					<PanelLeftOpen size={15} />
-				{/if}
-				<span>Sidebar</span>
-			</button>
 		</div>
 	</header>
 
@@ -2519,7 +2861,7 @@
 	{/snippet}
 
 	{#snippet agentSettingsSnippet()}
-		<AgentSettingsPanel onSettingsChange={persistAgentSettings} />
+		<AgentSettingsPanel onSettingsChange={handleAgentSettingsChange} />
 	{/snippet}
 
 	{#snippet hooksPanelSnippet()}
@@ -2660,6 +3002,13 @@
 
 <Dialog />
 
+{#if sessionsOpen}
+	<SessionBrowser
+		onClose={() => (sessionsOpen = false)}
+		onSwitchSession={switchAgentSession}
+	/>
+{/if}
+
 <CustomModelDialog
 	open={customModelOpen}
 	provider={currentProvider}
@@ -2712,35 +3061,23 @@
 		border-bottom: 1px solid var(--border-light);
 		background: var(--header-bg);
 	}
-	.header-left, .header-right {
+	.header-left {
 		display: flex;
 		align-items: center;
 		gap: 8px;
 		flex: 1;
 	}
-	.header-right {
-		justify-content: flex-end;
-	}
-	.header-toggle {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		padding: 6px 10px;
-		border-radius: 6px;
-		border: 1px solid var(--border-light);
-		background: var(--bg-elevated);
-		color: var(--text-secondary);
-		font: inherit;
-		cursor: pointer;
-	}
-	.header-toggle:hover,
-	.header-toggle[aria-pressed='true'] {
-		background: var(--bg-hover);
-		color: var(--text);
-		border-color: color-mix(in srgb, var(--accent) 40%, var(--border-light));
-	}
 	.logo {
 		flex-shrink: 0;
+		width: 22px;
+		height: 22px;
+		display: grid;
+		place-items: center;
+	}
+	.logo img {
+		width: 22px;
+		height: 22px;
+		display: block;
 	}
 	.app-title {
 		font-size: 15px;

@@ -14,12 +14,12 @@ import type {
 } from './types';
 import { buildToolDefinitions } from './tool-handlers';
 import { randomUUID } from 'node:crypto';
+import { DocWriterOpenAISession } from './openai-session';
 
 let sdkLoaded = false;
 let Agent: any = null;
 let run: any = null;
 let tool: any = null;
-let MemorySession: any = null;
 
 async function loadSdk() {
 	if (sdkLoaded) return;
@@ -28,8 +28,6 @@ async function loadSdk() {
 		Agent = sdk.Agent;
 		run = sdk.run;
 		tool = sdk.tool;
-		const core = await import('@openai/agents-core');
-		MemorySession = core.MemorySession;
 		sdkLoaded = true;
 	} catch (err) {
 		throw new Error(
@@ -80,12 +78,6 @@ function buildAgentTools(defs: ToolDefinition[], onResult: ToolResultSink): any[
 
 export class OpenAIAgentsProvider implements AgentProvider {
 	readonly id = 'openai' as const;
-	private session: any = null;
-	// Stable across renders for this provider instance so the persisted
-	// transcript (conversation_events) accumulates under one session id and
-	// `/api/history` can read it back. The SDK's StreamedRunResult has no
-	// usable id of its own.
-	private sessionId: string | null = null;
 
 	async *query(
 		options: ProviderQueryOptions,
@@ -116,21 +108,16 @@ export class OpenAIAgentsProvider implements AgentProvider {
 			tools: agentTools
 		});
 
-		if (!this.session) {
-			this.session = new MemorySession();
-		}
-
 		// Establish/reuse a stable session id and surface it BEFORE streaming so
 		// the render endpoint persists every event under the same id the viewer
 		// later reads. Prefer a resumed id from runtime state if one was passed.
-		if (!this.sessionId) {
-			this.sessionId = options.sessionId || `openai-${randomUUID()}`;
-		}
-		yield { type: 'session', sessionId: this.sessionId };
+		const sessionId = options.sessionId || `openai-${randomUUID()}`;
+		const session = new DocWriterOpenAISession(sessionId);
+		yield { type: 'session', sessionId };
 
 		const streamResult = await run(agent, options.prompt, {
 			stream: true,
-			session: this.session,
+			session,
 			// SDK default is 10; a read→edit→verify writing loop blows past that.
 			maxTurns: 50
 		});
@@ -142,10 +129,19 @@ export class OpenAIAgentsProvider implements AgentProvider {
 		// works on the public OpenAI API, which streams the same raw events.
 		const started = new Set<string>(); // call_ids we've emitted tool_call_start for
 		const completed = new Set<string>(); // call_ids we've emitted tool_call for
+		const toolCallAliases = new Map<string, string>(); // response item id -> call_id
+
+		function normalizeQueuedEvent(event: ProviderEvent): ProviderEvent {
+			if (event.type !== 'tool_result') return event;
+			return {
+				...event,
+				tool_use_id: toolCallAliases.get(event.tool_use_id) ?? event.tool_use_id
+			};
+		}
 
 		for await (const event of streamResult) {
 			// Flush any tool results produced since the last event.
-			while (resultQueue.length) yield resultQueue.shift()!;
+			while (resultQueue.length) yield normalizeQueuedEvent(resultQueue.shift()!);
 
 			if (event.type !== 'raw_model_stream_event') continue;
 			const inner = (event as any).data?.event; // the OpenAI Responses SSE event
@@ -162,6 +158,8 @@ export class OpenAIAgentsProvider implements AgentProvider {
 			} else if (t === 'response.output_item.added' && inner.item?.type === 'function_call') {
 				const ci = inner.item;
 				const callId = ci.call_id || ci.id;
+				if (ci.id && callId) toolCallAliases.set(ci.id, callId);
+				if (ci.call_id && callId) toolCallAliases.set(ci.call_id, callId);
 				if (callId && !started.has(callId)) {
 					started.add(callId);
 					yield { type: 'tool_call_start', tool_name: ci.name ?? 'unknown', tool_use_id: callId };
@@ -169,6 +167,8 @@ export class OpenAIAgentsProvider implements AgentProvider {
 			} else if (t === 'response.output_item.done' && inner.item?.type === 'function_call') {
 				const ci = inner.item;
 				const callId = ci.call_id || ci.id;
+				if (ci.id && callId) toolCallAliases.set(ci.id, callId);
+				if (ci.call_id && callId) toolCallAliases.set(ci.call_id, callId);
 				const toolName = ci.name ?? 'unknown';
 				let input: Record<string, unknown> = {};
 				try {
@@ -203,7 +203,7 @@ export class OpenAIAgentsProvider implements AgentProvider {
 		}
 
 		// Drain any results that landed after the final stream event.
-		while (resultQueue.length) yield resultQueue.shift()!;
+		while (resultQueue.length) yield normalizeQueuedEvent(resultQueue.shift()!);
 
 		// Emit cost/usage info from the final result
 		try {

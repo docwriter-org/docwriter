@@ -29,6 +29,18 @@ export const DOCWRITER_DIR = join(ROOT, '.docwriter');
  * directory is created unless the agent actually writes a scratch file. */
 export const AGENT_SCRATCH_DIR = join(DOCWRITER_DIR, 'agent', 'scratch');
 
+export function getEffectiveRoot(): string {
+	return ROOT;
+}
+
+export function getEffectiveDocwriterDir(): string {
+	return DOCWRITER_DIR;
+}
+
+export function getEffectiveScratchDir(): string {
+	return AGENT_SCRATCH_DIR;
+}
+
 /** File extensions we treat as text-editable tabs. */
 const TEXT_EXTENSIONS = new Set([
 	'md',

@@ -275,10 +275,10 @@ export type HistoryEntry =
 
 /** Agent behavior settings. Persisted in SQLite runtime state.
  *
- *  - `agency`: how eager the agent is to make edits. `conservative` keeps
- *    the current "default to NO edits" posture; `balanced` makes one focused
- *    improvement per round when there's clearly something to do; `aggressive`
- *    proactively rewrites for clarity, tightness, and flow.
+ *  - `agency`: the autonomy level. `conservative` waits for direct requests
+ *    or obvious fixes; `balanced` can create new comment threads on its own
+ *    but does not make unsolicited edits; `aggressive` can create comments
+ *    and propose reviewable edits on its own.
  *
  * Agent edits are ALWAYS tracked: they land behind the green/red diff overlay
  * as Accept/Reject review rounds. There is no "merge silently" mode.

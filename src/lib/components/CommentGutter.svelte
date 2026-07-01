@@ -27,6 +27,7 @@
 	import { tooltip } from '$lib/actions/tooltip';
 	import type { MaterializedPendingReviewRound } from '$lib/review-rounds';
 	import { summarizeRound } from '$lib/review-diff';
+	import { isRendering } from '$lib/stores';
 
 	interface Props {
 		threads: CommentThread[];
@@ -172,6 +173,18 @@
 			awaitTimers.delete(threadId);
 		}
 	}
+	let renderWasActive = false;
+	const unsubscribeRendering = isRendering.subscribe((value) => {
+		if (value) {
+			renderWasActive = true;
+			return;
+		}
+		if (!renderWasActive) return;
+		renderWasActive = false;
+		for (const tid of Object.keys(awaitingAgent)) {
+			if (awaitingAgent[tid]) clearAwaiting(tid);
+		}
+	});
 	// Clear the waiting indicator as soon as the agent's response lands — a new
 	// agent-authored message in the thread, or a new edit grouped under it.
 	$effect(() => {
@@ -207,6 +220,7 @@
 		awaitTimers.set(tid, setTimeout(() => clearAwaiting(tid), 120000));
 	});
 	onDestroy(() => {
+		unsubscribeRendering();
 		for (const t of awaitTimers.values()) clearTimeout(t);
 		awaitTimers.clear();
 	});

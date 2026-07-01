@@ -3034,6 +3034,73 @@
 		padding: 1px 4px;
 		border-radius: 3px;
 	}
+	.tiptap-editor :global(.tiptap-plain p.md-code-fence) {
+		color: var(--text-faint);
+		font-size: calc(12px * var(--font-scale, 1));
+		line-height: 1.35;
+		min-height: 1.35em;
+	}
+	.tiptap-editor :global(.tiptap-plain p.md-code-fence-open) {
+		margin-top: 8px;
+		padding: 0 10px;
+		border: 1px solid var(--border-light);
+		border-bottom: 0;
+		border-radius: 6px 6px 0 0;
+		background: color-mix(in srgb, var(--bg-surface) 70%, var(--bg-elevated));
+		box-sizing: border-box;
+	}
+	.tiptap-editor :global(.tiptap-plain p.md-code-fence-close) {
+		margin-bottom: 10px;
+		padding: 0 10px;
+		border: 1px solid var(--border-light);
+		border-top: 0;
+		border-radius: 0 0 6px 6px;
+		background: color-mix(in srgb, var(--bg-surface) 70%, var(--bg-elevated));
+		box-sizing: border-box;
+	}
+	.tiptap-editor :global(.md-code-fence-marker) {
+		opacity: 0.35;
+	}
+	.tiptap-editor :global(.md-code-lang) {
+		display: inline-flex;
+		align-items: center;
+		margin-left: 5px;
+		padding: 0 6px;
+		border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border-light));
+		border-radius: 999px;
+		background: color-mix(in srgb, var(--accent) 8%, var(--bg-elevated));
+		color: var(--accent);
+		font-family: 'Inter', -apple-system, sans-serif;
+		font-size: 10px;
+		font-weight: 650;
+		line-height: 1.45;
+		letter-spacing: 0.03em;
+		text-transform: uppercase;
+	}
+	.tiptap-editor :global(.tiptap-plain p.md-code-block-line) {
+		margin: 0;
+		padding: 0 12px;
+		border-left: 1px solid var(--border-light);
+		border-right: 1px solid var(--border-light);
+		background: color-mix(in srgb, var(--text) 4%, var(--bg-elevated));
+		color: var(--text);
+		font-family: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+		font-size: calc(14px * var(--font-scale, 1));
+		line-height: 1.5;
+		min-height: 1.5em;
+		box-sizing: border-box;
+		tab-size: 2;
+	}
+	.tiptap-editor :global(.tiptap-plain p.md-code-block-line-first) {
+		padding-top: 8px;
+	}
+	.tiptap-editor :global(.tiptap-plain p.md-code-block-line-last) {
+		padding-bottom: 8px;
+	}
+	.tiptap-editor :global(.tiptap-plain p.md-code-block-line-single) {
+		padding-top: 8px;
+		padding-bottom: 8px;
+	}
 	.tiptap-editor :global(.md-strikethrough) {
 		text-decoration: line-through;
 		opacity: 0.6;

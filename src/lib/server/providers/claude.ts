@@ -23,6 +23,10 @@ import {
 	WRITE_DOC_TOOL_NAME
 } from '$lib/server/mcp-doc-tools';
 import {
+	createProviderSessionStore,
+	hasProviderSessionEntries
+} from '$lib/server/provider-session-store';
+import {
 	readHooks,
 	HOOK_EVENTS,
 	type Hook,
@@ -31,15 +35,19 @@ import {
 import { runHookCommand, type HookRunEmitter } from '$lib/server/hook-runner';
 import { addCustomSkill } from '$lib/server/skills-config';
 import { executeReviewAction } from './tool-handlers';
+import {
+	formatClaudeModelLabel,
+	isHiddenClaudeModel
+} from '$lib/shared/claude-models';
 
 const PROPOSE_RULE_TOOL_NAME = 'mcp__docwriter__propose_rule';
 const PROPOSE_HOOK_TOOL_NAME = 'mcp__docwriter__propose_hook';
 
 const FALLBACK_MODELS: ProviderModelOption[] = [
-	{ id: 'claude-opus-4-8', label: 'Claude Opus 4.8', provider: 'claude' },
+	{ id: 'claude-opus-4-8', label: 'Claude Opus 4.8 (1M context)', provider: 'claude' },
 	{ id: 'claude-opus-4-7', label: 'Claude Opus 4.7', provider: 'claude' },
 	{ id: 'claude-opus-4-6', label: 'Claude Opus 4.6', provider: 'claude' },
-	{ id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', provider: 'claude' },
+	{ id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6 (1M context)', provider: 'claude' },
 	{ id: 'claude-opus-4-5', label: 'Claude Opus 4.5', provider: 'claude' },
 	{ id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5', provider: 'claude' },
 	{ id: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5', provider: 'claude' }
@@ -47,74 +55,76 @@ const FALLBACK_MODELS: ProviderModelOption[] = [
 
 /** Build the in-process MCP server for propose_rule / propose_hook. */
 function buildDocwriterMcp() {
+	const tools: any[] = [
+		tool(
+			'propose_rule',
+			'Propose a writing rule for the user to review.',
+			{
+				text: z.string().describe('The rule, written as a short imperative.'),
+				reason: z.string().optional().describe('One sentence explaining the pattern.')
+			},
+			async () => ({ content: [{ type: 'text', text: 'Rule proposal sent to the user for review.' }] })
+		),
+		tool(
+			'propose_hook',
+			'Propose a shell hook for the user to review.',
+			{
+				event: z.enum(['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'UserPromptSubmit', 'Stop', 'SubagentStop', 'SessionStart', 'SessionEnd', 'Notification']).describe('When the hook fires.'),
+				matcher: z.string().optional().describe('Regex over the tool name.'),
+				command: z.string().describe('The shell command.'),
+				reason: z.string().optional().describe('Explanation.')
+			},
+			async () => ({ content: [{ type: 'text', text: 'Hook proposal sent to the user for review.' }] })
+		),
+		tool(
+			'add_skill',
+			'Add an Agent Skill to DocWriter from a GitHub repository URL or local skill path.',
+			{
+				source: z.string().describe('A GitHub repository URL, local skill directory, or local SKILL.md path.')
+			},
+			async ({ source }) => {
+				try {
+					addCustomSkill(source);
+					return {
+						content: [{
+							type: 'text',
+							text: `Added skill from ${source}. It is now enabled and synced to native skill folders.`
+						}]
+					};
+				} catch (err) {
+					return {
+						content: [{
+							type: 'text',
+							text: `add_skill failed: ${(err as Error).message}`
+						}],
+						isError: true
+					};
+				}
+			}
+		),
+		tool(
+			'review_action',
+			'Accept/reject pending review edits or resolve/reopen comment threads ONLY when the user explicitly asks you to do that action. This mutates document review state.',
+			{
+				path: z.string().describe('Workspace-relative path or absolute path inside the workspace.'),
+				action: z.enum(['accept_round', 'accept_all', 'reject_round', 'reject_all', 'resolve_thread', 'reopen_thread']).describe('The explicit review action requested by the user.'),
+				round_id: z.string().optional().describe('Required for accept_round or reject_round.'),
+				thread_id: z.string().optional().describe('Required for resolve_thread or reopen_thread.')
+			},
+			async (input) => {
+				const result = await executeReviewAction(input);
+				return {
+					content: result.content.map((c) => ({ type: 'text' as const, text: c.text })),
+					...(result.isError ? { isError: true } : {})
+				};
+			}
+		)
+	];
+
 	return createSdkMcpServer({
 		name: 'docwriter',
 		version: '0.0.1',
-		tools: [
-			tool(
-				'propose_rule',
-				'Propose a writing rule for the user to review.',
-				{
-					text: z.string().describe('The rule, written as a short imperative.'),
-					reason: z.string().optional().describe('One sentence explaining the pattern.')
-				},
-				async () => ({ content: [{ type: 'text', text: 'Rule proposal sent to the user for review.' }] })
-			),
-			tool(
-				'propose_hook',
-				'Propose a shell hook for the user to review.',
-				{
-					event: z.enum(['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'UserPromptSubmit', 'Stop', 'SubagentStop', 'SessionStart', 'SessionEnd', 'Notification']).describe('When the hook fires.'),
-					matcher: z.string().optional().describe('Regex over the tool name.'),
-					command: z.string().describe('The shell command.'),
-					reason: z.string().optional().describe('Explanation.')
-				},
-				async () => ({ content: [{ type: 'text', text: 'Hook proposal sent to the user for review.' }] })
-			),
-			tool(
-				'add_skill',
-				'Add an Agent Skill to DocWriter from a GitHub repository URL or local skill path.',
-				{
-					source: z.string().describe('A GitHub repository URL, local skill directory, or local SKILL.md path.')
-				},
-				async ({ source }) => {
-					try {
-						addCustomSkill(source);
-						return {
-							content: [{
-								type: 'text',
-								text: `Added skill from ${source}. It is now enabled and synced to native skill folders.`
-							}]
-						};
-					} catch (err) {
-						return {
-							content: [{
-								type: 'text',
-								text: `add_skill failed: ${(err as Error).message}`
-							}],
-							isError: true
-						};
-					}
-				}
-			),
-			tool(
-				'review_action',
-				'Accept/reject pending review edits or resolve/reopen comment threads ONLY when the user explicitly asks you to do that action. This mutates document review state.',
-				{
-					path: z.string().describe('Workspace-relative path or absolute path inside the workspace.'),
-					action: z.enum(['accept_round', 'accept_all', 'reject_round', 'reject_all', 'resolve_thread', 'reopen_thread']).describe('The explicit review action requested by the user.'),
-					round_id: z.string().optional().describe('Required for accept_round or reject_round.'),
-					thread_id: z.string().optional().describe('Required for resolve_thread or reopen_thread.')
-				},
-				async (input) => {
-					const result = await executeReviewAction(input);
-					return {
-						content: result.content.map((c) => ({ type: 'text' as const, text: c.text })),
-						...(result.isError ? { isError: true } : {})
-					};
-				}
-			)
-		]
+		tools
 	});
 }
 
@@ -147,6 +157,14 @@ export class ClaudeProvider implements AgentProvider {
 
 		const canUseToolCb = options.canUseTool;
 
+		const effectiveModel = options.model;
+		const sessionStore = createProviderSessionStore('claude');
+		const resumeSessionId =
+			options.sessionId && hasProviderSessionEntries('claude', options.sessionId)
+				? options.sessionId
+				: undefined;
+		const effort = options.effort || 'low';
+
 		const queryOptions: any = {
 			allowedTools: options.allowedTools,
 			mcpServers: { docwriter: docwriterMcp, 'docwriter-doc': docToolsMcp },
@@ -154,7 +172,7 @@ export class ClaudeProvider implements AgentProvider {
 			permissionMode: options.planMode ? 'plan' : 'acceptEdits',
 			includePartialMessages: true,
 			agentProgressSummaries: true,
-			effort: options.effort || 'low',
+			effort,
 			// Sonnet 4.6+ reject thinking.type.enabled; adaptive is required.
 			thinking: { type: 'adaptive' },
 			...(options.abortSignal ? { abortController: { signal: options.abortSignal, abort() { /* unused */ } } } : {}),
@@ -166,8 +184,9 @@ export class ClaudeProvider implements AgentProvider {
 					return result;
 				}
 			} : {}),
-			...(options.model ? { model: options.model } : {}),
-			...(options.sessionId ? { resume: options.sessionId } : {}),
+			...(effectiveModel ? { model: effectiveModel } : {}),
+			sessionStore,
+			...(resumeSessionId ? { resume: resumeSessionId } : {}),
 			...(options.systemPrompt ? { systemPrompt: options.systemPrompt } : {})
 		};
 
@@ -253,7 +272,10 @@ export class ClaudeProvider implements AgentProvider {
 					if (event.delta.type === 'text_delta') {
 						yield { type: 'assistant_text', text: event.delta.text };
 					} else if (event.delta.type === 'thinking_delta') {
-						yield { type: 'assistant_thinking', text: event.delta.thinking };
+						const text = event.delta.thinking;
+						if (typeof text === 'string' && text) {
+							yield { type: 'assistant_thinking', text };
+						}
 					} else if (event.delta.type === 'input_json_delta') {
 						toolInputAccum += event.delta.partial_json;
 					}
@@ -294,8 +316,13 @@ export class ClaudeProvider implements AgentProvider {
 			const client = new Anthropic();
 			const collected: Array<{ id: string; label: string; created: number }> = [];
 			for await (const m of client.models.list({ limit: 1000 })) {
-				if (!m.id.startsWith('claude-')) continue;
-				collected.push({ id: m.id, label: m.display_name || m.id, created: Date.parse(m.created_at) || 0 });
+				const label = m.display_name || m.id;
+				if (!m.id.startsWith('claude-') || isHiddenClaudeModel(m.id, label)) continue;
+				collected.push({
+					id: m.id,
+					label: formatClaudeModelLabel(m.id, label, m.max_input_tokens),
+					created: Date.parse(m.created_at) || 0
+				});
 			}
 			if (collected.length === 0) return FALLBACK_MODELS;
 			collected.sort((a, b) => b.created - a.created);
