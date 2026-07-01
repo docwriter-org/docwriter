@@ -10,7 +10,6 @@ primary_region = 'sjc'
   DOCWRITER_HOSTED = '1'
   PUBLIC_DOCWRITER_HOSTED = '1'
   DOCWRITER_RUNNER_URL = 'https://docwriter-runner.fly.dev'
-  ORIGIN = 'https://app.docwriter.org'
 
 [http_service]
   internal_port = 3000
