@@ -14,6 +14,13 @@ import type {
 	ToolDefinition
 } from './types';
 import { buildToolDefinitions } from './tool-handlers';
+import {
+	combinePrompt,
+	emitProposalEvents,
+	makeLazySdkLoader,
+	staleSessionEvent,
+	wrapToolsForProvider
+} from './shared';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getEffectiveDocwriterDir, getEffectiveRoot } from '$lib/server/document-files';
@@ -27,29 +34,27 @@ let ModelRegistry: any = null;
 let getModel: any = null;
 let Type: any = null;
 
+const importPiSdk = makeLazySdkLoader(
+	async () => {
+		const sdk = await import('@earendil-works/pi-coding-agent');
+		const ai = await import('@earendil-works/pi-ai/compat');
+		const tb = await import('@sinclair/typebox');
+		return { sdk, ai, tb };
+	},
+	'@earendil-works/pi-coding-agent is not installed. Run: npm install @earendil-works/pi-coding-agent @earendil-works/pi-ai @sinclair/typebox'
+);
+
 async function loadSdk() {
 	if (sdkLoaded) return;
-	try {
-		const sdk = await import('@earendil-works/pi-coding-agent');
-		createAgentSession = sdk.createAgentSession;
-		defineTool = sdk.defineTool;
-		SessionManager = sdk.SessionManager;
-		AuthStorage = sdk.AuthStorage;
-		ModelRegistry = sdk.ModelRegistry;
-
-		const ai = await import('@earendil-works/pi-ai/compat');
-		getModel = ai.getModel;
-
-		const tb = await import('@sinclair/typebox');
-		Type = tb.Type;
-
-		sdkLoaded = true;
-	} catch (err) {
-		throw new Error(
-			'@earendil-works/pi-coding-agent is not installed. Run: npm install @earendil-works/pi-coding-agent @earendil-works/pi-ai @sinclair/typebox\n' +
-			(err as Error).message
-		);
-	}
+	const { sdk, ai, tb } = await importPiSdk();
+	createAgentSession = sdk.createAgentSession;
+	defineTool = sdk.defineTool;
+	SessionManager = sdk.SessionManager;
+	AuthStorage = sdk.AuthStorage;
+	ModelRegistry = sdk.ModelRegistry;
+	getModel = ai.getModel;
+	Type = tb.Type;
+	sdkLoaded = true;
 }
 
 const FALLBACK_MODELS: ProviderModelOption[] = [
@@ -140,7 +145,11 @@ export class PiProvider implements AgentProvider {
 		await loadSdk();
 
 		const allTools = tools.length > 0 ? tools : buildToolDefinitions();
-		const piTools = buildPiTools(allTools);
+		// Filter to options.allowedTools and gate each execute through
+		// options.canUseTool. Empty during warmup (allowedTools excludes every
+		// doc tool), so Pi no longer exposes mutation tools on a warmup ping.
+		const providerTools = wrapToolsForProvider(allTools, options);
+		const piTools = buildPiTools(providerTools);
 		const cwd = getEffectiveRoot();
 		const piDir = join(getEffectiveDocwriterDir(), 'pi');
 		const sessionDir = join(piDir, 'sessions');
@@ -167,7 +176,7 @@ export class PiProvider implements AgentProvider {
 			authStorage,
 			modelRegistry,
 			customTools: piTools,
-			tools: ['read', ...allTools.map((toolDef) => toolDef.name)]
+			tools: ['read', ...providerTools.map((toolDef) => toolDef.name)]
 		};
 
 		if (options.model) {
@@ -189,11 +198,7 @@ export class PiProvider implements AgentProvider {
 
 		const { session } = await createAgentSession(sessionOpts);
 		if (resumeFailed) {
-			yield {
-				type: 'sdk_status',
-				status: 'cleared_stale_session',
-				compactResult: 'Pi session was missing locally; starting a fresh conversation.'
-			};
+			yield staleSessionEvent('Pi session');
 		}
 		yield { type: 'session', sessionId: sessionManager.getSessionId() };
 
@@ -227,20 +232,8 @@ export class PiProvider implements AgentProvider {
 						input: event.args ?? {}
 					});
 
-					if (event.toolName === 'propose_rule') {
-						events.push({
-							type: 'rule_proposal',
-							text: typeof event.args?.text === 'string' ? event.args.text : '',
-							reason: typeof event.args?.reason === 'string' ? event.args.reason : undefined
-						});
-					} else if (event.toolName === 'propose_hook') {
-						events.push({
-							type: 'hook_proposal',
-							event: typeof event.args?.event === 'string' ? event.args.event : 'PostToolUse',
-							matcher: typeof event.args?.matcher === 'string' ? event.args.matcher : undefined,
-							command: typeof event.args?.command === 'string' ? event.args.command : '',
-							reason: typeof event.args?.reason === 'string' ? event.args.reason : undefined
-						});
+					for (const proposal of emitProposalEvents(event.toolName, event.args ?? {})) {
+						events.push(proposal);
 					}
 					break;
 				}
@@ -264,9 +257,7 @@ export class PiProvider implements AgentProvider {
 			if (resolveWait) resolveWait();
 		});
 
-		const fullPrompt = options.systemPrompt
-			? `${options.systemPrompt}\n\n${options.prompt}`
-			: options.prompt;
+		const fullPrompt = combinePrompt(options);
 
 		let promptError: Error | null = null;
 		const onAbort = () => {

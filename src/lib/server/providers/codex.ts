@@ -21,21 +21,20 @@ import type {
 	ToolResult
 } from './types';
 import { buildToolDefinitions } from './tool-handlers';
+import { emitProposalEvents, makeLazySdkLoader, wrapToolsForProvider } from './shared';
 
 type CodexCtor = new (options?: any) => any;
 let Codex: CodexCtor | null = null;
 
+const importCodexSdk = makeLazySdkLoader(
+	() => import('@openai/codex-sdk'),
+	'@openai/codex-sdk is not installed. Run: npm install @openai/codex-sdk'
+);
+
 async function loadSdk(): Promise<void> {
 	if (Codex) return;
-	try {
-		const sdk = await import('@openai/codex-sdk');
-		Codex = sdk.Codex as CodexCtor;
-	} catch (err) {
-		throw new Error(
-			'@openai/codex-sdk is not installed. Run: npm install @openai/codex-sdk\n' +
-				(err as Error).message
-		);
-	}
+	const sdk = await importCodexSdk();
+	Codex = sdk.Codex as CodexCtor;
 }
 
 const FALLBACK_MODELS: ProviderModelOption[] = [
@@ -93,12 +92,6 @@ type ToolLoopOutput = {
 	assistant_text?: string;
 	tool_calls?: ToolCallRequest[];
 };
-
-function allowedToolDefinitions(tools: ToolDefinition[], allowedTools?: string[]): ToolDefinition[] {
-	if (!allowedTools || allowedTools.length === 0) return tools;
-	const allowed = new Set(allowedTools);
-	return tools.filter((toolDef) => allowed.has(toolDef.name));
-}
 
 function toolResultText(result: ToolResult): string {
 	return result.content.map((c) => c.text).join('\n');
@@ -159,26 +152,6 @@ function buildToolResultPrompt(results: Array<Record<string, unknown>>): string 
 		'',
 		`Tool results:\n${JSON.stringify(results, null, 2)}`
 	].join('\n');
-}
-
-function emitProposalEvents(name: string, input: Record<string, unknown>): ProviderEvent[] {
-	if (name === 'propose_rule') {
-		return [{
-			type: 'rule_proposal',
-			text: typeof input.text === 'string' ? input.text : '',
-			reason: typeof input.reason === 'string' ? input.reason : undefined
-		}];
-	}
-	if (name === 'propose_hook') {
-		return [{
-			type: 'hook_proposal',
-			event: typeof input.event === 'string' ? input.event : 'PostToolUse',
-			matcher: typeof input.matcher === 'string' ? input.matcher : undefined,
-			command: typeof input.command === 'string' ? input.command : '',
-			reason: typeof input.reason === 'string' ? input.reason : undefined
-		}];
-	}
-	return [];
 }
 
 function extensionForMedia(mediaType: string): string {
@@ -259,7 +232,7 @@ export class CodexProvider implements AgentProvider {
 		tools: ToolDefinition[]
 	): AsyncIterable<ProviderEvent> {
 		const allTools = tools.length > 0 ? tools : buildToolDefinitions();
-		const availableTools = allowedToolDefinitions(allTools, options.allowedTools);
+		const availableTools = wrapToolsForProvider(allTools, options);
 		const toolMap = new Map(availableTools.map((toolDef) => [toolDef.name, toolDef]));
 		const thread = await this.getThread(options);
 		const images = await materializeImages(options.images);
@@ -338,25 +311,18 @@ export class CodexProvider implements AgentProvider {
 						continue;
 					}
 
-					const permission = await options.canUseTool?.(call.name, originalInput);
-					if (permission?.behavior === 'deny') {
-						yield { type: 'tool_result', tool_use_id: toolUseId, is_error: true, text: permission.message };
-						pendingResults.push({ id: toolUseId, name: call.name, input: originalInput, is_error: true, text: permission.message });
-						continue;
-					}
-
-					const input = permission?.behavior === 'allow' && permission.updatedInput
-						? permission.updatedInput
-						: originalInput;
+					// `toolDef.execute` is gated by wrapToolsForProvider: a denied
+					// permission returns an error ToolResult carrying the deny
+					// message; an allowed one runs with any updatedInput.
 					try {
-						const result = await toolDef.execute(input);
+						const result = await toolDef.execute(originalInput);
 						const text = toolResultText(result);
 						yield { type: 'tool_result', tool_use_id: toolUseId, is_error: !!result.isError, text };
-						pendingResults.push({ id: toolUseId, name: call.name, input, is_error: !!result.isError, text });
+						pendingResults.push({ id: toolUseId, name: call.name, input: originalInput, is_error: !!result.isError, text });
 					} catch (err) {
 						const text = (err as Error).message;
 						yield { type: 'tool_result', tool_use_id: toolUseId, is_error: true, text };
-						pendingResults.push({ id: toolUseId, name: call.name, input, is_error: true, text });
+						pendingResults.push({ id: toolUseId, name: call.name, input: originalInput, is_error: true, text });
 					}
 				}
 

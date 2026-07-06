@@ -2,11 +2,16 @@ import { Editor, Extension } from '@tiptap/core';
 import { Plugin, PluginKey, type EditorState } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import * as Y from 'yjs';
+// The y-sync plugin key + rel-position helpers MUST come from the same package
+// whose ySyncPlugin the Collaboration extension installs (@tiptap/y-tiptap),
+// re-exported via editor-extensions. Importing them from `y-prosemirror`
+// yields a different PluginKey, so getYBinding() below always returns null and
+// the entire RelativePosition anchoring tier goes dead. See editor-extensions.
 import {
 	ySyncPluginKey,
 	absolutePositionToRelativePosition,
 	relativePositionToAbsolutePosition
-} from 'y-prosemirror';
+} from '$lib/editor-extensions';
 import { getCommentsMap, USER_ORIGIN } from '$lib/shared/ydoc-codec';
 import { buildCharIndex as cachedBuildCharIndex } from './char-index';
 import type { CommentThread } from '$lib/types';
@@ -386,24 +391,6 @@ export const CommentOverlay = Extension.create({
 		];
 	}
 });
-
-/** Compute detached threads: unresolved threads whose anchor cannot be
- * resolved to a valid PM range (neither rel positions nor quote indexOf
- * finds it). The Outline pane uses this to surface threads that lost
- * their anchor so the user can jump to them. */
-export function computeDetachedThreads(
-	threads: CommentThread[],
-	plainText: string
-): CommentThread[] {
-	// Simplified: rel position resolution requires editor state, which
-	// callers of this function don't have. The quote-based check is a
-	// reasonable proxy — if the quote text is fully gone, the rel
-	// position is almost certainly gone too (text deletion invalidates
-	// it). Edge case: rel position survived but quote was edited around
-	// it; treated as detached here, still rendered correctly by the
-	// overlay because the overlay does try rel positions first.
-	return threads.filter((t) => !t.resolved && plainText.indexOf(t.anchor.quote) === -1);
-}
 
 /** Resolve a thread's anchor to PM positions. Used by the margin-gutter
  * component to decide where to stack each thread card vertically.

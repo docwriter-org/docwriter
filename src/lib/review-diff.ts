@@ -1,5 +1,6 @@
 import { diffLines, diffWords } from 'diff';
 import type { PendingReviewRound } from './types';
+import { TINY_EDIT_THRESHOLD } from './types';
 import type { DiffPart } from './diff';
 import { wordDiff } from './diff';
 
@@ -12,7 +13,7 @@ export function classifyRoundKind(beforeMd: string, afterMd: string): 'tiny' | '
 	for (const part of diffWords(normalizeReviewText(beforeMd), normalizeReviewText(afterMd))) {
 		if (part.added || part.removed) totalDelta += part.value.length;
 	}
-	return totalDelta < 25 ? 'tiny' : 'big';
+	return totalDelta < TINY_EDIT_THRESHOLD ? 'tiny' : 'big';
 }
 
 export function summarizeRound(round: PendingReviewRound): string {

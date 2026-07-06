@@ -12,8 +12,14 @@ import {
 	kvGet
 } from './db-writes';
 import { resolveThemeName } from '$lib/themes';
+import { DEFAULT_AGENT_SETTINGS, type AgentSettings, type Rule } from '$lib/types';
 import { getDb } from './db';
 import { syncRulesToClaudeMemory } from './claude-memory';
+
+// Re-exported for existing importers (db-writes, claude-memory, document-io)
+// that historically imported these types from runtime-state; the canonical
+// definitions now live in $lib/types.
+export type { AgentSettings, Rule };
 
 /**
  * Server-side runtime state lives in SQLite (`.docwriter/docwriter.db`).
@@ -24,16 +30,11 @@ import { syncRulesToClaudeMemory } from './claude-memory';
  *   - Writing rules (`rules`) — consumed by `/api/render` when building the agent prompt
  *   - Agent behavior settings (`agentSettings`) — autonomy level and review-mode toggle
  *   - Open tab order + active tab
+ *
+ * `Rule`, `AgentSettings`, and `DEFAULT_AGENT_SETTINGS` are imported from
+ * `$lib/types` (dependency-free and server-safe) so there's a single source
+ * of truth for their shape and default.
  */
-export interface Rule {
-	id: string;
-	text: string;
-}
-
-export interface AgentSettings {
-	agency: 'conservative' | 'balanced' | 'aggressive';
-	muted: boolean;
-}
 
 // Default soft-wrap on so long lines (e.g. a paragraph with inline [[ agent ]]
 // directives) don't silently clip off the right edge of the editor with no
@@ -48,11 +49,6 @@ export interface TabsState {
 }
 
 const DEFAULT_TABS: TabsState = { order: [], active: null };
-
-const DEFAULT_AGENT_SETTINGS: AgentSettings = {
-	agency: 'conservative',
-	muted: false
-};
 
 /** A process-unique UUID generated once in `hooks.server.ts`. Clients read
  * this over HTTP and compare to their last-known value; a mismatch means
