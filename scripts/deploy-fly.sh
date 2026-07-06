@@ -2,22 +2,21 @@
 set -euo pipefail
 
 target="${1:-all}"
-app_name="${DOCWRITER_FLY_APP:-docwriter-app}"
-runner_name="${DOCWRITER_FLY_RUNNER_APP:-docwriter-runner}"
 
 if ! command -v fly >/dev/null 2>&1; then
 	echo "fly CLI not found. Install it first: https://fly.io/docs/flyctl/install/"
 	exit 1
 fi
 
+# App names are pinned in the fly config files (`app = ...`), so no --app flag.
 deploy_runner() {
-	echo "Deploying ${runner_name} from fly.runner.toml"
-	fly deploy --config fly.runner.toml --app "${runner_name}"
+	echo "Deploying runner from fly.runner.toml"
+	fly deploy --config fly.runner.toml
 }
 
 deploy_app() {
-	echo "Deploying ${app_name} from fly.toml"
-	fly deploy --config fly.toml --app "${app_name}"
+	echo "Deploying app from fly.toml"
+	fly deploy --config fly.toml
 }
 
 case "${target}" in

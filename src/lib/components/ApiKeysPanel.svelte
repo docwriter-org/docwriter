@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { env } from '$env/dynamic/public';
+	import { IS_HOSTED } from '$lib/hosted';
 
 	interface KeyStatus {
 		id: string;
@@ -18,7 +18,7 @@
 	let saving = $state<string | null>(null);
 	let error = $state<string | null>(null);
 	let loaded = $state(false);
-	const hosted = env.PUBLIC_DOCWRITER_HOSTED === '1';
+	const hosted = IS_HOSTED;
 
 	async function load() {
 		if (hosted) {

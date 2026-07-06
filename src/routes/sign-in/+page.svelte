@@ -1,7 +1,10 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
 	import { env } from '$env/dynamic/public';
+	import { IS_HOSTED } from '$lib/hosted';
 	import { createBrowserClerk } from '$lib/clerk-client';
+	import { stripClerkParams } from '$lib/shared/clerk-params';
+	import LogoMark from '$lib/components/LogoMark.svelte';
 	import type { Clerk as ClerkType } from '@clerk/clerk-js';
 
 	let signInHost = $state<HTMLDivElement>();
@@ -10,52 +13,24 @@
 	let errorMessage = $state('');
 	let infoMessage = $state('');
 
-	const CLERK_TRANSIENT_PARAMS = [
-		'__clerk_handshake',
-		'__clerk_handshake_nonce',
-		'__clerk_help'
-	];
-
-	function defaultRedirectTarget(): string {
-		return env.PUBLIC_DOCWRITER_HOSTED === '1' ? '/' : '/welcome';
-	}
-
-	function forceRedirectTarget(): string | null {
-		return env.PUBLIC_DOCWRITER_HOSTED === '1' ? '/' : null;
-	}
-
-	function stripClerkTransientParams(url: URL): void {
-		for (const param of CLERK_TRANSIENT_PARAMS) {
-			url.searchParams.delete(param);
-		}
-	}
-
+	// Only same-origin paths are accepted — this guard prevents open redirects.
 	function localRedirectPath(value: string | null | undefined, fallback: string): string {
 		if (!value) return fallback;
 		try {
-			const target = new URL(value, location.origin);
+			const target = stripClerkParams(new URL(value, location.origin));
 			if (target.origin !== location.origin) return fallback;
-			stripClerkTransientParams(target);
 			return `${target.pathname}${target.search}${target.hash}` || fallback;
 		} catch {
 			return fallback;
 		}
 	}
 
-	function redirectTarget(fallback: string): string {
-		const url = new URL(location.href);
-		const requested = url.searchParams.get('redirect_url');
+	// Honor ?redirect_url when present (origin-checked above); otherwise land on
+	// '/' in hosted mode or '/welcome' on landing deploys.
+	function redirectTarget(): string {
+		const fallback = IS_HOSTED ? '/' : '/welcome';
+		const requested = new URL(location.href).searchParams.get('redirect_url');
 		return localRedirectPath(requested, fallback);
-	}
-
-	function redirectConfig() {
-		const fallback = defaultRedirectTarget();
-		const force = forceRedirectTarget();
-		return {
-			target: force ?? redirectTarget(fallback),
-			forceRedirectUrl: force,
-			fallbackRedirectUrl: fallback
-		};
 	}
 
 	type AuthorizationState = 'authorized' | 'signed-out' | 'forbidden';
@@ -73,14 +48,12 @@
 		return 'signed-out';
 	}
 
-	function mountSignIn(config: ReturnType<typeof redirectConfig>): void {
+	function mountSignIn(target: string): void {
 		if (!signInHost || !clerk) return;
 		clerk.mountSignIn(signInHost, {
-			fallbackRedirectUrl: config.fallbackRedirectUrl,
-			forceRedirectUrl: config.forceRedirectUrl,
+			forceRedirectUrl: target,
 			routing: 'hash',
-			signUpFallbackRedirectUrl: config.fallbackRedirectUrl,
-			signUpForceRedirectUrl: config.forceRedirectUrl,
+			signUpForceRedirectUrl: target,
 			signUpUrl: '/sign-in'
 		});
 	}
@@ -98,22 +71,22 @@
 
 		try {
 			clerk = await createBrowserClerk(env.PUBLIC_CLERK_PUBLISHABLE_KEY);
-			const config = redirectConfig();
+			const target = redirectTarget();
 
 			if (clerk.user) {
 				if ((await authorizationState(clerk)) === 'authorized') {
-					location.href = config.target;
+					location.href = target;
 					return;
 				}
 				await clerk.signOut().catch(() => undefined);
 			}
 
-			mountSignIn(config);
+			mountSignIn(target);
 
 			unlisten = clerk.addListener(async (resources) => {
 				if (!resources.user || !clerk) return;
 				if ((await authorizationState(clerk)) === 'authorized') {
-					location.href = config.target;
+					location.href = target;
 				}
 			});
 		} catch (err) {
@@ -134,7 +107,7 @@
 <main class="auth-page">
 	<section class="auth-shell" aria-label="User study sign-in">
 		<div class="brand">
-			<img class="mark" src="/docwriter-mark.svg" alt="" />
+			<LogoMark size={44} interactive={false} />
 			<div>
 				<h1>DocWriter</h1>
 				<p>Sign in for the private user study.</p>
@@ -179,13 +152,6 @@
 		display: flex;
 		align-items: center;
 		gap: 14px;
-	}
-
-	.mark {
-		width: 44px;
-		height: 44px;
-		border-radius: 8px;
-		display: block;
 	}
 
 	h1,

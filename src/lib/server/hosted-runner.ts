@@ -18,17 +18,17 @@ import { isMultiTenant } from './workspace';
 
 const MIB = 1024 * 1024;
 
+// The runner enforces its own defaults and ceilings on output/returned-file
+// sizes; these constants only govern what we bundle, clip, and time out here.
 const RUNNER = {
 	scratchRel: '.docwriter/agent/scratch',
 	outputsRel: '.docwriter/agent/outputs',
 	defaultTimeoutMs: 30_000,
 	maxTimeoutMs: 120_000,
-	defaultMaxFileBytes: 2 * MIB,
-	defaultMaxBundleBytes: 16 * MIB,
-	defaultMaxFiles: 800,
-	defaultOutputBytes: 12_000,
-	defaultReturnFiles: 100,
-	defaultReturnBytes: 8 * MIB
+	maxFileBytes: 2 * MIB,
+	maxBundleBytes: 16 * MIB,
+	maxFiles: 800,
+	outputClipBytes: 12_000
 };
 
 type BundleFile = {
@@ -37,8 +37,6 @@ type BundleFile = {
 	size: number;
 	sha256: string;
 };
-
-type RunnerResponseFile = BundleFile;
 
 type RunnerResponse = {
 	ok?: boolean;
@@ -49,19 +47,17 @@ type RunnerResponse = {
 	stdout?: string;
 	stderr?: string;
 	changedPaths?: string[];
-	files?: RunnerResponseFile[];
+	files?: BundleFile[];
 	error?: string;
 };
-
-function envInt(name: string, fallback: number): number {
-	const raw = Number(process.env[name]);
-	return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : fallback;
-}
 
 function normalizeRel(path: string): string {
 	return path.split(sep).join('/');
 }
 
+// NOTE: isSafeRelPath and isWithin are duplicated in runner/server.js. The
+// runner is a separate deploy unit (Dockerfile.runner copies only that file),
+// so we can't share a module — keep both copies in sync.
 function isSafeRelPath(path: string): boolean {
 	if (!path || path.includes('\0')) return false;
 	if (path.startsWith('/') || path.startsWith('\\') || isAbsolute(path)) return false;
@@ -104,55 +100,49 @@ function readBundleFile(absPath: string, relPath: string, maxFileBytes: number):
 function collectTree(
 	root: string,
 	startAbs: string,
-	startRel: string,
-	limits: { maxFiles: number; maxFileBytes: number; maxBundleBytes: number },
-	out: BundleFile[]
-): number {
-	if (!existsSync(startAbs)) return 0;
-	let bytes = 0;
-	const entries = readdirSync(startAbs, { withFileTypes: true });
-	for (const entry of entries) {
-		if (out.length >= limits.maxFiles || bytes >= limits.maxBundleBytes) break;
-		const abs = join(startAbs, entry.name);
-		const relPath = normalizeRel(startRel ? join(startRel, entry.name) : relative(root, abs));
-		if (!isSafeRelPath(relPath) || shouldSkipUserFile(relPath)) continue;
-		if (entry.isDirectory()) {
-			if (relPath === '.docwriter') continue;
-			bytes += collectTree(root, abs, relPath, limits, out);
-			continue;
+	state: { files: BundleFile[]; bytes: number }
+): void {
+	if (!existsSync(startAbs)) return;
+	const dirs = [startAbs];
+	while (dirs.length > 0) {
+		const dir = dirs.shift()!;
+		for (const entry of readdirSync(dir, { withFileTypes: true })) {
+			if (state.files.length >= RUNNER.maxFiles || state.bytes >= RUNNER.maxBundleBytes) return;
+			const abs = join(dir, entry.name);
+			const relPath = normalizeRel(relative(root, abs));
+			if (!isSafeRelPath(relPath) || shouldSkipUserFile(relPath)) continue;
+			if (entry.isDirectory()) {
+				if (relPath === '.docwriter') continue;
+				dirs.push(abs);
+				continue;
+			}
+			if (!entry.isFile()) continue;
+			const file = readBundleFile(abs, relPath, RUNNER.maxFileBytes);
+			if (!file) continue;
+			if (state.bytes + file.size > RUNNER.maxBundleBytes) continue;
+			state.files.push(file);
+			state.bytes += file.size;
 		}
-		if (!entry.isFile()) continue;
-		const file = readBundleFile(abs, relPath, limits.maxFileBytes);
-		if (!file) continue;
-		if (bytes + file.size > limits.maxBundleBytes) break;
-		out.push(file);
-		bytes += file.size;
 	}
-	return bytes;
 }
 
 function collectBundle(): { files: BundleFile[]; skippedByLimit: boolean } {
 	const root = getEffectiveRoot();
-	const limits = {
-		maxFiles: envInt('DOCWRITER_RUNNER_MAX_FILES', RUNNER.defaultMaxFiles),
-		maxFileBytes: envInt('DOCWRITER_RUNNER_MAX_FILE_BYTES', RUNNER.defaultMaxFileBytes),
-		maxBundleBytes: envInt('DOCWRITER_RUNNER_MAX_BUNDLE_BYTES', RUNNER.defaultMaxBundleBytes)
-	};
-	const files: BundleFile[] = [];
-	let bytes = collectTree(root, root, '', limits, files);
+	const state = { files: [] as BundleFile[], bytes: 0 };
+	collectTree(root, root, state);
 
 	const scratchDir = getEffectiveScratchDir();
 	if (existsSync(scratchDir) && isWithin(scratchDir, root)) {
-		bytes += collectTree(root, scratchDir, RUNNER.scratchRel, limits, files);
+		collectTree(root, scratchDir, state);
 	}
 
 	return {
-		files,
-		skippedByLimit: files.length >= limits.maxFiles || bytes >= limits.maxBundleBytes
+		files: state.files,
+		skippedByLimit: state.files.length >= RUNNER.maxFiles || state.bytes >= RUNNER.maxBundleBytes
 	};
 }
 
-function writeReturnedScratchFile(root: string, file: RunnerResponseFile): boolean {
+function writeReturnedScratchFile(root: string, file: BundleFile): boolean {
 	if (!file.path.startsWith(RUNNER.scratchRel + '/') || !isSafeRelPath(file.path)) return false;
 	const abs = resolve(root, file.path);
 	const scratch = resolve(root, RUNNER.scratchRel);
@@ -173,6 +163,12 @@ function timestampForPath(date: Date): string {
 	return date.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
 }
 
+function exitStatus(response: RunnerResponse): string {
+	return response.timedOut
+		? 'timed out'
+		: `exited ${response.exitCode ?? response.signal ?? 'unknown'}`;
+}
+
 function writeRunLog(args: {
 	command: string;
 	response: RunnerResponse;
@@ -185,17 +181,15 @@ function writeRunLog(args: {
 			.update(`${now.toISOString()}\n${args.command}`)
 			.digest('hex')
 			.slice(0, 8);
-		const relPath = `${RUNNER.outputsRel}/run-${timestampForPath(now)}-${id}.md`;
-		const absPath = join(getEffectiveDocwriterDir(), 'agent', 'outputs', relPath.split('/').pop()!);
+		const fileName = `run-${timestampForPath(now)}-${id}.md`;
+		const relPath = `${RUNNER.outputsRel}/${fileName}`;
+		const absPath = join(getEffectiveDocwriterDir(), 'agent', 'outputs', fileName);
 		mkdirSync(dirname(absPath), { recursive: true });
-		const exit = args.response.timedOut
-			? 'timed out'
-			: `exit ${args.response.exitCode ?? args.response.signal ?? 'unknown'}`;
 		const changed = args.response.changedPaths ?? [];
 		const lines = [
 			`# Bash run ${now.toISOString()}`,
 			'',
-			`Status: ${exit}`,
+			`Status: ${exitStatus(args.response)}`,
 			`Duration: ${args.response.durationMs ?? 0}ms`,
 			`Bundled files: ${args.bundle.files.length}${args.bundle.skippedByLimit ? ' (limit reached)' : ''}`,
 			`Scratch files copied back: ${args.copiedScratchFiles}`,
@@ -225,8 +219,8 @@ function writeRunLog(args: {
 
 function clip(text: string | undefined): string {
 	if (!text) return '';
-	return text.length > RUNNER.defaultOutputBytes
-		? `${text.slice(0, RUNNER.defaultOutputBytes)}\n...[truncated]`
+	return text.length > RUNNER.outputClipBytes
+		? `${text.slice(0, RUNNER.outputClipBytes)}\n...[truncated]`
 		: text;
 }
 
@@ -237,10 +231,7 @@ function formatResult(
 	logPath: string | null
 ): ToolResult {
 	const lines: string[] = [];
-	const exit = response.timedOut
-		? 'timed out'
-		: `exited ${response.exitCode ?? response.signal ?? 'unknown'}`;
-	lines.push(`run_bash ${exit} after ${response.durationMs ?? 0}ms.`);
+	lines.push(`run_bash ${exitStatus(response)} after ${response.durationMs ?? 0}ms.`);
 	lines.push(`Bundled ${bundle.files.length} file${bundle.files.length === 1 ? '' : 's'} from the user workspace.`);
 	if (bundle.skippedByLimit) {
 		lines.push('Some files were skipped because the bundle limit was reached.');
@@ -295,7 +286,7 @@ export async function runHostedBash(input: {
 			isError: true,
 			content: [{
 				type: 'text',
-				text: 'Hosted Bash runner is not configured. Set DOCWRITER_RUNNER_URL and DOCWRITER_RUNNER_TOKEN.'
+				text: 'Hosted Bash runner is not configured. Set DOCWRITER_RUNNER_URL and RUNNER_SHARED_TOKEN.'
 			}]
 		};
 	}
@@ -314,16 +305,13 @@ export async function runHostedBash(input: {
 			method: 'POST',
 			headers: {
 				'Content-Type': 'application/json',
-				...(process.env.DOCWRITER_RUNNER_TOKEN
-					? { Authorization: `Bearer ${process.env.DOCWRITER_RUNNER_TOKEN}` }
+				...(process.env.RUNNER_SHARED_TOKEN
+					? { Authorization: `Bearer ${process.env.RUNNER_SHARED_TOKEN}` }
 					: {})
 			},
 			body: JSON.stringify({
 				command,
 				timeoutMs,
-				maxOutputBytes: envInt('DOCWRITER_RUNNER_MAX_OUTPUT_BYTES', RUNNER.defaultOutputBytes),
-				maxReturnFiles: envInt('DOCWRITER_RUNNER_MAX_RETURN_FILES', RUNNER.defaultReturnFiles),
-				maxReturnBytes: envInt('DOCWRITER_RUNNER_MAX_RETURN_BYTES', RUNNER.defaultReturnBytes),
 				files: bundle.files
 			}),
 			signal: controller.signal

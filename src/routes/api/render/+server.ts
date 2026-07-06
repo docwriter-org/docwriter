@@ -45,11 +45,8 @@ import {
 	REPLY_TO_COMMENT_TOOL_NAME,
 	setActiveFeedbackThreadId
 } from '$lib/server/mcp-doc-tools';
-import {
-	HOSTED_CLAUDE_DEFAULT_MODEL,
-	isHiddenClaudeModel,
-	isHostedSelectableClaudeModel
-} from '$lib/shared/claude-models';
+import { resolveHostedClaudeModel } from '$lib/shared/claude-models';
+import { isMultiTenant } from '$lib/server/deploy-mode';
 
 /** Read the live authoritative markdown for a tab, including any pending
  * review rounds materialized on top. Prefers the Hocuspocus in-memory
@@ -270,7 +267,7 @@ interface QueryRoundOutcome {
  * boilerplate and burning context + tokens. */
 function buildSystemPrompt(): string {
 	const scratchDir = getEffectiveScratchDir();
-	const hosted = isHostedDeployment();
+	const hosted = isMultiTenant();
 	const meta = readMeta();
 	const ruleTexts = meta.rules.map((r) => r.text);
 	const rulesBlock = ruleTexts.length > 0
@@ -647,10 +644,6 @@ const ASK_USER_TOOL_NAME = 'AskUserQuestion';
  * executing edits — defeating the entire point of plan mode. */
 const EXIT_PLAN_MODE_TOOL_NAME = 'ExitPlanMode';
 
-function isHostedDeployment(): boolean {
-	return process.env.DOCWRITER_HOSTED === '1' || process.env.PUBLIC_DOCWRITER_HOSTED === '1';
-}
-
 // Hook runner extracted to $lib/server/hook-runner so the manual-run
 // /api/hooks/run endpoint can reuse the same spawn/emit logic.
 
@@ -761,28 +754,16 @@ export const POST: RequestHandler = async ({ request }) => {
 			images?: ImageAttachmentPayload[];
 			provider?: string;
 		};
-		const hostedProviderLocked = isHostedDeployment();
+		const hostedProviderLocked = isMultiTenant();
 		const providerId = (hostedProviderLocked ? 'claude' : (providerIdRaw || 'claude')) as ProviderId;
 		const configuredDefaultModel = process.env.DOCWRITER_DEFAULT_MODEL || undefined;
-		const hostedDefaultModel =
-			configuredDefaultModel &&
-			configuredDefaultModel.startsWith('claude-') &&
-			!isHiddenClaudeModel(configuredDefaultModel) &&
-			isHostedSelectableClaudeModel(configuredDefaultModel)
-				? configuredDefaultModel
-				: HOSTED_CLAUDE_DEFAULT_MODEL;
-		const requestedModel = model || configuredDefaultModel || hostedDefaultModel;
-		const resolvedModel =
-			hostedProviderLocked
-				? requestedModel &&
-					requestedModel.startsWith('claude-') &&
-					!isHiddenClaudeModel(requestedModel) &&
-					isHostedSelectableClaudeModel(requestedModel)
-					? requestedModel
-					: hostedDefaultModel
-				: requestedModel;
+		// Hosted deployments coerce onto the allowed Claude set. Self-hosted
+		// keeps the requested model, else the configured default, else lets
+		// the provider pick its own default (undefined).
+		const resolvedModel = hostedProviderLocked
+			? resolveHostedClaudeModel(model, configuredDefaultModel)
+			: model || configuredDefaultModel;
 		const modelKey = resolvedModel ?? '';
-		const sessionModelKey = modelKey;
 
 		// Session resume belongs to the provider/model pair that created it.
 		// The UI's selected provider/model still live in `provider` / `model`;
@@ -793,7 +774,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		let currentSessionId = getSessionId();
 		if (
 			currentSessionId &&
-			(previousSessionProvider !== providerId || previousSessionModel !== sessionModelKey)
+			(previousSessionProvider !== providerId || previousSessionModel !== modelKey)
 		) {
 			setSessionId('');
 			currentSessionId = null;
@@ -1025,24 +1006,7 @@ export const POST: RequestHandler = async ({ request }) => {
 							input: Record<string, unknown>;
 						}>();
 
-						let retriedWithoutResume = false;
-						for (;;) {
-							const sessionIdForRound = getSessionId() || resumableSessionId || undefined;
-							try {
-								for await (const event of provider.query({
-									prompt: roundPrompt,
-									systemPrompt: systemPromptBlock,
-									model: resolvedModel,
-									sessionId: sessionIdForRound,
-									planMode: !!planMode,
-									warmup: !!warmup,
-									allowedTools,
-									canUseTool,
-									abortSignal: abortController.signal,
-									images: roundImages,
-									effort: 'low',
-									hooks
-								}, tools)) {
+						async function consumeEvent(event: ProviderEvent): Promise<void> {
 							// Track mutation tool usage
 							if (event.type === 'tool_call_start' && mutationToolNames.has(event.tool_name)) {
 								usedDocMutationTool = true;
@@ -1062,7 +1026,7 @@ export const POST: RequestHandler = async ({ request }) => {
 							// lands in the same bucket /api/history reads back.
 							if (event.type === 'session') {
 								setSessionId(event.sessionId);
-								setSessionOwner(providerId, sessionModelKey);
+								setSessionOwner(providerId, modelKey);
 								resumableSessionId = event.sessionId;
 								if (userMessage && !userMsgPersisted) {
 									userMsgPersisted = true;
@@ -1084,6 +1048,29 @@ export const POST: RequestHandler = async ({ request }) => {
 								});
 							}
 						}
+
+						// One retry when Claude's local session JSONL is gone:
+						// clear the stale id and start a fresh conversation.
+						let retriedWithoutResume = false;
+						for (;;) {
+							const sessionIdForRound = getSessionId() || resumableSessionId || undefined;
+							try {
+								for await (const event of provider.query({
+									prompt: roundPrompt,
+									systemPrompt: systemPromptBlock,
+									model: resolvedModel,
+									sessionId: sessionIdForRound,
+									planMode: !!planMode,
+									warmup: !!warmup,
+									allowedTools,
+									canUseTool,
+									abortSignal: abortController.signal,
+									images: roundImages,
+									effort: 'low',
+									hooks
+								}, tools)) {
+									await consumeEvent(event);
+								}
 								break;
 							} catch (err) {
 								if (

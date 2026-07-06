@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
+	import type { PageData } from './$types';
 	import type * as Y from 'yjs';
 	import MenuBar, { type MenuSpec } from '$lib/components/MenuBar.svelte';
 	import OutlinePane from '$lib/components/OutlinePane.svelte';
@@ -30,10 +31,8 @@
 	import { unifiedLineDiff } from '$lib/diff';
 	import { materializePendingReviewRounds } from '$lib/review-rounds';
 	import { serializeFragment as plainTextFromFragment } from '$lib/shared/ydoc-codec';
-	import {
-		HOSTED_CLAUDE_MODEL_NOTE,
-		isHostedSelectableClaudeModel
-	} from '$lib/shared/claude-models';
+	import { HOSTED_CLAUDE_MODEL_NOTE } from '$lib/shared/claude-models';
+	import { IS_HOSTED } from '$lib/hosted';
 
 	/** Turn a submit trigger into a compact description for the history
 	 * pane. Full text of long prompts (including feedback-on-passage quotes)
@@ -136,6 +135,16 @@
 	import TabBar from '$lib/components/TabBar.svelte';
 	import type { AgentSettings, CommentThread, HistoryEntry, ImageAttachment, PendingReviewRound, ProposedRule, ProposedHook } from '$lib/types';
 	import type { MaterializedPendingReviewRound } from '$lib/review-rounds';
+
+	let { data }: { data: PageData } = $props();
+
+	// Hosted Y.Doc names are `<userId>:<tabId>`; the server delivers the
+	// Clerk userId via load data so it's available synchronously, before any
+	// getYDocForTab call. Must run before onMount wires providers. The
+	// initial value is exactly what we want -- identity doesn't change
+	// without a full page load.
+	// svelte-ignore state_referenced_locally
+	setYDocUserId(data.userId ?? null);
 
 	type AgentSettingsChange = {
 		type: 'agency';
@@ -2039,20 +2048,15 @@
 					kind: 'submenu',
 					label: 'Provider',
 					items: [
-						...(PROVIDER_LOCKED_TO_CLAUDE
-							? ALL_PROVIDERS.map((p) => ({
-								kind: 'action' as const,
-								label: p.label,
-								checked: currentProvider === p.id,
-								disabled: p.id !== 'claude',
-								onClick: () => setSelectedProvider(p.id)
-							}))
-							: AVAILABLE_PROVIDERS.map((p) => ({
-								kind: 'action' as const,
-								label: p.label,
-								checked: currentProvider === p.id,
-								onClick: () => setSelectedProvider(p.id)
-							}))),
+						// When not locked, AVAILABLE_PROVIDERS === ALL_PROVIDERS,
+						// so one map covers both modes.
+						...ALL_PROVIDERS.map((p) => ({
+							kind: 'action' as const,
+							label: p.label,
+							checked: currentProvider === p.id,
+							disabled: PROVIDER_LOCKED_TO_CLAUDE && p.id !== 'claude',
+							onClick: () => setSelectedProvider(p.id)
+						})),
 						...(PROVIDER_LOCKED_TO_CLAUDE
 							? [
 									{ kind: 'divider' as const },
@@ -2070,37 +2074,31 @@
 					kind: 'submenu',
 					label: 'Model',
 					items: [
+						// Hosted mode: /api/models already filters to the allowed
+						// set, so entries need no disabled logic — the store
+						// setters remain the enforcement point.
 						...(providerModels.length > 0 ? providerModels : modelOptions).map((m) => ({
 							kind: 'action' as const,
 							label: m.label,
 							checked: model === m.id,
-							disabled:
-								PROVIDER_LOCKED_TO_CLAUDE &&
-								(m.provider ?? currentProvider) === 'claude' &&
-								!isHostedSelectableClaudeModel(m.id),
 							onClick: () => setSelectedModel(m.id)
 						})),
-						...(PROVIDER_LOCKED_TO_CLAUDE
-							? [
-									{ kind: 'divider' as const },
-									{
-										kind: 'action' as const,
-										label: HOSTED_CLAUDE_MODEL_NOTE,
-										disabled: true,
-										onClick: () => {}
+						{ kind: 'divider' as const },
+						PROVIDER_LOCKED_TO_CLAUDE
+							? {
+									kind: 'action' as const,
+									label: HOSTED_CLAUDE_MODEL_NOTE,
+									disabled: true,
+									onClick: () => {}
+								}
+							: {
+									kind: 'action' as const,
+									label: 'Custom model…',
+									checked: false,
+									onClick: () => {
+										customModelOpen = true;
 									}
-								]
-							: [
-									{ kind: 'divider' as const },
-									{
-										kind: 'action' as const,
-										label: 'Custom model…',
-										checked: false,
-										onClick: () => {
-											customModelOpen = true;
-										}
-									}
-								])
+								}
 					]
 				},
 				{ kind: 'panel', label: 'API keys', panelKey: 'apiKeys' },
@@ -2224,9 +2222,6 @@
 			const res = await fetch('/api/session');
 			if (!res.ok) return;
 			const data = await res.json();
-			if ('userId' in data) {
-				setYDocUserId(typeof data.userId === 'string' ? data.userId : null);
-			}
 			if (typeof data.serverInstanceId === 'string') {
 				const prior =
 					typeof window !== 'undefined'
@@ -2843,13 +2838,8 @@
 			setSelectedProvider(session.provider);
 		}
 		if (!session.model) return;
-		if (
-			PROVIDER_LOCKED_TO_CLAUDE &&
-			session.provider === 'claude' &&
-			!isHostedSelectableClaudeModel(session.model)
-		) {
-			return;
-		}
+		// The store setters are the enforcement point for the hosted model
+		// policy — a blocked model is silently rejected there.
 		const knownModel = modelOptions.some(
 			(m) => m.id === session.model && (!m.provider || m.provider === session.provider)
 		);
@@ -2902,9 +2892,11 @@
 				}}
 			/>
 		</div>
-		<div class="header-right">
-			<HostedAccountButton />
-		</div>
+		{#if IS_HOSTED}
+			<div class="header-right">
+				<HostedAccountButton />
+			</div>
+		{/if}
 	</header>
 
 	{#snippet rulesPanelSnippet()}
@@ -3130,7 +3122,6 @@
 		align-items: center;
 		justify-content: flex-end;
 		flex: 0 0 auto;
-		min-width: 32px;
 	}
 	.logo {
 		flex-shrink: 0;

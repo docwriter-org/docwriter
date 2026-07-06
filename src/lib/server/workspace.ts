@@ -14,6 +14,10 @@ import type { Database } from 'better-sqlite3';
 import BetterSqlite3 from 'better-sqlite3';
 import { runMigrations } from './db-schema';
 
+// Canonical hosted predicate lives in deploy-mode; re-exported here because
+// most server modules already import it from workspace.
+export { isMultiTenant } from './deploy-mode';
+
 const DATA_DIR = process.env.DOCWRITER_ROOT || process.cwd();
 const WORKSPACES_DIR = join(DATA_DIR, 'workspaces');
 
@@ -27,10 +31,6 @@ export interface UserWorkspace {
 }
 
 const dbCache = new Map<string, Database>();
-
-export function isMultiTenant(): boolean {
-	return process.env.DOCWRITER_HOSTED === '1';
-}
 
 export function getUserWorkspace(userId: string): UserWorkspace {
 	const root = join(WORKSPACES_DIR, userId);
@@ -89,8 +89,14 @@ function migrateClaudeNativeState(ws: UserWorkspace): void {
 	}
 }
 
+// ensureUserWorkspace runs on every authenticated request (clerk-auth,
+// getDbForUser, providers) — do the filesystem probes and migration once
+// per user per process.
+const ensuredUsers = new Set<string>();
+
 export function ensureUserWorkspace(userId: string): UserWorkspace {
 	const ws = getUserWorkspace(userId);
+	if (ensuredUsers.has(userId)) return ws;
 	if (!existsSync(ws.docwriterDir)) {
 		mkdirSync(ws.docwriterDir, { recursive: true });
 	}
@@ -98,6 +104,7 @@ export function ensureUserWorkspace(userId: string): UserWorkspace {
 	if (!existsSync(join(ws.root, 'document.md'))) {
 		writeFileSync(join(ws.root, 'document.md'), '# Welcome to DocWriter\n\nStart writing here.\n');
 	}
+	ensuredUsers.add(userId);
 	return ws;
 }
 
@@ -115,7 +122,7 @@ export function getDbForUser(userId: string): Database {
 	return db;
 }
 
-export function closeAllUserDbs(): void {
+function closeAllUserDbs(): void {
 	for (const [userId, db] of dbCache) {
 		try {
 			db.close();
@@ -126,10 +133,12 @@ export function closeAllUserDbs(): void {
 	}
 }
 
-// Shutdown hooks for user DBs.
-let shutdownInstalled = false;
-if (!shutdownInstalled) {
-	shutdownInstalled = true;
+// Shutdown hooks for user DBs. Guarded via globalThis (like
+// __docwriterWsServer) so Vite HMR re-evaluation doesn't stack duplicate
+// process listeners — a module-scope flag resets on every re-eval.
+const SHUTDOWN_FLAG = '__docwriterUserDbShutdownHooks';
+if (!(globalThis as Record<string, unknown>)[SHUTDOWN_FLAG]) {
+	(globalThis as Record<string, unknown>)[SHUTDOWN_FLAG] = true;
 	const close = () => closeAllUserDbs();
 	process.once('exit', close);
 	process.once('SIGINT', () => { close(); process.exit(130); });

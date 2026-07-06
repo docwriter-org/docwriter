@@ -1,9 +1,8 @@
 import { get, writable } from 'svelte/store';
-import { env } from '$env/dynamic/public';
+import { IS_HOSTED } from '$lib/hosted';
 import {
-	HOSTED_CLAUDE_DEFAULT_MODEL,
-	isHiddenClaudeModel,
-	isHostedSelectableClaudeModel
+	hostedClaudeDefault,
+	isClaudeModelBlocked
 } from '$lib/shared/claude-models';
 import type {
 	Rule,
@@ -273,7 +272,12 @@ export type ModelOption = { id: string; label: string; provider?: string };
 
 /** Available provider options. */
 export type ProviderOption = { id: string; label: string };
-export const PROVIDER_LOCKED_TO_CLAUDE = env.PUBLIC_DOCWRITER_HOSTED === '1';
+export const PROVIDER_LOCKED_TO_CLAUDE = IS_HOSTED;
+
+/** One policy predicate for every model-menu / setter / init site below. */
+function isBlockedModel(provider: string, id: string): boolean {
+	return provider === 'claude' && isClaudeModelBlocked(id, PROVIDER_LOCKED_TO_CLAUDE);
+}
 
 export const ALL_PROVIDERS: ProviderOption[] = [
 	{ id: 'claude', label: 'Claude' },
@@ -391,8 +395,7 @@ function addStoredSelections(models: ModelOption[]): ModelOption[] {
 	const seen = new Set(next.map(modelKey));
 	for (const [provider, id] of Object.entries(selectedModelsByProvider)) {
 		if (!AVAILABLE_PROVIDERS.some((p) => p.id === provider)) continue;
-		if (provider === 'claude' && isHiddenClaudeModel(id)) continue;
-		if (PROVIDER_LOCKED_TO_CLAUDE && provider === 'claude' && !isHostedSelectableClaudeModel(id)) continue;
+		if (isBlockedModel(provider, id)) continue;
 		const option = { id, label: id, provider };
 		const key = modelKey(option);
 		if (!seen.has(key)) {
@@ -406,12 +409,7 @@ function addStoredSelections(models: ModelOption[]): ModelOption[] {
 function fallbackModelForProvider(provider: string): string {
 	const providerModels = FALLBACK_MODELS.filter((m) => m.provider === provider || !m.provider);
 	if (PROVIDER_LOCKED_TO_CLAUDE && provider === 'claude') {
-		return (
-			providerModels.find((m) => m.id === HOSTED_CLAUDE_DEFAULT_MODEL)?.id ??
-			providerModels.find((m) => isHostedSelectableClaudeModel(m.id) && m.id.includes('sonnet'))?.id ??
-			providerModels.find((m) => isHostedSelectableClaudeModel(m.id))?.id ??
-			HOSTED_CLAUDE_DEFAULT_MODEL
-		);
+		return hostedClaudeDefault(providerModels);
 	}
 	return providerModels.find((m) => m.id.includes('opus'))?.id ?? providerModels[0]?.id ?? 'opus';
 }
@@ -419,12 +417,7 @@ function fallbackModelForProvider(provider: string): string {
 function defaultModelForProvider(provider: string, models: ModelOption[]): string {
 	const providerModels = models.filter((m) => !m.provider || m.provider === provider);
 	if (PROVIDER_LOCKED_TO_CLAUDE && provider === 'claude') {
-		return (
-			providerModels.find((m) => m.id === HOSTED_CLAUDE_DEFAULT_MODEL)?.id ??
-			providerModels.find((m) => isHostedSelectableClaudeModel(m.id) && m.id.includes('sonnet'))?.id ??
-			providerModels.find((m) => isHostedSelectableClaudeModel(m.id))?.id ??
-			HOSTED_CLAUDE_DEFAULT_MODEL
-		);
+		return hostedClaudeDefault(providerModels);
 	}
 	if (provider === 'claude') {
 		return providerModels.find((m) => m.id.includes('opus'))?.id ?? providerModels[0]?.id ?? 'opus';
@@ -448,12 +441,7 @@ export const availableModels = writable<ModelOption[]>(addStoredSelections(FALLB
 
 const initialModel =
 	selectedModelsByProvider[validProvider] &&
-	!(validProvider === 'claude' && isHiddenClaudeModel(selectedModelsByProvider[validProvider])) &&
-	!(
-		PROVIDER_LOCKED_TO_CLAUDE &&
-		validProvider === 'claude' &&
-		!isHostedSelectableClaudeModel(selectedModelsByProvider[validProvider])
-	)
+	!isBlockedModel(validProvider, selectedModelsByProvider[validProvider])
 		? selectedModelsByProvider[validProvider]
 		: fallbackModelForProvider(validProvider);
 export const selectedModel = writable<string>(initialModel);
@@ -461,16 +449,14 @@ export const selectedProvider = writable<string>(validProvider);
 
 export function setSelectedModel(id: string) {
 	const provider = get(selectedProvider);
-	if (provider === 'claude' && isHiddenClaudeModel(id)) return;
-	if (PROVIDER_LOCKED_TO_CLAUDE && provider === 'claude' && !isHostedSelectableClaudeModel(id)) return;
+	if (isBlockedModel(provider, id)) return;
 	selectedModel.set(id);
 	persistProviderModel(provider, id);
 }
 
 export function setCustomModel(id: string, provider: string) {
 	if (!AVAILABLE_PROVIDERS.some((p) => p.id === provider)) return;
-	if (provider === 'claude' && isHiddenClaudeModel(id)) return;
-	if (PROVIDER_LOCKED_TO_CLAUDE && provider === 'claude' && !isHostedSelectableClaudeModel(id)) return;
+	if (isBlockedModel(provider, id)) return;
 	let existing: ModelOption[] = [];
 	availableModels.subscribe((v) => (existing = v))();
 	if (!existing.some((m) => m.id === id && m.provider === provider)) {
@@ -491,15 +477,7 @@ export function setSelectedProvider(id: string) {
 
 function selectModelForProvider(provider: string) {
 	const preferred = selectedModelsByProvider[provider];
-	if (
-		preferred &&
-		!(provider === 'claude' && isHiddenClaudeModel(preferred)) &&
-		!(
-			PROVIDER_LOCKED_TO_CLAUDE &&
-			provider === 'claude' &&
-			!isHostedSelectableClaudeModel(preferred)
-		)
-	) {
+	if (preferred && !isBlockedModel(provider, preferred)) {
 		selectedModel.set(preferred);
 		persistProviderModel(provider, preferred);
 		availableModels.update(addStoredSelections);

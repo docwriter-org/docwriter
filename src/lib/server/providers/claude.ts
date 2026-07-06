@@ -37,7 +37,7 @@ import { addCustomSkill } from '$lib/server/skills-config';
 import { runHostedBash } from '$lib/server/hosted-runner';
 import { executeReviewAction } from './tool-handlers';
 import { isMultiTenant, ensureUserWorkspace } from '$lib/server/workspace';
-import { getCurrentUserId } from '$lib/server/request-context';
+import { getActiveUserId } from '$lib/server/request-context';
 import {
 	formatClaudeModelLabel,
 	HOSTED_CLAUDE_DEFAULT_MODEL,
@@ -208,19 +208,18 @@ export class ClaudeProvider implements AgentProvider {
 		const canUseToolCb = options.canUseTool;
 
 		// In multi-tenant mode, sandbox the agent to the user's workspace
-		// directory. Use Sonnet 4.6 only when the caller did not choose a
-		// hosted-safe Claude model.
+		// directory. Use the hosted default model only when the caller did
+		// not choose one (render resolves a model first, so this is a
+		// belt-and-suspenders fallback).
 		const multiTenant = isMultiTenant();
 		const effectiveModel = options.model || (multiTenant ? HOSTED_CLAUDE_DEFAULT_MODEL : undefined);
 		let cwdOption: string | undefined;
 		let envOverrides: Record<string, string> | undefined;
-		if (multiTenant) {
-			const userId = getCurrentUserId();
-			if (userId) {
-				const ws = ensureUserWorkspace(userId);
-				cwdOption = ws.root;
-				envOverrides = { CLAUDE_CONFIG_DIR: ws.claudeConfigDir };
-			}
+		const userId = getActiveUserId();
+		if (userId) {
+			const ws = ensureUserWorkspace(userId);
+			cwdOption = ws.root;
+			envOverrides = { CLAUDE_CONFIG_DIR: ws.claudeConfigDir };
 		}
 		const sessionStore = createProviderSessionStore('claude');
 		const resumeSessionId =
@@ -253,11 +252,9 @@ export class ClaudeProvider implements AgentProvider {
 			...(resumeSessionId ? { resume: resumeSessionId } : {}),
 			...(options.systemPrompt ? { systemPrompt: options.systemPrompt } : {}),
 			...(cwdOption ? { cwd: cwdOption } : {}),
-			...(multiTenant
-				? { env: buildHostedClaudeEnv(envOverrides) }
-				: envOverrides
-					? { env: { ...process.env, ...envOverrides } }
-					: {})
+			// envOverrides is only ever set in multi-tenant mode, so the env
+			// override collapses to the hosted case.
+			...(multiTenant ? { env: buildHostedClaudeEnv(envOverrides) } : {})
 		};
 
 		const promptArg =

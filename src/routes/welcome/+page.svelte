@@ -1,6 +1,9 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { fade, fly } from 'svelte/transition';
+	// This page is prerendered on landing deploys, so $env/dynamic/public is
+	// unavailable; static public env is baked in at build time, which is fine.
+	import * as publicEnv from '$env/static/public';
 	import type { PageData } from './$types';
 	import LogoMark from '$lib/components/LogoMark.svelte';
 
@@ -86,7 +89,8 @@
 	let showDirectiveCaret = $derived(phase === 0);
 	let showUserCaret = $derived(phase === 1);
 
-	const APP_URL = 'https://app.docwriter.org';
+	const APP_URL =
+		(publicEnv as Record<string, string | undefined>).PUBLIC_APP_URL || 'https://app.docwriter.org';
 </script>
 
 <svelte:head>

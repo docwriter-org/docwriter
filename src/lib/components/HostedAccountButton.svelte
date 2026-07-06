@@ -1,13 +1,16 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
 	import { env } from '$env/dynamic/public';
+	import { IS_HOSTED } from '$lib/hosted';
 	import { LogOut, UserCircle } from 'lucide-svelte';
 	import { createBrowserClerk } from '$lib/clerk-client';
 	import type { Clerk as ClerkType } from '@clerk/clerk-js';
 
+	// The server auth gate redirects unauthenticated visitors away from this
+	// page, so this button only ever renders for a signed-in, authorized user.
+	// /api/auth/status is the single source of truth for identity; clerk-js is
+	// lazy-loaded on first menu open purely to power openUserProfile/signOut.
 	interface AuthStatus {
-		authenticated?: boolean;
-		authorized?: boolean;
 		user?: {
 			email?: string | null;
 			name?: string | null;
@@ -15,55 +18,28 @@
 	}
 
 	let root = $state<HTMLDivElement>();
-	let clerk: ClerkType | null = null;
-	let unsubscribe: (() => void) | null = null;
-	let signedIn = $state(false);
 	let loaded = $state(false);
 	let menuOpen = $state(false);
-	let profileReady = $state(false);
+	let clerkReady = $state(false);
 	let signingOut = $state(false);
 	let accountEmail = $state<string | null>(null);
 	let accountName = $state<string | null>(null);
-	let hasSeenSignedInUser = false;
+	let clerkPromise: Promise<ClerkType | null> | null = null;
 
-	const hosted = env.PUBLIC_DOCWRITER_HOSTED === '1';
+	const hosted = IS_HOSTED;
 	const CLERK_LOAD_TIMEOUT_MS = 6000;
-	const CLERK_TRANSIENT_PARAMS = [
-		'__clerk_handshake',
-		'__clerk_handshake_nonce',
-		'__clerk_help'
-	];
-
-	function currentPath(): string {
-		const url = new URL(location.href);
-		for (const param of CLERK_TRANSIENT_PARAMS) {
-			url.searchParams.delete(param);
-		}
-		return `${url.pathname}${url.search}${url.hash}` || '/';
-	}
-
-	function signInHref(): string {
-		if (typeof location === 'undefined') return '/sign-in';
-		return `/sign-in?redirect_url=${encodeURIComponent(currentPath())}`;
-	}
 
 	function accountLabel(): string {
 		return accountName || accountEmail || 'Account';
 	}
 
-	function applyAuthStatus(status: AuthStatus): void {
-		signedIn = status.authenticated === true && status.authorized === true;
-		accountEmail = status.user?.email ?? null;
-		accountName = status.user?.name ?? null;
-		hasSeenSignedInUser = hasSeenSignedInUser || signedIn;
-	}
-
 	async function loadAuthStatus(): Promise<void> {
-		if (!hosted) return;
 		try {
 			const res = await fetch('/api/auth/status');
 			if (!res.ok) return;
-			applyAuthStatus((await res.json()) as AuthStatus);
+			const status = (await res.json()) as AuthStatus;
+			accountEmail = status.user?.email ?? null;
+			accountName = status.user?.name ?? null;
 		} catch (err) {
 			console.error('Unable to load account status:', err);
 		} finally {
@@ -78,45 +54,26 @@
 		]);
 	}
 
-	async function loadClerk(): Promise<void> {
-		if (!hosted || !env.PUBLIC_CLERK_PUBLISHABLE_KEY) {
-			return;
-		}
-
-		try {
-			clerk = await withTimeout(
+	function ensureClerk(): Promise<ClerkType | null> {
+		if (!clerkPromise) {
+			if (!env.PUBLIC_CLERK_PUBLISHABLE_KEY) return Promise.resolve(null);
+			clerkPromise = withTimeout(
 				createBrowserClerk(env.PUBLIC_CLERK_PUBLISHABLE_KEY).catch((err) => {
 					console.error('Unable to load account menu:', err);
 					return null;
 				}),
 				CLERK_LOAD_TIMEOUT_MS
-			);
-			if (!clerk) return;
-
-			profileReady = !!clerk.user;
-			if (clerk.user) {
-				signedIn = true;
-				hasSeenSignedInUser = true;
-			}
-
-			unsubscribe = clerk.addListener(
-				(resources) => {
-					const hasUser = !!resources.user;
-					if (!hasUser && hasSeenSignedInUser) {
-						signedIn = false;
-						profileReady = false;
-						location.href = '/sign-in';
-						return;
-					}
-					if (hasUser) signedIn = true;
-					profileReady = hasUser;
-					hasSeenSignedInUser = hasSeenSignedInUser || hasUser;
-				},
-				{ skipInitialEmit: true }
-			);
-		} catch (err) {
-			console.error('Unable to load account menu:', err);
+			).then((instance) => {
+				clerkReady = !!instance;
+				return instance;
+			});
 		}
+		return clerkPromise;
+	}
+
+	function toggleMenu(): void {
+		menuOpen = !menuOpen;
+		if (menuOpen) void ensureClerk();
 	}
 
 	function handleDocumentPointerDown(event: PointerEvent): void {
@@ -129,34 +86,34 @@
 	}
 
 	async function openProfile(): Promise<void> {
-		if (!clerk || !profileReady) return;
-		clerk.openUserProfile();
+		const clerk = await ensureClerk();
 		menuOpen = false;
+		clerk?.openUserProfile();
 	}
 
 	async function signOut(): Promise<void> {
 		if (signingOut) return;
 		signingOut = true;
 		menuOpen = false;
-		const redirectUrl = '/sign-in';
 		try {
 			await fetch('/api/auth/sign-out', { method: 'POST' }).catch(() => undefined);
-			await clerk?.signOut({ redirectUrl }).catch(() => undefined);
+			// The endpoint revokes the Clerk session server-side but doesn't clear
+			// the client's short-lived __session JWT cookie; clerk.signOut() does.
+			const clerk = await ensureClerk();
+			await clerk?.signOut().catch(() => undefined);
 		} finally {
-			location.href = redirectUrl;
+			location.href = '/sign-in';
 		}
 	}
 
 	onMount(() => {
 		if (!hosted) return;
 		void loadAuthStatus();
-		void loadClerk();
 		document.addEventListener('pointerdown', handleDocumentPointerDown);
 		document.addEventListener('keydown', handleDocumentKeydown);
 	});
 
 	onDestroy(() => {
-		unsubscribe?.();
 		if (typeof document === 'undefined') return;
 		document.removeEventListener('pointerdown', handleDocumentPointerDown);
 		document.removeEventListener('keydown', handleDocumentKeydown);
@@ -165,53 +122,46 @@
 
 {#if hosted}
 	<div class="account-control" bind:this={root} aria-label="Account">
-		{#if loaded && !signedIn}
-			<a class="account-link" href={signInHref()}>
-				<UserCircle size={16} />
-				<span>Sign in</span>
-			</a>
-		{:else}
-			<button
-				class="account-trigger"
-				type="button"
-				aria-haspopup="menu"
-				aria-expanded={menuOpen}
-				onclick={() => (menuOpen = !menuOpen)}
-			>
-				<UserCircle size={16} />
-				<span>{loaded ? accountLabel() : 'Account'}</span>
-			</button>
-			{#if menuOpen}
-				<div class="account-menu" role="menu">
-					<div class="account-summary">
-						<div class="account-title">{accountLabel()}</div>
-						{#if accountEmail && accountEmail !== accountLabel()}
-							<div class="account-email">{accountEmail}</div>
-						{/if}
-					</div>
-					<button
-						class="account-item"
-						type="button"
-						role="menuitem"
-						disabled={!profileReady}
-						title={profileReady ? 'Open profile' : 'Profile is still loading'}
-						onclick={() => void openProfile()}
-					>
-						<UserCircle size={15} />
-						<span>Profile</span>
-					</button>
-					<button
-						class="account-item"
-						type="button"
-						role="menuitem"
-						disabled={signingOut}
-						onclick={() => void signOut()}
-					>
-						<LogOut size={15} />
-						<span>{signingOut ? 'Signing out' : 'Sign out'}</span>
-					</button>
+		<button
+			class="account-trigger"
+			type="button"
+			aria-haspopup="menu"
+			aria-expanded={menuOpen}
+			onclick={toggleMenu}
+		>
+			<UserCircle size={16} />
+			<span>{loaded ? accountLabel() : 'Account'}</span>
+		</button>
+		{#if menuOpen}
+			<div class="account-menu" role="menu">
+				<div class="account-summary">
+					<div class="account-title">{accountLabel()}</div>
+					{#if accountEmail && accountEmail !== accountLabel()}
+						<div class="account-email">{accountEmail}</div>
+					{/if}
 				</div>
-			{/if}
+				<button
+					class="account-item"
+					type="button"
+					role="menuitem"
+					disabled={!clerkReady}
+					title={clerkReady ? 'Open profile' : 'Profile is still loading'}
+					onclick={() => void openProfile()}
+				>
+					<UserCircle size={15} />
+					<span>Profile</span>
+				</button>
+				<button
+					class="account-item"
+					type="button"
+					role="menuitem"
+					disabled={signingOut}
+					onclick={() => void signOut()}
+				>
+					<LogOut size={15} />
+					<span>{signingOut ? 'Signing out' : 'Sign out'}</span>
+				</button>
+			</div>
 		{/if}
 	</div>
 {/if}
@@ -225,8 +175,7 @@
 		min-width: 92px;
 		min-height: 32px;
 	}
-	.account-trigger,
-	.account-link {
+	.account-trigger {
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
@@ -245,14 +194,12 @@
 		cursor: pointer;
 		max-width: 220px;
 	}
-	.account-trigger span,
-	.account-link span {
+	.account-trigger span {
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
 	.account-trigger:hover,
-	.account-link:hover,
 	.account-trigger[aria-expanded='true'] {
 		background: var(--hover-bg);
 	}

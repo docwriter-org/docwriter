@@ -45,8 +45,7 @@ import type {
 } from '$lib/types';
 import { isValidTabId, tabFile, WORKSPACE_ROOT, getEffectiveRoot } from './document-files';
 import { resolveWorkspacePath } from './workspace-path';
-import { isMultiTenant } from './workspace';
-import { getCurrentUserId } from './request-context';
+import { docNameForTab } from './doc-name';
 import { getTabsState, setTabsState } from './runtime-state';
 import { writeTextAtomic } from './file-utils';
 
@@ -74,43 +73,28 @@ export function countOccurrences(haystack: string, needle: string): number {
 	return count;
 }
 
+type DirectConnection = {
+	transact: (cb: (doc: Document) => void | Promise<void>) => Promise<void>;
+	disconnect: () => Promise<void>;
+};
+
 /** Resolve the live Hocuspocus instance stashed on `globalThis` by
  * `ws-server.ts`. The stashed handle is a `Server` wrapper whose real
  * directory-of-documents lives at `.hocuspocus`; `openDirectConnection` is a
- * method on the inner `Hocuspocus`, not the `Server` wrapper. Returns null
- * if it isn't up (development-time misconfiguration, not a tool-call
- * runtime condition). */
-/** In multi-tenant mode, Hocuspocus doc names are `<userId>:<tabId>`. */
-function hocuspocusDocName(tabId: string): string {
-	if (isMultiTenant()) {
-		const userId = getCurrentUserId();
-		if (userId) return `${userId}:${tabId}`;
-	}
-	return tabId;
-}
-
-function hocuspocusContext(): { userId: string } | undefined {
-	const userId = isMultiTenant() ? getCurrentUserId() : null;
-	return userId ? { userId } : undefined;
-}
-
-export function getHocuspocus(): { openDirectConnection: (name: string) => Promise<{ transact: (cb: (doc: Document) => void | Promise<void>) => Promise<void>; disconnect: () => Promise<void> }> } | null {
-	const holder = globalThis as unknown as { __docwriterWsServer?: unknown };
-	const server = holder.__docwriterWsServer as
-		| {
-				hocuspocus?: {
-					openDirectConnection: (name: string, context?: unknown) => Promise<{
-						transact: (cb: (doc: Document) => void | Promise<void>) => Promise<void>;
-						disconnect: () => Promise<void>;
-					}>;
-				};
-		  }
-		| undefined;
-	if (!server?.hocuspocus) return null;
-	const inner = server.hocuspocus;
+ * method on the inner `Hocuspocus`, not the `Server` wrapper. Tab ids are
+ * mapped to user-scoped doc names via docNameForTab. Returns null if it
+ * isn't up (development-time misconfiguration, not a tool-call runtime
+ * condition). */
+export function getHocuspocus(): { openDirectConnection: (tabId: string) => Promise<DirectConnection> } | null {
+	const holder = globalThis as unknown as {
+		__docwriterWsServer?: {
+			hocuspocus?: { openDirectConnection: (name: string) => Promise<DirectConnection> };
+		};
+	};
+	const inner = holder.__docwriterWsServer?.hocuspocus;
+	if (!inner) return null;
 	return {
-		openDirectConnection: (name: string) =>
-			inner.openDirectConnection(hocuspocusDocName(name), hocuspocusContext())
+		openDirectConnection: (tabId: string) => inner.openDirectConnection(docNameForTab(tabId))
 	};
 }
 

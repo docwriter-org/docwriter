@@ -1,12 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { Play, Plus, RefreshCw, Trash2 } from 'lucide-svelte';
-	import {
-		authRecoveryMessage,
-		clearAuthRecovery,
-		isAuthFailureStatus,
-		scheduleAuthRecovery
-	} from '$lib/auth-recovery';
+	import { authFetch } from '$lib/auth-recovery';
 
 	interface Props {
 		onSubmit?: (trigger: string) => void;
@@ -38,14 +33,9 @@
 		loading = true;
 		errorText = '';
 		try {
-			const res = await fetch('/api/skills', { credentials: 'same-origin' });
-			if (isAuthFailureStatus(res.status)) {
-				errorText = authRecoveryMessage(scheduleAuthRecovery());
-				return;
-			}
+			const res = await authFetch('/api/skills', { credentials: 'same-origin' });
 			const data = await res.json();
 			if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
-			clearAuthRecovery();
 			skills = Array.isArray(data?.skills) ? data.skills : [];
 			nativeDirs = Array.isArray(data?.nativeDirs) ? data.nativeDirs : [];
 		} catch (e) {
@@ -64,19 +54,14 @@
 		savingId = skill.id;
 		errorText = '';
 		try {
-			const res = await fetch('/api/skills', {
+			const res = await authFetch('/api/skills', {
 				method: 'PUT',
 				credentials: 'same-origin',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ id: skill.id, enabled: !skill.enabled })
 			});
-			if (isAuthFailureStatus(res.status)) {
-				errorText = authRecoveryMessage(scheduleAuthRecovery());
-				return;
-			}
 			const data = await res.json();
 			if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
-			clearAuthRecovery();
 			applyData(data);
 		} catch (e) {
 			errorText = (e as Error).message;
@@ -140,19 +125,14 @@
 		adding = true;
 		errorText = '';
 		try {
-			const res = await fetch('/api/skills', {
+			const res = await authFetch('/api/skills', {
 				method: 'POST',
 				credentials: 'same-origin',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ source: resolved })
 			});
-			if (isAuthFailureStatus(res.status)) {
-				errorText = authRecoveryMessage(scheduleAuthRecovery());
-				return;
-			}
 			const data = await res.json();
 			if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
-			clearAuthRecovery();
 			source = '';
 			applyData(data);
 		} catch (e) {
@@ -167,17 +147,12 @@
 		savingId = skill.id;
 		errorText = '';
 		try {
-			const res = await fetch(`/api/skills?id=${encodeURIComponent(skill.id)}`, {
+			const res = await authFetch(`/api/skills?id=${encodeURIComponent(skill.id)}`, {
 				method: 'DELETE',
 				credentials: 'same-origin'
 			});
-			if (isAuthFailureStatus(res.status)) {
-				errorText = authRecoveryMessage(scheduleAuthRecovery());
-				return;
-			}
 			const data = await res.json();
 			if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
-			clearAuthRecovery();
 			applyData(data);
 		} catch (e) {
 			errorText = (e as Error).message;

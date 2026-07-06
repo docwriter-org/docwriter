@@ -1,4 +1,4 @@
-import { env } from '$env/dynamic/public';
+import { IS_HOSTED } from '$lib/hosted';
 
 const AUTH_RECOVERY_KEY = 'docwriter.authRecoveryAt';
 const AUTH_RECOVERY_COOLDOWN_MS = 15_000;
@@ -21,7 +21,7 @@ export function clearAuthRecovery() {
 
 export function scheduleAuthRecovery(): boolean {
 	if (typeof window === 'undefined') return false;
-	if (env.PUBLIC_DOCWRITER_HOSTED !== '1') return false;
+	if (!IS_HOSTED) return false;
 	if (recoveryScheduled) return true;
 
 	const now = Date.now();
@@ -45,4 +45,31 @@ export function scheduleAuthRecovery(): boolean {
 
 export function authRecoveryMessage(scheduled: boolean): string {
 	return scheduled ? 'Refreshing sign-in...' : 'Sign-in expired. Refresh or sign in again.';
+}
+
+/** Thrown by authFetch when a request came back 401/403. `message` is
+ * user-presentable. */
+export class AuthFailureError extends Error {
+	readonly status: number;
+	constructor(status: number) {
+		super(authRecoveryMessage(scheduleAuthRecovery()));
+		this.name = 'AuthFailureError';
+		this.status = status;
+	}
+}
+
+/**
+ * fetch() with uniform auth handling: a 401/403 schedules hosted-mode
+ * recovery (page reload behind a cooldown) and throws AuthFailureError with
+ * a user-presentable message; any other response clears the recovery flag
+ * and is returned as-is. Use this for every /api call so an expired session
+ * recovers no matter which panel hits it first.
+ */
+export async function authFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+	const res = await fetch(input, init);
+	if (isAuthFailureStatus(res.status)) {
+		throw new AuthFailureError(res.status);
+	}
+	clearAuthRecovery();
+	return res;
 }

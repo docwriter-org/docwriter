@@ -1,7 +1,5 @@
 import type { ProviderId } from '$lib/server/providers/types';
 import { getDb } from './db';
-import { getCurrentUserId, runWithUser } from './request-context';
-import { isMultiTenant } from './workspace';
 
 export type ProviderSessionKey = {
 	projectKey: string;
@@ -40,113 +38,102 @@ function parseEntry(row: Row): ProviderSessionEntry {
  * This table is for SDKs that expose their own resumable transcript format.
  * Claude currently uses it through its SessionStore API; other providers can
  * attach adapters here if their SDKs expose equivalent durable session hooks.
+ *
+ * The store is constructed inside the request context, so the per-user DB
+ * handle is resolved once here — SDK callbacks that later invoke the methods
+ * outside the request's AsyncLocalStorage scope still hit the right tenant.
  */
 export function createProviderSessionStore(provider: ProviderId): ProviderSessionStore {
-	const boundUserId = isMultiTenant() ? getCurrentUserId() : null;
-	const withContext = <T>(fn: () => T): T =>
-		boundUserId ? runWithUser(boundUserId, fn) : fn();
+	const db = getDb();
 
 	return {
 		async append(key: ProviderSessionKey, entries: ProviderSessionEntry[]) {
 			if (entries.length === 0) return;
-			withContext(() => {
-				const db = getDb();
-				const insert = db.prepare(`
-					INSERT INTO provider_session_entries
-						(provider, project_key, session_id, subpath, entry_json, created)
-					VALUES (?, ?, ?, ?, ?, ?)
-				`);
-				const subpath = normalizeSubpath(key.subpath);
-				const now = Date.now();
-				db.transaction(() => {
-					for (const entry of entries) {
-						insert.run(
-							provider,
-							key.projectKey,
-							key.sessionId,
-							subpath,
-							JSON.stringify(entry),
-							now
-						);
-					}
-				})();
-			});
+			const insert = db.prepare(`
+				INSERT INTO provider_session_entries
+					(provider, project_key, session_id, subpath, entry_json, created)
+				VALUES (?, ?, ?, ?, ?, ?)
+			`);
+			const subpath = normalizeSubpath(key.subpath);
+			const now = Date.now();
+			db.transaction(() => {
+				for (const entry of entries) {
+					insert.run(
+						provider,
+						key.projectKey,
+						key.sessionId,
+						subpath,
+						JSON.stringify(entry),
+						now
+					);
+				}
+			})();
 		},
 
 		async load(key: ProviderSessionKey) {
-			return withContext(() => {
-				const rows = getDb()
-					.prepare(`
-						SELECT entry_json
-						FROM provider_session_entries
+			const rows = db
+				.prepare(`
+					SELECT entry_json
+					FROM provider_session_entries
+					WHERE provider = ?
+						AND project_key = ?
+						AND session_id = ?
+						AND subpath = ?
+					ORDER BY id ASC
+				`)
+				.all(
+					provider,
+					key.projectKey,
+					key.sessionId,
+					normalizeSubpath(key.subpath)
+				) as Row[];
+			if (rows.length === 0) return null;
+			return rows.map(parseEntry);
+		},
+
+		async listSessions(projectKey: string) {
+			return db
+				.prepare(`
+					SELECT session_id AS sessionId, MAX(created) AS mtime
+					FROM provider_session_entries
+					WHERE provider = ? AND project_key = ? AND subpath = ''
+					GROUP BY session_id
+				`)
+				.all(provider, projectKey) as Array<{ sessionId: string; mtime: number }>;
+		},
+
+		async delete(key: ProviderSessionKey) {
+			if (key.subpath) {
+				db.prepare(`
+						DELETE FROM provider_session_entries
 						WHERE provider = ?
 							AND project_key = ?
 							AND session_id = ?
 							AND subpath = ?
-						ORDER BY id ASC
 					`)
-					.all(
-						provider,
-						key.projectKey,
-						key.sessionId,
-						normalizeSubpath(key.subpath)
-					) as Row[];
-				if (rows.length === 0) return null;
-				return rows.map(parseEntry);
-			});
-		},
-
-		async listSessions(projectKey: string) {
-			return withContext(() =>
-				getDb()
-					.prepare(`
-						SELECT session_id AS sessionId, MAX(created) AS mtime
-						FROM provider_session_entries
-						WHERE provider = ? AND project_key = ? AND subpath = ''
-						GROUP BY session_id
+					.run(provider, key.projectKey, key.sessionId, key.subpath);
+			} else {
+				db.prepare(`
+						DELETE FROM provider_session_entries
+						WHERE provider = ? AND project_key = ? AND session_id = ?
 					`)
-					.all(provider, projectKey) as Array<{ sessionId: string; mtime: number }>
-			);
-		},
-
-		async delete(key: ProviderSessionKey) {
-			withContext(() => {
-				if (key.subpath) {
-					getDb()
-						.prepare(`
-							DELETE FROM provider_session_entries
-							WHERE provider = ?
-								AND project_key = ?
-								AND session_id = ?
-								AND subpath = ?
-						`)
-						.run(provider, key.projectKey, key.sessionId, key.subpath);
-				} else {
-					getDb()
-						.prepare(`
-							DELETE FROM provider_session_entries
-							WHERE provider = ? AND project_key = ? AND session_id = ?
-						`)
-						.run(provider, key.projectKey, key.sessionId);
-				}
-			});
+					.run(provider, key.projectKey, key.sessionId);
+			}
 		},
 
 		async listSubkeys(key: { projectKey: string; sessionId: string }) {
-			return withContext(() => {
-				const rows = getDb()
-					.prepare(`
-						SELECT DISTINCT subpath
-						FROM provider_session_entries
-						WHERE provider = ?
-							AND project_key = ?
-							AND session_id = ?
-							AND subpath <> ''
-						ORDER BY subpath ASC
-					`)
-					.all(provider, key.projectKey, key.sessionId) as Array<{ subpath: string }>;
-				return rows.map((row) => row.subpath);
-			});
+			const rows = db
+				.prepare(`
+					SELECT DISTINCT subpath
+					FROM provider_session_entries
+					WHERE provider = ?
+						AND project_key = ?
+						AND session_id = ?
+						AND subpath <> ''
+					ORDER BY subpath ASC
+				`)
+				.all(provider, key.projectKey, key.sessionId) as Array<{ subpath: string }>;
+			return rows.map((row) => row.subpath);
 		}
 	};
 }

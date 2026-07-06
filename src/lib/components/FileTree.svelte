@@ -21,12 +21,7 @@
 		FilePlus2,
 		FolderPlus
 	} from 'lucide-svelte';
-	import {
-		authRecoveryMessage,
-		clearAuthRecovery,
-		isAuthFailureStatus,
-		scheduleAuthRecovery
-	} from '$lib/auth-recovery';
+	import { authFetch } from '$lib/auth-recovery';
 	import { showAlert, showConfirm } from '$lib/dialogs';
 
 	interface Props {
@@ -62,16 +57,12 @@
 	let treeError = $state('');
 
 	async function fetchEntries(path: string): Promise<FileEntry[]> {
-		const res = await fetch(`/api/files?path=${encodeURIComponent(path)}`, {
+		const res = await authFetch(`/api/files?path=${encodeURIComponent(path)}`, {
 			credentials: 'same-origin'
 		});
-		if (isAuthFailureStatus(res.status)) {
-			throw new Error(handleAuthFetchFailure());
-		}
 		if (!res.ok) {
 			throw new Error(`Failed to load files (${res.status})`);
 		}
-		clearAuthRecovery();
 		const data = await res.json();
 		return Array.isArray(data.entries) ? data.entries : [];
 	}
@@ -84,12 +75,6 @@
 			treeError = e instanceof Error ? e.message : String(e);
 			if (rootEntries === null) rootEntries = [];
 		}
-	}
-
-	function handleAuthFetchFailure(): string {
-		const message = authRecoveryMessage(scheduleAuthRecovery());
-		treeError = message;
-		return message;
 	}
 
 	function entryMetaFor(path: string) {

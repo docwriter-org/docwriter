@@ -1,7 +1,7 @@
-import { join, resolve } from 'path';
+import { join, resolve, sep } from 'path';
 import { existsSync, mkdirSync } from 'fs';
-import { getCurrentUserId } from './request-context';
-import { isMultiTenant, getUserWorkspace, type UserWorkspace } from './workspace';
+import { getActiveUserId } from './request-context';
+import { getUserWorkspace, type UserWorkspace } from './workspace';
 
 // DocWriter persistence layout:
 //
@@ -29,11 +29,8 @@ export const DOCWRITER_DIR = join(ROOT, '.docwriter');
 export const AGENT_SCRATCH_DIR = join(DOCWRITER_DIR, 'agent', 'scratch');
 
 function getEffectiveWorkspace(): UserWorkspace | null {
-	if (isMultiTenant()) {
-		const userId = getCurrentUserId();
-		if (userId) return getUserWorkspace(userId);
-	}
-	return null;
+	const userId = getActiveUserId();
+	return userId ? getUserWorkspace(userId) : null;
 }
 
 export function getEffectiveRoot(): string {
@@ -121,11 +118,17 @@ function extensionOf(path: string): string | null {
 	return base.slice(idx + 1).toLowerCase();
 }
 
-/** Absolute path to a tab's user-facing file. Context-aware in multi-tenant mode. */
+/** Absolute path to a tab's user-facing file. Context-aware in multi-tenant
+ * mode. Rejects ids that fail isValidTabId or resolve outside the workspace
+ * root (separator-aware — a bare prefix match would admit sibling
+ * workspaces like `<root>2`). */
 export function tabFile(tabId: string): string {
+	if (!isValidTabId(tabId)) {
+		throw new Error(`Invalid tab id: ${tabId}`);
+	}
 	const root = getEffectiveRoot();
 	const resolved = resolve(root, tabId);
-	if (isMultiTenant() && !resolved.startsWith(root)) {
+	if (resolved !== root && !resolved.startsWith(root + sep)) {
 		throw new Error(`Path traversal blocked: ${tabId}`);
 	}
 	return resolved;

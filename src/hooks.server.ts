@@ -13,7 +13,7 @@ import { installBundledSkills } from '$lib/server/skills-install';
 import { createWsServer } from '$lib/server/ws-server';
 import { loadGlobalKeys } from '$lib/server/api-keys';
 import { maybeHandleClerkAuth } from '$lib/server/clerk-auth';
-import { IS_HOSTED_LANDING } from '$lib/server/deploy-mode';
+import { IS_HOSTED_LANDING, isMultiTenant } from '$lib/server/deploy-mode';
 
 // Load ~/.docwriter/keys.env into process.env (without overriding real env /
 // repo .env) so provider API keys are available cross-workspace and in the
@@ -42,8 +42,7 @@ if (!IS_HOSTED_LANDING) {
 	installBundledSkills();
 
 	// In hosted mode, single-port WS and Clerk auth are implied.
-	const hosted = process.env.DOCWRITER_HOSTED === '1';
-	const singlePort = hosted || process.env.SINGLE_PORT_WS === '1';
+	const singlePort = isMultiTenant() || process.env.SINGLE_PORT_WS === '1';
 	const WS_PORT = parseInt(process.env.DOCWRITER_WS_PORT ?? '', 10) || 3001;
 	let wsServer: ReturnType<typeof createWsServer> | null = (globalThis as unknown as { __docwriterWsServer?: ReturnType<typeof createWsServer> }).__docwriterWsServer ?? null;
 	if (!wsServer) {

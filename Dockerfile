@@ -11,6 +11,9 @@ RUN npm ci
 
 COPY . .
 
+# Needed at build time: prerendering (/sign-in) loads hooks.server.ts, and
+# DOCWRITER_HOSTED=1 keeps its Hocuspocus init in single-port mode instead of
+# binding port 3001 inside the build.
 ENV DOCWRITER_HOSTED=1
 ENV PUBLIC_DOCWRITER_HOSTED=1
 
@@ -24,7 +27,8 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 # Install Claude Code CLI, which is used by the Claude Agent SDK.
-RUN npm install -g @anthropic-ai/claude-code
+# Pinned; bump deliberately (npm view @anthropic-ai/claude-code version).
+RUN npm install -g @anthropic-ai/claude-code@2.1.201
 
 WORKDIR /app
 

@@ -18,8 +18,8 @@ import { dirname } from 'path';
 import * as Y from 'yjs';
 import { getDb } from './db';
 import { tabFile } from './document-files';
-import { getCurrentUserId, runWithUser } from './request-context';
-import { isMultiTenant } from './workspace';
+import { runWithUser } from './request-context';
+import { docNameForTab, parseDocName } from './doc-name';
 import { serializeYDoc, seedYDoc, SYSTEM_ORIGIN } from '$lib/shared/ydoc-codec';
 
 /** Filesystem mtime can lag our `Date.now()` row-insert by a few hundred ms
@@ -144,22 +144,9 @@ const lastWrittenContent = new Map<string, string>();
  * needing the file-path → tabId inverse mapping. */
 const lastWrittenByPath = new Map<string, string>();
 
-const DIRTY_KEY_SEPARATOR = '\u0000';
-
-function currentUserId(): string | null {
-	return isMultiTenant() ? getCurrentUserId() : null;
-}
-
-function dirtyKey(tabId: string, userId = currentUserId()): string {
-	return `${userId ?? ''}${DIRTY_KEY_SEPARATOR}${tabId}`;
-}
-
-function parseDirtyKey(key: string): { userId: string | null; tabId: string } {
-	const idx = key.indexOf(DIRTY_KEY_SEPARATOR);
-	if (idx === -1) return { userId: null, tabId: key };
-	const userId = key.slice(0, idx);
-	return { userId: userId || null, tabId: key.slice(idx + DIRTY_KEY_SEPARATOR.length) };
-}
+// Dirty-set and last-written keys are the Hocuspocus doc name
+// (`<userId>:<tabId>` in multi-tenant mode) -- the same encoding the flush
+// resolver looks documents up by. See doc-name.ts.
 
 function inUserContext<T>(userId: string | null, fn: () => T): T {
 	return userId ? runWithUser(userId, fn) : fn();
@@ -170,14 +157,14 @@ export function setLiveDocResolver(resolver: (tabId: string, userId: string | nu
 }
 
 export function markTabDirty(tabId: string) {
-	dirtyTabs.add(dirtyKey(tabId));
+	dirtyTabs.add(docNameForTab(tabId));
 	if (flushTimer) return;
 	flushTimer = setTimeout(runFlushTick, FLUSH_TICK_MS);
 }
 
 function runFlushTick() {
 	flushTimer = null;
-	const tabs = Array.from(dirtyTabs).map(parseDirtyKey);
+	const tabs = Array.from(dirtyTabs).map(parseDocName);
 	dirtyTabs.clear();
 	for (const { userId, tabId } of tabs) {
 		const ydoc = resolveLiveDoc?.(tabId, userId);
@@ -192,7 +179,7 @@ function runFlushTick() {
 
 function writeTabFile(tabId: string, ydoc: Y.Doc) {
 	const content = serializeYDoc(ydoc);
-	const key = dirtyKey(tabId);
+	const key = docNameForTab(tabId);
 	// Skip no-op rewrites: a pending review round dirties the tab without
 	// changing the committed text, and rewriting would bump mtime → CLI
 	// watcher reload → tab remount → the open comment thread closes.
@@ -221,7 +208,7 @@ export function isOwnFlushEcho(absPath: string): boolean {
 
 /** Synchronously flush one tab. Clears its pending dirty flag. */
 export function flushMarkdownNow(tabId: string, ydoc: Y.Doc) {
-	dirtyTabs.delete(dirtyKey(tabId));
+	dirtyTabs.delete(docNameForTab(tabId));
 	try {
 		writeTabFile(tabId, ydoc);
 	} catch (err) {
@@ -230,15 +217,15 @@ export function flushMarkdownNow(tabId: string, ydoc: Y.Doc) {
 }
 
 export function clearDirty(tabId: string) {
-	dirtyTabs.delete(dirtyKey(tabId));
+	dirtyTabs.delete(docNameForTab(tabId));
 }
 
 /** Drop all persisted Yjs state for a tab. Called when the user deletes the
  * underlying file — otherwise the stale updates would replay on reopen and
  * resurrect the old content. */
 export function purgeTabUpdates(tabId: string) {
-	dirtyTabs.delete(dirtyKey(tabId));
-	lastWrittenContent.delete(dirtyKey(tabId));
+	dirtyTabs.delete(docNameForTab(tabId));
+	lastWrittenContent.delete(docNameForTab(tabId));
 	lastWrittenByPath.delete(tabFile(tabId));
 	getDb().prepare(`DELETE FROM yjs_updates WHERE tab_id = ?`).run(tabId);
 }

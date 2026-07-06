@@ -14,6 +14,7 @@
  */
 import { Server } from '@hocuspocus/server';
 import type { IncomingMessage } from 'node:http';
+import type { Duplex } from 'node:stream';
 import * as Y from 'yjs';
 import type { PendingReviewRound } from '$lib/types';
 import {
@@ -38,16 +39,16 @@ import {
 	purgeTabUpdates,
 	setLiveDocResolver
 } from './ydoc-persistence';
-import { isMultiTenant } from './workspace';
-import { runWithUser, getCurrentUserId } from './request-context';
-import { getClerkClient, isAuthorizedUser } from './clerk-auth';
-
-interface WsUserContext {
-	userId?: string;
-}
+import { isMultiTenant } from './deploy-mode';
+import { runWithUser } from './request-context';
+import { docNameForTab, parseDocName } from './doc-name';
+import { authenticateWsUpgrade } from './clerk-auth';
 
 function globalHolder() {
-	return globalThis as unknown as { __docwriterWsServer?: Server };
+	return globalThis as unknown as {
+		__docwriterWsServer?: Server;
+		__docwriterHandleWsUpgrade?: typeof handleWsUpgrade;
+	};
 }
 
 function currentServerInstanceId(): string {
@@ -57,86 +58,26 @@ function currentServerInstanceId(): string {
 	);
 }
 
-/** In multi-tenant mode, doc names are `<userId>:<tabId>`. */
-function parseDocName(documentName: string): { userId: string | null; tabId: string } {
-	if (isMultiTenant()) {
-		const idx = documentName.indexOf(':');
-		if (idx > 0) {
-			return { userId: documentName.slice(0, idx), tabId: documentName.slice(idx + 1) };
-		}
-	}
-	return { userId: null, tabId: documentName };
-}
-
-function getContextUserId(context: unknown): string | null {
-	const value = (context as WsUserContext | null)?.userId;
-	return typeof value === 'string' && value.length > 0 ? value : null;
-}
-
-function resolveDocContext(documentName: string, context?: unknown): { userId: string | null; tabId: string } {
-	const parsed = parseDocName(documentName);
-	return {
-		userId: parsed.userId ?? getContextUserId(context),
-		tabId: parsed.tabId
-	};
-}
-
 /** Run a function in the user's workspace context, or directly if single-user. */
 function inUserContext<T>(userId: string | null, fn: () => T): T {
 	return userId ? runWithUser(userId, fn) : fn();
 }
 
-function directConnectionContext(): WsUserContext | undefined {
-	const userId = isMultiTenant() ? getCurrentUserId() : null;
-	return userId ? { userId } : undefined;
-}
-
-function firstHeader(value: string | string[] | undefined): string | undefined {
-	return Array.isArray(value) ? value[0] : value;
-}
-
-function requestOrigin(request: IncomingMessage): string {
-	const origin = firstHeader(request.headers.origin);
-	if (origin) {
-		try {
-			return new URL(origin).origin;
-		} catch {
-			/* fall through to forwarded headers */
-		}
-	}
-	const proto = firstHeader(request.headers['x-forwarded-proto']) ?? 'http';
-	const host =
-		firstHeader(request.headers['x-forwarded-host']) ??
-		firstHeader(request.headers.host) ??
-		'localhost';
-	return new URL(`${proto}://${host}`).origin;
-}
-
 export function createWsServer(port: number): Server {
+	// In multi-tenant mode every doc name is `<userId>:<tabId>` — enforced by
+	// onAuthenticate below and produced by docNameForTab everywhere on the
+	// server — so the hooks recover the user from the name alone.
 	const server = new Server({
 		port,
 		quiet: true,
 		async onAuthenticate({ token, documentName, request }) {
 			if (isMultiTenant()) {
-				// Validate via Clerk using the session cookie from the upgrade request.
-				const clerkClient = getClerkClient();
-				if (!clerkClient) throw new Error('clerk-not-configured');
 				try {
-					const origin = requestOrigin(request);
-					const url = new URL(request.url || '/', origin);
-					const reqObj = new Request(url, { headers: request.headers as Record<string, string> });
-					const state = await clerkClient.authenticateRequest(reqObj, {
-						authorizedParties: [origin]
-					});
-					if (!state.isAuthenticated) throw new Error('not-authenticated');
-					const auth = state.toAuth();
-					if (!auth.userId) throw new Error('no-user');
-					const allowed = await isAuthorizedUser(clerkClient, auth.userId);
-					if (!allowed) throw new Error('unauthorized');
+					const userId = await authenticateWsUpgrade(request);
 					const { userId: docUserId } = parseDocName(documentName);
 					if (!docUserId) throw new Error('missing-user-prefix');
-					if (docUserId !== auth.userId) throw new Error('user-mismatch');
-					return { userId: auth.userId };
+					if (docUserId !== userId) throw new Error('user-mismatch');
+					return { userId };
 				} catch (err) {
 					console.error('[onAuthenticate] multi-tenant auth error:', err);
 					throw new Error('auth-failed');
@@ -146,8 +87,8 @@ export function createWsServer(port: number): Server {
 			if (token && token === expected) return;
 			throw new Error('server-instance-mismatch');
 		},
-		async onLoadDocument({ documentName, document, context }) {
-			const { userId, tabId } = resolveDocContext(documentName, context);
+		async onLoadDocument({ documentName, document }) {
+			const { userId, tabId } = parseDocName(documentName);
 			const ydoc = document as unknown as Y.Doc;
 			const fragment = ydoc.getXmlFragment(FRAGMENT_NAME);
 			if (fragment.length === 0) {
@@ -159,8 +100,8 @@ export function createWsServer(port: number): Server {
 			const { userId, tabId } = parseDocName(documentName);
 			inUserContext(userId, () => clearDirty(tabId));
 		},
-		async onChange({ documentName, update, transactionOrigin, context }) {
-			const { userId, tabId } = resolveDocContext(documentName, context);
+		async onChange({ documentName, update, transactionOrigin }) {
+			const { userId, tabId } = parseDocName(documentName);
 			const origin = typeof transactionOrigin === 'string' ? transactionOrigin : USER_ORIGIN;
 			inUserContext(userId, () => {
 				appendUpdate(tabId, update, origin);
@@ -177,15 +118,25 @@ export function createWsServer(port: number): Server {
 	});
 
 	globalHolder().__docwriterWsServer = server;
+	// server.js (the standalone production entry) runs against the built
+	// bundle and can't import this module — hand it the upgrade function via
+	// the same globalThis channel as the server instance.
+	globalHolder().__docwriterHandleWsUpgrade = handleWsUpgrade;
 	return server;
 }
 
-/** Map a bare tabId to the Hocuspocus document name for the current user. */
-function docNameForTab(tabId: string, userId = getCurrentUserId()): string {
-	if (isMultiTenant()) {
-		if (userId) return `${userId}:${tabId}`;
-	}
-	return tabId;
+/** Hand an HTTP `upgrade` event to the Hocuspocus websocket server. Lets the
+ * standalone production entry (server.js) share its single listening port
+ * without reaching into Hocuspocus internals. Returns false when the WS
+ * server isn't up. */
+export function handleWsUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): boolean {
+	const server = globalHolder().__docwriterWsServer;
+	const wss = server?.webSocketServer;
+	if (!wss) return false;
+	wss.handleUpgrade(request, socket, head, (ws) => {
+		wss.emit('connection', ws, request);
+	});
+	return true;
 }
 
 function getLiveDocument(tabId: string): Y.Doc | null {
@@ -221,10 +172,7 @@ async function withLiveDoc<T>(
 ): Promise<T> {
 	const server = globalHolder().__docwriterWsServer;
 	if (server?.hocuspocus) {
-		const direct = await server.hocuspocus.openDirectConnection(
-			docNameForTab(tabId),
-			directConnectionContext()
-		);
+		const direct = await server.hocuspocus.openDirectConnection(docNameForTab(tabId));
 		try {
 			let result!: T;
 			await direct.transact((document) => {

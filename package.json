@@ -33,14 +33,14 @@
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"docs": "cd docs && npx -y mintlify dev --port 3333",
 		"docs:screenshots": "node docs/capture-screenshots.mjs",
-		"test:e2e": "node e2e/provider-smoke.mjs",
-		"test:e2e:provider": "node e2e/run-provider.mjs",
 		"cf:login": "wrangler login",
-		"cf:dns": "bash deploy/cloudflare/sync-dns.sh"
+		"cf:dns": "bash deploy/cloudflare/sync-dns.sh",
+		"test:e2e": "node e2e/provider-smoke.mjs",
+		"test:e2e:provider": "node e2e/run-provider.mjs"
 	},
 	"devDependencies": {
 		"@sveltejs/adapter-node": "^5.5.4",
-		"@sveltejs/adapter-vercel": "^6.3.4",
+		"@sveltejs/adapter-vercel": "^6.3.3",
 		"@sveltejs/kit": "^2.50.2",
 		"@sveltejs/vite-plugin-svelte": "^6.2.4",
 		"@types/better-sqlite3": "^7.6.13",

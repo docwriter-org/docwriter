@@ -2,7 +2,6 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import {
 	existsSync,
-	lstatSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
@@ -21,7 +20,7 @@ const MIB = 1024 * 1024;
 // output or copied files.
 const RUNNER = {
 	port: positiveInt(process.env.PORT, 3000),
-	token: process.env.RUNNER_SHARED_TOKEN || process.env.DOCWRITER_RUNNER_TOKEN || '',
+	token: process.env.RUNNER_SHARED_TOKEN || '',
 	scratchRel: '.docwriter/agent/scratch',
 	maxRequestBytes: 32 * MIB,
 	defaultTimeoutMs: 30_000,
@@ -33,6 +32,13 @@ const RUNNER = {
 	defaultReturnBytes: 8 * MIB,
 	maxReturnBytes: 32 * MIB
 };
+
+if (!RUNNER.token) {
+	console.error(
+		'[docwriter-runner] RUNNER_SHARED_TOKEN is not set. Refusing to start without a shared token.'
+	);
+	process.exit(1);
+}
 
 // Ignore runtime caches when reporting changed files. They are implementation
 // noise from package managers, Python, Rust, and test tools, not user outputs.
@@ -73,7 +79,6 @@ function safeEqual(a, b) {
 }
 
 function authorized(req) {
-	if (!RUNNER.token) return process.env.NODE_ENV !== 'production';
 	const header = req.headers.authorization || '';
 	const token = header.startsWith('Bearer ') ? header.slice('Bearer '.length) : '';
 	return !!token && safeEqual(token, RUNNER.token);
@@ -103,6 +108,10 @@ function readJson(req) {
 	});
 }
 
+// NOTE: isSafeRelPath and isWithin are duplicated in
+// src/lib/server/hosted-runner.ts. The runner is a separate deploy unit
+// (Dockerfile.runner copies only this file), so we can't share a module —
+// keep both copies in sync.
 function isSafeRelPath(path) {
 	if (!path || typeof path !== 'string') return false;
 	if (path.includes('\0') || path.startsWith('/') || path.startsWith('\\') || isAbsolute(path)) {
@@ -127,13 +136,11 @@ function writeBundle(workspace, files) {
 	}
 }
 
-function hashFile(abs) {
-	const data = readFileSync(abs);
+function sha256Hex(data) {
 	return createHash('sha256').update(data).digest('hex');
 }
 
-function snapshotFiles(root) {
-	const hashes = new Map();
+function walkFiles(root, visit) {
 	function walk(dir) {
 		for (const entry of readdirSync(dir, { withFileTypes: true })) {
 			const abs = join(dir, entry.name);
@@ -142,11 +149,17 @@ function snapshotFiles(root) {
 				continue;
 			}
 			if (!entry.isFile()) continue;
-			const rel = relative(root, abs).split(sep).join('/');
-			hashes.set(rel, hashFile(abs));
+			visit(abs, relative(root, abs).split(sep).join('/'));
 		}
 	}
 	if (existsSync(root)) walk(root);
+}
+
+function snapshotFiles(root) {
+	const hashes = new Map();
+	walkFiles(root, (abs, rel) => {
+		hashes.set(rel, sha256Hex(readFileSync(abs)));
+	});
 	return hashes;
 }
 
@@ -155,35 +168,24 @@ function collectChangedFiles(root, before, limits) {
 	const changedPaths = [];
 	let returnedBytes = 0;
 
-	function walk(dir) {
-		for (const entry of readdirSync(dir, { withFileTypes: true })) {
-			const abs = join(dir, entry.name);
-			if (entry.isDirectory()) {
-				walk(abs);
-				continue;
-			}
-			if (!entry.isFile()) continue;
-			const rel = relative(root, abs).split(sep).join('/');
-			if (!isSafeRelPath(rel)) continue;
-			if (IGNORED_RETURN_PATH_PATTERNS.some((pattern) => pattern.test(rel))) continue;
-			const stat = lstatSync(abs);
-			const sha256 = hashFile(abs);
-			if (before.get(rel) === sha256) continue;
-			changedPaths.push(rel);
-			if (files.length >= limits.maxReturnFiles) continue;
-			if (returnedBytes + stat.size > limits.maxReturnBytes) continue;
-			const data = readFileSync(abs);
-			files.push({
-				path: rel,
-				dataBase64: data.toString('base64'),
-				size: data.length,
-				sha256
-			});
-			returnedBytes += data.length;
-		}
-	}
+	walkFiles(root, (abs, rel) => {
+		if (!isSafeRelPath(rel)) return;
+		if (IGNORED_RETURN_PATH_PATTERNS.some((pattern) => pattern.test(rel))) return;
+		const data = readFileSync(abs);
+		const sha256 = sha256Hex(data);
+		if (before.get(rel) === sha256) return;
+		changedPaths.push(rel);
+		if (files.length >= limits.maxReturnFiles) return;
+		if (returnedBytes + data.length > limits.maxReturnBytes) return;
+		files.push({
+			path: rel,
+			dataBase64: data.toString('base64'),
+			size: data.length,
+			sha256
+		});
+		returnedBytes += data.length;
+	});
 
-	if (existsSync(root)) walk(root);
 	return { files, changedPaths };
 }
 

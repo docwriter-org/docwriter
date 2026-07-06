@@ -68,7 +68,7 @@ jobs:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
 
-      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - uses: superfly/flyctl-actions/setup-flyctl@1.6
 
       - name: Check runner changes
         id: runner_changes
@@ -85,7 +85,7 @@ jobs:
 
           printf '%s\n' "${changed}"
 
-          if printf '%s\n' "${changed}" | grep -Eq '^(runner/|Dockerfile\.runner|fly\.runner\.toml)$'; then
+          if printf '%s\n' "${changed}" | grep -Eq '^(runner/|Dockerfile\.runner$|fly\.runner\.toml$)'; then
             echo "changed=true" >> "${GITHUB_OUTPUT}"
           else
             echo "changed=false" >> "${GITHUB_OUTPUT}"
@@ -95,7 +95,7 @@ jobs:
         if: >-
           (github.event_name == 'push' && steps.runner_changes.outputs.changed == 'true') ||
           (github.event_name == 'workflow_dispatch' && (github.event.inputs.fly_target == 'runner' || github.event.inputs.fly_target == 'all'))
-        run: fly deploy --config fly.runner.toml --app docwriter-runner
+        run: bash scripts/deploy-fly.sh runner
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_RUNNER_DEPLOY_TOKEN }}
 
@@ -103,6 +103,6 @@ jobs:
         if: >-
           github.event_name == 'push' ||
           (github.event_name == 'workflow_dispatch' && (github.event.inputs.fly_target == 'app' || github.event.inputs.fly_target == 'all'))
-        run: fly deploy --config fly.toml --app docwriter-app
+        run: bash scripts/deploy-fly.sh app
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_APP_DEPLOY_TOKEN }}

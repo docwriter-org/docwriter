@@ -1,15 +1,10 @@
 import { json } from '@sveltejs/kit';
-import { getClerkClient } from '$lib/server/clerk-auth';
+import { getClerkClient, revokeSession } from '$lib/server/clerk-auth';
 
 export async function POST({ locals }) {
 	const clerkClient = getClerkClient();
-	const sessionId = locals.auth?.sessionId;
-	if (clerkClient && sessionId) {
-		try {
-			await clerkClient.sessions.revokeSession(sessionId);
-		} catch {
-			/* session may already be invalid */
-		}
+	if (clerkClient) {
+		await revokeSession(clerkClient, locals.auth?.sessionId ?? null);
 	}
 	return json({ ok: true });
 }

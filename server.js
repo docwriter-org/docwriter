@@ -11,19 +11,14 @@ const port = parseInt(process.env.PORT || '3000', 10);
 const server = http.createServer(handler);
 
 // handler.js transitively imports hooks.server.ts, which creates the
-// Hocuspocus Server (without binding a port when SINGLE_PORT_WS=1)
-// and stores it on globalThis.__docwriterWsServer.
-const wsServer = /** @type {any} */ (globalThis).__docwriterWsServer;
+// Hocuspocus Server (without binding a port when SINGLE_PORT_WS=1) and
+// publishes an upgrade handler on globalThis (see ws-server.ts).
+const handleWsUpgrade = /** @type {any} */ (globalThis).__docwriterHandleWsUpgrade;
 
-if (wsServer) {
-	const wss = wsServer.webSocketServer;
+if (handleWsUpgrade) {
 	server.on('upgrade', (request, socket, head) => {
 		const url = new URL(request.url || '/', `http://${request.headers.host}`);
-		if (url.pathname === '/ws') {
-			wss.handleUpgrade(request, socket, head, (ws) => {
-				wss.emit('connection', ws, request);
-			});
-		} else {
+		if (url.pathname !== '/ws' || !handleWsUpgrade(request, socket, head)) {
 			socket.destroy();
 		}
 	});
