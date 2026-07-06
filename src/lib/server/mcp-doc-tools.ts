@@ -21,7 +21,6 @@ import * as Y from 'yjs';
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
-import type { Document } from '@hocuspocus/server';
 
 import {
 	serializeYDoc,
@@ -45,9 +44,14 @@ import type {
 } from '$lib/types';
 import { isValidTabId, tabFile, WORKSPACE_ROOT, getEffectiveRoot } from './document-files';
 import { resolveWorkspacePath } from './workspace-path';
-import { docNameForTab } from './doc-name';
 import { getTabsState, setTabsState } from './runtime-state';
 import { writeTextAtomic } from './file-utils';
+import { getHocuspocus, countOccurrences } from './live-doc';
+import { getActiveFeedbackThreadId, setActiveFeedbackThreadId } from './request-context';
+
+// Re-exported so existing importers (tool-handlers.ts) keep resolving these
+// from mcp-doc-tools; the canonical definitions now live in live-doc.ts.
+export { getHocuspocus, countOccurrences };
 
 export function toolError(message: string): CallToolResult {
 	return {
@@ -59,42 +63,6 @@ export function toolError(message: string): CallToolResult {
 export function toolText(message: string): CallToolResult {
 	return {
 		content: [{ type: 'text', text: message }]
-	};
-}
-
-export function countOccurrences(haystack: string, needle: string): number {
-	if (!needle) return 0;
-	let count = 0;
-	let idx = 0;
-	while ((idx = haystack.indexOf(needle, idx)) !== -1) {
-		count += 1;
-		idx += needle.length;
-	}
-	return count;
-}
-
-type DirectConnection = {
-	transact: (cb: (doc: Document) => void | Promise<void>) => Promise<void>;
-	disconnect: () => Promise<void>;
-};
-
-/** Resolve the live Hocuspocus instance stashed on `globalThis` by
- * `ws-server.ts`. The stashed handle is a `Server` wrapper whose real
- * directory-of-documents lives at `.hocuspocus`; `openDirectConnection` is a
- * method on the inner `Hocuspocus`, not the `Server` wrapper. Tab ids are
- * mapped to user-scoped doc names via docNameForTab. Returns null if it
- * isn't up (development-time misconfiguration, not a tool-call runtime
- * condition). */
-export function getHocuspocus(): { openDirectConnection: (tabId: string) => Promise<DirectConnection> } | null {
-	const holder = globalThis as unknown as {
-		__docwriterWsServer?: {
-			hocuspocus?: { openDirectConnection: (name: string) => Promise<DirectConnection> };
-		};
-	};
-	const inner = holder.__docwriterWsServer?.hocuspocus;
-	if (!inner) return null;
-	return {
-		openDirectConnection: (tabId: string) => inner.openDirectConnection(docNameForTab(tabId))
 	};
 }
 
@@ -153,19 +121,17 @@ export function currentProposalText(doc: Y.Doc): string {
 /** Run a write-transaction against the live Hocuspocus Document for `tabId`.
  * `mutator` receives the current proposal text (latest pending `afterMd`, or
  * the committed live doc if no proposal is pending) and returns the next
- * proposal string, or null to abort. */
-/** Thread id the NEXT review round should attach to. Set transiently by
- * `edit_doc` for the duration of a single call when the agent passes an
- * explicit `thread_id` (and restored after), so attachment is per-edit and
- * intentional — NOT a render-wide default. Null means "no thread": the round
- * opens its own fresh thread (`createAgentEditThread`). This is what lets a
+ * proposal string, or null to abort.
+ *
+ * The thread a new review round attaches to comes from the per-render
+ * feedback-thread context (`getActiveFeedbackThreadId`, in request-context).
+ * It's seeded once per render from the triggering message and overridden
+ * transiently by `edit_doc` when the agent passes an explicit `thread_id`
+ * (restored after the call), so attachment is per-edit and intentional — a
  * thread revision and an unrelated directive edit in the same turn land in
- * different threads. */
-let activeFeedbackThreadId: string | null = null;
-export function setActiveFeedbackThreadId(id: string | null) {
-	activeFeedbackThreadId = id;
-}
-
+ * different threads. Because it lives in AsyncLocalStorage, concurrent renders
+ * never share a default. Null means "no thread": the round opens its own fresh
+ * thread (`createAgentEditThread`). */
 export async function runTabWrite(
 	tabId: string,
 	trigger: PendingReviewRound['trigger'],
@@ -196,14 +162,14 @@ export async function runTabWrite(
 			// (e.g. they resolved while the agent was still thinking), the user
 			// is done with it — toss the edit instead of reviving a resolved
 			// thread with a new proposal.
-			const targetThreadId = activeFeedbackThreadId ?? undefined;
+			const targetThreadId = getActiveFeedbackThreadId() ?? undefined;
 			if (targetThreadId && getCommentsMap(doc).get(targetThreadId)?.resolved) {
 				result = { beforeMd, afterMd: beforeMd, discarded: true };
 				return;
 			}
 			doc.transact(() => {
 				const reviewArr = getReviewArray(doc);
-				const threadIdExplicit = activeFeedbackThreadId ?? undefined;
+				const threadIdExplicit = getActiveFeedbackThreadId() ?? undefined;
 				// Default op: an explicit edit as given, or a narrowed wholesale
 				// write. `baseForRound` is the text this op is anchored to.
 				let baseForRound = beforeMd;
@@ -600,7 +566,7 @@ const editDocTool = tool(
 		// An explicit thread_id on the call wins over the render-level default
 		// (parsed from the triggering message). Restore the prior value after
 		// so a single edit's targeting can't leak into later edits this turn.
-		const priorThreadId = activeFeedbackThreadId;
+		const priorThreadId = getActiveFeedbackThreadId();
 		if (typeof thread_id === 'string' && thread_id) {
 			setActiveFeedbackThreadId(thread_id);
 		}
@@ -855,7 +821,7 @@ const commentDocTool = tool(
 				return { ok: false, error: `anchor_text matches ${hits} locations in ${file_path}. Pass occurrence_index to choose one.` };
 			}
 			const occurrence = occurrence_index ?? 0;
-			if (occurrence >= hits) {
+			if (!Number.isInteger(occurrence) || occurrence < 0 || occurrence >= hits) {
 				return { ok: false, error: `occurrence_index ${occurrence} is out of range; anchor_text appears ${hits} time${hits === 1 ? '' : 's'}.` };
 			}
 			threadId = createAgentCommentThread(
@@ -1020,4 +986,3 @@ export const READ_DOC_TOOL_NAME = 'mcp__docwriter-doc__read_doc';
 export const WRITE_DOC_TOOL_NAME = 'mcp__docwriter-doc__write_doc';
 export const COMMENT_DOC_TOOL_NAME = 'mcp__docwriter-doc__comment_doc';
 export const REPLY_TO_COMMENT_TOOL_NAME = 'mcp__docwriter-doc__reply_to_comment';
-export const LIST_THREADS_TOOL_NAME = 'mcp__docwriter-doc__list_threads';

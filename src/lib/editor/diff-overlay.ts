@@ -2,21 +2,20 @@ import { Editor, Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet, type EditorView } from '@tiptap/pm/view';
 import { diffLines, diffWords } from 'diff';
-import { buildReviewDiffPreview, normalizeReviewText } from '$lib/review-diff';
+import { normalizeReviewText } from '$lib/review-diff';
 import type { MaterializedPendingReviewRound } from '$lib/review-rounds';
 import { wordDiff, type DiffPart as WordDiffPart } from '$lib/diff';
 import type { Node as PMNode } from '@tiptap/pm/model';
 import { buildCharIndex, paragraphPlainText } from './char-index';
 import { applyProposedLinkAttrs } from './media-overlay';
 
-/** Memoize diffWords / diffLines by their string inputs. The diff inputs
- * (baseline + proposedText) only change when the review state changes,
- * not when the user types — but `decorations(state)` runs on every
- * keystroke. Without memoization the diff library re-tokenizes a multi-KB
- * doc on every key press, which dominates the typing-lag profile. WeakMap
- * is unfit (string keys); a tiny LRU on string-pair identity is enough. */
+/** Memoize per-round `diffLines` calls by their string inputs. The diff
+ * inputs (a round's before/after text) only change when the review state
+ * changes, not when the user types — but `decorations(state)` runs on every
+ * keystroke. Without memoization the diff library re-tokenizes on every key
+ * press, which dominates the typing-lag profile. WeakMap is unfit (string
+ * keys); a tiny LRU on string-pair identity is enough. */
 type DiffPart = ReturnType<typeof diffWords>;
-const diffWordsCache = new Map<string, DiffPart>();
 const diffLinesCache = new Map<string, DiffPart>();
 const DIFF_CACHE_MAX = 8;
 function cachedDiff(
@@ -127,17 +126,6 @@ export function setDiffState(editor: Editor, state: DiffState) {
 	editor.view.dispatch(editor.state.tr.setMeta(diffKey, state));
 }
 
-/** Undo Tiptap-markdown's backslash escaping (`\[` → `[`, etc.). Round text
- * (beforeMd/afterMd) comes from the SERIALIZED doc, where the serializer
- * escapes markdown specials — but the editor's paragraph text shows the
- * UNescaped characters. The per-round diff matches round lines against
- * paragraph text, so both must be in the same (unescaped) space; otherwise a
- * line containing `[[ ]]` (or `*`, `_`, etc.) never matches and its diff
- * silently fails to render. */
-export function unescapeMarkdown(text: string): string {
-	return text.replace(/\\([\\`*_{}[\]()#+\-.!>~|])/g, '$1');
-}
-
 /** Map line indices in `currentMd` to the document baseline (rounds[0].beforeMd)
  * so each round's hunks land on the correct live paragraphs. */
 function buildLineAlignmentMap(anchorMd: string, currentMd: string): Map<number, number> {
@@ -175,14 +163,13 @@ function buildLineAlignmentMap(anchorMd: string, currentMd: string): Map<number,
 // is likewise omitted so a click near it lands in the host paragraph via
 // PM's default handling instead of jumping to a sibling.
 const DIFF_NODE_SELECTOR =
-	'.diff-added-line, .diff-removed-line, .diff-removed-widget';
+	'.diff-added-line, .diff-removed-line';
 const DIFF_THREAD_SELECTOR = [
 	'.diff-thread-btn[data-thread-id]',
 	'.diff-added[data-thread-id]',
 	'.diff-added-line[data-thread-id]',
 	'.diff-removed[data-thread-id]',
 	'.diff-removed-line[data-thread-id]',
-	'.diff-removed-widget[data-thread-id]',
 	'.diff-insert-caret[data-thread-id]'
 ].join(',');
 
@@ -367,10 +354,6 @@ export const DiffOverlay = Extension.create({
 							pendingRounds = []
 						} = diffKey.getState(state) ?? INITIAL_STATE;
 						const addedClass = allRoundsTiny ? 'diff-added diff-added-tiny' : 'diff-added';
-						const removedWidgetClass = allRoundsTiny
-							? 'diff-removed-widget diff-removed-tiny'
-							: 'diff-removed-widget';
-						const removedInlineClass = 'diff-removed';
 						const activeFeedbackClass = 'feedback-selection';
 
 						const decorations: Decoration[] = [];
@@ -384,28 +367,27 @@ export const DiffOverlay = Extension.create({
 						}
 
 						// Cached char index: same doc reference returns instantly.
-						const { charPositions, plainText } = buildCharIndex(state.doc);
+						const { plainText } = buildCharIndex(state.doc);
 
 						// ── Agent diff overlay ──────────────────────────────────
+						// The live overlay always drives the round-based path below
+						// (isPlainText:true with a string baseline and a materialized
+						// proposal), so baseline/proposal are compared in the editor's
+						// plain-text space (no markdown stripping).
 						if (baseline !== null) {
-							const baselinePlain = isPlainText
-								? normalizeReviewText(baseline).replace(/\n/g, '')
-								: markdownToPlain(baseline);
+							const baselinePlain = normalizeReviewText(baseline).replace(/\n/g, '');
 							const targetPlain =
 								proposedText !== null && proposedText !== undefined
-									? isPlainText
-										? normalizeReviewText(proposedText).replace(/\n/g, '')
-										: markdownToPlain(proposedText)
+									? normalizeReviewText(proposedText).replace(/\n/g, '')
 									: plainText;
 
 							if (baselinePlain !== targetPlain) {
-								const parts = cachedDiff(diffWordsCache, baselinePlain, targetPlain, diffWords);
-
 								if (proposedText !== null && proposedText !== undefined && isPlainText) {
 									const paragraphs = buildParagraphTextIndex(state.doc);
-									// Match round text against paragraph text in the same
-									// (unescaped) space — see unescapeMarkdown.
-									const documentBaseline = unescapeMarkdown(baseline);
+									// Round text is already in the editor's plain-text space
+									// (serializeFragment does no escaping), so match it
+									// directly against paragraph text.
+									const documentBaseline = baseline;
 									interface DiffBlock {
 										id: string;
 										roundId: string;
@@ -427,8 +409,8 @@ export const DiffOverlay = Extension.create({
 									const modified: ModifiedPara[] = [];
 									for (const round of pendingRounds) {
 										if (round.beforeMd == null || round.afterMd == null) continue;
-										const beforeMdU = unescapeMarkdown(round.beforeMd);
-										const afterMdU = unescapeMarkdown(round.afterMd);
+										const beforeMdU = round.beforeMd;
+										const afterMdU = round.afterMd;
 										const lineToDoc = buildLineAlignmentMap(
 											documentBaseline,
 											beforeMdU
@@ -703,75 +685,6 @@ export const DiffOverlay = Extension.create({
 										pushNumberBadge(m.roundId, m.para.pos + 1);
 										pushThreadButton(m.roundId, m.threadId, m.para.pos + 1);
 									}
-								} else if (proposedText !== null && proposedText !== undefined) {
-									let baselineIdx = 0;
-									for (const part of parts) {
-										if (part.added) {
-											const editorPos = resolveWidgetPos(charPositions, baselineIdx);
-											if (editorPos >= 0) {
-												const value = part.value;
-												decorations.push(
-													Decoration.widget(
-														editorPos,
-														() => {
-															const span = document.createElement('span');
-															span.className = addedClass;
-															span.textContent = value;
-															span.setAttribute('contenteditable', 'false');
-															applyProposedLinkAttrs(span, value);
-															return span;
-														},
-														{ side: -1, key: `add:${editorPos}:${value}` }
-													)
-												);
-											}
-										} else if (part.removed) {
-											applyInlineClassRange(
-												decorations,
-												charPositions,
-												baselineIdx,
-												baselineIdx + part.value.length,
-												removedInlineClass
-											);
-											baselineIdx += part.value.length;
-										} else {
-											baselineIdx += part.value.length;
-										}
-									}
-								} else {
-									let editorIdx = 0;
-									for (const part of parts) {
-										if (part.added) {
-											applyInlineClassRange(
-												decorations,
-												charPositions,
-												editorIdx,
-												editorIdx + part.value.length,
-												addedClass
-											);
-											editorIdx += part.value.length;
-										} else if (part.removed) {
-											const editorPos = resolveWidgetPos(charPositions, editorIdx);
-											if (editorPos >= 0) {
-												const value = part.value;
-												decorations.push(
-													Decoration.widget(
-														editorPos,
-														() => {
-															const span = document.createElement('span');
-															span.className = removedWidgetClass;
-															span.textContent = value;
-															span.setAttribute('contenteditable', 'false');
-															return span;
-														},
-														{ side: -1, key: `rem:${editorPos}:${value}` }
-													)
-												);
-											}
-										} else {
-											editorIdx += part.value.length;
-										}
-									}
 								}
 							}
 						}
@@ -831,12 +744,6 @@ function applyInlineClassRange(
 		}
 		i = j + 1;
 	}
-}
-
-/** Return a PM position for a removal widget at the given editor index. */
-function resolveWidgetPos(charPositions: number[], idx: number): number {
-	if (idx < charPositions.length) return charPositions[idx];
-	return (charPositions[charPositions.length - 1] ?? 0) + 1;
 }
 
 function splitLogicalLines(value: string): string[] {
@@ -921,14 +828,15 @@ export function resolveRoundAnchorPos(
 	if (round.beforeMd == null || round.afterMd == null) return null;
 	const doc = editor.state.doc;
 	const paragraphs = buildParagraphTextIndex(doc);
-	// Unescape so bracketed / markdown lines align with paragraph text.
-	const beforeMdU = unescapeMarkdown(round.beforeMd);
-	const lineToDoc = buildLineAlignmentMap(unescapeMarkdown(baseline), beforeMdU);
+	// Round text is already in the editor's plain-text space (serializeFragment
+	// does no escaping), so align it directly against paragraph text.
+	const beforeMdU = round.beforeMd;
+	const lineToDoc = buildLineAlignmentMap(baseline, beforeMdU);
 	const toDocLine = (roundLine: number) => lineToDoc.get(roundLine) ?? roundLine;
 	const lineParts = cachedDiff(
 		diffLinesCache,
 		normalizeReviewText(beforeMdU),
-		normalizeReviewText(unescapeMarkdown(round.afterMd)),
+		normalizeReviewText(round.afterMd),
 		diffLines
 	);
 	let beforeLineIdx = 0;
@@ -1167,19 +1075,3 @@ function createThreadButton(view: EditorView, threadId: string, stackIdx: number
 	return button;
 }
 
-/** Strip markdown syntax to plain text, matching node.textContent semantics. */
-function markdownToPlain(md: string): string {
-	return normalizeReviewText(
-		md
-		.replace(/^#{1,6}\s+/gm, '')
-		.replace(/^[-*+]\s+/gm, '')
-		.replace(/^\d+\.\s+/gm, '')
-		.replace(/^>\s*/gm, '')
-		.replace(/\*\*(.+?)\*\*/g, '$1')
-		.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '$1')
-		.replace(/(?<!_)_(?!_)(.+?)(?<!_)_(?!_)/g, '$1')
-		.replace(/`(.+?)`/g, '$1')
-		.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
-		.replace(/\n+/g, '')
-	);
-}

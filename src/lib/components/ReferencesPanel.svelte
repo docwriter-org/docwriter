@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { Link2, NotebookPen, Plus, Trash2 } from 'lucide-svelte';
 	import { pushHistory } from '$lib/stores';
+	import { apiJson } from '$lib/auth-recovery';
 
 	type StyleReferenceType = 'workspace-file' | 'stored-sample' | 'url';
 	interface StyleReference {
@@ -30,15 +31,16 @@
 
 	let urlValue = $state('');
 	let urlLabel = $state('');
+	let errorText = $state('');
 
 	async function loadReferences() {
 		loading = true;
 		try {
-			const res = await fetch('/api/references');
-			const data = await res.json();
+			const data = await apiJson('/api/references');
 			references = Array.isArray(data?.references) ? data.references : [];
+			errorText = '';
 		} catch (e) {
-			console.error('Failed to load references:', e);
+			errorText = (e as Error).message;
 		} finally {
 			loading = false;
 		}
@@ -47,8 +49,9 @@
 	async function addCurrentFile() {
 		if (!activeTabId || savingCurrent) return;
 		savingCurrent = true;
+		errorText = '';
 		try {
-			await fetch('/api/references', {
+			await apiJson('/api/references', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ mode: 'add-current-file', tabId: activeTabId })
@@ -61,7 +64,7 @@
 			await loadReferences();
 			onSubmit?.(`The user added "${activeTabId}" as a style reference. Revise the open files so their voice and cadence match it.`);
 		} catch (e) {
-			console.error('Failed to add current file reference:', e);
+			errorText = (e as Error).message;
 		} finally {
 			savingCurrent = false;
 		}
@@ -72,8 +75,9 @@
 		const content = sampleContent.trim();
 		if (!name || !content || savingSample) return;
 		savingSample = true;
+		errorText = '';
 		try {
-			await fetch('/api/references', {
+			await apiJson('/api/references', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
@@ -94,7 +98,7 @@
 			await loadReferences();
 			onSubmit?.(`The user added a new style sample "${addedName}". Revise the open files so their voice and cadence match it.`);
 		} catch (e) {
-			console.error('Failed to add stored sample:', e);
+			errorText = (e as Error).message;
 		} finally {
 			savingSample = false;
 		}
@@ -104,8 +108,9 @@
 		const url = urlValue.trim();
 		if (!url || savingUrl) return;
 		savingUrl = true;
+		errorText = '';
 		try {
-			await fetch('/api/references', {
+			await apiJson('/api/references', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
@@ -126,15 +131,16 @@
 			await loadReferences();
 			onSubmit?.(`The user added a new style reference URL (${addedLabel || addedUrl}). Revise the open files so their voice and cadence match it.`);
 		} catch (e) {
-			console.error('Failed to add URL reference:', e);
+			errorText = (e as Error).message;
 		} finally {
 			savingUrl = false;
 		}
 	}
 
 	async function removeReference(ref: StyleReference) {
+		errorText = '';
 		try {
-			await fetch(`/api/references/${encodeURIComponent(ref.id)}`, { method: 'DELETE' });
+			await apiJson(`/api/references/${encodeURIComponent(ref.id)}`, { method: 'DELETE' });
 			pushHistory({
 				type: 'user_action',
 				timestamp: Date.now(),
@@ -142,7 +148,7 @@
 			});
 			await loadReferences();
 		} catch (e) {
-			console.error('Failed to remove reference:', e);
+			errorText = (e as Error).message;
 		}
 	}
 
@@ -166,6 +172,10 @@
 	<div class="panel-copy">
 		DocWriter only lists these references in the agent prompt. The agent can choose to read them if they would help with tone or cadence.
 	</div>
+
+	{#if errorText}
+		<div class="error">{errorText}</div>
+	{/if}
 
 	<div class="actions">
 		<button
@@ -414,5 +424,14 @@
 		font-size: 12px;
 		color: var(--text-faint);
 		padding: 8px 2px;
+	}
+	.error {
+		margin-bottom: 10px;
+		padding: 8px 10px;
+		border-radius: 6px;
+		background: color-mix(in srgb, #dc2626 9%, var(--bg-elevated));
+		color: #b91c1c;
+		font-size: 12px;
+		line-height: 1.4;
 	}
 </style>

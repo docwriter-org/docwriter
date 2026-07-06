@@ -9,7 +9,6 @@
  *   - `findStep(editor, +1 | -1)` — advance the current match; scrolls
  *     into view
  *   - `closeFind(editor)` — clear matches + decorations
- *   - `getFindState(view)` — read the current state for UI display
  *
  * The bar component (FindBar.svelte) drives this; the editor itself
  * owns the keymap (Cmd/Ctrl+F to open, Esc to close, Enter / Shift+
@@ -153,7 +152,9 @@ function computeMatchesAgainstDoc(doc: unknown, query: string, caseSensitive: bo
 
 // ── Public actions ──────────────────────────────────────────────────────
 
-export function getFindState(editor: Editor): FindState {
+// Internal only — the FindBar mirrors state via the editor's `transaction`
+// event (see TiptapEditor), so this reader isn't part of the public surface.
+function getFindState(editor: Editor): FindState {
 	return findKey.getState(editor.view.state) ?? { ...INITIAL };
 }
 

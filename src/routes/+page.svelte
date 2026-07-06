@@ -33,6 +33,7 @@
 	import { serializeFragment as plainTextFromFragment } from '$lib/shared/ydoc-codec';
 	import { HOSTED_CLAUDE_MODEL_NOTE } from '$lib/shared/claude-models';
 	import { IS_HOSTED } from '$lib/hosted';
+	import { authFetch } from '$lib/auth-recovery';
 
 	/** Turn a submit trigger into a compact description for the history
 	 * pane. Full text of long prompts (including feedback-on-passage quotes)
@@ -127,7 +128,6 @@
 		resetSessionCost,
 		actionUsageCounts,
 		commentThreads,
-		allTabPendingRounds,
 		allTabCommentThreads,
 		openCommentThreadId,
 		queuedSubmissionCount
@@ -338,7 +338,7 @@
 
 	async function loadTabs(): Promise<string | null> {
 		try {
-			const res = await fetch('/api/tabs');
+			const res = await authFetch('/api/tabs');
 			const data = await res.json();
 			const tabIds: string[] = Array.isArray(data.tabs)
 				? data.tabs
@@ -373,7 +373,7 @@
 		}
 		try {
 			getYDocForTab(tabId);
-			const res = await fetch(`/api/document?tab=${encodeURIComponent(tabId)}`);
+			const res = await authFetch(`/api/document?tab=${encodeURIComponent(tabId)}`);
 			const data = await res.json();
 			rules.set(data.meta?.rules || []);
 			if (data.meta?.agentSettings) {
@@ -418,14 +418,9 @@
 	 * comment change so the OutlinePane cross-tab view stays current. */
 	function syncAllTabsState() {
 		const tabIds = getCurrentTabList();
-		const roundsAgg: Array<{ tabId: string; rounds: MaterializedPendingReviewRound[] }> = [];
 		const commentsAgg: Array<{ tabId: string; threads: CommentThread[] }> = [];
 		for (const id of tabIds) {
 			if (isPdfPath(id)) continue;
-			const rawRounds = getReviewArrayForTab(id).toArray();
-			if (rawRounds.length > 0) {
-				roundsAgg.push({ tabId: id, rounds: materializedRoundsForTab(id, rawRounds) });
-			}
 			// Count only threads still anchored to text that exists. A thread
 			// whose passage was deleted is "detached": it doesn't render in the
 			// gutter, so it must not inflate the tab count either. It isn't
@@ -444,7 +439,6 @@
 				commentsAgg.push({ tabId: id, threads });
 			}
 		}
-		allTabPendingRounds.set(roundsAgg);
 		allTabCommentThreads.set(commentsAgg);
 	}
 
@@ -555,7 +549,7 @@
 		docLoaded = false; // unmounts TiptapEditor
 		activeTab.set(tabId);
 		try {
-			await fetch('/api/tabs', {
+			await authFetch('/api/tabs', {
 				method: 'PATCH',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ id: tabId, active: true })
@@ -568,7 +562,7 @@
 	}
 
 	async function createTab(id: string) {
-		const res = await fetch('/api/tabs', {
+		const res = await authFetch('/api/tabs', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({ id })
@@ -578,7 +572,7 @@
 			throw new Error(err || 'Failed to create tab');
 		}
 		const data = await res.json();
-		const listRes = await fetch('/api/tabs');
+		const listRes = await authFetch('/api/tabs');
 		const listData = await listRes.json();
 		tabs.set(listData.tabs || []);
 		await switchTab(data.active);
@@ -592,7 +586,7 @@
 		for (const file of files) {
 			const path = targetFolder ? `${targetFolder}/${file.name}` : file.name;
 			const content = await readFileAsBase64(file);
-			const createRes = await fetch('/api/files', {
+			const createRes = await authFetch('/api/files', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ path, content, encoding: 'base64' })
@@ -659,7 +653,7 @@
 		const qs = new URLSearchParams({ id });
 		if (deleteFile) qs.set('deleteFile', 'true');
 		const closedWasActive = getCurrentActiveTab() === id;
-		const res = await fetch(`/api/tabs?${qs.toString()}`, { method: 'DELETE' });
+		const res = await authFetch(`/api/tabs?${qs.toString()}`, { method: 'DELETE' });
 		if (!res.ok) throw new Error(await res.text());
 		const data = await res.json();
 		detachBgTabObserver(id);
@@ -668,7 +662,7 @@
 		// was unlinked — we don't want a stale in-memory doc if the tab
 		// gets re-opened.
 		await destroyTab(id);
-		const listData = await fetch('/api/tabs').then((r) => r.json());
+		const listData = await authFetch('/api/tabs').then((r) => r.json());
 		const tabIds: string[] = listData.tabs ?? data.order ?? [];
 		tabs.set(tabIds);
 		const nextActive =
@@ -683,7 +677,7 @@
 	}
 
 	async function renameTabAction(oldId: string, newId: string) {
-		const res = await fetch('/api/tabs', {
+		const res = await authFetch('/api/tabs', {
 			method: 'PATCH',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({ id: oldId, newId })
@@ -691,7 +685,7 @@
 		if (!res.ok) throw new Error(await res.text());
 		const data = await res.json();
 		await renameTab(oldId, newId);
-		const listData = await fetch('/api/tabs').then((r) => r.json());
+		const listData = await authFetch('/api/tabs').then((r) => r.json());
 		tabs.set(listData.tabs || []);
 		if (getCurrentActiveTab() === oldId) {
 			activeTab.set(newId);
@@ -737,7 +731,7 @@
 	async function resolvePreviewOutputForTab(tabPath: string | null): Promise<string | null> {
 		if (!tabPath) return null;
 		try {
-			const res = await fetch(
+			const res = await authFetch(
 				`/api/hooks/preview-match?file=${encodeURIComponent(tabPath)}`
 			);
 			if (!res.ok) return null;
@@ -853,7 +847,7 @@
 			const tabId = getCurrentActiveTab();
 			if (!tabId) return;
 			const q = tabId ? `?tab=${encodeURIComponent(tabId)}` : '';
-			await fetch(`/api/document${q}`, {
+			await authFetch(`/api/document${q}`, {
 				method: 'PUT',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ meta: { agentSettings: next } })
@@ -1013,7 +1007,7 @@
 			selectedProvider.subscribe((v) => (provider = v))();
 
 			const tabId = getCurrentActiveTab();
-			const res = await fetch('/api/render', {
+			const res = await authFetch('/api/render', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
@@ -1508,7 +1502,7 @@
 			const body = Array.isArray(roundId)
 				? { action, roundIds: roundId }
 				: { action, roundId };
-			const res = await fetch(`/api/document?tab=${encodeURIComponent(tabId)}`, {
+			const res = await authFetch(`/api/document?tab=${encodeURIComponent(tabId)}`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify(body)
@@ -1534,7 +1528,7 @@
 		if (!tabId) return;
 		const resumeTabSync = pauseTabSync(tabId);
 		try {
-			const res = await fetch(`/api/document?tab=${encodeURIComponent(tabId)}`, {
+			const res = await authFetch(`/api/document?tab=${encodeURIComponent(tabId)}`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ action: 'set_thread_resolution', threadId, resolved })
@@ -1743,7 +1737,7 @@
 		const nextRules = [...currentRules, rule];
 		rules.set(nextRules);
 		try {
-			await fetch('/api/document', {
+			await authFetch('/api/document', {
 				method: 'PUT',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ meta: { rules: nextRules } })
@@ -1792,7 +1786,7 @@
 		if (!proposal) return;
 		try {
 			// GET current hooks, append, PUT back. Server is source of truth.
-			const current = await fetch('/api/hooks').then((r) => r.json());
+			const current = await authFetch('/api/hooks').then((r) => r.json());
 			const existing: Array<Record<string, unknown>> = Array.isArray(current?.hooks)
 				? current.hooks
 				: [];
@@ -1804,7 +1798,7 @@
 				enabled: true
 			};
 			const next = [...existing, hook];
-			await fetch('/api/hooks', {
+			await authFetch('/api/hooks', {
 				method: 'PUT',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ hooks: next })
@@ -1825,7 +1819,7 @@
 	async function answerUserQuestion(id: string, answers: string[]) {
 		pendingUserQuestions.update((list) => list.filter((q) => q.id !== id));
 		try {
-			await fetch('/api/ask-user-reply', {
+			await authFetch('/api/ask-user-reply', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ id, answers })
@@ -1938,7 +1932,7 @@
 		// aborted render can't land between awaits and the final reset.
 		resetSessionCost();
 		try {
-			await fetch('/api/session', { method: 'DELETE' });
+			await authFetch('/api/session', { method: 'DELETE' });
 			agentHistory.set([]);
 			// Reject any pending agent edits — fresh start across all tabs.
 			// Must go through the server; see rejectAgentEdit for why.
@@ -1946,7 +1940,7 @@
 				const list = getReviewArrayForTab(id).toArray();
 				if (list.length === 0) continue;
 				try {
-					await fetch(`/api/document?tab=${encodeURIComponent(id)}`, {
+					await authFetch(`/api/document?tab=${encodeURIComponent(id)}`, {
 						method: 'POST',
 						headers: { 'Content-Type': 'application/json' },
 						body: JSON.stringify({ action: 'reject_rounds' })
@@ -2219,7 +2213,7 @@
 	 */
 	async function restoreSessionState() {
 		try {
-			const res = await fetch('/api/session');
+			const res = await authFetch('/api/session');
 			if (!res.ok) return;
 			const data = await res.json();
 			if (typeof data.serverInstanceId === 'string') {
@@ -2271,7 +2265,7 @@
 			let theme = 'light';
 			selectedTheme.subscribe((v) => (theme = v))();
 			try {
-				await fetch('/api/session', {
+				await authFetch('/api/session', {
 					method: 'PUT',
 					headers: { 'Content-Type': 'application/json' },
 					body: JSON.stringify({
@@ -2360,7 +2354,7 @@
 				async fakeAgentEdit(content: string) {
 					const tabId = getCurrentActiveTab();
 					if (!tabId) return;
-					const res = await fetch(`/api/document?tab=${encodeURIComponent(tabId)}`, {
+					const res = await authFetch(`/api/document?tab=${encodeURIComponent(tabId)}`, {
 						method: 'POST',
 						headers: { 'Content-Type': 'application/json' },
 						body: JSON.stringify({
@@ -2376,7 +2370,7 @@
 				async fakeAgentReplace(oldString: string, newString: string) {
 					const tabId = getCurrentActiveTab();
 					if (!tabId) return;
-					const res = await fetch(`/api/document?tab=${encodeURIComponent(tabId)}`, {
+					const res = await authFetch(`/api/document?tab=${encodeURIComponent(tabId)}`, {
 						method: 'POST',
 						headers: { 'Content-Type': 'application/json' },
 						body: JSON.stringify({
@@ -2806,7 +2800,7 @@
 	 * endpoint fails or the session is empty, we leave the pane empty. */
 	async function restoreAgentHistory() {
 		try {
-			const res = await fetch('/api/history');
+			const res = await authFetch('/api/history');
 			const data = await res.json();
 			const provider = typeof data.provider === 'string' ? data.provider : 'claude';
 			const raw = Array.isArray(data.raw) ? data.raw : [];
@@ -2853,7 +2847,7 @@
 	async function switchAgentSession(session: AgentSessionForSwitch) {
 		if (session.isCurrent) return;
 		if (rendering) cancelRender();
-		const res = await fetch('/api/sessions', {
+		const res = await authFetch('/api/sessions', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({ sessionId: session.id })
@@ -2935,7 +2929,7 @@
 		<aside class="left-pane" style:width="{leftWidth}px">
 			<div class="left-pane-inner" bind:this={leftPaneInnerEl}>
 				<div class="outline-wrap">
-					<OutlinePane showOutline={true} showReview={false} />
+					<OutlinePane showOutline={true} />
 				</div>
 				{#if filesVisible}
 					<HorizontalPanelResizer onResize={resizeFileTree} />

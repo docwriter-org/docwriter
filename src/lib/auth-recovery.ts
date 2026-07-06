@@ -73,3 +73,20 @@ export async function authFetch(input: RequestInfo | URL, init?: RequestInit): P
 	clearAuthRecovery();
 	return res;
 }
+
+/**
+ * authFetch + JSON parsing in one call. A 401/403 throws AuthFailureError
+ * (and schedules hosted recovery) via authFetch before we ever get here;
+ * any other non-ok response throws an Error carrying the server's
+ * `error`/`message` field (falling back to `HTTP <status>`). On success the
+ * parsed JSON body is returned. Collapses the repeated
+ * fetch → res.json() → `if (!res.ok) throw` block used across the panels.
+ */
+export async function apiJson<T = any>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
+	const res = await authFetch(input, init);
+	const data = await res.json().catch(() => null);
+	if (!res.ok) {
+		throw new Error(data?.error ?? data?.message ?? `HTTP ${res.status}`);
+	}
+	return data as T;
+}

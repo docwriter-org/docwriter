@@ -8,7 +8,6 @@ import type { ToolDefinition, ToolResult } from './types';
 import {
 	runTabWrite,
 	runCommentWrite,
-	setActiveFeedbackThreadId,
 	countOccurrences,
 	getHocuspocus,
 	ensureWorkspaceTabOpen,
@@ -21,6 +20,10 @@ import {
 	toolError,
 	toolText
 } from '$lib/server/mcp-doc-tools';
+import {
+	getActiveFeedbackThreadId,
+	setActiveFeedbackThreadId
+} from '$lib/server/request-context';
 import { isScratchPath, resolveTabFromPath, isOpenTab } from '$lib/server/path-router';
 import { readFileSync, existsSync } from 'fs';
 import * as Y from 'yjs';
@@ -154,6 +157,12 @@ export function buildToolDefinitions(): ToolDefinition[] {
 				if (!opened.ok) return toToolResult(opened.error);
 				const tabId = opened.tabId;
 
+				// An explicit thread_id wins over the render-level default for
+				// this call only; capture the prior value and restore it after so
+				// it doesn't leak into later edits this turn (matches mcp-doc-tools
+				// edit_doc). Setting null unconditionally here would discard the
+				// render's feedback-thread default.
+				const priorThreadId = getActiveFeedbackThreadId();
 				if (typeof thread_id === 'string' && thread_id) {
 					setActiveFeedbackThreadId(thread_id);
 				}
@@ -179,11 +188,15 @@ export function buildToolDefinitions(): ToolDefinition[] {
 					};
 				});
 				if (typeof thread_id === 'string' && thread_id) {
-					setActiveFeedbackThreadId(null);
+					setActiveFeedbackThreadId(priorThreadId);
 				}
 				if (failure) return { isError: true, content: [{ type: 'text' as const, text: failure }] };
 				if ('error' in result) {
-					return { isError: true, content: [{ type: 'text' as const, text: `edit_doc failed: ${result.error}` }] };
+					if (result.error === 'mutator-aborted') {
+						// A mutator-level abort that didn't set `failure` is a bug; surface it.
+						return { isError: true, content: [{ type: 'text' as const, text: `edit_doc aborted without a reason for ${path}.` }] };
+					}
+					return { isError: true, content: [{ type: 'text' as const, text: `edit_doc failed for ${path}: ${result.error}` }] };
 				}
 				if (result.discarded) {
 					return { content: [{ type: 'text' as const, text: `Edit discarded for ${path}: the user resolved this feedback thread.` }] };

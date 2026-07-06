@@ -28,6 +28,7 @@
 	import type { MaterializedPendingReviewRound } from '$lib/review-rounds';
 	import { summarizeRound } from '$lib/review-diff';
 	import { isRendering } from '$lib/stores';
+	import { authFetch } from '$lib/auth-recovery';
 
 	interface Props {
 		threads: CommentThread[];
@@ -423,7 +424,7 @@
 		if (!text || replying[thread.id]) return;
 		replying = { ...replying, [thread.id]: true };
 		try {
-			const res = await fetch('/api/comments', {
+			const res = await authFetch('/api/comments', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ mode: 'reply', tabId, threadId: thread.id, message: text })

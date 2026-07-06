@@ -250,7 +250,7 @@
 		const parent = parentOf(entry.path);
 		const toPath = parent ? `${parent}/${next.trim()}` : next.trim();
 		try {
-			const res = await fetch('/api/files', {
+			const res = await authFetch('/api/files', {
 				method: 'PATCH',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ from: entry.path, to: toPath })
@@ -273,7 +273,7 @@
 		);
 		if (!ok) return;
 		try {
-			const res = await fetch(
+			const res = await authFetch(
 				`/api/files?path=${encodeURIComponent(entry.path)}`,
 				{ method: 'DELETE' }
 			);
@@ -418,7 +418,7 @@
 		const name = from.split('/').pop()!;
 		const to = toFolder ? `${toFolder}/${name}` : name;
 		try {
-			const res = await fetch('/api/files', {
+			const res = await authFetch('/api/files', {
 				method: 'PATCH',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ from, to })
@@ -462,7 +462,7 @@
 		}
 		const newPath = parentPath ? `${parentPath}/${name}` : name;
 		try {
-			const res = await fetch('/api/files', {
+			const res = await authFetch('/api/files', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ path: newPath, kind })

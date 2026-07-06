@@ -192,6 +192,7 @@
 	class="tab-bar"
 	class:drag-over={isDragOver}
 	role="tablist"
+	tabindex="-1"
 	ondragover={handleDragOver}
 	ondragleave={handleDragLeave}
 	ondrop={handleDrop}
@@ -433,7 +434,6 @@
 	}
 	.tab-bar.drag-over {
 		background: color-mix(in srgb, var(--accent) 8%, var(--pane-bg));
-		border-bottom-color: var(--accent);
 		outline: 1.5px dashed var(--accent);
 		outline-offset: -2px;
 	}

@@ -1,7 +1,6 @@
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import * as Y from 'yjs';
-import type { Document } from '@hocuspocus/server';
 import {
 	getCommentsMap,
 	serializeYDoc,
@@ -9,21 +8,7 @@ import {
 } from '$lib/shared/ydoc-codec';
 import { isValidTabId } from '$lib/server/document-files';
 import type { CommentMessage, CommentThread } from '$lib/types';
-
-/** Resolve the live Hocuspocus server (stashed on globalThis by
- * ws-server.ts) so we can mutate a tab's Y.Doc via DirectConnection. */
-function getHocuspocus(): {
-	openDirectConnection: (name: string) => Promise<{
-		transact: (cb: (doc: Document) => void | Promise<void>) => Promise<void>;
-		disconnect: () => Promise<void>;
-	}>;
-} | null {
-	const holder = globalThis as unknown as { __docwriterWsServer?: unknown };
-	const server = holder.__docwriterWsServer as
-		| { hocuspocus?: unknown }
-		| undefined;
-	return (server?.hocuspocus as ReturnType<typeof getHocuspocus>) ?? null;
-}
+import { getHocuspocus, countOccurrences } from '$lib/server/live-doc';
 
 async function mutateTabYDoc(
 	tabId: string,
@@ -53,17 +38,6 @@ function cryptoRandomId(): string {
 	const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
 	if (c?.randomUUID) return c.randomUUID();
 	return 'id-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
-}
-
-function countOccurrences(haystack: string, needle: string): number {
-	if (!needle) return 0;
-	let count = 0;
-	let idx = 0;
-	while ((idx = haystack.indexOf(needle, idx)) !== -1) {
-		count += 1;
-		idx += needle.length;
-	}
-	return count;
 }
 
 export const POST: RequestHandler = async ({ request }) => {

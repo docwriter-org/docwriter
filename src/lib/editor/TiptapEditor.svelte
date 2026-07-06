@@ -2,8 +2,7 @@
 	import { onMount, onDestroy, tick } from 'svelte';
 	import { Editor } from '@tiptap/core';
 	import { TextSelection, type Transaction } from '@tiptap/pm/state';
-	import { ySyncPluginKey } from 'y-prosemirror';
-	import { DiffOverlay, setDiffState, unescapeMarkdown } from './diff-overlay';
+	import { DiffOverlay, setDiffState } from './diff-overlay';
 	import {
 		CommentOverlay,
 		setCommentOverlayState,
@@ -31,7 +30,12 @@
 	import PreviewButton from '$lib/components/PreviewButton.svelte';
 	import CommentGutter from '$lib/components/CommentGutter.svelte';
 	import { Crosshair } from 'lucide-svelte';
-	import { collaborativeExtensions } from '$lib/editor-extensions';
+	// `ySyncPluginKey` MUST come from the same package whose ySyncPlugin the
+	// Collaboration extension installs (@tiptap/y-tiptap), re-exported here via
+	// editor-extensions. Importing it from `y-prosemirror` yields a different
+	// PluginKey, so `transaction.getMeta(ySyncPluginKey)` never matches and
+	// remote/agent Yjs transactions get misclassified as user edits.
+	import { collaborativeExtensions, ySyncPluginKey } from '$lib/editor-extensions';
 	import { getYDocForTab, whenYDocReadyForTab, waitForTabSync } from '$lib/yjs-doc';
 	import {
 		reviewBaseline,
@@ -1221,12 +1225,12 @@
 			// pass a string `content` here (doing so would wipe the Y.Doc).
 			editorProps: {
 				attributes: { class: 'tiptap-content tiptap-plain' },
-				// The doc fragment can carry markdown escapes that leaked in via
-				// the agent's edit_doc round-trip (`[` → `\[`, hard breaks). Strip
-				// them on copy so pasting elsewhere gives clean text, not stray
-				// backslashes / spurious newlines.
+				// Plain-text copy: the Y.Doc is stored verbatim (serializeFragment
+				// does no escaping), so hand ProseMirror the raw text between the
+				// slice bounds. Paragraphs join with '\n' and hard breaks render as
+				// '\n' inside a line — matching the on-disk file byte-for-byte.
 				clipboardTextSerializer: (slice) =>
-					unescapeMarkdown(slice.content.textBetween(0, slice.content.size, '\n', '\n')),
+					slice.content.textBetween(0, slice.content.size, '\n', '\n'),
 				handlePaste: (view, event) => handleEditorPaste(view, event).handled,
 				handleDrop: (view, event) => handleEditorDrop(view, event as DragEvent).handled,
 				handleKeyDown: (_view, event) => {
@@ -2258,33 +2262,6 @@
 			background: color-mix(in srgb, var(--accent) 22%, transparent);
 		}
 	}
-	/* Ghost strikethrough widget for agent removals. The removed text isn't
-	 * in the editor's doc tree (the editor displays the live Y.Doc state),
-	 * so we inject this inline span at the position the text used to occupy. */
-	.tiptap-editor :global(.diff-removed-widget) {
-		position: relative;
-		color: var(--diff-removed-color);
-		background-color: color-mix(in srgb, var(--diff-removed-color) 12%, transparent);
-		text-decoration: none;
-		--diff-final-opacity: 0.75;
-		opacity: 0.75;
-		padding: 0 3px;
-		border-radius: 3px;
-		user-select: none;
-		animation: diffFadeIn 480ms ease-out both;
-	}
-	.tiptap-editor :global(.diff-removed-widget)::after {
-		content: '';
-		position: absolute;
-		left: 3px;
-		right: 3px;
-		top: 0.58em;
-		height: 1.5px;
-		background: var(--diff-removed-color);
-		transform-origin: left center;
-		animation: strikeSweepX 520ms cubic-bezier(0.33, 0, 0.2, 1) both;
-		pointer-events: none;
-	}
 	/* Tiny-edit variants: when every pending round is small (< ~25 chars
 	 * delta, e.g. a typo fix), drop the solid green/red treatment and use
 	 * a ghost-like muted style so the diff reads as "a small suggestion"
@@ -2343,12 +2320,6 @@
 			background: transparent;
 			box-shadow: inset 0 0 0 1px transparent;
 		}
-	}
-	.tiptap-editor :global(.diff-removed-widget.diff-removed-tiny) {
-		background: transparent;
-		color: color-mix(in srgb, var(--diff-removed-color) 70%, var(--text-faint));
-		opacity: 0.6;
-		padding: 0 1px;
 	}
 	.feedback-popup {
 		position: fixed;
