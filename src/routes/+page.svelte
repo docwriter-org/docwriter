@@ -120,7 +120,6 @@
 		resetSessionCost,
 		actionUsageCounts,
 		commentThreads,
-		allTabPendingRounds,
 		allTabCommentThreads,
 		openCommentThreadId,
 		queuedSubmissionCount
@@ -401,14 +400,9 @@
 	 * comment change so the OutlinePane cross-tab view stays current. */
 	function syncAllTabsState() {
 		const tabIds = getCurrentTabList();
-		const roundsAgg: Array<{ tabId: string; rounds: MaterializedPendingReviewRound[] }> = [];
 		const commentsAgg: Array<{ tabId: string; threads: CommentThread[] }> = [];
 		for (const id of tabIds) {
 			if (isPdfPath(id)) continue;
-			const rawRounds = getReviewArrayForTab(id).toArray();
-			if (rawRounds.length > 0) {
-				roundsAgg.push({ tabId: id, rounds: materializedRoundsForTab(id, rawRounds) });
-			}
 			// Count only threads still anchored to text that exists. A thread
 			// whose passage was deleted is "detached": it doesn't render in the
 			// gutter, so it must not inflate the tab count either. It isn't
@@ -427,7 +421,6 @@
 				commentsAgg.push({ tabId: id, threads });
 			}
 		}
-		allTabPendingRounds.set(roundsAgg);
 		allTabCommentThreads.set(commentsAgg);
 	}
 
@@ -2885,7 +2878,7 @@
 		<aside class="left-pane" style:width="{leftWidth}px">
 			<div class="left-pane-inner" bind:this={leftPaneInnerEl}>
 				<div class="outline-wrap">
-					<OutlinePane showOutline={true} showReview={false} />
+					<OutlinePane showOutline={true} />
 				</div>
 				{#if filesVisible}
 					<HorizontalPanelResizer onResize={resizeFileTree} />

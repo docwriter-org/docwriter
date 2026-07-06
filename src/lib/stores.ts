@@ -29,12 +29,6 @@ export const reviewBaseline = writable<string | null>(null);
  * (also dropping all later rounds). */
 export const pendingReviewRounds = writable<MaterializedPendingReviewRound[]>([]);
 
-/** Pending agent-edit rounds for EVERY open tab. Each entry contains a
- * tabId and the materialized rounds for that tab, sorted oldest-first.
- * Tabs with zero pending rounds are omitted. Used by OutlinePane to show
- * cross-tab review cards without requiring the user to switch tabs. */
-export const allTabPendingRounds = writable<Array<{ tabId: string; rounds: MaterializedPendingReviewRound[] }>>([]);
-
 /** Agent comment threads for EVERY open tab. Each entry contains a tabId
  * and the unresolved threads that have at least one agent message.
  * Used by OutlinePane's cross-tab comment section. */
@@ -117,7 +111,6 @@ export const pendingPlanProposals = writable<PendingPlanProposal[]>([]);
 // ── UI state ──────────────────────────────────────────────────────────
 
 export const isRendering = writable(false);
-export const showHistory = writable(true);
 
 /** Seconds remaining until the editor auto-submits after user stops typing.
  * 0 means no countdown active. Updated by the editor's idle timer. */
@@ -139,7 +132,6 @@ export const pinnedActions: Action[] = [
 	{ id: 'a_incorrect', label: 'Incorrect', icon: 'circle-x', pinned: true, color: '#dc2626' }
 ];
 export const recentActions = writable<Action[]>([]);
-export const selectedAction = writable<Action | null>(null);
 export const actionUsageCounts = writable<Record<string, number>>({});
 
 export function trackActionUsage(actionLabel: string) {
@@ -568,11 +560,3 @@ export const expandedReviewRoundId = writable<string | null>(null);
  * isn't focused — independent of `expandedReviewRoundId`. Toggled by the
  * switch on each edit card. */
 export const pinnedDiffRounds = writable<Set<string>>(new Set());
-export function togglePinnedDiffRound(id: string) {
-	pinnedDiffRounds.update((s) => {
-		const n = new Set(s);
-		if (n.has(id)) n.delete(id);
-		else n.add(id);
-		return n;
-	});
-}
