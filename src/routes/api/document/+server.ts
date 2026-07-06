@@ -10,19 +10,8 @@ import {
 	setThreadResolution,
 	flushTabMarkdownNow
 } from '$lib/server/ws-server';
-import { setActiveFeedbackThreadId } from '$lib/server/mcp-doc-tools';
-import { runTabWrite } from '$lib/server/mcp-doc-tools';
-
-function countOccurrences(haystack: string, needle: string): number {
-	if (!needle) return 0;
-	let count = 0;
-	let idx = 0;
-	while ((idx = haystack.indexOf(needle, idx)) !== -1) {
-		count += 1;
-		idx += needle.length;
-	}
-	return count;
-}
+import { runTabWrite, countOccurrences } from '$lib/server/mcp-doc-tools';
+import { runWithFeedbackThread } from '$lib/server/request-context';
 
 /**
  * Per-tab document endpoint.
@@ -169,10 +158,11 @@ export const POST: RequestHandler = async ({ request, url }) => {
 			// the gutter's grouped-card rendering can be exercised locally.
 			const fakeThreadId =
 				typeof body.feedbackThreadId === 'string' ? body.feedbackThreadId : null;
-			if (fakeThreadId) setActiveFeedbackThreadId(fakeThreadId);
-			let result;
-			try {
-				result = await runTabWrite(tabId, 'dev_fake_agent_edit', (currentMd) => {
+			// Wrap in the per-request feedback-thread cell so the fake edit can
+			// attach to a thread (setActiveFeedbackThreadId is a no-op outside a
+			// runWithFeedbackThread context).
+			const result = await runWithFeedbackThread(fakeThreadId, () =>
+				runTabWrite(tabId, 'dev_fake_agent_edit', (currentMd) => {
 					const hits = countOccurrences(currentMd, oldString);
 					if (hits === 0) {
 						failure = 'oldString not found in current document';
@@ -186,10 +176,8 @@ export const POST: RequestHandler = async ({ request, url }) => {
 						operation: { type: 'edit', oldString, newString },
 						afterMd: currentMd.replace(oldString, newString)
 					};
-				});
-			} finally {
-				if (fakeThreadId) setActiveFeedbackThreadId(null);
-			}
+				})
+			);
 			if ('error' in result) {
 				if (failure) {
 					return json({ error: failure }, { status: 409 });

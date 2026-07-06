@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { IS_HOSTED } from '$lib/hosted';
+	import { apiJson } from '$lib/auth-recovery';
 
 	interface KeyStatus {
 		id: string;
@@ -26,8 +27,7 @@
 			return;
 		}
 		try {
-			const res = await fetch('/api/keys');
-			const data = await res.json();
+			const data = await apiJson('/api/keys');
 			providers = data.providers ?? [];
 		} catch (e) {
 			error = (e as Error).message;
@@ -44,13 +44,11 @@
 		saving = envVar;
 		error = null;
 		try {
-			const res = await fetch('/api/keys', {
+			const data = await apiJson('/api/keys', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ envVar, value })
 			});
-			const data = await res.json();
-			if (!res.ok) throw new Error(data.error ?? 'failed to save');
 			providers = data.providers ?? providers;
 			drafts = { ...drafts, [envVar]: '' };
 		} catch (e) {
@@ -64,13 +62,11 @@
 		saving = envVar;
 		error = null;
 		try {
-			const res = await fetch('/api/keys', {
+			const data = await apiJson('/api/keys', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ envVar, value: '' })
 			});
-			const data = await res.json();
-			if (!res.ok) throw new Error(data.error ?? 'failed to clear');
 			providers = data.providers ?? providers;
 		} catch (e) {
 			error = (e as Error).message;

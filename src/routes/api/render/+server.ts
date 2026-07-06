@@ -1,7 +1,6 @@
 import { error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { normalize, resolve } from 'path';
-import * as Y from 'yjs';
 import { getProvider } from '$lib/server/providers';
 import type { ProviderId, ProviderEvent } from '$lib/server/providers/types';
 import { buildToolDefinitions, TOOL_NAMES } from '$lib/server/providers/tool-handlers';
@@ -31,7 +30,7 @@ import { readMeta } from '$lib/server/document-io';
 import { kvGet, kvSet, dbAppendConversationEvent } from '$lib/server/db-writes';
 import { readCommentThreads, readReviewRounds } from '$lib/shared/ydoc-codec';
 import type { CommentThread } from '$lib/types';
-import { replayUpdatesInto } from '$lib/server/ydoc-persistence';
+import { withLiveTabDoc } from '$lib/server/live-doc';
 import { registerPendingAskUser } from '$lib/server/ask-user-state';
 import { unifiedLineDiff } from '$lib/diff';
 import { listStyleReferences } from '$lib/server/references';
@@ -42,54 +41,23 @@ import {
 	READ_DOC_TOOL_NAME,
 	WRITE_DOC_TOOL_NAME,
 	COMMENT_DOC_TOOL_NAME,
-	REPLY_TO_COMMENT_TOOL_NAME,
-	setActiveFeedbackThreadId
+	REPLY_TO_COMMENT_TOOL_NAME
 } from '$lib/server/mcp-doc-tools';
+import { runWithFeedbackThread } from '$lib/server/request-context';
 import { resolveHostedClaudeModel } from '$lib/shared/claude-models';
 import { isMultiTenant } from '$lib/server/deploy-mode';
 
 /** Read the live authoritative markdown for a tab, including any pending
- * review rounds materialized on top. Prefers the Hocuspocus in-memory
- * Document (what clients are synced to); falls back to a throwaway Y.Doc
- * hydrated from SQLite when no client is connected. */
+ * review rounds materialized on top. Reads the tab's live-or-replay Y.Doc
+ * through `withLiveTabDoc` (the in-memory Hocuspocus Document when a client
+ * is connected, else a throwaway hydrated from SQLite). */
 function readLiveTabMarkdown(tabId: string): string {
-	const holder = globalThis as unknown as {
-		__docwriterWsServer?: {
-			hocuspocus?: { documents?: { get(name: string): unknown } };
-		};
-	};
-	const hp = holder.__docwriterWsServer?.hocuspocus;
-	const liveDoc = hp?.documents?.get(tabId) as Y.Doc | undefined;
-	if (liveDoc) {
-		return readTabMarkdownForAgent(liveDoc);
-	}
-	const ydoc = new Y.Doc();
-	try {
-		replayUpdatesInto(ydoc, tabId);
-		return readTabMarkdownForAgent(ydoc);
-	} finally {
-		ydoc.destroy();
-	}
+	return withLiveTabDoc(tabId, (doc) => readTabMarkdownForAgent(doc));
 }
 
-/** Snapshot of a tab's comment threads. Prefer the Hocuspocus in-memory
- * Document; fall back to a throwaway doc hydrated from SQLite. */
+/** Snapshot of a tab's comment threads from its live-or-replay Y.Doc. */
 function readLiveTabCommentThreads(tabId: string): CommentThread[] {
-	const holder = globalThis as unknown as {
-		__docwriterWsServer?: {
-			hocuspocus?: { documents?: { get(name: string): unknown } };
-		};
-	};
-	const hp = holder.__docwriterWsServer?.hocuspocus;
-	const liveDoc = hp?.documents?.get(tabId) as Y.Doc | undefined;
-	if (liveDoc) return readCommentThreads(liveDoc);
-	const ydoc = new Y.Doc();
-	try {
-		replayUpdatesInto(ydoc, tabId);
-		return readCommentThreads(ydoc);
-	} finally {
-		ydoc.destroy();
-	}
+	return withLiveTabDoc(tabId, (doc) => readCommentThreads(doc));
 }
 
 /** Which comment threads on a tab currently carry a pending edit (a review
@@ -97,28 +65,17 @@ function readLiveTabCommentThreads(tabId: string): CommentThread[] {
  * the agent knows a reply there is feedback on an edit it should *revise*,
  * not a discussion to chat back on. */
 function readLiveTabPendingEditThreadIds(tabId: string): Set<string> {
-	const holder = globalThis as unknown as {
-		__docwriterWsServer?: {
-			hocuspocus?: { documents?: { get(name: string): unknown } };
-		};
-	};
-	const hp = holder.__docwriterWsServer?.hocuspocus;
-	const liveDoc = hp?.documents?.get(tabId) as Y.Doc | undefined;
-	const collect = (doc: Y.Doc) =>
-		new Set(
-			readReviewRounds(doc)
-				.map((r) => r.feedbackThreadId)
-				.filter((id): id is string => typeof id === 'string')
-		);
-	if (liveDoc) return collect(liveDoc);
-	const ydoc = new Y.Doc();
-	try {
-		replayUpdatesInto(ydoc, tabId);
-		return collect(ydoc);
-	} finally {
-		ydoc.destroy();
-	}
+	return withLiveTabDoc(
+		tabId,
+		(doc) =>
+			new Set(
+				readReviewRounds(doc)
+					.map((r) => r.feedbackThreadId)
+					.filter((id): id is string => typeof id === 'string')
+			)
+	);
 }
+
 
 const GENERIC_WAKEUP_MESSAGE =
 	'The user clicked Wake-up without a specific request. Decide what (if anything) to do per the agency guidance above.';
@@ -1100,8 +1057,13 @@ export const POST: RequestHandler = async ({ request }) => {
 					}
 
 					const feedbackThreadId = message.match(/thread_id="([^"]+)"/)?.[1] ?? null;
-					setActiveFeedbackThreadId(feedbackThreadId);
-					try {
+					// Carry the render's default feedback thread in a per-request
+					// AsyncLocalStorage cell (request-context). Wrapping the whole render
+					// flow means the provider query loop and every tool callback it spawns
+					// inherit THIS render's cell, so concurrent renders (two hosted users,
+					// or a user render racing warmup) each keep their own default and
+					// can't stomp each other.
+					await runWithFeedbackThread(feedbackThreadId, async () => {
 					const firstOutcome = await runQueryRound(prompt, images);
 					if (
 						isImplicitWakeup &&
@@ -1127,9 +1089,7 @@ export const POST: RequestHandler = async ({ request }) => {
 						send('directive_retry', {});
 						await runQueryRound(retryPrompt);
 					}
-					} finally {
-						setActiveFeedbackThreadId(null);
-					}
+					});
 				} catch (err) {
 					// Plan-mode aborts the controller from canUseTool once we've
 					// captured the plan — that surfaces as an AbortError here,
