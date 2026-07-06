@@ -59,21 +59,22 @@ No per-tab shadows (`.docwriter/agent/<tabId>`), no IndexedDB, no
 in-browser persistence. A fresh browser paints only after the WebSocket's
 first `synced` event — on localhost this is sub-20ms.
 
-## Three-pane layout
+## Layout
 
 - **Left (`OutlinePane`, 260px):** auto-generated TOC from headings only
-  (`showOutline`), with the `FileTree` below it.
-- **Center:** Tiptap editor + `AgentDock` in the top-right (Wake up button,
-  sleeping-cat mascot, gear-icon settings popover).
-- **Right (340px, toggleable):** `HistoryPane` (agent tool-call log) on top,
-  and a second `OutlinePane` instance (`showReview`) below it holding the
-  pending-edit cards with Accept / Reject / Retry, unread comments, and
-  proposed rules / hooks.
-
-`OutlinePane` is one component reused twice: `showOutline={true}
-showReview={false}` for the left TOC, and `showOutline={false}
-showReview={true}` for the right pending-review sidebar. The pending-edit
-cards live in the **right** column, not the left.
+  (`showOutline`), with the `FileTree` below it. This is the sole
+  `OutlinePane` instance — it renders only the TOC. (There used to be a
+  second `showReview` instance in a right-hand sidebar; that mode has been
+  removed.)
+- **Center:** Tiptap editor + a floating `AgentDock` in the top-right (Wake
+  up button, sleeping-cat mascot, gear-icon settings popover). The agent
+  tool-call log (`HistoryPane`) lives inside the expandable
+  `AgentDockShell`, not a fixed pane.
+- **Pending agent edits + comment threads** render inline in the editor's
+  comment gutter (`CommentGutter`, mounted in `TiptapEditor`) with Accept /
+  Reject / Retry, plus per-tab badges on the `TabBar` — there is no separate
+  review column.
+- **Proposed rules / hooks** surface as dismissable toasts (`ToastStack`).
 
 ## Agent SDK integration
 
