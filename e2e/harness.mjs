@@ -49,12 +49,22 @@ export function agentTimeoutMs() {
 }
 
 export function modelForProvider(provider) {
-	return process.env.E2E_MODEL || DEFAULT_MODELS[provider] || DEFAULT_MODELS.claude;
+	if (process.env.E2E_MODEL) return process.env.E2E_MODEL;
+	// Pi routes to whichever inference provider the available key unlocks:
+	// default to a Gemini model when only GEMINI_API_KEY is set.
+	if (
+		provider === 'pi' &&
+		!process.env.TOGETHER_API_KEY?.trim() &&
+		process.env.GEMINI_API_KEY?.trim()
+	) {
+		return 'google/gemini-3.5-flash';
+	}
+	return DEFAULT_MODELS[provider] || DEFAULT_MODELS.claude;
 }
 
 export function hasProviderCredentials(provider) {
 	if (provider === 'pi') {
-		return Boolean(process.env.TOGETHER_API_KEY?.trim());
+		return Boolean(process.env.TOGETHER_API_KEY?.trim() || process.env.GEMINI_API_KEY?.trim());
 	}
 	if (provider === 'codex') {
 		return Boolean(process.env.OPENAI_API_KEY?.trim() || process.env.CODEX_API_KEY?.trim());

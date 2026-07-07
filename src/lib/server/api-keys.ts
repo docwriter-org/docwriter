@@ -31,6 +31,10 @@ export interface ProviderKeySpec {
 	required: boolean;
 	/** Human note about alternative auth (shown when no key is set). */
 	altAuthNote?: string;
+	/** Additional env vars that also make this provider usable (e.g. Pi is
+	 * usable with a Gemini key for google/* models even without a Together
+	 * key). They don't count as `present` for the primary row. */
+	altEnvVars?: string[];
 }
 
 export const PROVIDER_KEYS: ProviderKeySpec[] = [
@@ -62,8 +66,17 @@ export const PROVIDER_KEYS: ProviderKeySpec[] = [
 		label: 'Pi (Together)',
 		envVar: 'TOGETHER_API_KEY',
 		required: false,
+		altEnvVars: ['GEMINI_API_KEY'],
 		altAuthNote:
 			'Pi routes models to many inference providers; it reuses ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY if set. Set TOGETHER_API_KEY for Together-served models (e.g. Kimi K2.6).'
+	},
+	{
+		id: 'gemini',
+		label: 'Gemini (Pi)',
+		envVar: 'GEMINI_API_KEY',
+		required: false,
+		altAuthNote:
+			'Used by the Pi provider for Google models (google/gemini-*). Get a key at aistudio.google.com.'
 	}
 ];
 
@@ -155,6 +168,10 @@ export function getKeyStatus(): ProviderKeyStatus[] {
 		const present = !!process.env[spec.envVar] || (spec.id === 'codex' && !!process.env.OPENAI_API_KEY);
 		let usable = present;
 		let source: ProviderKeyStatus['source'] = present ? 'env' : null;
+		if (!usable && spec.altEnvVars?.some((envVar) => !!process.env[envVar])) {
+			usable = true;
+			source = 'env';
+		}
 		if (!usable) {
 			if (spec.id === 'codex' && (process.env.OPENAI_API_KEY || hasCodexLogin())) {
 				usable = true;

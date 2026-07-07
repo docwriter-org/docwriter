@@ -314,6 +314,8 @@ const ALL_FALLBACK_MODELS: ModelOption[] = [
 	{ id: 'openai/gpt-4o', label: 'GPT-4o', provider: 'pi' },
 	{ id: 'openai/gpt-4o-mini', label: 'GPT-4o Mini', provider: 'pi' },
 	{ id: 'openai/o4-mini', label: 'o4-mini', provider: 'pi' },
+	{ id: 'google/gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro', provider: 'pi' },
+	{ id: 'google/gemini-3.5-flash', label: 'Gemini 3.5 Flash', provider: 'pi' },
 	{ id: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash', provider: 'pi' },
 	{ id: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro', provider: 'pi' },
 	{ id: 'deepseek/deepseek-r1', label: 'DeepSeek R1', provider: 'pi' },
