@@ -65,6 +65,8 @@ const FALLBACK_MODELS: ProviderModelOption[] = [
 	{ id: 'openai/gpt-4o', label: 'GPT-4o', provider: 'pi' },
 	{ id: 'openai/gpt-4o-mini', label: 'GPT-4o Mini', provider: 'pi' },
 	{ id: 'openai/o4-mini', label: 'o4-mini', provider: 'pi' },
+	{ id: 'google/gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro', provider: 'pi' },
+	{ id: 'google/gemini-3.5-flash', label: 'Gemini 3.5 Flash', provider: 'pi' },
 	{ id: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash', provider: 'pi' },
 	{ id: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro', provider: 'pi' },
 	{ id: 'deepseek/deepseek-r1', label: 'DeepSeek R1', provider: 'pi' },
@@ -205,6 +207,11 @@ export class PiProvider implements AgentProvider {
 		const events: ProviderEvent[] = [];
 		let resolveWait: (() => void) | null = null;
 		let done = false;
+		// A model-call failure (e.g. invalid GEMINI_API_KEY) surfaces only as a
+		// message_end whose message has stopReason 'error'; session.prompt()
+		// still resolves — without capturing it here the render completes as a
+		// silent "made no edits" no-op.
+		let streamError: Error | null = null;
 		// Correlate tool start/end without wall-clock fallbacks (Date.now()
 		// differs between the two events, breaking tool_use_id matching).
 		let toolCounter = 0;
@@ -218,6 +225,21 @@ export class PiProvider implements AgentProvider {
 						events.push({ type: 'assistant_text', text: ame.delta });
 					} else if (ame?.type === 'thinking_delta' && ame.delta) {
 						events.push({ type: 'assistant_thinking', text: ame.delta });
+					}
+					break;
+				}
+				case 'message_end': {
+					// A model-call failure (invalid API key, quota, network) ends the
+					// assistant message with stopReason 'error' + errorMessage; the
+					// prompt promise still RESOLVES, so this is the only signal.
+					const msg = event.message;
+					if (msg?.role === 'assistant' && msg?.stopReason === 'error') {
+						const detail = msg.errorMessage;
+						streamError = new Error(
+							typeof detail === 'string' && detail
+								? `Pi model error: ${detail.slice(0, 500)}`
+								: 'Pi model call ended with an error.'
+						);
 					}
 					break;
 				}
@@ -294,9 +316,11 @@ export class PiProvider implements AgentProvider {
 		unsubscribe();
 		await promptPromise;
 		session.dispose();
-		// Surface a prompt failure (e.g. missing API key) so the render endpoint
-		// emits an `error` event instead of completing as a silent no-op.
+		// Surface a prompt failure (e.g. missing API key) or an in-stream model
+		// error (e.g. invalid API key) so the render endpoint emits an `error`
+		// event instead of completing as a silent no-op.
 		if (promptError) throw promptError;
+		if (streamError) throw streamError;
 	}
 
 	async listModels(): Promise<ProviderModelOption[]> {
