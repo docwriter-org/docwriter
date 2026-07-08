@@ -17,7 +17,6 @@ import { emitProposalEvents, makeLazySdkLoader, wrapToolsForProvider } from './s
 import { randomUUID } from 'node:crypto';
 import { DocWriterOpenAISession } from './openai-session';
 
-let sdkLoaded = false;
 let Agent: any = null;
 let run: any = null;
 let tool: any = null;
@@ -28,12 +27,12 @@ const importAgentsSdk = makeLazySdkLoader(
 );
 
 async function loadSdk() {
-	if (sdkLoaded) return;
+	// importAgentsSdk (makeLazySdkLoader) already memoizes the dynamic import,
+	// so re-destructuring here on a warm cache is idempotent and cheap.
 	const sdk = await importAgentsSdk();
 	Agent = sdk.Agent;
 	run = sdk.run;
 	tool = sdk.tool;
-	sdkLoaded = true;
 }
 
 // Current OpenAI frontier + reasoning models (newest first), per

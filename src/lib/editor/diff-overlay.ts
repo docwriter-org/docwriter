@@ -87,7 +87,6 @@ export interface DiffState {
 	baseline: string | null;
 	proposedText?: string | null;
 	activeFeedbackRange?: { from: number; to: number } | null;
-	isPlainText?: boolean;
 	/** True when every pending round is classified as `tiny`. Drives a
 	 * softer ghost-text style for inline additions so a single typo fix
 	 * doesn't look like a paragraph rewrite. */
@@ -114,7 +113,6 @@ const diffKey = new PluginKey<DiffState>('diffOverlay');
 	baseline: null,
 	proposedText: null,
 	activeFeedbackRange: null,
-	isPlainText: false,
 	allRoundsTiny: false,
 	revealedRoundIds: new Set<string>(),
 	roundNumbers: new Map<string, number>(),
@@ -346,7 +344,6 @@ export const DiffOverlay = Extension.create({
 							baseline,
 							proposedText,
 							activeFeedbackRange,
-							isPlainText,
 							allRoundsTiny,
 							revealedRoundIds = new Set<string>(),
 							roundNumbers = new Map<string, number>(),
@@ -371,9 +368,9 @@ export const DiffOverlay = Extension.create({
 
 						// ── Agent diff overlay ──────────────────────────────────
 						// The live overlay always drives the round-based path below
-						// (isPlainText:true with a string baseline and a materialized
-						// proposal), so baseline/proposal are compared in the editor's
-						// plain-text space (no markdown stripping).
+						// (a string baseline and a materialized proposal), so
+						// baseline/proposal are compared in the editor's plain-text
+						// space (no markdown stripping).
 						if (baseline !== null) {
 							const baselinePlain = normalizeReviewText(baseline).replace(/\n/g, '');
 							const targetPlain =
@@ -382,7 +379,7 @@ export const DiffOverlay = Extension.create({
 									: plainText;
 
 							if (baselinePlain !== targetPlain) {
-								if (proposedText !== null && proposedText !== undefined && isPlainText) {
+								if (proposedText !== null && proposedText !== undefined) {
 									const paragraphs = buildParagraphTextIndex(state.doc);
 									// Round text is already in the editor's plain-text space
 									// (serializeFragment does no escaping), so match it

@@ -317,11 +317,11 @@ export const CommentOverlay = Extension.create({
 					// Backfill rel positions for any thread that doesn't have them
 					// yet (server-created or pre-rel-position legacy). Runs after
 					// every state update; cheap because the filter exits early
-					// once every thread has rel positions. Threads in the per-tab
-					// `tabsBackfilled` set are skipped to avoid re-attempting in
-					// the (rare) case `absolutePositionToRelativePosition` returns
-					// a position that re-resolves to a different range — the loop
-					// would otherwise repeatedly write back. */
+					// once every thread has rel positions. Threads in the local
+					// `attempted` set are skipped to avoid re-attempting in the
+					// (rare) case `absolutePositionToRelativePosition` returns a
+					// position that re-resolves to a different range — the loop
+					// would otherwise repeatedly write back.
 					const attempted = new Set<string>();
 					const tryBackfill = () => {
 						const binding = getYBinding(editorView.state);

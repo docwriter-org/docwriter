@@ -192,8 +192,7 @@
 		return map;
 	});
 
-	// Surface proposed rules/hooks as sticky toasts (the showReview sidebar
-	// used to render them as cards). The toast queue is reconciled against
+	// Surface proposed rules/hooks as sticky toasts. The toast queue is reconciled against
 	// the proposal stores: push one per proposal, dismiss when the proposal
 	// is gone (accepted/rejected via the toast clears it from the store).
 	let proposedRulesList = $state<ProposedRule[]>([]);

@@ -25,7 +25,6 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getEffectiveDocwriterDir, getEffectiveRoot } from '$lib/server/document-files';
 
-let sdkLoaded = false;
 let createAgentSession: any = null;
 let defineTool: any = null;
 let SessionManager: any = null;
@@ -45,7 +44,8 @@ const importPiSdk = makeLazySdkLoader(
 );
 
 async function loadSdk() {
-	if (sdkLoaded) return;
+	// importPiSdk (makeLazySdkLoader) already memoizes the dynamic import, so
+	// re-destructuring here on a warm cache is idempotent and cheap.
 	const { sdk, ai, tb } = await importPiSdk();
 	createAgentSession = sdk.createAgentSession;
 	defineTool = sdk.defineTool;
@@ -54,7 +54,6 @@ async function loadSdk() {
 	ModelRegistry = sdk.ModelRegistry;
 	getModel = ai.getModel;
 	Type = tb.Type;
-	sdkLoaded = true;
 }
 
 const FALLBACK_MODELS: ProviderModelOption[] = [

@@ -1076,7 +1076,6 @@
 				baseline: baselineForOverlay,
 				proposedText: proposalForOverlay,
 				activeFeedbackRange: feedbackSelectionRange,
-				isPlainText: true,
 				allRoundsTiny,
 				// Proposed (green) lines show inline for the focused round, any
 				// the user pinned "keep diff visible", and — when a feedback
