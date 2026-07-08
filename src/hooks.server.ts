@@ -11,11 +11,12 @@ import { getRules, getSessionId, setSessionId } from '$lib/server/runtime-state'
 import { syncRulesToClaudeMemory } from '$lib/server/claude-memory';
 import { installBundledSkills } from '$lib/server/skills-install';
 import { createWsServer } from '$lib/server/ws-server';
-import { loadGlobalKeys } from '$lib/server/api-keys';
+import { loadGlobalKeys, loadRepoEnv } from '$lib/server/api-keys';
 
-// Load ~/.docwriter/keys.env into process.env (without overriding real env /
-// repo .env) so provider API keys are available cross-workspace and in the
-// built server. Runs before any render path reads process.env.<KEY>.
+// Load repo .env, then ~/.docwriter/keys.env into process.env so provider API
+// keys are available before any render path reads process.env.<KEY>. The
+// global store does not override repo .env or real shell env.
+loadRepoEnv();
 loadGlobalKeys();
 
 // A fresh UUID per server process. Clients compare this against the one they

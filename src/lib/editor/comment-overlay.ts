@@ -2,12 +2,17 @@ import { Editor, Extension } from '@tiptap/core';
 import { Plugin, PluginKey, type EditorState } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import * as Y from 'yjs';
+// The y-sync plugin key + rel-position helpers MUST come from the same package
+// whose ySyncPlugin the Collaboration extension installs (@tiptap/y-tiptap),
+// re-exported via editor-extensions. Importing them from `y-prosemirror`
+// yields a different PluginKey, so getYBinding() below always returns null and
+// the entire RelativePosition anchoring tier goes dead. See editor-extensions.
 import {
 	ySyncPluginKey,
 	absolutePositionToRelativePosition,
 	relativePositionToAbsolutePosition
-} from 'y-prosemirror';
-import { getCommentsMap, USER_ORIGIN } from '$lib/shared/ydoc-codec';
+} from '$lib/editor-extensions';
+import { getCommentsMap, SYSTEM_ORIGIN } from '$lib/shared/ydoc-codec';
 import { buildCharIndex as cachedBuildCharIndex } from './char-index';
 import type { CommentThread } from '$lib/types';
 
@@ -312,11 +317,11 @@ export const CommentOverlay = Extension.create({
 					// Backfill rel positions for any thread that doesn't have them
 					// yet (server-created or pre-rel-position legacy). Runs after
 					// every state update; cheap because the filter exits early
-					// once every thread has rel positions. Threads in the per-tab
-					// `tabsBackfilled` set are skipped to avoid re-attempting in
-					// the (rare) case `absolutePositionToRelativePosition` returns
-					// a position that re-resolves to a different range — the loop
-					// would otherwise repeatedly write back. */
+					// once every thread has rel positions. Threads in the local
+					// `attempted` set are skipped to avoid re-attempting in the
+					// (rare) case `absolutePositionToRelativePosition` returns a
+					// position that re-resolves to a different range — the loop
+					// would otherwise repeatedly write back.
 					const attempted = new Set<string>();
 					const tryBackfill = () => {
 						const binding = getYBinding(editorView.state);
@@ -367,13 +372,18 @@ export const CommentOverlay = Extension.create({
 						}
 						if (updates.length === 0) return;
 						const commentsMap = getCommentsMap(binding.doc);
+						// SYSTEM_ORIGIN (not USER_ORIGIN) so this machine-generated
+						// rel-position backfill stays off the UndoManager's stack —
+						// trackedOrigins is {ySyncPluginKey, USER_ORIGIN}. Otherwise the
+						// first backfill after loading a legacy/agent thread would plant
+						// a phantom undo step the user could Cmd+Z into.
 						binding.doc.transact(() => {
 							for (const u of updates) {
 								// Re-check existence before writing — the thread may have
 								// been deleted between our read and this transact.
 								if (commentsMap.has(u.id)) commentsMap.set(u.id, u.thread);
 							}
-						}, USER_ORIGIN);
+						}, SYSTEM_ORIGIN);
 					};
 
 					return {
@@ -386,24 +396,6 @@ export const CommentOverlay = Extension.create({
 		];
 	}
 });
-
-/** Compute detached threads: unresolved threads whose anchor cannot be
- * resolved to a valid PM range (neither rel positions nor quote indexOf
- * finds it). The Outline pane uses this to surface threads that lost
- * their anchor so the user can jump to them. */
-export function computeDetachedThreads(
-	threads: CommentThread[],
-	plainText: string
-): CommentThread[] {
-	// Simplified: rel position resolution requires editor state, which
-	// callers of this function don't have. The quote-based check is a
-	// reasonable proxy — if the quote text is fully gone, the rel
-	// position is almost certainly gone too (text deletion invalidates
-	// it). Edge case: rel position survived but quote was edited around
-	// it; treated as detached here, still rendered correctly by the
-	// overlay because the overlay does try rel positions first.
-	return threads.filter((t) => !t.resolved && plainText.indexOf(t.anchor.quote) === -1);
-}
 
 /** Resolve a thread's anchor to PM positions. Used by the margin-gutter
  * component to decide where to stack each thread card vertically.

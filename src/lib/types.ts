@@ -132,7 +132,7 @@ export interface Action {
  * they sync through Hocuspocus exactly like pending review rounds and
  * merge cleanly with concurrent edits.
  */
-export interface CommentThreadAnchor {
+interface CommentThreadAnchor {
 	quote: string;
 	/** Which occurrence of `quote` to prefer when it appears multiple
 	 * times in the document. Snapshot at thread creation; stays fixed
@@ -155,7 +155,7 @@ export interface CommentThreadAnchor {
 	relEnd?: string;
 }
 
-export type CommentAuthor = 'user' | 'agent';
+type CommentAuthor = 'user' | 'agent';
 
 export interface CommentMessage {
 	id: string;
@@ -182,13 +182,6 @@ export interface CommentThread {
  *  - `edit`: propose an `edit_doc` change (no `reply_to_comment`).
  *  - `comment`: reply on the thread via `reply_to_comment` — no edit. */
 export type FeedbackMode = 'edit' | 'comment';
-
-
-export interface InlineFeedback {
-	text: string;
-	x: number;
-	y: number;
-}
 
 export type HistoryEntry =
 	| {
@@ -292,3 +285,11 @@ export interface AgentSettings {
 	 * attention while the agent works in the background. */
 	muted: boolean;
 }
+
+/** Canonical default agent settings. Imported by the server runtime-state.
+ * NOTE: the client store (src/lib/stores.ts) still keeps its own copy of this
+ * default; it should also import this constant in a later pass. */
+export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
+	agency: 'conservative',
+	muted: false
+};

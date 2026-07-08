@@ -14,11 +14,17 @@ import type {
 	ToolDefinition
 } from './types';
 import { buildToolDefinitions } from './tool-handlers';
+import {
+	combinePrompt,
+	emitProposalEvents,
+	makeLazySdkLoader,
+	staleSessionEvent,
+	wrapToolsForProvider
+} from './shared';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getEffectiveDocwriterDir, getEffectiveRoot } from '$lib/server/document-files';
 
-let sdkLoaded = false;
 let createAgentSession: any = null;
 let defineTool: any = null;
 let SessionManager: any = null;
@@ -27,29 +33,27 @@ let ModelRegistry: any = null;
 let getModel: any = null;
 let Type: any = null;
 
-async function loadSdk() {
-	if (sdkLoaded) return;
-	try {
+const importPiSdk = makeLazySdkLoader(
+	async () => {
 		const sdk = await import('@earendil-works/pi-coding-agent');
-		createAgentSession = sdk.createAgentSession;
-		defineTool = sdk.defineTool;
-		SessionManager = sdk.SessionManager;
-		AuthStorage = sdk.AuthStorage;
-		ModelRegistry = sdk.ModelRegistry;
-
 		const ai = await import('@earendil-works/pi-ai/compat');
-		getModel = ai.getModel;
-
 		const tb = await import('@sinclair/typebox');
-		Type = tb.Type;
+		return { sdk, ai, tb };
+	},
+	'@earendil-works/pi-coding-agent is not installed. Run: npm install @earendil-works/pi-coding-agent @earendil-works/pi-ai @sinclair/typebox'
+);
 
-		sdkLoaded = true;
-	} catch (err) {
-		throw new Error(
-			'@earendil-works/pi-coding-agent is not installed. Run: npm install @earendil-works/pi-coding-agent @earendil-works/pi-ai @sinclair/typebox\n' +
-			(err as Error).message
-		);
-	}
+async function loadSdk() {
+	// importPiSdk (makeLazySdkLoader) already memoizes the dynamic import, so
+	// re-destructuring here on a warm cache is idempotent and cheap.
+	const { sdk, ai, tb } = await importPiSdk();
+	createAgentSession = sdk.createAgentSession;
+	defineTool = sdk.defineTool;
+	SessionManager = sdk.SessionManager;
+	AuthStorage = sdk.AuthStorage;
+	ModelRegistry = sdk.ModelRegistry;
+	getModel = ai.getModel;
+	Type = tb.Type;
 }
 
 const FALLBACK_MODELS: ProviderModelOption[] = [
@@ -60,6 +64,8 @@ const FALLBACK_MODELS: ProviderModelOption[] = [
 	{ id: 'openai/gpt-4o', label: 'GPT-4o', provider: 'pi' },
 	{ id: 'openai/gpt-4o-mini', label: 'GPT-4o Mini', provider: 'pi' },
 	{ id: 'openai/o4-mini', label: 'o4-mini', provider: 'pi' },
+	{ id: 'google/gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro', provider: 'pi' },
+	{ id: 'google/gemini-3.5-flash', label: 'Gemini 3.5 Flash', provider: 'pi' },
 	{ id: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash', provider: 'pi' },
 	{ id: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro', provider: 'pi' },
 	{ id: 'deepseek/deepseek-r1', label: 'DeepSeek R1', provider: 'pi' },
@@ -140,7 +146,11 @@ export class PiProvider implements AgentProvider {
 		await loadSdk();
 
 		const allTools = tools.length > 0 ? tools : buildToolDefinitions();
-		const piTools = buildPiTools(allTools);
+		// Filter to options.allowedTools and gate each execute through
+		// options.canUseTool. Empty during warmup (allowedTools excludes every
+		// doc tool), so Pi no longer exposes mutation tools on a warmup ping.
+		const providerTools = wrapToolsForProvider(allTools, options);
+		const piTools = buildPiTools(providerTools);
 		const cwd = getEffectiveRoot();
 		const piDir = join(getEffectiveDocwriterDir(), 'pi');
 		const sessionDir = join(piDir, 'sessions');
@@ -167,7 +177,7 @@ export class PiProvider implements AgentProvider {
 			authStorage,
 			modelRegistry,
 			customTools: piTools,
-			tools: ['read', ...allTools.map((toolDef) => toolDef.name)]
+			tools: ['read', ...providerTools.map((toolDef) => toolDef.name)]
 		};
 
 		if (options.model) {
@@ -189,17 +199,18 @@ export class PiProvider implements AgentProvider {
 
 		const { session } = await createAgentSession(sessionOpts);
 		if (resumeFailed) {
-			yield {
-				type: 'sdk_status',
-				status: 'cleared_stale_session',
-				compactResult: 'Pi session was missing locally; starting a fresh conversation.'
-			};
+			yield staleSessionEvent('Pi session');
 		}
 		yield { type: 'session', sessionId: sessionManager.getSessionId() };
 
 		const events: ProviderEvent[] = [];
 		let resolveWait: (() => void) | null = null;
 		let done = false;
+		// A model-call failure (e.g. invalid GEMINI_API_KEY) surfaces only as a
+		// message_end whose message has stopReason 'error'; session.prompt()
+		// still resolves — without capturing it here the render completes as a
+		// silent "made no edits" no-op.
+		let streamError: Error | null = null;
 		// Correlate tool start/end without wall-clock fallbacks (Date.now()
 		// differs between the two events, breaking tool_use_id matching).
 		let toolCounter = 0;
@@ -216,6 +227,21 @@ export class PiProvider implements AgentProvider {
 					}
 					break;
 				}
+				case 'message_end': {
+					// A model-call failure (invalid API key, quota, network) ends the
+					// assistant message with stopReason 'error' + errorMessage; the
+					// prompt promise still RESOLVES, so this is the only signal.
+					const msg = event.message;
+					if (msg?.role === 'assistant' && msg?.stopReason === 'error') {
+						const detail = msg.errorMessage;
+						streamError = new Error(
+							typeof detail === 'string' && detail
+								? `Pi model error: ${detail.slice(0, 500)}`
+								: 'Pi model call ended with an error.'
+						);
+					}
+					break;
+				}
 				case 'tool_execution_start': {
 					const callId = event.toolCallId || `pi_tool_${++toolCounter}`;
 					lastCallIdByTool.set(event.toolName, callId);
@@ -227,20 +253,8 @@ export class PiProvider implements AgentProvider {
 						input: event.args ?? {}
 					});
 
-					if (event.toolName === 'propose_rule') {
-						events.push({
-							type: 'rule_proposal',
-							text: typeof event.args?.text === 'string' ? event.args.text : '',
-							reason: typeof event.args?.reason === 'string' ? event.args.reason : undefined
-						});
-					} else if (event.toolName === 'propose_hook') {
-						events.push({
-							type: 'hook_proposal',
-							event: typeof event.args?.event === 'string' ? event.args.event : 'PostToolUse',
-							matcher: typeof event.args?.matcher === 'string' ? event.args.matcher : undefined,
-							command: typeof event.args?.command === 'string' ? event.args.command : '',
-							reason: typeof event.args?.reason === 'string' ? event.args.reason : undefined
-						});
+					for (const proposal of emitProposalEvents(event.toolName, event.args ?? {})) {
+						events.push(proposal);
 					}
 					break;
 				}
@@ -264,9 +278,7 @@ export class PiProvider implements AgentProvider {
 			if (resolveWait) resolveWait();
 		});
 
-		const fullPrompt = options.systemPrompt
-			? `${options.systemPrompt}\n\n${options.prompt}`
-			: options.prompt;
+		const fullPrompt = combinePrompt(options);
 
 		let promptError: Error | null = null;
 		const onAbort = () => {
@@ -303,27 +315,34 @@ export class PiProvider implements AgentProvider {
 		unsubscribe();
 		await promptPromise;
 		session.dispose();
-		// Surface a prompt failure (e.g. missing API key) so the render endpoint
-		// emits an `error` event instead of completing as a silent no-op.
+		// Surface a prompt failure (e.g. missing API key) or an in-stream model
+		// error (e.g. invalid API key) so the render endpoint emits an `error`
+		// event instead of completing as a silent no-op.
 		if (promptError) throw promptError;
+		if (streamError) throw streamError;
 	}
 
 	async listModels(): Promise<ProviderModelOption[]> {
+		const models = [...FALLBACK_MODELS];
+		const seen = new Set(models.map((model) => model.id));
 		try {
 			await loadSdk();
 			const authStorage = AuthStorage.create();
 			const registry = ModelRegistry.create(authStorage);
 			const available = await registry.getAvailable();
-			if (available?.length > 0) {
-				return available.slice(0, 10).map((m: any) => ({
-					id: m.id || m.name,
+			for (const m of available ?? []) {
+				const id = m.id || m.name;
+				if (!id || seen.has(id)) continue;
+				seen.add(id);
+				models.push({
+					id,
 					label: m.label || m.name || m.id,
 					provider: 'pi' as const
-				}));
+				});
 			}
 		} catch {
-			// Fall through to defaults
+			// Keep the curated defaults.
 		}
-		return FALLBACK_MODELS;
+		return models;
 	}
 }

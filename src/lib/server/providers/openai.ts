@@ -13,28 +13,26 @@ import type {
 	ToolDefinition
 } from './types';
 import { buildToolDefinitions } from './tool-handlers';
+import { emitProposalEvents, makeLazySdkLoader, wrapToolsForProvider } from './shared';
 import { randomUUID } from 'node:crypto';
 import { DocWriterOpenAISession } from './openai-session';
 
-let sdkLoaded = false;
 let Agent: any = null;
 let run: any = null;
 let tool: any = null;
 
+const importAgentsSdk = makeLazySdkLoader(
+	() => import('@openai/agents'),
+	'@openai/agents is not installed. Run: npm install @openai/agents'
+);
+
 async function loadSdk() {
-	if (sdkLoaded) return;
-	try {
-		const sdk = await import('@openai/agents');
-		Agent = sdk.Agent;
-		run = sdk.run;
-		tool = sdk.tool;
-		sdkLoaded = true;
-	} catch (err) {
-		throw new Error(
-			'@openai/agents is not installed. Run: npm install @openai/agents\n' +
-			(err as Error).message
-		);
-	}
+	// importAgentsSdk (makeLazySdkLoader) already memoizes the dynamic import,
+	// so re-destructuring here on a warm cache is idempotent and cheap.
+	const sdk = await importAgentsSdk();
+	Agent = sdk.Agent;
+	run = sdk.run;
+	tool = sdk.tool;
 }
 
 // Current OpenAI frontier + reasoning models (newest first), per
@@ -86,12 +84,16 @@ export class OpenAIAgentsProvider implements AgentProvider {
 		await loadSdk();
 
 		const allTools = tools.length > 0 ? tools : buildToolDefinitions();
+		// Filter to options.allowedTools and gate each execute through
+		// options.canUseTool before registering with the Agents SDK (plan-mode
+		// mutation-tool blocking + scratch-only Edit/Write guard).
+		const providerTools = wrapToolsForProvider(allTools, options);
 
 		// Tool results aren't echoed in the raw model stream, so the execute
 		// wrapper pushes them here; the event loop drains the queue and yields
 		// them with the SDK call_id so the client can correlate to the call.
 		const resultQueue: ProviderEvent[] = [];
-		const agentTools = buildAgentTools(allTools, (callId, _name, text, isError) => {
+		const agentTools = buildAgentTools(providerTools, (callId, _name, text, isError) => {
 			resultQueue.push({ type: 'tool_result', tool_use_id: callId, is_error: isError, text });
 		});
 
@@ -183,21 +185,7 @@ export class OpenAIAgentsProvider implements AgentProvider {
 					completed.add(callId);
 					yield { type: 'tool_call', tool_name: toolName, tool_use_id: callId, input };
 
-					if (toolName === 'propose_rule') {
-						yield {
-							type: 'rule_proposal',
-							text: typeof input.text === 'string' ? input.text : '',
-							reason: typeof input.reason === 'string' ? input.reason : undefined
-						};
-					} else if (toolName === 'propose_hook') {
-						yield {
-							type: 'hook_proposal',
-							event: typeof input.event === 'string' ? input.event : 'PostToolUse',
-							matcher: typeof input.matcher === 'string' ? input.matcher : undefined,
-							command: typeof input.command === 'string' ? input.command : '',
-							reason: typeof input.reason === 'string' ? input.reason : undefined
-						};
-					}
+					for (const proposal of emitProposalEvents(toolName, input)) yield proposal;
 				}
 			}
 		}

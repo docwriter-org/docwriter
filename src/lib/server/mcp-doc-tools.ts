@@ -755,9 +755,125 @@ export async function runCommentWrite(
 	return result;
 }
 
+/** Create a new agent-authored comment thread on a tab's comments map.
+ * Mirrors the thread shape used by `reply_to_comment`; writes under
+ * AGENT_ORIGIN so the update is classified as an agent change (never on the
+ * user's undo stack). Runs inside the caller's `runCommentWrite` transaction. */
+function createAgentCommentThread(
+	doc: Y.Doc,
+	anchorText: string,
+	occurrenceIndex: number,
+	message: string,
+	proposedEdit?: { old_string: string; new_string: string }
+): string {
+	const threadId = 'thread_' + cryptoRandomId();
+	const now = Date.now();
+	const thread: CommentThread = {
+		id: threadId,
+		anchor: { quote: anchorText, occurrenceIndex },
+		messages: [
+			{
+				id: 'msg_' + cryptoRandomId(),
+				author: 'agent',
+				text: message,
+				timestamp: now,
+				...(proposedEdit
+					? {
+							proposedEdit: {
+								oldString: proposedEdit.old_string,
+								newString: proposedEdit.new_string
+							}
+						}
+					: {})
+			}
+		],
+		resolved: false,
+		createdAt: now
+	};
+	doc.transact(() => getCommentsMap(doc).set(threadId, thread), AGENT_ORIGIN);
+	return threadId;
+}
+
+const commentDocTool = tool(
+	'comment_doc',
+	'Create a new agent comment thread anchored to existing text in a workspace document. Use this at Medium autonomy when a comment would help without changing the document, or at High autonomy when a comment is more useful than an edit. The comment is visible to the user in the document gutter. It does not change document text. You CANNOT open new threads at Low autonomy — only reply on threads the user opened.',
+	{
+		file_path: z
+			.string()
+			.describe(
+				'Workspace-relative path (e.g. "drafts/chapter-1.md") or absolute path inside the workspace. Must be an existing file.'
+			),
+		anchor_text: z
+			.string()
+			.describe(
+				'Exact text in the current document to anchor the comment to. Prefer a short unique passage, usually one sentence or clause.'
+			),
+		message: z.string().describe('The comment text. Say the useful point directly. Keep it short.'),
+		occurrence_index: z
+			.number()
+			.int()
+			.min(0)
+			.optional()
+			.describe(
+				'Zero-based occurrence to anchor when anchor_text appears more than once. Omit only when anchor_text is unique.'
+			),
+		proposed_edit: z
+			.object({
+				old_string: z.string(),
+				new_string: z.string()
+			})
+			.optional()
+			.describe(
+				'Optional concrete edit the user can approve from the comment. Do not use this at Medium autonomy unless the user directly asked for an edit.'
+			)
+	},
+	async ({ file_path, anchor_text, message, occurrence_index, proposed_edit }) => {
+		if (isScratchPath(file_path)) {
+			return toolError('comment_doc cannot be used on scratch paths — only on workspace files.');
+		}
+		const opened = ensureWorkspaceTabOpen(file_path, { createIfMissing: false });
+		if (!opened.ok) return opened.error;
+
+		const anchorText = anchor_text.trim();
+		const trimmedMessage = message.trim();
+		if (!anchorText) return toolError('comment_doc requires non-empty anchor_text.');
+		if (!trimmedMessage) return toolError('comment_doc requires a non-empty message.');
+
+		let threadId = '';
+		const outcome = await runCommentWrite(opened.tabId, (doc) => {
+			const liveText = serializeYDoc(doc);
+			const hits = countOccurrences(liveText, anchorText);
+			if (hits === 0) {
+				return {
+					ok: false,
+					error: `anchor_text was not found in ${file_path}. Call read_doc and retry with exact current text.`
+				};
+			}
+			if (hits > 1 && occurrence_index === undefined) {
+				return {
+					ok: false,
+					error: `anchor_text matches ${hits} locations in ${file_path}. Pass occurrence_index to choose one.`
+				};
+			}
+			const occurrence = occurrence_index ?? 0;
+			if (!Number.isInteger(occurrence) || occurrence < 0 || occurrence >= hits) {
+				return {
+					ok: false,
+					error: `occurrence_index ${occurrence} is out of range; anchor_text appears ${hits} time${hits === 1 ? '' : 's'}.`
+				};
+			}
+			threadId = createAgentCommentThread(doc, anchorText, occurrence, trimmedMessage, proposed_edit);
+			return { ok: true };
+		});
+
+		if (!outcome.ok) return toolError(outcome.error);
+		return toolText(`Commented on ${file_path} in thread ${threadId}.`);
+	}
+);
+
 const replyToCommentTool = tool(
 	'reply_to_comment',
-	'Reply on an existing comment thread the user has opened. Use this when the user\'s feedback is open-ended, exploratory, or unsure ("what do you think", "idk", "is this right?", "maybe X?"), or when they ask a question that doesn\'t demand an immediate edit. Say what you think, optionally sketch an edit in `proposed_edit` (the user can approve it to apply later). You CANNOT open new threads — only the user can start a thread. If there is no relevant thread for what you want to say, prefer `edit_doc`, `AskUserQuestion`, or staying silent over forcing a thread.',
+	'Reply on an existing comment thread the user has opened. Use this when the user\'s feedback is open-ended, exploratory, or unsure ("what do you think", "idk", "is this right?", "maybe X?"), or when they ask a question that doesn\'t demand an immediate edit. Say what you think, optionally sketch an edit in `proposed_edit` (the user can approve it to apply later). To start a NEW agent-authored thread (Medium/High autonomy), use `comment_doc` instead. If there is no relevant thread and autonomy does not permit a new comment, prefer `edit_doc`, `AskUserQuestion`, or staying silent.',
 	{
 		file_path: z
 			.string()
@@ -893,12 +1009,13 @@ const listThreadsTool = tool(
 export const docToolsMcp = createSdkMcpServer({
 	name: 'docwriter-doc',
 	version: '0.0.1',
-	tools: [editDocTool, readDocTool, writeDocTool, replyToCommentTool, listThreadsTool]
+	tools: [editDocTool, readDocTool, writeDocTool, commentDocTool, replyToCommentTool, listThreadsTool]
 });
 
 /** SDK-namespaced tool names (what appears in stream events). */
 export const EDIT_DOC_TOOL_NAME = 'mcp__docwriter-doc__edit_doc';
 export const READ_DOC_TOOL_NAME = 'mcp__docwriter-doc__read_doc';
 export const WRITE_DOC_TOOL_NAME = 'mcp__docwriter-doc__write_doc';
+export const COMMENT_DOC_TOOL_NAME = 'mcp__docwriter-doc__comment_doc';
 export const REPLY_TO_COMMENT_TOOL_NAME = 'mcp__docwriter-doc__reply_to_comment';
 export const LIST_THREADS_TOOL_NAME = 'mcp__docwriter-doc__list_threads';

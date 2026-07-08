@@ -46,34 +46,38 @@ project-root/
                          server Y.Doc; git-friendly)
   drafts/chapter-1.md  ← any workspace file can be an open tab
   .docwriter/
-    docwriter.db       ← SQLite: yjs_updates, tabs, rules, hooks,
-                         recent_actions, action_usage_counts, kv
-                         (sessionId, last_seen:<tabId>, etc.)
-    state.json         ← JSON mirror of rules / agent settings / tabs
-                         (dual-written for portability)
+    docwriter.db       ← SQLite: yjs_updates, tabs, rules,
+                         recent_actions, action_usage_counts,
+                         provider_session_entries, conversation_events,
+                         kv (sessionId, agentSettings, last_seen:<tabId>…)
+    hooks.json         ← user-defined shell hooks (read by hooks-config.ts)
     agent/scratch/     ← agent scratch workspace (lazy-created on first
                          scratch write; cleared on "New session")
 ```
+
+SQLite is the single source of truth for runtime state — there is no
+`state.json` JSON mirror (it was removed; only stale comments referenced it).
 
 No per-tab shadows (`.docwriter/agent/<tabId>`), no IndexedDB, no
 in-browser persistence. A fresh browser paints only after the WebSocket's
 first `synced` event — on localhost this is sub-20ms.
 
-## Three-pane layout
+## Layout
 
 - **Left (`OutlinePane`, 260px):** auto-generated TOC from headings only
-  (`showOutline`), with the `FileTree` below it.
-- **Center:** Tiptap editor + `AgentDock` in the top-right (Wake up button,
-  sleeping-cat mascot, gear-icon settings popover).
-- **Right (340px, toggleable):** `HistoryPane` (agent tool-call log) on top,
-  and a second `OutlinePane` instance (`showReview`) below it holding the
-  pending-edit cards with Accept / Reject / Retry, unread comments, and
-  proposed rules / hooks.
-
-`OutlinePane` is one component reused twice: `showOutline={true}
-showReview={false}` for the left TOC, and `showOutline={false}
-showReview={true}` for the right pending-review sidebar. The pending-edit
-cards live in the **right** column, not the left.
+  (`showOutline`), with the `FileTree` below it. This is the sole
+  `OutlinePane` instance — it renders only the TOC. (There used to be a
+  second `showReview` instance in a right-hand sidebar; that mode has been
+  removed.)
+- **Center:** Tiptap editor + a floating `AgentDock` in the top-right (Wake
+  up button, sleeping-cat mascot, gear-icon settings popover). The agent
+  tool-call log (`HistoryPane`) lives inside the expandable
+  `AgentDockShell`, not a fixed pane.
+- **Pending agent edits + comment threads** render inline in the editor's
+  comment gutter (`CommentGutter`, mounted in `TiptapEditor`) with Accept /
+  Reject / Retry, plus per-tab badges on the `TabBar` — there is no separate
+  review column.
+- **Proposed rules / hooks** surface as dismissable toasts (`ToastStack`).
 
 ## Agent SDK integration
 
@@ -114,14 +118,15 @@ other remote update. No client-side 3-way merge, no clone-and-diff, no
 rolling baselines. User keystrokes typed during a render converge with
 agent ops via Yjs's item-level CRDT merge.
 
-On the server, the per-tab Y.Doc + `Y.UndoManager` (tracking
-`AGENT_ORIGIN` only) lives on the Hocuspocus Document (see
-`ws-server.ts`). Reject removes the round from the review `Y.Array`;
-the doc fragment isn't touched. Accept walks each accepted round and
-applies its `edit` op via `applyEditToFragment` (in `ydoc-codec.ts`),
-which deletes + reinserts only the paragraphs the edit covers. `write`
-ops fall back to wholesale `replaceYDocText`. Both paths run in a single
-`ydoc.transact(..., USER_ORIGIN)` along with the `reviewArr.delete`.
+On the server, Accept/Reject run against the live Hocuspocus Document
+(`acceptTabRounds` / `rejectTabRounds` in `ws-server.ts`; there is no
+server-side UndoManager). Reject removes the round from the review
+`Y.Array`; the doc fragment isn't touched. Accept walks each accepted
+round and applies its `edit` op via `applyEditToFragment` (in
+`ydoc-codec.ts`), which deletes + reinserts only the paragraphs the edit
+covers. `write` ops fall back to wholesale `replaceYDocText`. Both paths
+run in a single `ydoc.transact(..., USER_ORIGIN)` along with the
+`reviewArr.delete`.
 
 Because Accept's blast radius is bounded to the affected paragraphs,
 the client doesn't need to disconnect + remount the editor to avoid
@@ -130,16 +135,18 @@ update over the existing WebSocket and ProseMirror re-renders only the
 touched range. `acceptAgentEdit` / `rejectAgentEdit` in `+page.svelte`
 just POST to `/api/document` and let the sync handle the UI update.
 
-`src/lib/yjs-agent.ts` on the client keeps a minimal mirror: a per-tab
-UndoManager (same tracked-origin set) so Reject can be local-first
-without round-tripping through the server, plus the `AGENT_APPLY_KEY`
-ProseMirror plugin key used by the editor update handler to distinguish
-agent-origin transactions from user typing.
+On the client, undo lives in `src/lib/editor-extensions.ts`: a custom
+`Y.UndoManager` scoped to the text fragment + review array + comments map,
+with `trackedOrigins = {ySyncPluginKey, USER_ORIGIN}` — local typing and
+Accept/Reject are undoable; agent-origin changes are not on the local undo
+stack. The editor update handler distinguishes user typing from remote/
+agent transactions via `transaction.getMeta(ySyncPluginKey)` (undefined ⇒
+local typing ⇒ restart the idle timer).
 
 ## Agent settings
 
-`AgentSettings` in `src/lib/types.ts`, persisted to `.docwriter/state.json`
-(JSON mirror) and dual-written into the SQLite `kv` / rules tables:
+`AgentSettings` in `src/lib/types.ts`, persisted in the SQLite `kv` table
+(`agentSettings` key; see `runtime-state.ts`):
 - **autonomy** (`agency: 'conservative' | 'balanced' | 'aggressive'`) —
   prompt rewiring.
 - **trackChanges** — review mode on/off. (Track-changes off bypasses the
@@ -152,16 +159,18 @@ the mascot card).
 ## Conventions
 
 - **Svelte 5 runes** (`$state`, `$derived`, `$effect`) in components.
-  Stores are subscribed manually with `.subscribe()`, not `$store` syntax.
-- **Font:** Lora (serif) for editor prose, Inter for UI.
-- **Model selection:** Opus / Sonnet / Haiku, passed as `model` in request
-  bodies.
-- **Timing:** 3s idle countdown to auto-submit, 1s markdown-flush debounce
+  `$store` auto-subscription is fine in runes mode (TiptapEditor uses it);
+  if you use manual `.subscribe()`, capture and call the unsubscriber on
+  destroy — leaked subscriptions on remounting components were a real bug.
+- **Font:** Lora (serif) for editor prose, Inter for UI, Geist Mono for
+  plain/code rendering.
+- **Model selection:** multi-provider (claude / openai / codex / cursor /
+  pi); request bodies carry `provider` + `model`.
+- **Timing:** 3s idle countdown to auto-submit, 500ms markdown-flush tick
   on the server, Cmd/Ctrl+Enter skips the countdown.
-- **Origin constants must match:** `AGENT_ORIGIN = 'agent'` in
-  `src/lib/yjs-agent.ts` (client) and `src/lib/server/ydoc-registry.ts`
-  (server). Any drift and the UndoManager stops recognizing agent
-  transactions.
+- **Yjs origins** (`AGENT_ORIGIN`, `USER_ORIGIN`, `SYSTEM_ORIGIN`) are
+  single shared constants in `src/lib/shared/ydoc-codec.ts`, imported by
+  both client and server — never redefine them locally.
 
 ## Gotchas
 
@@ -174,32 +183,25 @@ the mascot card).
   updates is named `payload`. (Historical: it was originally named
   `update`, a SQLite reserved word; migration v2 renamed it. Don't
   revive the old name.)
-- **`AGENT_ORIGIN` and `AGENT_APPLY_KEY` must agree across boundaries.**
-  Server sets `AGENT_ORIGIN` on `DirectConnection.transact`; the update
-  streams to the browser as a Yjs origin string; the client's
-  UndoManager matches by string equality. Separately, the browser's
-  editor-update handler reads the ProseMirror `AGENT_APPLY_KEY` meta to
-  decide whether to restart the idle timer. Don't rename one without the
-  other.
-- **Hocuspocus's internal Document is authoritative.** `onLoadDocument`
-  copies state out of the registry Y.Doc into Hocuspocus's own
-  `Document`. Once a client has connected, the registry Y.Doc goes stale.
-  Server code that wants to mutate a tab MUST go through
-  `server.hocuspocus.openDirectConnection(tabId)` — not
-  `getTabYDoc(tabId).ydoc`. The registry's sole remaining job is
-  cold-start hydration before any client connects.
-- **UndoManager construction order.** In `ydoc-registry.ts`, the
-  `Y.UndoManager` is constructed BEFORE `replayUpdatesInto` runs so that
-  every replayed `ydoc.transact(..., origin)` fires through the
-  UndoManager's observer with its original origin. Swap the order and
-  the stack is empty on every cold start — Reject silently does nothing.
-- **Tiptap-markdown escapes brackets.** The markdown serializer escapes
-  `[` → `\[` when serializing the Y.Doc. `read_doc` returns those
-  escaped forms, and `edit_doc`'s `old_string` must also be escaped if
-  the text originally contained a bracket. If an agent edit complains
-  that `old_string` isn't found in a place it visibly is, check for
-  un-escaped brackets.
-- **`undoRedo: false` in StarterKit.** Collaboration ships its own Yjs
-  undo and double-registering corrupts plugin state.
-- **`Link` bundled via StarterKit.** Don't import
-  `@tiptap/extension-link` separately.
+- **`ySyncPluginKey` must come from `@tiptap/y-tiptap`.** The
+  Collaboration extension installs its sync plugin from `@tiptap/y-tiptap`,
+  not `y-prosemirror`; both packages define a `PluginKey('y-sync')`, and
+  prosemirror-state dedupes key names, so the two instances never match.
+  Import the key (and the rel-position helpers) from
+  `src/lib/editor-extensions.ts`, which re-exports the correct one —
+  importing from `y-prosemirror` silently breaks agent-vs-user transaction
+  classification and comment anchoring (this was a real shipped bug).
+- **Hocuspocus's internal Document is authoritative.** Once the WS server
+  is up, server code that wants to READ a tab should prefer the live
+  in-memory Document (`hocuspocus.documents.get(...)`, falling back to a
+  throwaway Y.Doc hydrated via `replayUpdatesInto`), and code that wants
+  to MUTATE a tab MUST go through
+  `hocuspocus.openDirectConnection(...)` (see `getHocuspocus` in
+  `mcp-doc-tools.ts`) — never mutate a replayed throwaway doc.
+- **Serialization is plain text, not markdown.** `serializeFragment` /
+  `serializeYDoc` in `ydoc-codec.ts` emit the document text verbatim
+  (plus typography normalization) — nothing escapes markdown specials.
+  The editor schema is intentionally minimal (Document / Paragraph /
+  Text / HardBreak); don't add StarterKit, Link, or Tiptap's history
+  extension — undo is the custom `Y.UndoManager` wired through
+  `Collaboration.configure({ yUndoOptions })` in `editor-extensions.ts`.

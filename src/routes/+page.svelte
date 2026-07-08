@@ -2,6 +2,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import type * as Y from 'yjs';
 	import MenuBar, { type MenuSpec } from '$lib/components/MenuBar.svelte';
+	import ModelPicker from '$lib/components/ModelPicker.svelte';
 	import OutlinePane from '$lib/components/OutlinePane.svelte';
 	import FileTree from '$lib/components/FileTree.svelte';
 	import type { FileEntry } from '$lib/components/FileTree.svelte';
@@ -120,7 +121,6 @@
 		resetSessionCost,
 		actionUsageCounts,
 		commentThreads,
-		allTabPendingRounds,
 		allTabCommentThreads,
 		openCommentThreadId,
 		queuedSubmissionCount
@@ -192,8 +192,7 @@
 		return map;
 	});
 
-	// Surface proposed rules/hooks as sticky toasts (the showReview sidebar
-	// used to render them as cards). The toast queue is reconciled against
+	// Surface proposed rules/hooks as sticky toasts. The toast queue is reconciled against
 	// the proposal stores: push one per proposal, dismiss when the proposal
 	// is gone (accepted/rejected via the toast clears it from the store).
 	let proposedRulesList = $state<ProposedRule[]>([]);
@@ -401,14 +400,9 @@
 	 * comment change so the OutlinePane cross-tab view stays current. */
 	function syncAllTabsState() {
 		const tabIds = getCurrentTabList();
-		const roundsAgg: Array<{ tabId: string; rounds: MaterializedPendingReviewRound[] }> = [];
 		const commentsAgg: Array<{ tabId: string; threads: CommentThread[] }> = [];
 		for (const id of tabIds) {
 			if (isPdfPath(id)) continue;
-			const rawRounds = getReviewArrayForTab(id).toArray();
-			if (rawRounds.length > 0) {
-				roundsAgg.push({ tabId: id, rounds: materializedRoundsForTab(id, rawRounds) });
-			}
 			// Count only threads still anchored to text that exists. A thread
 			// whose passage was deleted is "detached": it doesn't render in the
 			// gutter, so it must not inflate the tab count either. It isn't
@@ -427,7 +421,6 @@
 				commentsAgg.push({ tabId: id, threads });
 			}
 		}
-		allTabPendingRounds.set(roundsAgg);
 		allTabCommentThreads.set(commentsAgg);
 	}
 
@@ -2027,37 +2020,6 @@
 		{
 			label: 'Settings',
 			items: [
-				{
-					kind: 'submenu',
-					label: 'Provider',
-					items: AVAILABLE_PROVIDERS.map((p) => ({
-						kind: 'action' as const,
-						label: p.label,
-						checked: currentProvider === p.id,
-						onClick: () => setSelectedProvider(p.id)
-					}))
-				},
-				{
-					kind: 'submenu',
-					label: 'Model',
-					items: [
-						...(providerModels.length > 0 ? providerModels : modelOptions).map((m) => ({
-							kind: 'action' as const,
-							label: m.label,
-							checked: model === m.id,
-							onClick: () => setSelectedModel(m.id)
-						})),
-						{ kind: 'divider' as const },
-						{
-							kind: 'action' as const,
-							label: 'Custom model…',
-							checked: false,
-							onClick: () => {
-								customModelOpen = true;
-							}
-						}
-					]
-				},
 				{ kind: 'panel', label: 'API keys', panelKey: 'apiKeys' },
 				{ kind: 'panel', label: 'Agent behavior', panelKey: 'agentSettings' },
 				{
@@ -2846,6 +2808,15 @@
 					apiKeys: apiKeysPanelSnippet
 				}}
 			/>
+			<ModelPicker
+				providers={AVAILABLE_PROVIDERS}
+				{currentProvider}
+				onSelectProvider={(id) => setSelectedProvider(id)}
+				models={providerModels}
+				currentModel={model}
+				onSelectModel={(id) => setSelectedModel(id)}
+				onCustomModel={() => (customModelOpen = true)}
+			/>
 		</div>
 	</header>
 
@@ -2885,7 +2856,7 @@
 		<aside class="left-pane" style:width="{leftWidth}px">
 			<div class="left-pane-inner" bind:this={leftPaneInnerEl}>
 				<div class="outline-wrap">
-					<OutlinePane showOutline={true} showReview={false} />
+					<OutlinePane showOutline={true} />
 				</div>
 				{#if filesVisible}
 					<HorizontalPanelResizer onResize={resizeFileTree} />
