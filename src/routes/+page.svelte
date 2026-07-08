@@ -2,6 +2,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import type * as Y from 'yjs';
 	import MenuBar, { type MenuSpec } from '$lib/components/MenuBar.svelte';
+	import ModelPicker from '$lib/components/ModelPicker.svelte';
 	import OutlinePane from '$lib/components/OutlinePane.svelte';
 	import FileTree from '$lib/components/FileTree.svelte';
 	import type { FileEntry } from '$lib/components/FileTree.svelte';
@@ -2020,37 +2021,6 @@
 		{
 			label: 'Settings',
 			items: [
-				{
-					kind: 'submenu',
-					label: 'Provider',
-					items: AVAILABLE_PROVIDERS.map((p) => ({
-						kind: 'action' as const,
-						label: p.label,
-						checked: currentProvider === p.id,
-						onClick: () => setSelectedProvider(p.id)
-					}))
-				},
-				{
-					kind: 'submenu',
-					label: 'Model',
-					items: [
-						...(providerModels.length > 0 ? providerModels : modelOptions).map((m) => ({
-							kind: 'action' as const,
-							label: m.label,
-							checked: model === m.id,
-							onClick: () => setSelectedModel(m.id)
-						})),
-						{ kind: 'divider' as const },
-						{
-							kind: 'action' as const,
-							label: 'Custom model…',
-							checked: false,
-							onClick: () => {
-								customModelOpen = true;
-							}
-						}
-					]
-				},
 				{ kind: 'panel', label: 'API keys', panelKey: 'apiKeys' },
 				{ kind: 'panel', label: 'Agent behavior', panelKey: 'agentSettings' },
 				{
@@ -2838,6 +2808,15 @@
 					skills: skillsPanelSnippet,
 					apiKeys: apiKeysPanelSnippet
 				}}
+			/>
+			<ModelPicker
+				providers={AVAILABLE_PROVIDERS}
+				{currentProvider}
+				onSelectProvider={(id) => setSelectedProvider(id)}
+				models={providerModels.length > 0 ? providerModels : modelOptions}
+				currentModel={model}
+				onSelectModel={(id) => setSelectedModel(id)}
+				onCustomModel={() => (customModelOpen = true)}
 			/>
 		</div>
 	</header>
