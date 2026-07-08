@@ -209,6 +209,11 @@
 		return null;
 	}
 
+	function shouldRenderMarkdownForPath(path: string): boolean {
+		const ext = extensionForPath(path);
+		return !['.tex', '.ltx', '.sty', '.cls', '.bib'].includes(ext);
+	}
+
 	function escapeRegExp(value: string): string {
 		return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 	}
@@ -1174,7 +1179,7 @@
 				FindOverlay,
 				MediaOverlay,
 				D3Overlay,
-				MarkdownRender,
+				...(shouldRenderMarkdownForPath(tabId) ? [MarkdownRender] : []),
 				SourceCommentOverlay.configure({
 					style: sourceCommentStyleForPath(tabId)
 				})
