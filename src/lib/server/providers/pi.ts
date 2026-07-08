@@ -324,21 +324,26 @@ export class PiProvider implements AgentProvider {
 	}
 
 	async listModels(): Promise<ProviderModelOption[]> {
+		const models = [...FALLBACK_MODELS];
+		const seen = new Set(models.map((model) => model.id));
 		try {
 			await loadSdk();
 			const authStorage = AuthStorage.create();
 			const registry = ModelRegistry.create(authStorage);
 			const available = await registry.getAvailable();
-			if (available?.length > 0) {
-				return available.slice(0, 10).map((m: any) => ({
-					id: m.id || m.name,
+			for (const m of available ?? []) {
+				const id = m.id || m.name;
+				if (!id || seen.has(id)) continue;
+				seen.add(id);
+				models.push({
+					id,
 					label: m.label || m.name || m.id,
 					provider: 'pi' as const
-				}));
+				});
 			}
 		} catch {
-			// Fall through to defaults
+			// Keep the curated defaults.
 		}
-		return FALLBACK_MODELS;
+		return models;
 	}
 }

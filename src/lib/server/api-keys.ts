@@ -103,6 +103,32 @@ function parseEnvFile(text: string): Record<string, string> {
 }
 
 let loaded = false;
+let repoEnvLoaded = false;
+
+/**
+ * Copy the repo's dotenv files into process.env. Vite exposes .env entries via
+ * import.meta.env, but server provider code reads process.env directly.
+ */
+export function loadRepoEnv(): void {
+	if (repoEnvLoaded) return;
+	repoEnvLoaded = true;
+	const mode = process.env.NODE_ENV || 'development';
+	const files = ['.env', '.env.local', `.env.${mode}`, `.env.${mode}.local`];
+	for (const file of files) {
+		const path = join(process.cwd(), file);
+		if (!existsSync(path)) continue;
+		try {
+			const parsed = parseEnvFile(readFileSync(path, 'utf8'));
+			for (const [key, val] of Object.entries(parsed)) {
+				if (process.env[key] === undefined || process.env[key] === '') {
+					process.env[key] = val;
+				}
+			}
+		} catch (err) {
+			console.warn('[docwriter] could not read', path, '-', (err as Error).message);
+		}
+	}
+}
 
 /**
  * Copy `~/.docwriter/keys.env` into process.env, without clobbering vars that
