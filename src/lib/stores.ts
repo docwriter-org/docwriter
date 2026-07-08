@@ -444,6 +444,11 @@ export function setSelectedProvider(id: string) {
 	if (!AVAILABLE_PROVIDERS.some((p) => p.id === id)) return;
 	selectedProvider.set(id);
 	if (typeof window !== 'undefined') window.localStorage.setItem(SELECTED_PROVIDER_KEY, id);
+	// Pick a valid model for the new provider synchronously from the models we
+	// already have (fallback list + stored prefs), so header UI never briefly
+	// shows the previous provider's model id while the live list loads.
+	// loadAvailableModels refines the selection once it resolves.
+	selectModelForProvider(id);
 	loadAvailableModels(id).then(() => {
 		if (get(selectedProvider) === id) selectModelForProvider(id);
 	});

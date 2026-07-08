@@ -2813,7 +2813,7 @@
 				providers={AVAILABLE_PROVIDERS}
 				{currentProvider}
 				onSelectProvider={(id) => setSelectedProvider(id)}
-				models={providerModels.length > 0 ? providerModels : modelOptions}
+				models={providerModels}
 				currentModel={model}
 				onSelectModel={(id) => setSelectedModel(id)}
 				onCustomModel={() => (customModelOpen = true)}

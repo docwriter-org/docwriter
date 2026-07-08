@@ -12,7 +12,7 @@ import {
 	absolutePositionToRelativePosition,
 	relativePositionToAbsolutePosition
 } from '$lib/editor-extensions';
-import { getCommentsMap, USER_ORIGIN } from '$lib/shared/ydoc-codec';
+import { getCommentsMap, SYSTEM_ORIGIN } from '$lib/shared/ydoc-codec';
 import { buildCharIndex as cachedBuildCharIndex } from './char-index';
 import type { CommentThread } from '$lib/types';
 
@@ -372,13 +372,18 @@ export const CommentOverlay = Extension.create({
 						}
 						if (updates.length === 0) return;
 						const commentsMap = getCommentsMap(binding.doc);
+						// SYSTEM_ORIGIN (not USER_ORIGIN) so this machine-generated
+						// rel-position backfill stays off the UndoManager's stack —
+						// trackedOrigins is {ySyncPluginKey, USER_ORIGIN}. Otherwise the
+						// first backfill after loading a legacy/agent thread would plant
+						// a phantom undo step the user could Cmd+Z into.
 						binding.doc.transact(() => {
 							for (const u of updates) {
 								// Re-check existence before writing — the thread may have
 								// been deleted between our read and this transact.
 								if (commentsMap.has(u.id)) commentsMap.set(u.id, u.thread);
 							}
-						}, USER_ORIGIN);
+						}, SYSTEM_ORIGIN);
 					};
 
 					return {
