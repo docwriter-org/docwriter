@@ -3,13 +3,7 @@
 declare global {
 	namespace App {
 		// interface Error {}
-		interface Locals {
-			auth: {
-				isAuthenticated: boolean;
-				userId: string | null;
-				sessionId: string | null;
-			};
-		}
+		// interface Locals {}
 		// interface PageData {}
 		// interface PageState {}
 		// interface Platform {}

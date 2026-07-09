@@ -94,9 +94,6 @@
 <div class="page" class:mounted>
 	<nav class="nav">
 		<span class="logo">DocWriter</span>
-		<div class="nav-right">
-			<a href="/sign-in" class="nav-link">User study login</a>
-		</div>
 	</nav>
 
 	<header class="hero">
@@ -310,9 +307,6 @@
 
 	.nav { display: flex; align-items: center; justify-content: space-between; max-width: 920px; margin: 0 auto; padding: 20px 24px; }
 	.logo { font-family: 'Lora', Georgia, serif; font-size: 18px; font-weight: 600; }
-	.nav-right { display: flex; gap: 20px; }
-	.nav-link { font-size: 13px; font-weight: 500; color: #555; text-decoration: none; }
-	.nav-link:hover { color: #1a1a1a; }
 
 	.hero { max-width: 640px; margin: 52px auto 0; padding: 0 24px; text-align: center; }
 	.hl { background: rgba(5,150,105,0.1); padding: 1px 4px; border-radius: 3px; }

@@ -5,14 +5,12 @@
  *   DOCWRITER_NEW_SESSION=1   — clear the persisted SDK session ID so the
  *                               next render starts a fresh conversation.
  */
-import type { Handle } from '@sveltejs/kit';
 import { randomUUID } from 'node:crypto';
 import { getRules, getSessionId, setSessionId } from '$lib/server/runtime-state';
 import { syncRulesToClaudeMemory } from '$lib/server/claude-memory';
 import { installBundledSkills } from '$lib/server/skills-install';
 import { createWsServer } from '$lib/server/ws-server';
 import { loadGlobalKeys, loadRepoEnv } from '$lib/server/api-keys';
-import { maybeHandleClerkAuth } from '$lib/server/clerk-auth';
 import { IS_HOSTED_LANDING } from '$lib/server/deploy-mode';
 
 // Load repo .env, then ~/.docwriter/keys.env into process.env so provider API
@@ -82,10 +80,3 @@ if (!IS_HOSTED_LANDING) {
 		}
 	}
 }
-
-// Pass-through handle unless Clerk auth intercepts the request.
-export const handle: Handle = async ({ event, resolve }) => {
-	const clerkResponse = await maybeHandleClerkAuth(event, resolve);
-	if (clerkResponse) return clerkResponse;
-	return resolve(event);
-};
