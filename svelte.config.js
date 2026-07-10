@@ -30,7 +30,7 @@ const config = {
 		...(isLandingDeploy
 			? {
 					prerender: {
-						entries: ['/welcome', '/sign-in'],
+						entries: ['/welcome'],
 						crawl: false
 					}
 				}

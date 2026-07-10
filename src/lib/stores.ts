@@ -31,12 +31,6 @@ export const reviewBaseline = writable<string | null>(null);
  * (also dropping all later rounds). */
 export const pendingReviewRounds = writable<MaterializedPendingReviewRound[]>([]);
 
-/** Pending agent-edit rounds for EVERY open tab. Each entry contains a
- * tabId and the materialized rounds for that tab, sorted oldest-first.
- * Tabs with zero pending rounds are omitted. Used by OutlinePane to show
- * cross-tab review cards without requiring the user to switch tabs. */
-export const allTabPendingRounds = writable<Array<{ tabId: string; rounds: MaterializedPendingReviewRound[] }>>([]);
-
 /** Agent comment threads for EVERY open tab. Each entry contains a tabId
  * and the unresolved threads that have at least one agent message.
  * Used by OutlinePane's cross-tab comment section. */
@@ -119,7 +113,6 @@ export const pendingPlanProposals = writable<PendingPlanProposal[]>([]);
 // ── UI state ──────────────────────────────────────────────────────────
 
 export const isRendering = writable(false);
-export const showHistory = writable(true);
 
 /** Seconds remaining until the editor auto-submits after user stops typing.
  * 0 means no countdown active. Updated by the editor's idle timer. */
@@ -141,7 +134,6 @@ export const pinnedActions: Action[] = [
 	{ id: 'a_incorrect', label: 'Incorrect', icon: 'circle-x', pinned: true, color: '#dc2626' }
 ];
 export const recentActions = writable<Action[]>([]);
-export const selectedAction = writable<Action | null>(null);
 export const actionUsageCounts = writable<Record<string, number>>({});
 
 export function trackActionUsage(actionLabel: string) {
@@ -326,6 +318,8 @@ const ALL_FALLBACK_MODELS: ModelOption[] = [
 	{ id: 'openai/gpt-4o', label: 'GPT-4o', provider: 'pi' },
 	{ id: 'openai/gpt-4o-mini', label: 'GPT-4o Mini', provider: 'pi' },
 	{ id: 'openai/o4-mini', label: 'o4-mini', provider: 'pi' },
+	{ id: 'google/gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro', provider: 'pi' },
+	{ id: 'google/gemini-3.5-flash', label: 'Gemini 3.5 Flash', provider: 'pi' },
 	{ id: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash', provider: 'pi' },
 	{ id: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro', provider: 'pi' },
 	{ id: 'deepseek/deepseek-r1', label: 'DeepSeek R1', provider: 'pi' },
@@ -470,6 +464,11 @@ export function setSelectedProvider(id: string) {
 	if (!AVAILABLE_PROVIDERS.some((p) => p.id === id)) return;
 	selectedProvider.set(id);
 	if (typeof window !== 'undefined') window.localStorage.setItem(SELECTED_PROVIDER_KEY, id);
+	// Pick a valid model for the new provider synchronously from the models we
+	// already have (fallback list + stored prefs), so header UI never briefly
+	// shows the previous provider's model id while the live list loads.
+	// loadAvailableModels refines the selection once it resolves.
+	selectModelForProvider(id);
 	loadAvailableModels(id).then(() => {
 		if (get(selectedProvider) === id) selectModelForProvider(id);
 	});
@@ -585,11 +584,3 @@ export const expandedReviewRoundId = writable<string | null>(null);
  * isn't focused — independent of `expandedReviewRoundId`. Toggled by the
  * switch on each edit card. */
 export const pinnedDiffRounds = writable<Set<string>>(new Set());
-export function togglePinnedDiffRound(id: string) {
-	pinnedDiffRounds.update((s) => {
-		const n = new Set(s);
-		if (n.has(id)) n.delete(id);
-		else n.add(id);
-		return n;
-	});
-}

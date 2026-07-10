@@ -12,6 +12,13 @@ import type {
 	ToolDefinition
 } from './types';
 import { buildToolDefinitions } from './tool-handlers';
+import {
+	combinePrompt,
+	emitProposalEvents,
+	makeLazySdkLoader,
+	staleSessionEvent,
+	wrapToolsForProvider
+} from './shared';
 import { getEffectiveRoot } from '$lib/server/document-files';
 import { DocWriterCursorLocalAgentStore } from './cursor-store';
 
@@ -39,18 +46,16 @@ function extractCursorResultText(result: unknown): string {
 let Agent: any = null;
 let Cursor: any = null;
 
+const importCursorSdk = makeLazySdkLoader(
+	() => import('@cursor/sdk'),
+	'@cursor/sdk is not installed. Run: npm install @cursor/sdk'
+);
+
 async function loadCursorSdk() {
 	if (Agent) return;
-	try {
-		const sdk = await import('@cursor/sdk');
-		Agent = sdk.Agent;
-		Cursor = sdk.Cursor ?? sdk;
-	} catch (err) {
-		throw new Error(
-			'@cursor/sdk is not installed. Run: npm install @cursor/sdk\n' +
-			(err as Error).message
-		);
-	}
+	const sdk = await importCursorSdk();
+	Agent = sdk.Agent;
+	Cursor = sdk.Cursor ?? sdk;
 }
 
 const FALLBACK_MODELS: ProviderModelOption[] = [
@@ -95,9 +100,12 @@ export class CursorProvider implements AgentProvider {
 		await loadCursorSdk();
 
 		const allTools = tools.length > 0 ? tools : buildToolDefinitions();
+		// Filter to options.allowedTools and gate each execute through
+		// options.canUseTool before registering as Cursor custom tools.
+		const providerTools = wrapToolsForProvider(allTools, options);
 
 		const toolCallResults: Array<{ name: string; input: Record<string, unknown>; result: any }> = [];
-		const customTools = buildCustomTools(allTools, (name, input, result) => {
+		const customTools = buildCustomTools(providerTools, (name, input, result) => {
 			toolCallResults.push({ name, input, result });
 		});
 
@@ -125,16 +133,10 @@ export class CursorProvider implements AgentProvider {
 		}
 		if (!agent) agent = await Agent.create(agentOptions);
 
-		const fullPrompt = options.systemPrompt
-			? `${options.systemPrompt}\n\n${options.prompt}`
-			: options.prompt;
+		const fullPrompt = combinePrompt(options);
 
 		if (resumeFailed) {
-			yield {
-				type: 'sdk_status',
-				status: 'cleared_stale_session',
-				compactResult: 'Cursor agent was missing locally; starting a fresh conversation.'
-			};
+			yield staleSessionEvent('Cursor agent');
 		}
 		yield { type: 'session', sessionId: agent.agentId };
 
@@ -187,21 +189,7 @@ export class CursorProvider implements AgentProvider {
 							text
 						};
 						// Emit rule/hook proposals if the tool was propose_rule or propose_hook
-						if (toolName === 'propose_rule') {
-							yield {
-								type: 'rule_proposal',
-								text: typeof toolInput.text === 'string' ? toolInput.text : '',
-								reason: typeof toolInput.reason === 'string' ? toolInput.reason : undefined
-							};
-						} else if (toolName === 'propose_hook') {
-							yield {
-								type: 'hook_proposal',
-								event: typeof toolInput.event === 'string' ? toolInput.event : 'PostToolUse',
-								matcher: typeof toolInput.matcher === 'string' ? toolInput.matcher : undefined,
-								command: typeof toolInput.command === 'string' ? toolInput.command : '',
-								reason: typeof toolInput.reason === 'string' ? toolInput.reason : undefined
-							};
-						}
+						for (const proposal of emitProposalEvents(toolName, toolInput)) yield proposal;
 					}
 					break;
 				}

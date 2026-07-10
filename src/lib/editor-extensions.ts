@@ -4,7 +4,11 @@ import Paragraph from '@tiptap/extension-paragraph';
 import Text from '@tiptap/extension-text';
 import HardBreak from '@tiptap/extension-hard-break';
 import Collaboration from '@tiptap/extension-collaboration';
-import { ySyncPluginKey } from '@tiptap/y-tiptap';
+import {
+	ySyncPluginKey,
+	absolutePositionToRelativePosition,
+	relativePositionToAbsolutePosition
+} from '@tiptap/y-tiptap';
 import type { Extensions } from '@tiptap/core';
 import * as Y from 'yjs';
 import {
@@ -13,6 +17,21 @@ import {
 	COMMENTS_MAP_NAME,
 	USER_ORIGIN
 } from '$lib/shared/ydoc-codec';
+
+// Re-export the y-sync plugin key + Yjs rel-position helpers so overlays read
+// them from ONE place. These MUST come from `@tiptap/y-tiptap` — the exact
+// package whose `ySyncPlugin` the `Collaboration` extension installs (see the
+// `Collaboration.configure` call below). The identically-named `ySyncPluginKey`
+// exported by `y-prosemirror` is a DIFFERENT PluginKey instance (its own
+// dedup-suffixed key string), so `ySyncPluginKey.getState(view.state)` against
+// the Collaboration plugin silently returns null — breaking rel-position
+// anchoring and remote-vs-user transaction classification. Keep every consumer
+// importing the key from here so it can never drift back to the wrong package.
+export {
+	ySyncPluginKey,
+	absolutePositionToRelativePosition,
+	relativePositionToAbsolutePosition
+};
 
 /** Plain-text extension set: minimal schema (doc, paragraph, text, hard-break).
  * Every file — including `.md` / `.markdown` / `.mdx` — is rendered as source

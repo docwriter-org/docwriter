@@ -17,6 +17,7 @@ import type {
 	ProviderQueryOptions,
 	CanUseToolFn
 } from './types';
+import { emitProposalEvents } from './shared';
 import {
 	docToolsMcp,
 	EDIT_DOC_TOOL_NAME,
@@ -28,9 +29,7 @@ import {
 } from '$lib/server/provider-session-store';
 import {
 	readHooks,
-	HOOK_EVENTS,
-	type Hook,
-	type HookEvent
+	type Hook
 } from '$lib/server/hooks-config';
 import { runHookCommand, type HookRunEmitter } from '$lib/server/hook-runner';
 import { addCustomSkill } from '$lib/server/skills-config';
@@ -350,22 +349,9 @@ export class ClaudeProvider implements AgentProvider {
 					if (currentToolName) {
 						let parsedInput: Record<string, unknown> = {};
 						try { parsedInput = JSON.parse(toolInputAccum); } catch { /* ignore */ }
-						if (currentToolName === PROPOSE_RULE_TOOL_NAME) {
-							yield {
-								type: 'rule_proposal',
-								text: typeof parsedInput.text === 'string' ? parsedInput.text : '',
-								reason: typeof parsedInput.reason === 'string' ? parsedInput.reason : undefined
-							};
-						} else if (currentToolName === PROPOSE_HOOK_TOOL_NAME) {
-							const ev = parsedInput.event;
-							const valid = HOOK_EVENTS.includes(ev as HookEvent) ? (ev as HookEvent) : 'PostToolUse';
-							yield {
-								type: 'hook_proposal',
-								event: valid,
-								matcher: typeof parsedInput.matcher === 'string' ? parsedInput.matcher : undefined,
-								command: typeof parsedInput.command === 'string' ? parsedInput.command : '',
-								reason: typeof parsedInput.reason === 'string' ? parsedInput.reason : undefined
-							};
+						const proposals = emitProposalEvents(currentToolName, parsedInput);
+						if (proposals.length > 0) {
+							for (const proposal of proposals) yield proposal;
 						} else {
 							yield { type: 'tool_call', tool_name: currentToolName, tool_use_id: currentToolId, input: parsedInput };
 						}

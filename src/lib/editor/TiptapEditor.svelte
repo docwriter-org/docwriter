@@ -2,8 +2,7 @@
 	import { onMount, onDestroy, tick } from 'svelte';
 	import { Editor } from '@tiptap/core';
 	import { TextSelection, type Transaction } from '@tiptap/pm/state';
-	import { ySyncPluginKey } from 'y-prosemirror';
-	import { DiffOverlay, setDiffState, unescapeMarkdown } from './diff-overlay';
+	import { DiffOverlay, setDiffState } from './diff-overlay';
 	import {
 		CommentOverlay,
 		setCommentOverlayState,
@@ -31,7 +30,12 @@
 	import PreviewButton from '$lib/components/PreviewButton.svelte';
 	import CommentGutter from '$lib/components/CommentGutter.svelte';
 	import { Crosshair } from 'lucide-svelte';
-	import { collaborativeExtensions } from '$lib/editor-extensions';
+	// `ySyncPluginKey` MUST come from the same package whose ySyncPlugin the
+	// Collaboration extension installs (@tiptap/y-tiptap), re-exported here via
+	// editor-extensions. Importing it from `y-prosemirror` yields a different
+	// PluginKey, so `transaction.getMeta(ySyncPluginKey)` never matches and
+	// remote/agent Yjs transactions get misclassified as user edits.
+	import { collaborativeExtensions, ySyncPluginKey } from '$lib/editor-extensions';
 	import { getYDocForTab, whenYDocReadyForTab, waitForTabSync } from '$lib/yjs-doc';
 	import {
 		reviewBaseline,
@@ -105,10 +109,11 @@
 	let plainMetricsRaf = 0;
 	let plainResizeObserver: ResizeObserver | null = null;
 
-	let fontScale = $state(1.0);
-	editorFontScale.subscribe((v) => (fontScale = v));
-	let softWrap = $state(false);
-	editorSoftWrap.subscribe((v) => (softWrap = v));
+	// `$store` auto-subscription (valid in runes mode): Svelte tears the
+	// subscription down with the component, so a tab-switch remount can't leak
+	// a live subscriber that keeps firing against a destroyed editor.
+	let fontScale = $derived($editorFontScale);
+	let softWrap = $derived($editorSoftWrap);
 	/** Per-paragraph row entries for the line gutter. Each row carries a
 	 * label and an absolute `top` offset (px) from the editor content's
 	 * top. Absolute positioning lets the gutter follow paragraphs through
@@ -120,7 +125,6 @@
 	 * collapses to 0 (children are absolutely positioned) and the
 	 * border-right disappears. */
 	let plainGutterMinHeight = $state(0);
-	let hasPendingProposal = false;
 	let pointerSelecting = false;
 	let shouldFocusFeedbackInput = false;
 	let detachFeedbackPointerHandlers: (() => void) | null = null;
@@ -149,37 +153,24 @@
 	 * popup closes so each feedback session starts fresh. */
 	let feedbackMode = $state<FeedbackMode>('edit');
 
-	// Comment thread state — mirrors the commentThreads store for local
-	// use in the overlay and the gutter component.
-	let threadsForTab: CommentThread[] = $state([]);
-	let openThreadId = $state<string | null>(null);
+	// Comment thread + review state, each mirrored from its store via `$store`
+	// auto-subscription so there's exactly ONE reactive value per concept and
+	// no manually-managed (leak-prone) subscriptions. These feed BOTH the diff
+	// overlay (imperatively, inside updateDiff / syncCommentOverlay) and the
+	// CommentGutter props. The overlay refresh is driven reactively by the
+	// $effect near updateDiff below — no imperative updateDiff/syncCommentOverlay
+	// calls are scattered through store handlers anymore.
+	let threadsForTab: CommentThread[] = $derived($commentThreads);
+	let openThreadId = $derived($openCommentThreadId);
 	let newAwaitingThreadId = $state<string | null>(null);
-	commentThreads.subscribe((v) => {
-		threadsForTab = v;
-		syncCommentOverlay();
-	});
-	openCommentThreadId.subscribe((v) => {
-		openThreadId = v;
-		syncCommentOverlay();
-		// Opening/closing a feedback thread reveals (or hides) its edits'
-		// diffs inline and (re)numbers them, so refresh the overlay.
-		updateDiff();
-	});
-
-	// Reactive mirrors for the merged gutter — the plain `currentRoundsList`
-	// / `currentBaseline` / `expandedRoundId` vars below feed the diff
-	// overlay imperatively, but CommentGutter needs $state props so its
-	// card list re-renders. Kept in sync inside the same store subscribes.
-	let roundsForGutter = $state<MaterializedPendingReviewRound[]>([]);
-	let baselineForGutter = $state<string | null>(null);
-	let openRoundId = $state<string | null>(null);
+	let rounds: MaterializedPendingReviewRound[] = $derived($pendingReviewRounds);
+	let baseline = $derived($reviewBaseline);
 	/** The gutter (and its 200px column) shows when there's anything to
 	 * review — unresolved comment threads OR pending edit rounds. */
 	let hasGutterContent = $derived(
-		threadsForTab.some((t) => !t.resolved) || roundsForGutter.length > 0
+		threadsForTab.some((t) => !t.resolved) || rounds.length > 0
 	);
-	let recent: Action[] = $state([]);
-	recentActions.subscribe((v) => (recent = v));
+	let recent: Action[] = $derived($recentActions);
 
 	type FeedbackRange = { from: number; to: number };
 	let dismissedFeedbackSelectionRange: FeedbackRange | null = null;
@@ -216,6 +207,11 @@
 			return { kind: 'block', open: '/* ', close: ' */' };
 		}
 		return null;
+	}
+
+	function shouldRenderMarkdownForPath(path: string): boolean {
+		const ext = extensionForPath(path);
+		return !['.tex', '.ltx', '.sty', '.cls', '.bib'].includes(ext);
 	}
 
 	function escapeRegExp(value: string): string {
@@ -720,90 +716,61 @@
 		return waitForTabSync(tabId);
 	}
 
-	// Diff overlay state — baseline changes when a review starts/ends.
-	let currentBaseline: string | null = null;
-	let currentProposalText: string | null = null;
-	reviewBaseline.subscribe((v) => {
-		currentBaseline = v;
-		baselineForGutter = v;
-		updateDiff();
-	});
+	// Diff overlay derived state. `baseline` + `rounds` are declared above via
+	// `$store` auto-subscription; the rest derive from them, so there's ONE
+	// reactive value per concept and no manual subscriptions to leak.
+	/** True when every pending round is a tiny (<THRESHOLD char) edit. Drives a
+	 * softer ghost style on the diff overlay so a one-word tweak doesn't look
+	 * like a paragraph rewrite. */
+	let allRoundsTiny = $derived(rounds.length > 0 && rounds.every((r) => r.kind === 'tiny'));
+	// Compose the full pending stack in the overlay: baseline is rounds[0].beforeMd
+	// (via reviewBaseline) and the proposal is the last round's afterMd (all ops
+	// applied in order). Each round's hunks are rendered separately with that
+	// round's id on the pill.
+	let currentProposalText = $derived(
+		rounds.length > 0 ? (rounds[rounds.length - 1].afterMd ?? null) : null
+	);
+	// Muted mode + which round is "expanded" in the OutlinePane drive a
+	// peek-one-round-at-a-time variant of the overlay. See updateDiff().
+	let muted = $derived($agentSettings.muted);
+	let expandedRoundId = $derived($expandedReviewRoundId);
+	// Rounds the user pinned "keep diff visible" on — their green proposal stays
+	// revealed regardless of which card is focused.
+	let pinnedRoundIds = $derived($pinnedDiffRounds);
 
-	/** True when every pending round is a tiny (<THRESHOLD char) edit.
-	 * Drives a softer ghost style on the diff overlay so a one-word tweak
-	 * doesn't look like a paragraph rewrite. */
-	let allRoundsTiny = false;
-	let currentRoundsList: MaterializedPendingReviewRound[] = [];
-	pendingReviewRounds.subscribe((v) => {
-		allRoundsTiny = v.length > 0 && v.every((r) => r.kind === 'tiny');
-		// Compose the full pending stack in the overlay: baseline is
-		// rounds[0].beforeMd (via reviewBaseline) and the proposal is the
-		// last round's afterMd (all ops applied in order). Each round's
-		// hunks are rendered separately with that round's id on the pill.
-		currentProposalText =
-			v.length > 0 ? (v[v.length - 1].afterMd ?? null) : null;
-		currentRoundsList = v;
-		roundsForGutter = v;
-		hasPendingProposal = v.length > 0;
-		schedulePlainLineSync();
-		updateDiff();
-		// A round appearing/disappearing flips whether its thread should be
-		// highlighted (diff present → suppress the redundant comment highlight).
-		// Deferred inside syncCommentOverlay, so it's safe during this apply.
-		syncCommentOverlay();
-	});
-
-	// Reactive safety net for the in-doc diff. The store subscriptions above
-	// already call updateDiff() imperatively, but the in-doc reveal of a
-	// thread's edits depends on BOTH the pending rounds AND which thread is
-	// open — and a revised edit arriving over WebSocket while a thread is open
-	// must reveal in the document WITHOUT the user closing + reopening the
-	// thread. Re-tracking the reactive inputs here guarantees the overlay
-	// re-applies on any change to them. updateDiff is deferred + deduped, so
-	// the extra calls are cheap and can't loop (it mutates none of these).
+	// Sole reactive trigger for the in-doc diff overlay. Touching each store-
+	// derived input makes this effect re-run whenever any of them changes; the
+	// actual overlay write happens inside updateDiff, which defers to a
+	// queueMicrotask so it lands AFTER y-prosemirror reconciles the doc (see the
+	// long comment on updateDiff). Store handlers no longer call updateDiff
+	// imperatively, so this is the only reactive path — no duplicate triggers,
+	// nothing to leak. A revised edit arriving over WebSocket while a thread is
+	// open still reveals in the document without the user reopening the thread,
+	// because `rounds` / `openThreadId` are tracked here.
 	$effect(() => {
-		// Touch every reactive input updateDiff consumes so this re-runs when
-		// any of them changes.
-		roundsForGutter;
+		rounds;
 		openThreadId;
-		baselineForGutter;
-		openRoundId;
-		mutedForGutter;
+		baseline;
+		expandedRoundId;
+		muted;
 		pinnedRoundIds;
 		updateDiff();
 	});
-
-	// Muted mode + which round is "expanded" in the OutlinePane drive a
-	// peek-one-round-at-a-time variant of the overlay. See updateDiff().
-	let isMuted = false;
-	// Reactive mirror for the gutter (which hides agent proposal cards when
-	// muted). The plain `isMuted` feeds updateDiff imperatively.
-	let mutedForGutter = $state(false);
-	let expandedRoundId: string | null = null;
-	agentSettings.subscribe((v) => {
-		const next = v.muted;
-		mutedForGutter = next;
-		if (next !== isMuted) {
-			isMuted = next;
-			updateDiff();
-		}
+	// A round appearing/disappearing flips whether its thread should be
+	// highlighted (diff present → suppress the redundant comment highlight), and
+	// opening/closing a thread changes the same. Deferred inside
+	// syncCommentOverlay, so it's safe during a Yjs apply.
+	$effect(() => {
+		threadsForTab;
+		openThreadId;
+		rounds;
+		syncCommentOverlay();
 	});
-	expandedReviewRoundId.subscribe((v) => {
-		openRoundId = v;
-		if (v !== expandedRoundId) {
-			expandedRoundId = v;
-			updateDiff();
-		}
-	});
-	// Rounds the user pinned "keep diff visible" on — their green proposal
-	// stays revealed regardless of which card is focused. $state mirror feeds
-	// the gutter switches; the plain var feeds updateDiff.
-	let pinnedRoundIds = $state<Set<string>>(new Set());
-	let pinnedRoundsForOverlay: Set<string> = new Set();
-	pinnedDiffRounds.subscribe((v) => {
-		pinnedRoundIds = v;
-		pinnedRoundsForOverlay = v;
-		updateDiff();
+	// Pending-round changes alter paragraph heights (diff decorations), so the
+	// line-number gutter needs a relayout when the round set changes.
+	$effect(() => {
+		rounds;
+		schedulePlainLineSync();
 	});
 	// Round whose in-doc diff should pulse — driven by hovering its row in a
 	// feedback thread card. Null = nothing flashing.
@@ -834,7 +801,7 @@
 	 * number them, so in-doc numbers line up with the card rows. */
 	function openThreadEdits(): MaterializedPendingReviewRound[] {
 		if (!openThreadId) return [];
-		return currentRoundsList.filter((r) => r.feedbackThreadId === openThreadId);
+		return rounds.filter((r) => r.feedbackThreadId === openThreadId);
 	}
 	function openThreadEditIds(): string[] {
 		return openThreadEdits().map((r) => r.id);
@@ -1039,7 +1006,7 @@
 			// highlighted, i.e. the user's own text-selection feedback that hasn't
 			// turned into a diff yet. Agent-suggested edits show only the diff.
 			const pendingEditThreadIds = new Set(
-				roundsForGutter
+				rounds
 					.map((r) => r.feedbackThreadId)
 					.filter((id): id is string => typeof id === 'string')
 			);
@@ -1076,15 +1043,15 @@
 			// Guard against timing issues where one store updates before the
 			// other (e.g. fragment observer clears rounds before array observer
 			// sets baseline to null). Use hasRounds as source of truth.
-			const hasRounds = currentRoundsList.length > 0;
+			const hasRounds = rounds.length > 0;
 			// Muted mode: hide the overlay entirely until the user clicks a
 			// pending card, then show only that round's decorations.
-			let baselineForOverlay = hasRounds ? currentBaseline : null;
+			let baselineForOverlay = hasRounds ? baseline : null;
 			let proposalForOverlay = hasRounds ? currentProposalText : null;
 			let pendingRoundsForOverlay: MaterializedPendingReviewRound[] = [];
-			if (isMuted && hasRounds) {
+			if (muted && hasRounds) {
 				const expanded = expandedRoundId
-					? currentRoundsList.find((r) => r.id === expandedRoundId)
+					? rounds.find((r) => r.id === expandedRoundId)
 					: null;
 				if (expanded && expanded.beforeMd != null && expanded.afterMd != null) {
 					baselineForOverlay = expanded.beforeMd;
@@ -1095,7 +1062,7 @@
 					proposalForOverlay = null;
 				}
 			} else if (hasRounds) {
-				pendingRoundsForOverlay = currentRoundsList;
+				pendingRoundsForOverlay = rounds;
 			}
 			const validThreadIds = new Set(
 				threadsForTab.filter((t) => !t.resolved).map((t) => t.id)
@@ -1109,13 +1076,12 @@
 				baseline: baselineForOverlay,
 				proposedText: proposalForOverlay,
 				activeFeedbackRange: feedbackSelectionRange,
-				isPlainText: true,
 				allRoundsTiny,
 				// Proposed (green) lines show inline for the focused round, any
 				// the user pinned "keep diff visible", and — when a feedback
 				// thread card is open — all the edits grouped under it. No pill.
 				revealedRoundIds: new Set([
-					...pinnedRoundsForOverlay,
+					...pinnedRoundIds,
 					...(expandedRoundId ? [expandedRoundId] : []),
 					...openThreadEditIds()
 				]),
@@ -1212,7 +1178,7 @@
 				FindOverlay,
 				MediaOverlay,
 				D3Overlay,
-				MarkdownRender,
+				...(shouldRenderMarkdownForPath(tabId) ? [MarkdownRender] : []),
 				SourceCommentOverlay.configure({
 					style: sourceCommentStyleForPath(tabId)
 				})
@@ -1221,12 +1187,12 @@
 			// pass a string `content` here (doing so would wipe the Y.Doc).
 			editorProps: {
 				attributes: { class: 'tiptap-content tiptap-plain' },
-				// The doc fragment can carry markdown escapes that leaked in via
-				// the agent's edit_doc round-trip (`[` → `\[`, hard breaks). Strip
-				// them on copy so pasting elsewhere gives clean text, not stray
-				// backslashes / spurious newlines.
+				// Plain-text copy: the Y.Doc is stored verbatim (serializeFragment
+				// does no escaping), so hand ProseMirror the raw text between the
+				// slice bounds. Paragraphs join with '\n' and hard breaks render as
+				// '\n' inside a line — matching the on-disk file byte-for-byte.
 				clipboardTextSerializer: (slice) =>
-					unescapeMarkdown(slice.content.textBetween(0, slice.content.size, '\n', '\n')),
+					slice.content.textBetween(0, slice.content.size, '\n', '\n'),
 				handlePaste: (view, event) => handleEditorPaste(view, event).handled,
 				handleDrop: (view, event) => handleEditorDrop(view, event as DragEvent).handled,
 				handleKeyDown: (_view, event) => {
@@ -1406,8 +1372,10 @@
 		schedulePlainLineSync();
 	});
 
-	isRendering.subscribe((v) => {
-		if (v) {
+	// When a render starts, cancel any pending idle auto-submit. `$store`
+	// auto-subscription in an $effect cleans up on unmount (no leaked subscriber).
+	$effect(() => {
+		if ($isRendering) {
 			if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
 			clearCountdown();
 		}
@@ -1491,8 +1459,8 @@
 		{#if hasGutterContent}
 			<CommentGutter
 				threads={threadsForTab}
-				rounds={roundsForGutter}
-				baseline={baselineForGutter}
+				rounds={rounds}
+				baseline={baseline}
 				editor={editor}
 				tabId={tabId}
 				openThreadId={openThreadId}
@@ -1504,7 +1472,7 @@
 				pinnedRoundIds={pinnedRoundIds}
 				onAcceptFeedback={(roundIds) => onAcceptFeedbackEdits?.(roundIds)}
 				onResolveThread={(threadId, resolved) => onResolveThread?.(threadId, resolved)}
-				muted={mutedForGutter}
+				muted={muted}
 				onPinThreadEdits={(roundIds, pinned) =>
 					pinnedDiffRounds.update((s) => {
 						const n = new Set(s);
@@ -1539,7 +1507,7 @@
 					// If this thread already carries a pending edit, a reply is
 					// feedback ON that edit — steer the agent to REVISE via
 					// edit_doc (tagged to the thread) rather than chit-chat.
-					const hasPendingEdit = roundsForGutter.some((r) => r.feedbackThreadId === t.id);
+					const hasPendingEdit = rounds.some((r) => r.feedbackThreadId === t.id);
 					const instruction = hasPendingEdit
 						? `This thread has a PENDING EDIT and the user's reply is feedback on it. ` +
 							`Propose a REVISED edit with edit_doc(thread_id="${t.id}") that addresses the feedback — ` +
@@ -2258,33 +2226,6 @@
 			background: color-mix(in srgb, var(--accent) 22%, transparent);
 		}
 	}
-	/* Ghost strikethrough widget for agent removals. The removed text isn't
-	 * in the editor's doc tree (the editor displays the live Y.Doc state),
-	 * so we inject this inline span at the position the text used to occupy. */
-	.tiptap-editor :global(.diff-removed-widget) {
-		position: relative;
-		color: var(--diff-removed-color);
-		background-color: color-mix(in srgb, var(--diff-removed-color) 12%, transparent);
-		text-decoration: none;
-		--diff-final-opacity: 0.75;
-		opacity: 0.75;
-		padding: 0 3px;
-		border-radius: 3px;
-		user-select: none;
-		animation: diffFadeIn 480ms ease-out both;
-	}
-	.tiptap-editor :global(.diff-removed-widget)::after {
-		content: '';
-		position: absolute;
-		left: 3px;
-		right: 3px;
-		top: 0.58em;
-		height: 1.5px;
-		background: var(--diff-removed-color);
-		transform-origin: left center;
-		animation: strikeSweepX 520ms cubic-bezier(0.33, 0, 0.2, 1) both;
-		pointer-events: none;
-	}
 	/* Tiny-edit variants: when every pending round is small (< ~25 chars
 	 * delta, e.g. a typo fix), drop the solid green/red treatment and use
 	 * a ghost-like muted style so the diff reads as "a small suggestion"
@@ -2343,12 +2284,6 @@
 			background: transparent;
 			box-shadow: inset 0 0 0 1px transparent;
 		}
-	}
-	.tiptap-editor :global(.diff-removed-widget.diff-removed-tiny) {
-		background: transparent;
-		color: color-mix(in srgb, var(--diff-removed-color) 70%, var(--text-faint));
-		opacity: 0.6;
-		padding: 0 1px;
 	}
 	.feedback-popup {
 		position: fixed;

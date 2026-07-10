@@ -566,32 +566,29 @@ on a hot scheduler.
 
 ## Client architecture
 
-`src/routes/+page.svelte` is the page shell. Three-pane layout:
+`src/routes/+page.svelte` is the page shell:
 
 ```
-┌───────────────┬──────────────────────────────────────┬────────────────┐
-│ OutlinePane   │ TabBar                               │ HistoryPane    │
-│ (260px,       ├──────────────────────────────────────┤ (340px,        │
-│  showOutline) │                                      │  toggleable)   │
-│               │          TiptapEditor                │ • agent events │
-│ • outline     │     (bound to per-tab Y.Doc          │ • tool calls   │
-│   from        │      via HocuspocusProvider)         │ • thinking     │
-│   headings    │                                      │   summaries    │
-│               │                          AgentDock ──┤ • notifications│
-├───────────────┤                         (wake, cost, ├────────────────┤
-│ FileTree      │                          settings)   │ OutlinePane    │
-│               │                                      │ (showReview)   │
-│               │                                      │ • review cards │
-│               │                                      │ • comments     │
-│               │                                      │ • proposed     │
-│               │                                      │   rules/hooks  │
-│               │                                      │ • user qs      │
-└───────────────┴──────────────────────────────────────┴────────────────┘
+┌───────────────┬──────────────────────────────────────────────┐
+│ OutlinePane   │ TabBar                                       │
+│ (260px, TOC   ├──────────────────────────────────────────────┤
+│  from         │                                              │
+│  headings)    │          TiptapEditor          AgentDock ──┐ │
+│               │     (bound to per-tab Y.Doc    (floating,  │ │
+│               │      via HocuspocusProvider)    wake/cost/ │ │
+├───────────────┤                                 settings;  │ │
+│ FileTree      │   pending edits + comments      expands to │ │
+│               │   render in the editor's        HistoryPane│ │
+│               │   CommentGutter                 dock)      │ │
+└───────────────┴──────────────────────────────────────────────┘
 ```
 
-`OutlinePane` is one component mounted twice: `showOutline` (left, TOC only)
-and `showReview` (right, below `HistoryPane` — pending review cards,
-comments, and proposals). The two modes render disjoint blocks.
+There is no fixed right-hand pane. `OutlinePane` is mounted once (left,
+TOC only — its old `showReview` mode was removed). The agent event log
+(`HistoryPane`) lives inside the expandable floating `AgentDockShell`.
+Pending review cards and comment threads render inline in the editor's
+`CommentGutter` (with Accept / Reject / Retry) plus per-tab badges on the
+`TabBar`; proposed rules / hooks surface as `ToastStack` toasts.
 
 ### Per-tab client Y.Doc (`src/lib/yjs-doc.ts`)
 
@@ -615,15 +612,17 @@ the editor paints only after the WS `synced` event (sub-20ms locally).
 Stores are **projections of the Y.Doc + UI state**, not the source of
 editor content.
 
-- Doc projections: `userMd`, `pendingReviewRounds`, `reviewBaseline`.
+- Doc projections: `pendingReviewRounds`, `reviewBaseline`,
+  `commentThreads`, `openCommentThreadId`.
 - Agent output: `proposedRules`, `proposedHooks`, `pendingUserQuestions`,
-  `pendingPlanProposals`, `agentHistory`, `annotations`, `isRendering`,
+  `pendingPlanProposals`, `agentHistory`, `isRendering`,
   `submitCountdown`, `sessionCost`.
-- Preferences: `selectedModel`, `selectedTheme`, `historyVerbosity`,
-  `showFilesPane`, `agentSettings`, `editorFontScale`, `editorSoftWrap`.
-- Tabs: `tabs`, `activeTab`, `activeTabKind`.
+- Preferences: `selectedProvider`, `selectedModel`, `selectedTheme`,
+  `historyVerbosity`, `showFilesPane`, `agentSettings`,
+  `editorFontScale`, `editorSoftWrap`.
+- Tabs: `tabs`, `activeTab`.
 - Actions toolbar (feedback popup): `pinnedActions`, `recentActions`,
-  `selectedAction`, `actionUsageCounts`.
+  `actionUsageCounts`.
 
 ### Components
 
@@ -631,11 +630,12 @@ All in `src/lib/components/`:
 
 | Component | Role |
 | --- | --- |
-| `TabBar` | Tab strip with open / close / rename / context menu. |
-| `OutlinePane` | Mounted twice via `showOutline` / `showReview` flags (disjoint blocks). `showOutline` → left sidebar: auto outline from headings. `showReview` → right column under `HistoryPane`: pending review cards (Accept/Reject/Retry), comments, proposed rules, proposed hooks, user questions. |
+| `TabBar` | Tab strip with open / close / rename / context menu, plus per-tab pending-review/comment badges. |
+| `OutlinePane` | Left sidebar, mounted once: auto outline (TOC) from headings. |
 | `FileTree` | Workspace file explorer with inline create/rename. |
-| `HistoryPane` | Right sidebar: agent history, tool calls, thinking summaries, cost, notifications. Two modes: `verbose` / `minimal`. |
-| `AgentDock` | Floating top-right: wake button, sleeping-cat mascot, cost pill, gear-icon settings popover. |
+| `CommentGutter` | In-editor gutter cards for pending agent edits (Accept/Reject/Retry) and comment threads; anchored to document positions. |
+| `HistoryPane` | Agent history, tool calls, thinking summaries, cost, notifications. Two modes: `verbose` / `minimal`. Rendered inside `AgentDockShell`. |
+| `AgentDock` / `AgentDockShell` | Floating top-right: wake button, sleeping-cat mascot, cost pill, gear-icon settings popover; the shell expands into the agent-history dock. |
 | `AgentModal` | Modal for detailed interaction. |
 | `AgentSettingsPanel` | Agency level + Track Changes toggle. |
 | `ChatPanel` | Direct chat interface. |
@@ -649,13 +649,14 @@ All in `src/lib/components/`:
 
 On every ProseMirror transaction:
 
-1. If it carries `ySyncPluginKey` meta (Yjs pushing a remote update
-   into the editor), skip — no idle timer, no serialization side effects.
-2. Serialize editor content and publish to the `userMd` store (outline).
-3. If it carries `AGENT_APPLY_KEY` meta (set locally when an
-   agent-origin Y.Doc update is applied), skip the idle-timer restart
-   — an agent edit is not "the user is still writing."
-4. Otherwise, restart the 3-second idle-submit countdown.
+1. If it carries `ySyncPluginKey` meta, Yjs is pushing a remote update
+   into the editor (another client or the agent) — skip the idle-timer
+   restart; an agent edit is not "the user is still writing".
+   (`ySyncPluginKey` must be imported from `@tiptap/y-tiptap` via
+   `editor-extensions.ts` — the `y-prosemirror` key is a different
+   instance and never matches.)
+2. Otherwise (doc changed, no sync meta ⇒ local typing), restart the
+   3-second idle-submit countdown.
 
 Cmd/Ctrl+Enter skips the countdown. The client does not `PUT
 /api/document` with markdown; the server's Y.Doc-to-disk flush owns that.
@@ -748,28 +749,31 @@ Hook configuration is never agent-writable. The agent can only call
 
 ## Gotchas (from painful debugging sessions)
 
-- **`AGENT_ORIGIN` must agree across boundaries.** The server sets it
-  on `DirectConnection.transact`; it streams to the browser as a Yjs
-  origin string; the client matches by string equality. Renaming one
-  side silently breaks the UndoManager.
-- **UndoManager attach-before-replay.** If the Y.UndoManager is
-  constructed after `replayUpdatesInto`, the undo stack is empty on
-  cold start, and Reject silently does nothing for rounds from prior
-  sessions.
+- **Yjs origins are shared constants.** `AGENT_ORIGIN` / `USER_ORIGIN` /
+  `SYSTEM_ORIGIN` live once in `src/lib/shared/ydoc-codec.ts` and are
+  imported by both client and server. Never redefine them locally — the
+  origin string in the SQLite log and the client's `trackedOrigins`
+  matching both depend on the exact values.
+- **`ySyncPluginKey` must come from `@tiptap/y-tiptap`.** The
+  Collaboration extension installs its sync plugin from
+  `@tiptap/y-tiptap`; `y-prosemirror` exports a *different*
+  `PluginKey('y-sync')` instance that never matches. Import the key and
+  the rel-position helpers from `editor-extensions.ts` (the single
+  source) — the wrong import silently breaks agent-vs-user transaction
+  classification and RelativePosition comment anchoring.
 - **Hocuspocus's internal Document is authoritative.** Once a client
   has connected and `onLoadDocument` has run, Hocuspocus's own
   `Document` is the source of truth. Server code that wants to mutate
   a tab MUST go through `server.hocuspocus.openDirectConnection(tabId)`
   — not a cached Y.Doc reference.
 - **`"update"` is a SQLite reserved word.** Always quote the column.
-- **Tiptap-markdown escapes brackets.** The serializer turns `[` into
-  `\[`. `read_doc` returns the escaped form, and `edit_doc`'s
-  `old_string` must match. If an edit fails with "not found" in a spot
-  you can see, check bracket escaping.
-- **`undoRedo: false` in StarterKit.** Collaboration ships its own Yjs
-  undo. Registering both corrupts plugin state.
-- **`Link` is bundled via StarterKit.** Don't import
-  `@tiptap/extension-link` separately.
+- **Serialization is plain text, not markdown.** `serializeFragment` /
+  `serializeYDoc` emit document text verbatim (plus typography
+  normalization); nothing escapes markdown specials. The schema is
+  intentionally minimal (Document / Paragraph / Text / HardBreak) —
+  don't add StarterKit, Link, or Tiptap's history extension; undo is
+  the custom `Y.UndoManager` wired via
+  `Collaboration.configure({ yUndoOptions })`.
 - **Vite HMR re-executes `hooks.server.ts`.** The
   `globalThis.__docwriterWsServer` guard keeps us from double-binding
   the WS port on every save.
