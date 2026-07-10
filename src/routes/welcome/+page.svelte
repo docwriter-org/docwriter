@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { fade, fly } from 'svelte/transition';
 	import type { PageData } from './$types';
+	import LogoMark from '$lib/components/LogoMark.svelte';
 
 	interface Props {
 		data: PageData;
@@ -93,7 +94,7 @@
 
 <div class="page" class:mounted>
 	<nav class="nav">
-		<span class="logo">DocWriter</span>
+		<span class="logo"><LogoMark size={30} title="DocWriter" />DocWriter</span>
 	</nav>
 
 	<header class="hero">
@@ -306,7 +307,8 @@
 	.page.mounted { opacity: 1; }
 
 	.nav { display: flex; align-items: center; justify-content: space-between; max-width: 920px; margin: 0 auto; padding: 20px 24px; }
-	.logo { font-family: 'Lora', Georgia, serif; font-size: 18px; font-weight: 600; }
+	.logo { display: inline-flex; align-items: center; gap: 10px; font-family: 'Lora', Georgia, serif; font-size: 20px; font-weight: 600; color: #1a1a1a; }
+	.logo :global(.dw-logo) { width: 30px; height: 30px; }
 
 	.hero { max-width: 640px; margin: 52px auto 0; padding: 0 24px; text-align: center; }
 	.hl { background: rgba(5,150,105,0.1); padding: 1px 4px; border-radius: 3px; }
