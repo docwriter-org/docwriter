@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { IS_HOSTED } from '$lib/hosted';
+	import { apiJson } from '$lib/auth-recovery';
 
 	interface KeyStatus {
 		id: string;
@@ -17,11 +19,15 @@
 	let saving = $state<string | null>(null);
 	let error = $state<string | null>(null);
 	let loaded = $state(false);
+	const hosted = IS_HOSTED;
 
 	async function load() {
+		if (hosted) {
+			loaded = true;
+			return;
+		}
 		try {
-			const res = await fetch('/api/keys');
-			const data = await res.json();
+			const data = await apiJson('/api/keys');
 			providers = data.providers ?? [];
 		} catch (e) {
 			error = (e as Error).message;
@@ -38,13 +44,11 @@
 		saving = envVar;
 		error = null;
 		try {
-			const res = await fetch('/api/keys', {
+			const data = await apiJson('/api/keys', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ envVar, value })
 			});
-			const data = await res.json();
-			if (!res.ok) throw new Error(data.error ?? 'failed to save');
 			providers = data.providers ?? providers;
 			drafts = { ...drafts, [envVar]: '' };
 		} catch (e) {
@@ -58,13 +62,11 @@
 		saving = envVar;
 		error = null;
 		try {
-			const res = await fetch('/api/keys', {
+			const data = await apiJson('/api/keys', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ envVar, value: '' })
 			});
-			const data = await res.json();
-			if (!res.ok) throw new Error(data.error ?? 'failed to clear');
 			providers = data.providers ?? providers;
 		} catch (e) {
 			error = (e as Error).message;
@@ -93,15 +95,23 @@
 	</div>
 
 	<div class="intro">
-		Stored in <code>~/.docwriter/keys.env</code> and shared across all workspaces.
-		Environment variables (and the repo <code>.env</code>) override these.
+		{#if hosted}
+			API keys are managed by the hosted deployment. Key editing is only available when self-hosting.
+		{:else}
+			Stored in <code>~/.docwriter/keys.env</code> and shared across all workspaces.
+			Environment variables (and the repo <code>.env</code>) override these.
+		{/if}
 	</div>
 
 	{#if error}
 		<div class="error">{error}</div>
 	{/if}
 
-	{#if !loaded}
+	{#if hosted}
+		<div class="disabled-note">
+			Self-host DocWriter to configure provider API keys from this panel.
+		</div>
+	{:else if !loaded}
 		<div class="muted">Loading…</div>
 	{:else}
 		{#each providers as p (p.envVar)}
@@ -181,6 +191,15 @@
 		border-radius: 6px;
 		padding: 6px 8px;
 		margin-bottom: 10px;
+	}
+	.disabled-note {
+		font-size: 12px;
+		color: var(--text-muted);
+		background: var(--bg-surface);
+		border: 1px solid var(--border-light);
+		border-radius: 6px;
+		padding: 8px 10px;
+		line-height: 1.45;
 	}
 	.muted {
 		font-size: 12px;

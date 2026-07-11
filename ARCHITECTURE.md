@@ -97,6 +97,7 @@ runtime state:
    ├─ hooks.json             ← user-defined shell hooks
    ├─ references.json        ← writing-style references index
    ├─ references/            ← stored sample files
+   ├─ provider-cache/         ← provider-native cache/state
    └─ agent/scratch/         ← agent's private workspace (lazy-created)
 ```
 

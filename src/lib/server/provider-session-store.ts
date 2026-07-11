@@ -38,12 +38,17 @@ function parseEntry(row: Row): ProviderSessionEntry {
  * This table is for SDKs that expose their own resumable transcript format.
  * Claude currently uses it through its SessionStore API; other providers can
  * attach adapters here if their SDKs expose equivalent durable session hooks.
+ *
+ * The store is constructed inside the request context, so the per-user DB
+ * handle is resolved once here — SDK callbacks that later invoke the methods
+ * outside the request's AsyncLocalStorage scope still hit the right tenant.
  */
 export function createProviderSessionStore(provider: ProviderId): ProviderSessionStore {
+	const db = getDb();
+
 	return {
 		async append(key: ProviderSessionKey, entries: ProviderSessionEntry[]) {
 			if (entries.length === 0) return;
-			const db = getDb();
 			const insert = db.prepare(`
 				INSERT INTO provider_session_entries
 					(provider, project_key, session_id, subpath, entry_json, created)
@@ -66,7 +71,7 @@ export function createProviderSessionStore(provider: ProviderId): ProviderSessio
 		},
 
 		async load(key: ProviderSessionKey) {
-			const rows = getDb()
+			const rows = db
 				.prepare(`
 					SELECT entry_json
 					FROM provider_session_entries
@@ -87,7 +92,7 @@ export function createProviderSessionStore(provider: ProviderId): ProviderSessio
 		},
 
 		async listSessions(projectKey: string) {
-			return getDb()
+			return db
 				.prepare(`
 					SELECT session_id AS sessionId, MAX(created) AS mtime
 					FROM provider_session_entries
@@ -99,8 +104,7 @@ export function createProviderSessionStore(provider: ProviderId): ProviderSessio
 
 		async delete(key: ProviderSessionKey) {
 			if (key.subpath) {
-				getDb()
-					.prepare(`
+				db.prepare(`
 						DELETE FROM provider_session_entries
 						WHERE provider = ?
 							AND project_key = ?
@@ -109,8 +113,7 @@ export function createProviderSessionStore(provider: ProviderId): ProviderSessio
 					`)
 					.run(provider, key.projectKey, key.sessionId, key.subpath);
 			} else {
-				getDb()
-					.prepare(`
+				db.prepare(`
 						DELETE FROM provider_session_entries
 						WHERE provider = ? AND project_key = ? AND session_id = ?
 					`)
@@ -119,7 +122,7 @@ export function createProviderSessionStore(provider: ProviderId): ProviderSessio
 		},
 
 		async listSubkeys(key: { projectKey: string; sessionId: string }) {
-			const rows = getDb()
+			const rows = db
 				.prepare(`
 					SELECT DISTINCT subpath
 					FROM provider_session_entries

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { Play, Plus, RefreshCw, Trash2 } from 'lucide-svelte';
+	import { apiJson } from '$lib/auth-recovery';
 
 	interface Props {
 		onSubmit?: (trigger: string) => void;
@@ -32,9 +33,7 @@
 		loading = true;
 		errorText = '';
 		try {
-			const res = await fetch('/api/skills', { credentials: 'same-origin' });
-			const data = await res.json();
-			if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+			const data = await apiJson('/api/skills', { credentials: 'same-origin' });
 			skills = Array.isArray(data?.skills) ? data.skills : [];
 			nativeDirs = Array.isArray(data?.nativeDirs) ? data.nativeDirs : [];
 		} catch (e) {
@@ -53,14 +52,12 @@
 		savingId = skill.id;
 		errorText = '';
 		try {
-			const res = await fetch('/api/skills', {
+			const data = await apiJson('/api/skills', {
 				method: 'PUT',
 				credentials: 'same-origin',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ id: skill.id, enabled: !skill.enabled })
 			});
-			const data = await res.json();
-			if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
 			applyData(data);
 		} catch (e) {
 			errorText = (e as Error).message;
@@ -124,14 +121,12 @@
 		adding = true;
 		errorText = '';
 		try {
-			const res = await fetch('/api/skills', {
+			const data = await apiJson('/api/skills', {
 				method: 'POST',
 				credentials: 'same-origin',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ source: resolved })
 			});
-			const data = await res.json();
-			if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
 			source = '';
 			applyData(data);
 		} catch (e) {
@@ -146,12 +141,10 @@
 		savingId = skill.id;
 		errorText = '';
 		try {
-			const res = await fetch(`/api/skills?id=${encodeURIComponent(skill.id)}`, {
+			const data = await apiJson(`/api/skills?id=${encodeURIComponent(skill.id)}`, {
 				method: 'DELETE',
 				credentials: 'same-origin'
 			});
-			const data = await res.json();
-			if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
 			applyData(data);
 		} catch (e) {
 			errorText = (e as Error).message;

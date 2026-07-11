@@ -3,6 +3,7 @@
 	import { X, Plus, Play, Sparkles } from 'lucide-svelte';
 	import { agentHistory, activeTab } from '$lib/stores';
 	import { HOOK_TEMPLATES, type HookTemplate } from '$lib/shared/hook-templates';
+	import { apiJson } from '$lib/auth-recovery';
 
 	type HookEvent =
 		| 'PreToolUse'
@@ -44,14 +45,15 @@
 	let newCommand = $state('');
 	let newOutput = $state('');
 	let loading = $state(true);
+	let errorText = $state('');
 
 	async function load() {
 		try {
-			const res = await fetch('/api/hooks');
-			const data = await res.json();
+			const data = await apiJson('/api/hooks');
 			hooks = Array.isArray(data?.hooks) ? data.hooks : [];
+			errorText = '';
 		} catch (e) {
-			console.error('Failed to load hooks:', e);
+			errorText = (e as Error).message;
 		} finally {
 			loading = false;
 		}
@@ -59,14 +61,15 @@
 
 	async function persist(next: Hook[]) {
 		hooks = next;
+		errorText = '';
 		try {
-			await fetch('/api/hooks', {
+			await apiJson('/api/hooks', {
 				method: 'PUT',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ hooks: next })
 			});
 		} catch (e) {
-			console.error('Failed to persist hooks:', e);
+			errorText = (e as Error).message;
 		}
 	}
 
@@ -212,14 +215,13 @@
 			status: 'running'
 		});
 		try {
-			const res = await fetch('/api/hooks/run', {
+			const data = await apiJson<{ ok?: boolean; entry?: any; error?: string }>('/api/hooks/run', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ id: hook.id, file: currentTabPath ?? undefined })
 			});
-			const data = await res.json().catch(() => null);
-			if (!res.ok || !data?.ok || !data.entry) {
-				throw new Error(data?.error || `HTTP ${res.status}`);
+			if (!data?.ok || !data.entry) {
+				throw new Error(data?.error || 'Hook run failed');
 			}
 			// The server-resolved command (after {{file}}/{{tool}} substitution)
 			// may differ from hook.command, so match the upsert against the
@@ -258,6 +260,10 @@
 		<span class="panel-title">Hooks</span>
 		<span class="panel-subtitle">shell commands fired on agent events</span>
 	</div>
+
+	{#if errorText}
+		<div class="error">{errorText}</div>
+	{/if}
 
 	{#if loading}
 		<div class="empty">Loading…</div>
@@ -414,6 +420,15 @@
 		font-size: 12px;
 		color: var(--text-faint);
 		padding: 8px 2px;
+	}
+	.error {
+		margin-bottom: 10px;
+		padding: 8px 10px;
+		border-radius: 6px;
+		background: color-mix(in srgb, #dc2626 9%, var(--bg-elevated));
+		color: #b91c1c;
+		font-size: 12px;
+		line-height: 1.4;
 	}
 	.hook-list {
 		display: flex;

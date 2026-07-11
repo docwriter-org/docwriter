@@ -33,9 +33,13 @@ import {
 } from '$lib/server/hooks-config';
 import { runHookCommand, type HookRunEmitter } from '$lib/server/hook-runner';
 import { addCustomSkill } from '$lib/server/skills-config';
+import { runHostedBash } from '$lib/server/hosted-runner';
 import { executeReviewAction } from './tool-handlers';
+import { isMultiTenant, ensureUserWorkspace } from '$lib/server/workspace';
+import { getActiveUserId } from '$lib/server/request-context';
 import {
 	formatClaudeModelLabel,
+	HOSTED_CLAUDE_DEFAULT_MODEL,
 	isHiddenClaudeModel
 } from '$lib/shared/claude-models';
 
@@ -51,6 +55,32 @@ const FALLBACK_MODELS: ProviderModelOption[] = [
 	{ id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5', provider: 'claude' },
 	{ id: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5', provider: 'claude' }
 ];
+
+function buildHostedClaudeEnv(overrides: Record<string, string> | undefined): Record<string, string> {
+	const env: Record<string, string> = {};
+	for (const key of [
+		'PATH',
+		'LANG',
+		'LC_ALL',
+		'TMPDIR',
+		'TEMP',
+		'TMP',
+		'NODE_EXTRA_CA_CERTS',
+		'SSL_CERT_FILE',
+		'SSL_CERT_DIR'
+	]) {
+		const value = process.env[key];
+		if (value) env[key] = value;
+	}
+	if (process.env.ANTHROPIC_API_KEY) {
+		env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+	}
+	if (overrides?.CLAUDE_CONFIG_DIR) {
+		env.CLAUDE_CONFIG_DIR = overrides.CLAUDE_CONFIG_DIR;
+		env.HOME = overrides.CLAUDE_CONFIG_DIR;
+	}
+	return env;
+}
 
 /** Build the in-process MCP server for propose_rule / propose_hook. */
 function buildDocwriterMcp() {
@@ -120,6 +150,26 @@ function buildDocwriterMcp() {
 		)
 	];
 
+	if (isMultiTenant()) {
+		tools.push(
+			tool(
+				'run_bash',
+				'Run a Bash command in the hosted DocWriter sandbox. The command runs against a temporary copy of the user workspace plus .docwriter/agent/scratch. HTTP/HTTPS network is available. Changed scratch files are copied back; changed workspace files are reported but not written back. Use edit_doc/write_doc for document changes.',
+				{
+					command: z.string().describe('The Bash command to run from /workspace. Use relative paths.'),
+					timeout_ms: z.number().int().positive().max(120000).optional().describe('Optional timeout in milliseconds. Default is 30000.')
+				},
+				async (input) => {
+					const result = await runHostedBash(input);
+					return {
+						content: result.content.map((c) => ({ type: 'text' as const, text: c.text })),
+						...(result.isError ? { isError: true } : {})
+					};
+				}
+			)
+		);
+	}
+
 	return createSdkMcpServer({
 		name: 'docwriter',
 		version: '0.0.1',
@@ -156,7 +206,20 @@ export class ClaudeProvider implements AgentProvider {
 
 		const canUseToolCb = options.canUseTool;
 
-		const effectiveModel = options.model;
+		// In multi-tenant mode, sandbox the agent to the user's workspace
+		// directory. Use the hosted default model only when the caller did
+		// not choose one (render resolves a model first, so this is a
+		// belt-and-suspenders fallback).
+		const multiTenant = isMultiTenant();
+		const effectiveModel = options.model || (multiTenant ? HOSTED_CLAUDE_DEFAULT_MODEL : undefined);
+		let cwdOption: string | undefined;
+		let envOverrides: Record<string, string> | undefined;
+		const userId = getActiveUserId();
+		if (userId) {
+			const ws = ensureUserWorkspace(userId);
+			cwdOption = ws.root;
+			envOverrides = { CLAUDE_CONFIG_DIR: ws.claudeConfigDir };
+		}
 		const sessionStore = createProviderSessionStore('claude');
 		const resumeSessionId =
 			options.sessionId && hasProviderSessionEntries('claude', options.sessionId)
@@ -186,7 +249,11 @@ export class ClaudeProvider implements AgentProvider {
 			...(effectiveModel ? { model: effectiveModel } : {}),
 			sessionStore,
 			...(resumeSessionId ? { resume: resumeSessionId } : {}),
-			...(options.systemPrompt ? { systemPrompt: options.systemPrompt } : {})
+			...(options.systemPrompt ? { systemPrompt: options.systemPrompt } : {}),
+			...(cwdOption ? { cwd: cwdOption } : {}),
+			// envOverrides is only ever set in multi-tenant mode, so the env
+			// override collapses to the hosted case.
+			...(multiTenant ? { env: buildHostedClaudeEnv(envOverrides) } : {})
 		};
 
 		const promptArg =

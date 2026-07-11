@@ -1,3 +1,4 @@
+import type { Database } from 'better-sqlite3';
 import { getDb } from '$lib/server/db';
 import { getEffectiveRoot } from '$lib/server/document-files';
 
@@ -38,14 +39,15 @@ function callIdForItem(item: AgentInputItem): string | null {
 export class DocWriterOpenAISession {
 	private readonly sessionId: string;
 	private readonly projectKey: string;
+	// Constructed inside the request context; binding the tenant's DB handle
+	// here keeps later SDK callbacks (outside AsyncLocalStorage) on the
+	// right database.
+	private readonly db: Database;
 
 	constructor(sessionId: string) {
 		this.sessionId = sessionId;
+		this.db = getDb();
 		this.projectKey = getEffectiveRoot();
-	}
-
-	private withContext<T>(fn: () => T): T {
-		return fn();
 	}
 
 	async getSessionId(): Promise<string> {
@@ -53,8 +55,8 @@ export class DocWriterOpenAISession {
 	}
 
 	async getItems(limit?: number): Promise<AgentInputItem[]> {
-		return this.withContext(() => {
-			const db = getDb();
+		{
+			const db = this.db;
 			const rows =
 				limit === undefined
 					? db.prepare(`
@@ -73,13 +75,13 @@ export class DocWriterOpenAISession {
 
 			const orderedRows = limit === undefined ? rows : [...rows].reverse();
 			return orderedRows.map((row) => cloneItem(parseItem(row)));
-		});
+		}
 	}
 
 	async addItems(items: AgentInputItem[]): Promise<void> {
 		if (items.length === 0) return;
-		this.withContext(() => {
-			const db = getDb();
+		{
+			const db = this.db;
 			const insert = db.prepare(`
 				INSERT INTO provider_session_entries
 					(provider, project_key, session_id, subpath, entry_json, created)
@@ -98,12 +100,12 @@ export class DocWriterOpenAISession {
 					);
 				}
 			})();
-		});
+		}
 	}
 
 	async popItem(): Promise<AgentInputItem | undefined> {
-		return this.withContext(() => {
-			const db = getDb();
+		{
+			const db = this.db;
 			const row = db.prepare(`
 				SELECT id, entry_json
 				FROM provider_session_entries
@@ -114,22 +116,22 @@ export class DocWriterOpenAISession {
 			if (!row) return undefined;
 			db.prepare('DELETE FROM provider_session_entries WHERE id = ?').run(row.id);
 			return cloneItem(parseItem(row));
-		});
+		}
 	}
 
 	async clearSession(): Promise<void> {
-		this.withContext(() => {
-			getDb().prepare(`
+		{
+			this.db.prepare(`
 				DELETE FROM provider_session_entries
 				WHERE provider = ? AND project_key = ? AND session_id = ?
 			`).run(PROVIDER, this.projectKey, this.sessionId);
-		});
+		}
 	}
 
 	async applyHistoryMutations(args: { mutations: SessionHistoryMutation[] }): Promise<void> {
 		if (args.mutations.length === 0) return;
-		this.withContext(() => {
-			const db = getDb();
+		{
+			const db = this.db;
 			const rows = db.prepare(`
 				SELECT id, entry_json
 				FROM provider_session_entries
@@ -165,6 +167,6 @@ export class DocWriterOpenAISession {
 			db.transaction(() => {
 				for (const row of updates) update.run(JSON.stringify(row.item), now, row.id);
 			})();
-		});
+		}
 	}
 }

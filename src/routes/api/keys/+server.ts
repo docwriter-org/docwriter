@@ -1,9 +1,11 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { getKeyStatus, setGlobalKey, PROVIDER_KEYS } from '$lib/server/api-keys';
+import { isMultiTenant } from '$lib/server/deploy-mode';
 
 /** Report per-provider key status (never returns the secret values). */
 export const GET: RequestHandler = async () => {
+	if (isMultiTenant()) return json({ providers: [], locked: true });
 	return json({ providers: getKeyStatus() });
 };
 
@@ -12,6 +14,13 @@ export const GET: RequestHandler = async () => {
  * Writes to `~/.docwriter/keys.env` and applies to the live process.
  */
 export const POST: RequestHandler = async ({ request }) => {
+	if (isMultiTenant()) {
+		return json(
+			{ error: 'API key editing is only available when self-hosting.' },
+			{ status: 403 }
+		);
+	}
+
 	let body: { envVar?: string; value?: string };
 	try {
 		body = await request.json();

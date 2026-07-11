@@ -1,5 +1,7 @@
-import { join } from 'path';
+import { join, resolve, sep } from 'path';
 import { existsSync, mkdirSync } from 'fs';
+import { getActiveUserId } from './request-context';
+import { getUserWorkspace, type UserWorkspace } from './workspace';
 
 // DocWriter persistence layout:
 //
@@ -13,6 +15,8 @@ import { existsSync, mkdirSync } from 'fs';
 //                                       + last_seen:<tabId>).
 //     agent/scratch/                  ← agent scratch workspace — created
 //                                       lazily on first scratch write.
+//     provider-cache/<provider>/      ← provider-native cache/state that
+//                                       must stay outside user-facing files.
 //
 // Agent edits to tab files go through `mcp-doc-tools.ts`, which mutates
 // the live Hocuspocus Y.Doc and syncs to the browser via WebSocket.
@@ -22,23 +26,23 @@ const ROOT = process.env.DOCWRITER_ROOT || process.cwd();
 export const WORKSPACE_ROOT = ROOT;
 
 export const DOCWRITER_DIR = join(ROOT, '.docwriter');
-/** Scratch workspace the agent can freely Write/Edit without user review.
- * Meant for its own drafts, outlines, intermediate notes-to-self. Not
- * surfaced as tabs; survives across rounds in the same session; cleared
- * when the user starts a new session. Created lazily — no `.docwriter/agent/`
- * directory is created unless the agent actually writes a scratch file. */
 export const AGENT_SCRATCH_DIR = join(DOCWRITER_DIR, 'agent', 'scratch');
 
+function getEffectiveWorkspace(): UserWorkspace | null {
+	const userId = getActiveUserId();
+	return userId ? getUserWorkspace(userId) : null;
+}
+
 export function getEffectiveRoot(): string {
-	return ROOT;
+	return getEffectiveWorkspace()?.root ?? ROOT;
 }
 
 export function getEffectiveDocwriterDir(): string {
-	return DOCWRITER_DIR;
+	return getEffectiveWorkspace()?.docwriterDir ?? DOCWRITER_DIR;
 }
 
 export function getEffectiveScratchDir(): string {
-	return AGENT_SCRATCH_DIR;
+	return getEffectiveWorkspace()?.agentScratchDir ?? AGENT_SCRATCH_DIR;
 }
 
 /** File extensions we treat as text-editable tabs. */
@@ -114,30 +118,41 @@ function extensionOf(path: string): string | null {
 	return base.slice(idx + 1).toLowerCase();
 }
 
-/** Absolute path to a tab's user-facing file under DOCWRITER_ROOT. */
+/** Absolute path to a tab's user-facing file. Context-aware in multi-tenant
+ * mode. Rejects ids that fail isValidTabId or resolve outside the workspace
+ * root (separator-aware — a bare prefix match would admit sibling
+ * workspaces like `<root>2`). */
 export function tabFile(tabId: string): string {
-	return join(ROOT, tabId);
+	if (!isValidTabId(tabId)) {
+		throw new Error(`Invalid tab id: ${tabId}`);
+	}
+	const root = getEffectiveRoot();
+	const resolved = resolve(root, tabId);
+	if (resolved !== root && !resolved.startsWith(root + sep)) {
+		throw new Error(`Path traversal blocked: ${tabId}`);
+	}
+	return resolved;
 }
 
-/** Ensure `.docwriter/` exists. Idempotent. Does NOT create
- * `.docwriter/agent/`; that directory is created lazily only if the agent
- * actually writes a scratch file. */
+/** Ensure `.docwriter/` exists. Context-aware. Idempotent. */
 export function ensureDocWriterDir() {
-	if (!existsSync(DOCWRITER_DIR)) {
-		mkdirSync(DOCWRITER_DIR, { recursive: true });
+	const dir = getEffectiveDocwriterDir();
+	if (!existsSync(dir)) {
+		mkdirSync(dir, { recursive: true });
 	}
 }
 
-/** Ensure the agent's scratch dir exists. Called lazily the first time the
- * agent writes a scratch file. Idempotent. */
+/** Ensure the agent's scratch dir exists. Context-aware. Idempotent. */
 export function ensureAgentScratchDir() {
 	ensureDocWriterDir();
-	if (!existsSync(AGENT_SCRATCH_DIR)) {
-		mkdirSync(AGENT_SCRATCH_DIR, { recursive: true });
+	const dir = getEffectiveScratchDir();
+	if (!existsSync(dir)) {
+		mkdirSync(dir, { recursive: true });
 	}
 }
 
 /** True iff `path` is the scratch dir itself or somewhere inside it. */
 export function isAgentScratchPath(path: string): boolean {
-	return path === AGENT_SCRATCH_DIR || path.startsWith(AGENT_SCRATCH_DIR + '/');
+	const dir = getEffectiveScratchDir();
+	return path === dir || path.startsWith(dir + '/');
 }

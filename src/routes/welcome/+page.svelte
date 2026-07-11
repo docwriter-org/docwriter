@@ -1,6 +1,9 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { fade, fly } from 'svelte/transition';
+	// This page is prerendered on landing deploys, so $env/dynamic/public is
+	// unavailable; static public env is baked in at build time, which is fine.
+	import * as publicEnv from '$env/static/public';
 	import type { PageData } from './$types';
 	import LogoMark from '$lib/components/LogoMark.svelte';
 
@@ -85,6 +88,9 @@
 	let agentActive = $derived(agentStruck && phase <= 2);
 	let showDirectiveCaret = $derived(phase === 0);
 	let showUserCaret = $derived(phase === 1);
+
+	const APP_URL =
+		(publicEnv as Record<string, string | undefined>).PUBLIC_APP_URL || 'https://app.docwriter.org';
 </script>
 
 <svelte:head>
@@ -94,12 +100,17 @@
 
 <div class="page" class:mounted>
 	<nav class="nav">
-		<span class="logo"><LogoMark size={30} title="DocWriter" />DocWriter</span>
+		<a class="logo" href="/welcome">
+			<LogoMark size={42} />
+			<span>DocWriter</span>
+		</a>
+		<div class="nav-right">
+			<a href={APP_URL} class="nav-link">User study login</a>
+		</div>
 	</nav>
 
 	<header class="hero">
-		<h1>DocWriter</h1>
-		<p class="subtitle">A <span class="hl">harness and user interface</span> for AI-assisted writing,<br/>from HCI researchers at UC Berkeley.</p>
+		<h1>A <span class="hl">harness and user interface</span> for AI-assisted writing,<br/>from HCI researchers at UC Berkeley.</h1>
 	</header>
 
 	<!-- Animated demo -->
@@ -108,7 +119,10 @@
 			<div class="demo-titlebar">
 				<div class="tb-left">
 					<span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
-					<span class="tb-logo">DocWriter</span>
+					<span class="tb-logo">
+						<LogoMark interactive={false} size={15} />
+						<span>DocWriter</span>
+					</span>
 					<span class="tb-link">Settings</span>
 				</div>
 				<div class="tb-right">
@@ -306,17 +320,40 @@
 	}
 	.page.mounted { opacity: 1; }
 
-	.nav { display: flex; align-items: center; justify-content: space-between; max-width: 920px; margin: 0 auto; padding: 20px 24px; }
-	.logo { display: inline-flex; align-items: center; gap: 10px; font-family: 'Lora', Georgia, serif; font-size: 20px; font-weight: 600; color: #1a1a1a; }
-	.logo :global(.dw-logo) { width: 30px; height: 30px; }
+	.nav { display: flex; align-items: center; justify-content: space-between; max-width: none; margin: 0; padding: 28px 64px; }
+	.logo { display: inline-flex; align-items: center; gap: 12px; font-family: 'Lora', Georgia, serif; font-size: 30px; line-height: 1; font-weight: 700; color: #1a1a1a; text-decoration: none; }
+	.logo :global(.dw-logo) { width: 42px; height: 42px; display: block; }
+	.logo:focus-visible { outline: 2px solid rgba(124, 58, 237, 0.45); outline-offset: 6px; border-radius: 8px; }
+	.nav-right { display: flex; align-items: center; gap: 20px; }
+	.nav-link {
+		min-height: 38px;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		padding: 0 16px;
+		border: 1px solid #d8d2c6;
+		border-radius: 999px;
+		background: #fffdf8;
+		box-shadow: 0 2px 8px rgba(20, 18, 16, 0.06);
+		color: #1a1a1a;
+		font-size: 13px;
+		font-weight: 600;
+		text-decoration: none;
+	}
+	.nav-link:hover {
+		border-color: rgba(124, 58, 237, 0.35);
+		background: #ffffff;
+		color: #111;
+	}
+	.nav-link:focus-visible {
+		outline: 2px solid rgba(124, 58, 237, 0.45);
+		outline-offset: 3px;
+	}
 
-	.hero { max-width: 640px; margin: 52px auto 0; padding: 0 24px; text-align: center; }
+	.hero { max-width: 980px; margin: 52px auto 0; padding: 0 24px; text-align: center; }
 	.hl { background: rgba(5,150,105,0.1); padding: 1px 4px; border-radius: 3px; }
 
-	h1 { margin: 0 0 10px; font-family: 'Lora', Georgia, serif; font-size: 40px; font-weight: 700; letter-spacing: -0.02em; }
-	.subtitle { margin: 0; font-size: 18px; line-height: 1.5; color: #333; font-style: italic; }
-	.subtitle a { color: #003262; text-decoration: none; font-weight: 500; font-style: normal; }
-	.subtitle a:hover { text-decoration: underline; }
+	h1 { margin: 0; font-family: 'Lora', Georgia, serif; font-size: 40px; line-height: 1.22; font-weight: 700; letter-spacing: 0; color: #1a1a1a; }
 
 	.demo-wrap { max-width: 940px; margin: 56px auto 0; padding: 0 24px; }
 	.demo-window { border: 1px solid #d4d1ca; border-radius: 10px; overflow: hidden; background: #fff; box-shadow: 0 6px 32px rgba(0,0,0,0.06); }
@@ -324,7 +361,8 @@
 	.tb-left, .tb-right { display: flex; align-items: center; gap: 7px; }
 	.dot { width: 10px; height: 10px; border-radius: 50%; }
 	.dot.r { background: #ec6a5e; } .dot.y { background: #f4bf4f; } .dot.g { background: #61c554; }
-	.tb-logo { margin-left: 10px; font-family: 'Lora', Georgia, serif; font-size: 13px; font-weight: 600; color: #333; }
+	.tb-logo { margin-left: 10px; display: inline-flex; align-items: center; gap: 5px; font-family: 'Lora', Georgia, serif; font-size: 13px; font-weight: 600; color: #333; }
+	.tb-logo :global(.dw-logo) { width: 15px; height: 15px; display: block; }
 	.tb-link { font-size: 11.5px; color: #888; }
 
 	.rules-bar { display: flex; gap: 6px; padding: 6px 14px; border-bottom: 1px solid #eae7e0; background: #faf8f4; flex-wrap: wrap; }
@@ -470,6 +508,9 @@
 		.demo-right { display: none; }
 	}
 	@media (max-width: 520px) {
+		.nav { padding: 22px 24px; }
+		.logo { gap: 9px; font-size: 24px; }
+		.logo :global(.dw-logo) { width: 32px; height: 32px; }
 		.try-row { flex-direction: column; align-items: center; }
 	}
 </style>

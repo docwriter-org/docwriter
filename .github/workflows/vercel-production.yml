@@ -1,13 +1,23 @@
-name: Deploy to Vercel
+name: Deploy production
 
 on:
   push:
     branches:
       - landing
   workflow_dispatch:
+    inputs:
+      fly_target:
+        description: Fly service to deploy after Vercel
+        type: choice
+        default: app
+        options:
+          - app
+          - runner
+          - all
+          - none
 
 concurrency:
-  group: vercel-production
+  group: production-deploy
   cancel-in-progress: true
 
 permissions:
@@ -57,3 +67,42 @@ jobs:
         env:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+      - uses: superfly/flyctl-actions/setup-flyctl@1.6
+
+      - name: Check runner changes
+        id: runner_changes
+        if: github.event_name == 'push'
+        run: |
+          before="${{ github.event.before }}"
+          after="$(git rev-parse HEAD)"
+
+          if [[ -z "${before}" || "${before}" =~ ^0+$ ]]; then
+            changed="$(git diff-tree --no-commit-id --name-only -r "${after}")"
+          else
+            changed="$(git diff --name-only "${before}" "${after}")"
+          fi
+
+          printf '%s\n' "${changed}"
+
+          if printf '%s\n' "${changed}" | grep -Eq '^(runner/|Dockerfile\.runner$|fly\.runner\.toml$)'; then
+            echo "changed=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "changed=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Deploy Fly runner
+        if: >-
+          (github.event_name == 'push' && steps.runner_changes.outputs.changed == 'true') ||
+          (github.event_name == 'workflow_dispatch' && (github.event.inputs.fly_target == 'runner' || github.event.inputs.fly_target == 'all'))
+        run: bash scripts/deploy-fly.sh runner
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_RUNNER_DEPLOY_TOKEN }}
+
+      - name: Deploy Fly app
+        if: >-
+          github.event_name == 'push' ||
+          (github.event_name == 'workflow_dispatch' && (github.event.inputs.fly_target == 'app' || github.event.inputs.fly_target == 'all'))
+        run: bash scripts/deploy-fly.sh app
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_APP_DEPLOY_TOKEN }}

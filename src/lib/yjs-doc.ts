@@ -1,7 +1,9 @@
 import * as Y from 'yjs';
 import { HocuspocusProvider } from '@hocuspocus/provider';
 import { env } from '$env/dynamic/public';
+import { IS_HOSTED } from '$lib/hosted';
 import { COMMENTS_MAP_NAME, FRAGMENT_NAME, REVIEW_ARRAY_NAME, USER_ORIGIN } from '$lib/shared/ydoc-codec';
+import { scheduleAuthRecovery } from '$lib/auth-recovery';
 import type { CommentThread, PendingReviewRound } from './types';
 
 /**
@@ -24,9 +26,13 @@ interface TabDoc {
 }
 
 function wsUrl(): string {
-	// Runtime (not build-time) env: the CLI picks a free WS port per instance
-	// and passes it via PUBLIC_DOCWRITER_WS_PORT, so the value can't be baked
-	// into the bundle at build time.
+	// Single-port mode (production / Fly): WebSocket is served on the same
+	// origin under /ws. Hosted mode always uses the single HTTP port.
+	if (IS_HOSTED || env.PUBLIC_DOCWRITER_SINGLE_PORT_WS === '1') {
+		const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+		return `${proto}//${location.host}/ws`;
+	}
+	// Dev / CLI mode: separate WS port.
 	const port = env.PUBLIC_DOCWRITER_WS_PORT || '3001';
 	return `ws://${location.hostname}:${port}`;
 }
@@ -81,16 +87,21 @@ function waitForProviderIdle(
 
 export const SERVER_INSTANCE_STORAGE_KEY = 'docwriter.serverInstanceId';
 
+let multiTenantUserId: string | null = null;
+
+/** Set synchronously at hydration from the root +page.server.ts load data.
+ * The server owns the Clerk userId; the client never reconstructs it. */
+export function setYDocUserId(userId: string | null): void {
+	multiTenantUserId = userId;
+}
+
 function currentInstanceToken(): string {
 	if (typeof window === 'undefined') return '';
 	return sessionStorage.getItem(SERVER_INSTANCE_STORAGE_KEY) ?? '';
 }
 
 let instanceMismatchHandled = false;
-function handleInstanceMismatch(): void {
-	if (typeof window === 'undefined') return;
-	if (instanceMismatchHandled) return;
-	instanceMismatchHandled = true;
+function resetDocsForReload(): void {
 	for (const [id, entry] of Array.from(registry)) {
 		if (entry.wsProvider) {
 			try { entry.wsProvider.destroy(); } catch {}
@@ -98,17 +109,37 @@ function handleInstanceMismatch(): void {
 		try { entry.ydoc.destroy(); } catch {}
 		registry.delete(id);
 	}
+}
+
+function handleInstanceMismatch(): void {
+	if (typeof window === 'undefined') return;
+	if (instanceMismatchHandled) return;
+	instanceMismatchHandled = true;
+	resetDocsForReload();
 	sessionStorage.removeItem(SERVER_INSTANCE_STORAGE_KEY);
 	window.location.reload();
 }
 
+function handleAuthenticationFailed(): void {
+	if (IS_HOSTED) {
+		resetDocsForReload();
+		scheduleAuthRecovery();
+		return;
+	}
+	handleInstanceMismatch();
+}
+
 function createProvider(ydoc: Y.Doc, tabId: string): HocuspocusProvider {
+	const docName =
+		IS_HOSTED && multiTenantUserId ? `${multiTenantUserId}:${tabId}` : tabId;
 	return new HocuspocusProvider({
 		url: wsUrl(),
-		name: tabId,
+		name: docName,
 		document: ydoc,
-		token: currentInstanceToken,
-		onAuthenticationFailed: handleInstanceMismatch
+		// Hosted auth rides on the Clerk session cookie during the WS
+		// upgrade; the token is a placeholder the server ignores.
+		token: IS_HOSTED ? 'cookie-auth' : currentInstanceToken,
+		onAuthenticationFailed: handleAuthenticationFailed
 	});
 }
 

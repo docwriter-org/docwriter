@@ -1,0 +1,34 @@
+.git
+node_modules
+
+# Build outputs
+build
+.svelte-kit
+.output
+.vercel
+.netlify
+.wrangler
+
+# Local state and secrets
+.docwriter
+.env
+.env.*
+!.env.example
+!.env.test
+
+# Not needed by either image build. NOTE: runner/ must stay in the context
+# (Dockerfile.runner copies runner/server.js), and `*.md` is root-only by
+# design — src/lib/server/skills/**/SKILL.md is imported via `?raw` at build.
+docs
+e2e
+.github
+*.md
+
+# Local editor/test artifacts
+.DS_Store
+Thumbs.db
+test-results
+playwright-report
+blob-report
+.playwright-mcp
+artifact_data

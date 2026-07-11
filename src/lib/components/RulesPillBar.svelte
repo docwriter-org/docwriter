@@ -2,6 +2,12 @@
 	import { X, Plus, Play, BookOpen } from 'lucide-svelte';
 	import { rules, pushHistory } from '$lib/stores';
 	import type { Rule } from '$lib/types';
+	import {
+		saveRules,
+		addRule as addRuleAction,
+		removeRule as removeRuleAction,
+		applyRules as applyRulesAction
+	} from '$lib/rules-actions';
 
 	interface Props {
 		onSubmit?: (trigger: string) => void;
@@ -24,34 +30,17 @@
 	let visibleRules = $derived(rulesList.slice(0, MAX_VISIBLE_PILLS));
 	let overflowCount = $derived(Math.max(0, rulesList.length - MAX_VISIBLE_PILLS));
 
-	async function saveRules(nextRules: Rule[]) {
-		rules.set(nextRules);
-		await fetch('/api/document', {
-			method: 'PUT',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ meta: { rules: nextRules } })
-		});
-	}
-
 	function addRule() {
-		if (!newRule.trim()) return;
-		const text = newRule.trim();
-		const next = [...rulesList, { id: 'r' + Date.now(), text }];
-		void saveRules(next);
-		pushHistory({ type: 'user_action', timestamp: Date.now(), description: `Added rule: "${text}"` });
+		const result = addRuleAction(rulesList, newRule);
+		if (!result) return;
 		newRule = '';
 		requestAnimationFrame(() => inputEl?.focus());
-		onSubmit?.(`The user added a new writing rule: "${text}". Revise the open files to comply.`);
+		onSubmit?.(result.trigger);
 	}
 
 	function removeRule(id: string) {
-		const rule = rulesList.find((r) => r.id === id);
-		const next = rulesList.filter((x) => x.id !== id);
-		void saveRules(next);
 		if (editingRuleId === id) closePopover();
-		if (rule) {
-			pushHistory({ type: 'user_action', timestamp: Date.now(), description: `Removed rule: "${rule.text}"` });
-		}
+		removeRuleAction(rulesList, id);
 	}
 
 	function startEditingRule(id: string) {
@@ -136,16 +125,7 @@
 	}
 
 	function applyRules() {
-		if (rulesList.length === 0) return;
-		const ruleList = rulesList.map((r) => `- ${r.text}`).join('\n');
-		onSubmit?.(
-			`Review files against the following rules and fix violations:\n${ruleList}\n\n` +
-				`Scope: I clicked "Apply rules" without specifying which tabs. ` +
-				`If more than one tab is open, call AskUserQuestion FIRST to confirm scope ` +
-				`(e.g. "Just the active tab", "All open tabs", or let me pick a subset) ` +
-				`before making any edits. If only one tab is open, skip the question and proceed.`
-		);
-		pushHistory({ type: 'user_action', timestamp: Date.now(), description: `Applying ${rulesList.length} rule${rulesList.length === 1 ? '' : 's'}` });
+		applyRulesAction(rulesList, onSubmit);
 	}
 </script>
 

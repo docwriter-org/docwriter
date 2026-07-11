@@ -17,8 +17,9 @@ import { getEffectiveScratchDir } from '$lib/server/document-files';
 import { existsSync, readdirSync, rmSync } from 'fs';
 import { join } from 'path';
 
-export const GET: RequestHandler = async () => {
+export const GET: RequestHandler = async ({ locals }) => {
 	return json({
+		userId: locals.auth?.userId ?? null,
 		sessionId: getSessionId(),
 		serverInstanceId: getServerInstanceId(),
 		recentActions: getRecentActions(),

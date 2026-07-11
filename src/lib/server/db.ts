@@ -1,19 +1,26 @@
 /**
- * SQLite connection singleton. Lazily opens `.docwriter/docwriter.db` on
- * first use and runs any pending migrations.
+ * SQLite connection. In single-user mode (dev/CLI), a module-level singleton.
+ * In multi-tenant mode, resolves per-user via AsyncLocalStorage context.
  */
 import BetterSqlite3, { type Database } from 'better-sqlite3';
 import { join } from 'path';
 import { DOCWRITER_DIR, ensureDocWriterDir } from './document-files';
 import { runMigrations } from './db-schema';
+import { requireActiveUserId } from './request-context';
+import { getDbForUser } from './workspace';
 
 const DB_FILE = join(DOCWRITER_DIR, 'docwriter.db');
 
 let cachedDb: Database | null = null;
 
-/** Open (or return) the singleton DB connection. WAL mode is enabled so
- * reads don't block writes. Migrations run once per process on first open. */
+/** Open (or return) the DB connection for the current context. In multi-tenant
+ * mode, resolves the per-user DB from the AsyncLocalStorage context and THROWS
+ * when no context is active — falling back to the shared singleton there
+ * would silently bleed data across tenants. Single-user mode returns the
+ * singleton. */
 export function getDb(): Database {
+	const userId = requireActiveUserId();
+	if (userId) return getDbForUser(userId);
 	if (cachedDb) return cachedDb;
 	ensureDocWriterDir();
 	const db = new BetterSqlite3(DB_FILE);

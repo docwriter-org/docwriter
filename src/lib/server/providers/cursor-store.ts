@@ -1,3 +1,4 @@
+import type { Database } from 'better-sqlite3';
 import { getDb } from '$lib/server/db';
 import { getEffectiveRoot } from '$lib/server/document-files';
 
@@ -41,77 +42,70 @@ function seqForOffset(offset: string | null | undefined): number {
 
 export class DocWriterCursorLocalAgentStore {
 	private readonly projectKey: string;
+	// Constructed inside the request context; binding the tenant's DB handle
+	// here keeps later SDK callbacks (outside AsyncLocalStorage) on the
+	// right database.
+	private readonly db: Database;
 
 	constructor() {
+		this.db = getDb();
 		this.projectKey = getEffectiveRoot();
 	}
 
-	private withContext<T>(fn: () => T): T {
-		return fn();
-	}
-
 	private getLatest(subpath: string): CursorRecord | null {
-		return this.withContext(() => {
-			const row = getDb().prepare(`
-				SELECT id, subpath, entry_json, created
-				FROM provider_session_entries
-				WHERE provider = ? AND project_key = ? AND session_id = ? AND subpath = ?
-				ORDER BY id DESC
-				LIMIT 1
-			`).get(PROVIDER, this.projectKey, 'cursor', subpath) as Row | undefined;
-			return row ? JSON.parse(row.entry_json) as CursorRecord : null;
-		});
+		const row = this.db.prepare(`
+			SELECT id, subpath, entry_json, created
+			FROM provider_session_entries
+			WHERE provider = ? AND project_key = ? AND session_id = ? AND subpath = ?
+			ORDER BY id DESC
+			LIMIT 1
+		`).get(PROVIDER, this.projectKey, 'cursor', subpath) as Row | undefined;
+		return row ? JSON.parse(row.entry_json) as CursorRecord : null;
 	}
 
 	private putLatest(subpath: string, value: CursorRecord): void {
-		this.withContext(() => {
-			const db = getDb();
-			db.transaction(() => {
-				db.prepare(`
-					DELETE FROM provider_session_entries
-					WHERE provider = ? AND project_key = ? AND session_id = ? AND subpath = ?
-				`).run(PROVIDER, this.projectKey, 'cursor', subpath);
-				db.prepare(`
-					INSERT INTO provider_session_entries
-						(provider, project_key, session_id, subpath, entry_json, created)
-					VALUES (?, ?, ?, ?, ?, ?)
-				`).run(PROVIDER, this.projectKey, 'cursor', subpath, JSON.stringify(value), Date.now());
-			})();
-		});
+		const db = this.db;
+		db.transaction(() => {
+			db.prepare(`
+				DELETE FROM provider_session_entries
+				WHERE provider = ? AND project_key = ? AND session_id = ? AND subpath = ?
+			`).run(PROVIDER, this.projectKey, 'cursor', subpath);
+			db.prepare(`
+				INSERT INTO provider_session_entries
+					(provider, project_key, session_id, subpath, entry_json, created)
+				VALUES (?, ?, ?, ?, ?, ?)
+			`).run(PROVIDER, this.projectKey, 'cursor', subpath, JSON.stringify(value), Date.now());
+		})();
 	}
 
 	private listLatest(prefix: string): Array<{ subpath: string; value: CursorRecord }> {
-		return this.withContext(() => {
-			const rows = getDb().prepare(`
-				SELECT id, subpath, entry_json, created
-				FROM provider_session_entries
-				WHERE provider = ? AND project_key = ? AND session_id = ? AND subpath LIKE ?
-				ORDER BY id ASC
-			`).all(PROVIDER, this.projectKey, 'cursor', `${prefix}%`) as Row[];
-			return rows.map((row) => ({
-				subpath: row.subpath,
-				value: JSON.parse(row.entry_json) as CursorRecord
-			}));
-		});
+		const rows = this.db.prepare(`
+			SELECT id, subpath, entry_json, created
+			FROM provider_session_entries
+			WHERE provider = ? AND project_key = ? AND session_id = ? AND subpath LIKE ?
+			ORDER BY id ASC
+		`).all(PROVIDER, this.projectKey, 'cursor', `${prefix}%`) as Row[];
+		return rows.map((row) => ({
+			subpath: row.subpath,
+			value: JSON.parse(row.entry_json) as CursorRecord
+		}));
 	}
 
 	private deleteWhere(predicate: (subpath: string, value: CursorRecord) => boolean): void {
-		this.withContext(() => {
-			const db = getDb();
-			const rows = db.prepare(`
-				SELECT id, subpath, entry_json, created
-				FROM provider_session_entries
-				WHERE provider = ? AND project_key = ? AND session_id = ?
-			`).all(PROVIDER, this.projectKey, 'cursor') as Row[];
-			const ids = rows
-				.filter((row) => predicate(row.subpath, JSON.parse(row.entry_json) as CursorRecord))
-				.map((row) => row.id);
-			if (ids.length === 0) return;
-			const del = db.prepare('DELETE FROM provider_session_entries WHERE id = ?');
-			db.transaction(() => {
-				for (const id of ids) del.run(id);
-			})();
-		});
+		const db = this.db;
+		const rows = db.prepare(`
+			SELECT id, subpath, entry_json, created
+			FROM provider_session_entries
+			WHERE provider = ? AND project_key = ? AND session_id = ?
+		`).all(PROVIDER, this.projectKey, 'cursor') as Row[];
+		const ids = rows
+			.filter((row) => predicate(row.subpath, JSON.parse(row.entry_json) as CursorRecord))
+			.map((row) => row.id);
+		if (ids.length === 0) return;
+		const del = db.prepare('DELETE FROM provider_session_entries WHERE id = ?');
+		db.transaction(() => {
+			for (const id of ids) del.run(id);
+		})();
 	}
 
 	readonly agents = {
@@ -256,8 +250,8 @@ export class DocWriterCursorLocalAgentStore {
 			payload?: unknown;
 			payloadRef?: string | null;
 			idempotencyKey?: string | null;
-		}) => this.withContext(() => {
-			const db = getDb();
+		}) => {
+			const db = this.db;
 			const existing =
 				input.idempotencyKey
 					? db.prepare(`
@@ -297,25 +291,24 @@ export class DocWriterCursorLocalAgentStore {
 				VALUES (?, ?, ?, ?, ?, ?)
 			`).run(PROVIDER, this.projectKey, 'cursor', `run-events/${input.runId}`, JSON.stringify(doc), doc.createdAt);
 			return doc;
-		}),
+		},
 
-		list: async (input: { runId: string; afterOffset?: string | null; limit?: number }) =>
-			this.withContext(() => {
-				const afterSeq = seqForOffset(input.afterOffset);
-				const all = getDb().prepare(`
-					SELECT id, subpath, entry_json, created
-					FROM provider_session_entries
-					WHERE provider = ? AND project_key = ? AND session_id = ? AND subpath = ?
-					ORDER BY id ASC
-				`).all(PROVIDER, this.projectKey, 'cursor', `run-events/${input.runId}`) as Row[];
-				const matching = all
-					.map((row) => JSON.parse(row.entry_json) as CursorRecord)
-					.filter((event) => (event.seq ?? 0) > afterSeq);
-				const limit = input.limit && input.limit > 0 ? input.limit : matching.length;
-				const items = matching.slice(0, limit);
-				const nextOffset = items.length > 0 ? String(items[items.length - 1].offset) : undefined;
-				return nextOffset ? { items, nextOffset } : { items };
-			}),
+		list: async (input: { runId: string; afterOffset?: string | null; limit?: number }) => {
+			const afterSeq = seqForOffset(input.afterOffset);
+			const all = this.db.prepare(`
+				SELECT id, subpath, entry_json, created
+				FROM provider_session_entries
+				WHERE provider = ? AND project_key = ? AND session_id = ? AND subpath = ?
+				ORDER BY id ASC
+			`).all(PROVIDER, this.projectKey, 'cursor', `run-events/${input.runId}`) as Row[];
+			const matching = all
+				.map((row) => JSON.parse(row.entry_json) as CursorRecord)
+				.filter((event) => (event.seq ?? 0) > afterSeq);
+			const limit = input.limit && input.limit > 0 ? input.limit : matching.length;
+			const items = matching.slice(0, limit);
+			const nextOffset = items.length > 0 ? String(items[items.length - 1].offset) : undefined;
+			return nextOffset ? { items, nextOffset } : { items };
+		},
 
 		delete: async ({ filter }: { filter: { runIds?: readonly string[] } }) => {
 			const runIds = filter.runIds && filter.runIds.length > 0 ? new Set(filter.runIds) : null;
