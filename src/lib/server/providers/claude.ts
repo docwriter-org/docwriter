@@ -57,10 +57,10 @@ function buildDocwriterMcp() {
 	const tools: any[] = [
 		tool(
 			'propose_rule',
-			'Propose a writing rule for the user to review.',
+			'Propose a writing rule for the user to review. Follow the Proposing rules section: at most one per turn, and only with evidence.',
 			{
-				text: z.string().describe('The rule, written as a short imperative.'),
-				reason: z.string().optional().describe('One sentence explaining the pattern.')
+				text: z.string().describe('The rule, a short imperative.'),
+				reason: z.string().optional().describe('The evidence in one sentence, e.g. "you removed em dashes in three edits today".')
 			},
 			async () => ({ content: [{ type: 'text', text: 'Rule proposal sent to the user for review.' }] })
 		),
@@ -103,7 +103,7 @@ function buildDocwriterMcp() {
 		),
 		tool(
 			'review_action',
-			'Accept/reject pending review edits or resolve/reopen comment threads ONLY when the user explicitly asks you to do that action. This mutates document review state.',
+			'Accept or reject pending edits, or resolve or reopen comment threads, only when the user\'s current message explicitly asks for that action. This mutates document review state.',
 			{
 				path: z.string().describe('Workspace-relative path or absolute path inside the workspace.'),
 				action: z.enum(['accept_round', 'accept_all', 'reject_round', 'reject_all', 'resolve_thread', 'reopen_thread']).describe('The explicit review action requested by the user.'),
