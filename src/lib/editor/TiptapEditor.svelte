@@ -524,11 +524,9 @@
 		const prefix = isCustom
 			? `The user flagged this passage with feedback "${label}"`
 			: `The user flagged this passage as "${label}"`;
-		const threadHint = threadId
-			? mode === 'comment'
-				? ` A thread is open for this feedback (thread_id="${threadId}"). Reply on it with reply_to_comment using that thread_id — do NOT edit the document. You cannot open new threads.`
-				: ` A thread is open recording this feedback (thread_id="${threadId}"). Make your edit_doc call with thread_id="${threadId}" so it attaches to this thread; the edit is your response.`
-			: '';
+		// The system prompt's "Where a response goes" rules carry the routing;
+		// the trigger only needs the facts (mode tag + thread id).
+		const threadHint = threadId ? ` A thread is open for this feedback (thread_id="${threadId}").` : '';
 		return `${prefix}. ${tag} ${verb} it: "${passage}"${threadHint}`;
 	}
 
@@ -1504,27 +1502,14 @@
 						),
 						`- [user] ${replyText}`
 					].join('\n');
-					// If this thread already carries a pending edit, a reply is
-					// feedback ON that edit — steer the agent to REVISE via
-					// edit_doc (tagged to the thread) rather than chit-chat.
+					// Routing (revise the pending edit vs. reply in words) lives in
+					// the system prompt's "Where a response goes" rules; the trigger
+					// carries the facts only.
 					const hasPendingEdit = rounds.some((r) => r.feedbackThreadId === t.id);
-					const instruction = hasPendingEdit
-						? `This thread has a PENDING EDIT and the user's reply is feedback on it. ` +
-							`Propose a REVISED edit with edit_doc(thread_id="${t.id}") that addresses the feedback — ` +
-							`base old_string on the CURRENT document text, not your previous proposal; it supersedes the current edit. ` +
-							`Do NOT reply with conversational text unless the user is purely asking a question and clearly not requesting a change. ` +
-							`You cannot open new threads.`
-						: `Decide whether to reply on the same thread (call reply_to_comment with thread_id="${t.id}") or, ` +
-							`if the user's reply is now a clear edit request, call edit_doc(thread_id="${t.id}") instead — ` +
-							`either way your response stays attached to this thread. You cannot open new threads.`;
 					const trigger =
-						`The user replied on comment thread thread_id="${t.id}" on this tab. ` +
-						`${instruction}\n\n` +
-						`This thread is anchored to a SPECIFIC passage — the text the user commented on:\n` +
-						`"${t.anchor.quote}"\n` +
-						`If you edit for THIS thread, your edit_doc MUST target this passage (find this exact text and change it there) and pass thread_id="${t.id}". ` +
-						`Do not satisfy this thread by editing a different paragraph or an unrelated \`[[ ]]\` directive. ` +
-						`(If you separately notice \`[[ ]]\` directives elsewhere worth acting on, handle them as their OWN edit_doc calls WITHOUT a thread_id — each gets its own new thread — not under this thread.)\n\n` +
+						`The user replied on comment thread thread_id="${t.id}" on this tab` +
+						`${hasPendingEdit ? ' (it has a pending edit)' : ''}.\n` +
+						`Anchor passage: "${t.anchor.quote}"\n` +
 						`User's latest reply: "${replyText}"\n` +
 						`Full thread (latest reply included):\n${transcript}`;
 					onSubmit?.(trigger);

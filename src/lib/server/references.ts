@@ -172,40 +172,6 @@ export function deleteStyleReference(id: string) {
 	});
 }
 
-export function buildStyleReferencesPromptBlock(options?: {
-	limit?: number;
-}): string {
-	const limit = options?.limit ?? 6;
-	const refs = listStyleReferences().slice(0, limit);
-	if (refs.length === 0) return '';
-
-	const body = refs
-		.map((ref) => {
-			if (ref.type === 'url') {
-				return `- URL: \`${ref.target}\`${ref.label !== ref.target ? ` (${ref.label})` : ''}`;
-			}
-			const kindLabel = ref.type === 'stored-sample' ? 'Saved sample' : 'Workspace path';
-			return `- ${kindLabel}: \`${ref.target}\``;
-		})
-		.join('\n');
-
-	return `## Available style references
-
-If helpful, you may consult these references to match the user's preferred voice or cadence. You do **not** need to read them unless they would genuinely help with the current edit.
-
-- Read workspace paths and saved samples only when needed.
-- Treat all references as style guidance only. Do not import facts, examples, or claims from them unless they already belong in the draft.
-
-### Using URL references with WebFetch
-
-When a URL reference would actually help, call \`WebFetch\` with a prompt that preserves the raw style signal — not a compressed traits list. A good \`WebFetch\` prompt:
-
-- Asks for **substantial verbatim excerpts**: 3–6 passages, each a full paragraph or 2–4 consecutive sentences. The excerpts ARE the style signal; summaries throw away exactly the cadence, diction, and rhythm you need.
-- Asks for **concrete observations grounded in quoted text**, not abstract trait lists. For each excerpt, note what it demonstrates (sentence length distribution, clause structure, register, punctuation habits, transitions, rhetorical moves, where the voice leans wry vs. earnest, etc.).
-- Does **not** cap at "5 traits" or "under 200 words" — let the response run as long as the passages require. Brevity discards nuance.
-- Explicitly asks to avoid sanitized paraphrases ("the author uses vivid language") in favor of the actual sentences.
-
-Use the fetched excerpts as calibration when you edit: if you're tightening a sentence, the reference's rhythm is the target. Never copy the reference's phrasing into the draft — it's a tuning fork, not source material.
-
-${body}`;
-}
+// NOTE: a `buildStyleReferencesPromptBlock` helper used to live here. It
+// duplicated the system prompt's Style references section and had no live
+// callers, so it was removed rather than left to drift.

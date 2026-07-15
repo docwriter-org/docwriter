@@ -521,7 +521,7 @@ export function editScratch(
 
 const editDocTool = tool(
 	'edit_doc',
-	'Replace `old_string` with `new_string` in the given file. For an open tab, this creates or updates a pending review proposal; the live document changes only after the user accepts it. For a file under `.docwriter/agent/scratch/` it writes plain text. By default `old_string` must match exactly once; pass `replace_all: true` to replace every occurrence as a single proposal.',
+	'Replace old_string with new_string in the given file. For a workspace file this creates or updates a pending review proposal. The document changes only when the user accepts it. For a path under .docwriter/agent/scratch/ it writes plain text. old_string must match exactly once. Pass replace_all: true to replace every occurrence in one proposal, which suits renames and consistent term changes.',
 	{
 		file_path: z
 			.string()
@@ -544,7 +544,7 @@ const editDocTool = tool(
 			.string()
 			.optional()
 			.describe(
-				'Attach this edit to an existing comment thread. Pass the thread_id when you are REVISING the edit a thread is about (e.g. the user replied with feedback on a pending edit) — the proposal lands inside that thread\'s card and supersedes the thread\'s current pending edit. Omit it for a brand-new, unsolicited edit (the system opens a fresh thread for it automatically).'
+				'Pass the thread id when you are revising the edit that thread is about. The proposal lands in that thread\'s card and supersedes its pending edit. Omit it for a fresh edit. The system opens a thread automatically.'
 			)
 	},
 	async ({ file_path, old_string, new_string, replace_all, thread_id }) => {
@@ -625,7 +625,7 @@ const editDocTool = tool(
 
 const readDocTool = tool(
 	'read_doc',
-	'Read the current content of an open tab or a scratch file. For tabs, returns the latest review-aware content: the newest pending proposal if one exists, otherwise the committed live document.',
+	'Read the current content of a workspace file or scratch file. For an open tab it returns the review-aware content: the newest pending proposal if one exists, otherwise the committed document.',
 	{
 		file_path: z
 			.string()
@@ -694,7 +694,7 @@ const readDocTool = tool(
 
 const writeDocTool = tool(
 	'write_doc',
-	'Replace the full content of a workspace file or scratch file. For a file_path that already exists on disk (whether the tab is open or not), this creates a pending review proposal; the committed document only changes on Accept. For a file_path that does NOT exist, write_doc creates the file with the given content and opens it as a new tab — no review round is needed because there is nothing to compare against. For scratch paths (under .docwriter/agent/scratch/), it just writes the file directly.',
+	'Replace the full content of a workspace or scratch file. If the file exists, the write lands as a pending review proposal. If it does not exist, write_doc creates it and opens it as a new tab with no proposal. Scratch paths are written directly.',
 	{
 		file_path: z
 			.string()
@@ -796,7 +796,7 @@ function createAgentCommentThread(
 
 const commentDocTool = tool(
 	'comment_doc',
-	'Create a new agent comment thread anchored to existing text in a workspace document. Use this at Medium autonomy when a comment would help without changing the document, or at High autonomy when a comment is more useful than an edit. The comment is visible to the user in the document gutter. It does not change document text. You CANNOT open new threads at Low autonomy — only reply on threads the user opened.',
+	'Create a new comment thread anchored to existing text in a workspace document. Allowed at Medium or High autonomy, or when the user asks for a comment. The comment appears in the document gutter and does not change document text. At Low autonomy you may only reply on threads the user opened.',
 	{
 		file_path: z
 			.string()
@@ -873,7 +873,7 @@ const commentDocTool = tool(
 
 const replyToCommentTool = tool(
 	'reply_to_comment',
-	'Reply on an existing comment thread the user has opened. Use this when the user\'s feedback is open-ended, exploratory, or unsure ("what do you think", "idk", "is this right?", "maybe X?"), or when they ask a question that doesn\'t demand an immediate edit. Say what you think, optionally sketch an edit in `proposed_edit` (the user can approve it to apply later). To start a NEW agent-authored thread (Medium/High autonomy), use `comment_doc` instead. If there is no relevant thread and autonomy does not permit a new comment, prefer `edit_doc`, `AskUserQuestion`, or staying silent.',
+	'Reply on an existing comment thread. Route per the "Where a response goes" rules in your instructions. Write in the first person and keep it to a few sentences. You may attach proposed_edit for the user to approve later. To start a new thread, use comment_doc.',
 	{
 		file_path: z
 			.string()
@@ -955,7 +955,7 @@ const replyToCommentTool = tool(
  * prompt only carries stubs; call this tool to get the full conversations. */
 const listThreadsTool = tool(
 	'list_threads',
-	'Return all open (unresolved) comment threads for a workspace tab, including every message in each thread. Use this when you need to read a thread\'s conversation before replying or to understand the full context of user feedback. The prompt only shows thread IDs and anchor quotes to keep context short; the full messages live here.',
+	'Return all open comment threads for a workspace tab, with every message in each. The prompt shows only thread ids and anchor quotes. Call this to read the full conversation before replying.',
 	{
 		file_path: z
 			.string()
