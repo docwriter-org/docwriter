@@ -536,6 +536,23 @@ if (typeof window !== 'undefined') {
 	showSidebar.subscribe((v) => window.localStorage.setItem(SHOW_SIDEBAR_KEY, String(v)));
 }
 
+/** AI-provenance view toggle: when true, text the agent wrote (tracked as
+ * the `ai` Yjs format attribute, applied at accept time) is colored in the
+ * editor so the user can see at a glance which prose is theirs and which is
+ * the AI's. Pure view state — flipping it never touches the document.
+ * Persisted to localStorage so it survives reloads. Default off. */
+const SHOW_AI_PROVENANCE_KEY = 'docwriter.showAiProvenance';
+function readShowAiProvenance(): boolean {
+	if (typeof window === 'undefined') return false;
+	return window.localStorage.getItem(SHOW_AI_PROVENANCE_KEY) === 'true';
+}
+export const showAiProvenance = writable<boolean>(readShowAiProvenance());
+if (typeof window !== 'undefined') {
+	showAiProvenance.subscribe((v) =>
+		window.localStorage.setItem(SHOW_AI_PROVENANCE_KEY, String(v))
+	);
+}
+
 /** Whether the floating agent dock is expanded into a panel (showing the
  * history log + dock controls) or collapsed to a pill in the bottom-right.
  * Persisted so it survives reloads. Default collapsed. */

@@ -10,6 +10,7 @@
  * `REVIEW_ARRAY_NAME`, `AGENT_ORIGIN`) so the client and server never drift.
  */
 import * as Y from 'yjs';
+import DiffMatchPatch from 'diff-match-patch';
 import type { CommentThread, PendingReviewRound } from '$lib/types';
 
 /**
@@ -48,6 +49,18 @@ export const AGENT_ORIGIN = 'agent';
 export const USER_ORIGIN = 'user';
 export const SYSTEM_ORIGIN = 'system';
 
+/** Yjs text-format attribute (and Tiptap mark name) that flags a run of text
+ * as AI-authored. Set by the accept path when an agent round lands; the
+ * client renders it as `span[data-ai-text]` and the provenance toggle colors
+ * it. Absence of the attribute means human-authored — pre-existing docs need
+ * no migration. Provenance lives only in the CRDT (SQLite `yjs_updates`);
+ * `serializeFragment` strips it, so `document.md`, `read_doc`, prompt diffs
+ * and stale checks all keep seeing plain text. */
+export const AI_ATTR = 'ai';
+
+/** One contiguous span of paragraph text with a single provenance flag. */
+export type ProvenanceRun = { text: string; ai: boolean };
+
 export function getFragment(ydoc: Y.Doc): Y.XmlFragment {
 	return ydoc.getXmlFragment(FRAGMENT_NAME);
 }
@@ -83,23 +96,196 @@ export function serializeFragment(fragment: Y.XmlFragment): string {
 }
 
 function textOf(node: unknown): string {
-	if (node instanceof Y.XmlText) return node.toString();
+	return runsOf(node)
+		.map((r) => r.text)
+		.join('');
+}
+
+/** Flatten a node to provenance runs. Mirrors `textOf`'s walk exactly:
+ * `<hardBreak/>` becomes a '\n' run, nested elements recurse. NOTE:
+ * `Y.XmlText.toString()` cannot be used for text extraction once formatting
+ * attributes exist — it serializes formatted ranges as XML tags
+ * (`a <ai>b</ai>`), so all text extraction goes through `toDelta()`. */
+function runsOf(node: unknown): ProvenanceRun[] {
+	if (node instanceof Y.XmlText) {
+		const runs: ProvenanceRun[] = [];
+		for (const d of node.toDelta() as Array<{
+			insert?: unknown;
+			attributes?: Record<string, unknown>;
+		}>) {
+			if (typeof d.insert === 'string' && d.insert.length > 0) {
+				runs.push({ text: d.insert, ai: Boolean(d.attributes?.[AI_ATTR]) });
+			}
+		}
+		return runs;
+	}
 	if (node instanceof Y.XmlElement || node instanceof Y.XmlFragment) {
-		const parts: string[] = [];
+		const runs: ProvenanceRun[] = [];
 		(node as Y.XmlElement).forEach((child: unknown) => {
 			if (
 				child instanceof Y.XmlElement &&
 				typeof (child as Y.XmlElement).nodeName === 'string' &&
 				(child as Y.XmlElement).nodeName === 'hardBreak'
 			) {
-				parts.push('\n');
+				runs.push({ text: '\n', ai: false });
 				return;
 			}
-			parts.push(textOf(child));
+			runs.push(...runsOf(child));
 		});
-		return parts.join('');
+		return runs;
 	}
-	return '';
+	return [];
+}
+
+/** Per-paragraph runs with typography normalized run-by-run. Every
+ * normalizeTypography replacement is context-free, so normalizing each run
+ * individually equals normalizing the concatenation — offsets computed
+ * against the joined text stay valid against the runs. */
+function paragraphRunsNormalized(child: unknown): ProvenanceRun[] {
+	const out: ProvenanceRun[] = [];
+	for (const r of runsOf(child)) {
+		const text = normalizeTypography(r.text);
+		if (text.length > 0) out.push({ text, ai: r.ai });
+	}
+	return out;
+}
+
+/** Join per-paragraph run lists with '\n' separator runs, mirroring how
+ * `serializeFragment` joins paragraph texts. */
+function joinParagraphRuns(paraRuns: ProvenanceRun[][]): ProvenanceRun[] {
+	const out: ProvenanceRun[] = [];
+	paraRuns.forEach((runs, i) => {
+		if (i > 0) out.push({ text: '\n', ai: false });
+		out.push(...runs);
+	});
+	return out;
+}
+
+/** Slice a run list by character offsets (like String.slice on the joined
+ * text), preserving each character's provenance flag. */
+function sliceRuns(runs: ProvenanceRun[], from: number, to: number): ProvenanceRun[] {
+	const out: ProvenanceRun[] = [];
+	let cursor = 0;
+	for (const run of runs) {
+		const runStart = cursor;
+		const runEnd = cursor + run.text.length;
+		cursor = runEnd;
+		if (runEnd <= from) continue;
+		if (runStart >= to) break;
+		const text = run.text.slice(Math.max(0, from - runStart), Math.min(run.text.length, to - runStart));
+		if (text.length > 0) out.push({ text, ai: run.ai });
+	}
+	return out;
+}
+
+const dmp = new DiffMatchPatch.diff_match_patch();
+
+/** Word-level diff. A raw character diff produces mid-word provenance
+ * boundaries — "cat" → "ferret" shares the trailing "t", so "ferre" would be
+ * AI and "t" human, and the editor would color half a word. Instead we
+ * tokenize both texts into words + whitespace runs, encode each distinct
+ * token as one sentinel char (diff-match-patch's lines-to-chars technique at
+ * word granularity), diff in token space, and run `diff_cleanupSemantic`
+ * THERE — so a lone surviving token sandwiched between rewrites merges into
+ * one phrase-level chunk, while genuinely surviving words stay unmarked.
+ * Decoding restores the real text; every boundary lands on a token edge.
+ * Falls back to a plain character diff in the (pathological) case of more
+ * distinct tokens than sentinel code points. */
+function diffWordLevel(oldText: string, newText: string): Array<[number, string]> {
+	const tokenRe = /\S+|\s+/g;
+	const tokenToChar = new Map<string, string>();
+	const charToToken = new Map<string, string>();
+	// Sentinel code points: skip the surrogate range so decoding can walk
+	// the encoded string one UTF-16 unit at a time.
+	let nextCode = 1;
+	const encode = (text: string): string | null => {
+		let out = '';
+		for (const token of text.match(tokenRe) ?? []) {
+			let c = tokenToChar.get(token);
+			if (c === undefined) {
+				if (nextCode === 0xd800) nextCode = 0xe000;
+				if (nextCode >= 0xfff0) return null;
+				c = String.fromCharCode(nextCode++);
+				tokenToChar.set(token, c);
+				charToToken.set(c, token);
+			}
+			out += c;
+		}
+		return out;
+	};
+	const encodedOld = encode(oldText);
+	const encodedNew = encodedOld === null ? null : encode(newText);
+	if (encodedOld === null || encodedNew === null) {
+		const charDiffs = dmp.diff_main(oldText, newText);
+		dmp.diff_cleanupSemantic(charDiffs);
+		return charDiffs as Array<[number, string]>;
+	}
+	const diffs = dmp.diff_main(encodedOld, encodedNew, false);
+	dmp.diff_cleanupSemantic(diffs);
+	return diffs.map(([op, chars]) => {
+		let text = '';
+		for (let i = 0; i < chars.length; i += 1) text += charToToken.get(chars[i]) ?? '';
+		return [op, text] as [number, string];
+	});
+}
+
+/** Transform `oldRuns` into `newText`, marking inserted text as AI-authored
+ * and carrying the provenance of surviving text through unchanged. Uses the
+ * word-level diff above, so an agent rewrite of half a sentence marks that
+ * half as AI — never sub-word fragments, never the untouched remainder. */
+function diffRunsToText(oldRuns: ProvenanceRun[], newText: string): ProvenanceRun[] {
+	const oldText = oldRuns.map((r) => r.text).join('');
+	if (oldText === newText) return oldRuns;
+	if (!newText) return [];
+	if (!oldText) return [{ text: newText, ai: true }];
+	const diffs = diffWordLevel(oldText, newText);
+	const out: ProvenanceRun[] = [];
+	let cursor = 0;
+	for (const [op, text] of diffs) {
+		if (op === 0) {
+			out.push(...sliceRuns(oldRuns, cursor, cursor + text.length));
+			cursor += text.length;
+		} else if (op === -1) {
+			cursor += text.length;
+		} else {
+			out.push({ text, ai: true });
+		}
+	}
+	return out;
+}
+
+/** Build `<paragraph>` elements from runs, splitting on '\n' like
+ * `buildParagraphElements`. Formatted text is written via `applyDelta`:
+ * unlike `Y.Text.insert` without attributes — which INHERITS the formatting
+ * of the character before the insertion point — `applyDelta` inserts
+ * attribute-less ops as genuinely unformatted. */
+function buildParagraphsFromRuns(runs: ProvenanceRun[]): Y.XmlElement[] {
+	const paras: ProvenanceRun[][] = [[]];
+	for (const run of runs) {
+		const parts = run.text.split('\n');
+		parts.forEach((part, i) => {
+			if (i > 0) paras.push([]);
+			if (part.length > 0) {
+				const current = paras[paras.length - 1];
+				const last = current[current.length - 1];
+				if (last && last.ai === run.ai) last.text += part;
+				else current.push({ text: part, ai: run.ai });
+			}
+		});
+	}
+	return paras.map((paraRuns) => {
+		const p = new Y.XmlElement('paragraph');
+		if (paraRuns.length > 0) {
+			const t = new Y.XmlText();
+			t.applyDelta(
+				paraRuns.map((r) =>
+					r.ai ? { insert: r.text, attributes: { [AI_ATTR]: true } } : { insert: r.text }
+				)
+			);
+			p.insert(0, [t]);
+		}
+		return p;
+	});
 }
 
 function buildParagraphElements(content: string): Y.XmlElement[] {
@@ -119,6 +305,13 @@ function buildParagraphElements(content: string): Y.XmlElement[] {
  * only deleting + reinserting the paragraphs the edit covers, concurrent
  * typing in any other paragraph merges through Yjs CRDT untouched.
  *
+ * Provenance: edit-ops are agent-authored by construction (they only exist
+ * inside PendingReviewRounds), so the text this splice INTRODUCES is tagged
+ * with the `ai` format attribute — at phrase granularity via
+ * `diffRunsToText`, not "the whole new_string". Text that survives the edit
+ * (including the untouched head/tail of the affected paragraphs) keeps
+ * whatever provenance it already had.
+ *
  * Caller must be inside a `ydoc.transact(..., origin)`. */
 export function applyEditToFragment(
 	fragment: Y.XmlFragment,
@@ -128,27 +321,29 @@ export function applyEditToFragment(
 ): boolean {
 	if (!oldString) return false;
 
-	// Snapshot paragraph texts so we can compute affected range. Mirrors
-	// serializeFragment's per-child textOf walk.
-	const paraTexts: string[] = [];
-	fragment.forEach((child) => paraTexts.push(textOf(child)));
+	// Snapshot paragraph runs (normalized) so we can compute the affected
+	// range AND carry existing provenance through the rebuild. The joined
+	// texts mirror serializeFragment's output exactly.
+	const paraRuns: ProvenanceRun[][] = [];
+	fragment.forEach((child) => paraRuns.push(paragraphRunsNormalized(child)));
+	const paraTexts = paraRuns.map((runs) => runs.map((r) => r.text).join(''));
 
 	if (replaceAll) {
 		// Sweeping rename: replace every occurrence in one pass. Concurrent
 		// typing protection is weaker here (we touch the whole fragment),
 		// but replace_all is a sweeping rename by intent — the caller is
 		// asking for it.
-		const fullText = normalizeTypography(paraTexts.join('\n'));
+		const fullText = paraTexts.join('\n');
 		if (fullText.indexOf(oldString) < 0) return false;
 		const replaced = fullText.split(oldString).join(normalizeTypography(newString));
 		if (replaced === fullText) return false;
-		const newParas = buildParagraphElements(replaced);
+		const newRuns = diffRunsToText(joinParagraphRuns(paraRuns), replaced);
 		fragment.delete(0, fragment.length);
-		fragment.insert(0, newParas);
+		fragment.insert(0, buildParagraphsFromRuns(newRuns));
 		return true;
 	}
 
-	const fullText = normalizeTypography(paraTexts.join('\n'));
+	const fullText = paraTexts.join('\n');
 	const startOffset = fullText.indexOf(oldString);
 	if (startOffset < 0) return false;
 	const endOffset = startOffset + oldString.length;
@@ -160,31 +355,39 @@ export function applyEditToFragment(
 	let cursor = 0;
 	let firstAffected = -1;
 	let lastAffected = -1;
-	let startInFirst = 0;
-	let endInLast = 0;
+	let regionStart = 0;
 	for (let i = 0; i < paraTexts.length; i += 1) {
 		const paraStart = cursor;
 		const paraEnd = cursor + paraTexts[i].length;
 		if (firstAffected < 0 && startOffset >= paraStart && startOffset <= paraEnd) {
 			firstAffected = i;
-			startInFirst = startOffset - paraStart;
+			regionStart = paraStart;
 		}
 		if (firstAffected >= 0 && endOffset >= paraStart && endOffset <= paraEnd) {
 			lastAffected = i;
-			endInLast = endOffset - paraStart;
 			break;
 		}
 		cursor = paraEnd + 1; // +1 for the '\n' separator between paragraphs
 	}
 	if (firstAffected < 0 || lastAffected < 0) return false;
 
-	const before = paraTexts[firstAffected].slice(0, startInFirst);
-	const after = paraTexts[lastAffected].slice(endInLast);
-	const splicedText = before + normalizeTypography(newString) + after;
-	const newParas = buildParagraphElements(splicedText);
+	// Splice in run space: head and tail of the affected region pass through
+	// with their existing provenance; only oldString → newString is diffed.
+	const regionRuns = joinParagraphRuns(paraRuns.slice(firstAffected, lastAffected + 1));
+	const regionLength = regionRuns.reduce((n, r) => n + r.text.length, 0);
+	const startInRegion = startOffset - regionStart;
+	const endInRegion = startInRegion + oldString.length;
+	const newRuns = [
+		...sliceRuns(regionRuns, 0, startInRegion),
+		...diffRunsToText(
+			sliceRuns(regionRuns, startInRegion, endInRegion),
+			normalizeTypography(newString)
+		),
+		...sliceRuns(regionRuns, endInRegion, regionLength)
+	];
 	const count = lastAffected - firstAffected + 1;
 	fragment.delete(firstAffected, count);
-	fragment.insert(firstAffected, newParas);
+	fragment.insert(firstAffected, buildParagraphsFromRuns(newRuns));
 	return true;
 }
 
@@ -204,4 +407,20 @@ export function replaceYDocText(ydoc: Y.Doc, content: string): void {
 	const fragment = getFragment(ydoc);
 	if (fragment.length > 0) fragment.delete(0, fragment.length);
 	if (content) fragment.insert(0, buildParagraphElements(normalizeTypography(content)));
+}
+
+/** Like `replaceYDocText`, but for AGENT-authored content (accepting a
+ * `write` op or a legacy afterMd round): diffs the new content against the
+ * current fragment and tags only the text the agent actually introduced with
+ * the `ai` provenance attribute. A wholesale rewrite that carries most of the
+ * user's prose through unchanged keeps that prose human-authored; a brand-new
+ * file (empty fragment) comes out entirely AI-authored. Callers must wrap
+ * this in `ydoc.transact(..., origin)`. */
+export function replaceYDocTextWithAiProvenance(ydoc: Y.Doc, content: string): void {
+	const fragment = getFragment(ydoc);
+	const paraRuns: ProvenanceRun[][] = [];
+	fragment.forEach((child) => paraRuns.push(paragraphRunsNormalized(child)));
+	const newRuns = diffRunsToText(joinParagraphRuns(paraRuns), normalizeTypography(content ?? ''));
+	if (fragment.length > 0) fragment.delete(0, fragment.length);
+	if (content) fragment.insert(0, buildParagraphsFromRuns(newRuns));
 }

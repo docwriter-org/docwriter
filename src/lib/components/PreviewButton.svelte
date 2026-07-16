@@ -94,14 +94,10 @@
 {/if}
 
 <style>
-	/* Pinned top-right of the editor host, just to the left of where
-	 * the FindBar lives so they don't collide when find is open. The
-	 * FindBar wins the corner when both are visible. */
+	/* Laid out inside the editor's top-right chrome cluster
+	 * (.editor-topright-chrome in TiptapEditor), which owns the absolute
+	 * pin-to-corner positioning for the whole button row. */
 	.preview-control {
-		position: absolute;
-		top: 12px;
-		right: 16px;
-		z-index: 11;
 		display: inline-flex;
 		align-items: center;
 		gap: 6px;
