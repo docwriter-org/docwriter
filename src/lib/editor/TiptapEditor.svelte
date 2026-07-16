@@ -28,6 +28,7 @@
 	import { handleEditorPaste, handleEditorDrop } from './media-paste';
 	import FindBar from '$lib/components/FindBar.svelte';
 	import PreviewButton from '$lib/components/PreviewButton.svelte';
+	import AiProvenanceToggle from '$lib/components/AiProvenanceToggle.svelte';
 	import CommentGutter from '$lib/components/CommentGutter.svelte';
 	import { Crosshair } from 'lucide-svelte';
 	// `ySyncPluginKey` MUST come from the same package whose ySyncPlugin the
@@ -51,7 +52,8 @@
 		openCommentThreadId,
 		agentSettings,
 		expandedReviewRoundId,
-		pinnedDiffRounds
+		pinnedDiffRounds,
+		showAiProvenance
 	} from '$lib/stores';
 	import type { Action, CommentThread, FeedbackMode } from '$lib/types';
 	import type { MaterializedPendingReviewRound } from '$lib/review-rounds';
@@ -1406,16 +1408,19 @@
 
 <svelte:window onkeydown={handleFeedbackWindowKeydown} />
 
-<div class="tiptap-host" class:find-open={findState.open}>
-	<!-- Top-right floating chrome: preview button + find bar. Both live
-	     outside the scroll container so they pin regardless of scroll.
-	     When find is open, the preview button shifts down so the two
-	     don't overlap (FindBar wins the corner). -->
-	<PreviewButton
-		activeTabPath={tabId}
-		onOpenSplit={onOpenSplitPreview}
-		splitOpen={splitPreviewOpen}
-	/>
+<div class="tiptap-host" class:find-open={findState.open} class:show-ai-provenance={$showAiProvenance}>
+	<!-- Top-right floating chrome: AI-provenance toggle + preview button +
+	     find bar. All live outside the scroll container so they pin
+	     regardless of scroll. When find is open, the button cluster shifts
+	     down so the two don't overlap (FindBar wins the corner). -->
+	<div class="editor-topright-chrome">
+		<AiProvenanceToggle />
+		<PreviewButton
+			activeTabPath={tabId}
+			onOpenSplit={onOpenSplitPreview}
+			splitOpen={splitPreviewOpen}
+		/>
+	</div>
 	{#if findState.open}
 		<FindBar
 			findState={findState}
@@ -1650,10 +1655,33 @@
 		min-width: 0;
 		min-height: 0;
 	}
-	/* When the FindBar is open, drop the PreviewButton below it so the
+	/* Top-right button cluster (AI-provenance toggle + preview controls).
+	 * One absolutely-positioned flex row so the buttons stack leftward from
+	 * the corner regardless of which ones are visible. */
+	.editor-topright-chrome {
+		position: absolute;
+		top: 12px;
+		right: 16px;
+		z-index: 11;
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+	}
+	/* When the FindBar is open, drop the button cluster below it so the
 	 * two don't collide in the corner. */
-	.tiptap-host.find-open :global(.preview-control) {
+	.tiptap-host.find-open .editor-topright-chrome {
 		top: 50px;
+	}
+
+	/* AI-provenance view: agent-written text carries the `ai` mark
+	 * (span[data-ai-text], see AiProvenanceMark). It renders as normal prose
+	 * until the toggle turns the view on — then it takes the theme's
+	 * provenance color, iA-Writer-authorship style. */
+	.tiptap-host :global(.tiptap-content span[data-ai-text]) {
+		transition: color 160ms ease;
+	}
+	.tiptap-host.show-ai-provenance :global(.tiptap-content span[data-ai-text]) {
+		color: var(--ai-provenance, var(--tool-accent, #7c3aed));
 	}
 	.tiptap-wrapper {
 		position: relative;
