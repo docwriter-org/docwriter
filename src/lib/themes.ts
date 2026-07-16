@@ -50,6 +50,7 @@ export const themes: Theme[] = [
 			'--color-user-edit': '#d97706',
 			'--color-agent-edit': '#059669',
 			'--color-pinned': '#7c3aed',
+			'--ai-provenance': '#7c3aed',
 			'--win-bg': '#d1fae5',
 			'--win-border': '#10b981',
 		}
@@ -91,6 +92,7 @@ export const themes: Theme[] = [
 			'--color-user-edit': '#fbbf24',
 			'--color-agent-edit': '#6ee7b7',
 			'--color-pinned': '#c4b5fd',
+			'--ai-provenance': '#c4b5fd',
 			'--win-bg': 'rgba(16, 185, 129, 0.18)',
 			'--win-border': '#10b981',
 		}
@@ -132,6 +134,7 @@ export const themes: Theme[] = [
 			'--color-user-edit': '#b58900',
 			'--color-agent-edit': '#859900',
 			'--color-pinned': '#6c71c4',
+			'--ai-provenance': '#6c71c4',
 			'--win-bg': '#e9f5e6',
 			'--win-border': '#859900',
 		}
@@ -173,6 +176,7 @@ export const themes: Theme[] = [
 			'--color-user-edit': '#b58900',
 			'--color-agent-edit': '#859900',
 			'--color-pinned': '#6c71c4',
+			'--ai-provenance': '#8b90d9',
 			'--win-bg': 'color-mix(in srgb, #859900 16%, transparent)',
 			'--win-border': '#859900',
 		}
@@ -214,6 +218,7 @@ export const themes: Theme[] = [
 			'--color-user-edit': '#e6db74',
 			'--color-agent-edit': '#a6e22e',
 			'--color-pinned': '#ae81ff',
+			'--ai-provenance': '#ae81ff',
 			'--win-bg': 'color-mix(in srgb, #a6e22e 22%, transparent)',
 			'--win-border': '#a6e22e',
 		}

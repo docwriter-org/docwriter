@@ -78,6 +78,15 @@ first `synced` event — on localhost this is sub-20ms.
   Reject / Retry, plus per-tab badges on the `TabBar` — there is no separate
   review column.
 - **Proposed rules / hooks** surface as dismissable toasts (`ToastStack`).
+- **AI provenance toggle** (`AiProvenanceToggle`, in the editor's sticky
+  top-right chrome next to `PreviewButton`): colors agent-written text,
+  iA-Writer-authorship style. Accepting a round stamps the `ai` Yjs
+  text-format attribute onto the text the agent actually introduced — a
+  word-level diff (`diffWordLevel` in `ydoc-codec.ts`), so surviving user
+  prose stays unmarked. The client renders the attribute as the
+  `AiProvenanceMark` Tiptap mark (`span[data-ai-text]`); the toggle is pure
+  CSS view state (`showAiProvenance` store, localStorage). Typing into an
+  AI span strips the mark from the typed text ("make it your own").
 
 ## Agent SDK integration
 
@@ -198,9 +207,19 @@ the mascot card).
   to MUTATE a tab MUST go through
   `hocuspocus.openDirectConnection(...)` (see `getHocuspocus` in
   `mcp-doc-tools.ts`) — never mutate a replayed throwaway doc.
+- **`Y.XmlText.toString()` is not plain text.** Once a text node carries a
+  format attribute (the `ai` provenance attribute), `toString()` serializes
+  formatted ranges as XML tags (`a <ai>b</ai>`). All text extraction in
+  `ydoc-codec.ts` goes through `toDelta()` — never call `toString()` on a
+  fragment's text. Related: `Y.Text.insert` WITHOUT attributes inherits the
+  formatting of the preceding character; build formatted paragraphs with
+  `applyDelta` (attribute-less ops insert genuinely unformatted).
 - **Serialization is plain text, not markdown.** `serializeFragment` /
   `serializeYDoc` in `ydoc-codec.ts` emit the document text verbatim
-  (plus typography normalization) — nothing escapes markdown specials.
+  (plus typography normalization) — nothing escapes markdown specials, and
+  the `ai` provenance attribute is stripped, so `document.md`, `read_doc`,
+  prompt diffs and stale checks all see plain text (provenance lives only
+  in the CRDT log).
   The editor schema is intentionally minimal (Document / Paragraph /
   Text / HardBreak); don't add StarterKit, Link, or Tiptap's history
   extension — undo is the custom `Y.UndoManager` wired through

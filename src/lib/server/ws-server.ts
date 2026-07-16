@@ -23,7 +23,7 @@ import {
 	getFragment,
 	readReviewRounds,
 	serializeYDoc,
-	replaceYDocText,
+	replaceYDocTextWithAiProvenance,
 	applyEditToFragment
 } from '$lib/shared/ydoc-codec';
 import { applyPendingReviewRound } from '$lib/review-rounds';
@@ -246,7 +246,9 @@ export async function acceptTabRounds(
 		// Mutate the live fragment one op at a time, touching only the
 		// paragraphs each op covers. Concurrent user typing in any other
 		// paragraph merges through Yjs CRDT untouched. `write` ops are
-		// wholesale by contract; they keep using replaceYDocText.
+		// wholesale by contract. Every op here is agent-authored, so both
+		// paths tag introduced text with the `ai` provenance attribute
+		// (diff-scoped: carried-over user prose stays human-authored).
 		ydoc.transact(() => {
 			const fragment = getFragment(ydoc);
 			for (const round of accepted) {
@@ -257,12 +259,12 @@ export async function acceptTabRounds(
 					// hit by rounds persisted before the operation field
 					// existed.
 					if (typeof round.afterMd === 'string') {
-						replaceYDocText(ydoc, round.afterMd);
+						replaceYDocTextWithAiProvenance(ydoc, round.afterMd);
 					}
 					continue;
 				}
 				if (op.type === 'write') {
-					replaceYDocText(ydoc, op.content);
+					replaceYDocTextWithAiProvenance(ydoc, op.content);
 					continue;
 				}
 				// op.type === 'edit'
