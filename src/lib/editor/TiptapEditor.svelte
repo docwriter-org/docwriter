@@ -1681,7 +1681,7 @@
 		transition: color 160ms ease;
 	}
 	.tiptap-host.show-ai-provenance :global(.tiptap-content span[data-ai-text]) {
-		color: var(--ai-provenance, var(--tool-accent, #7c3aed));
+		color: var(--ai-provenance, var(--tool-accent));
 	}
 	.tiptap-wrapper {
 		position: relative;
