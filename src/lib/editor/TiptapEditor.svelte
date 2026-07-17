@@ -63,7 +63,10 @@
 	interface Props {
 		/** Workspace path for the tab this editor instance is bound to. */
 		tabId: string;
-		onSubmit?: (trigger?: string) => void;
+		/** `planThreadId` (feedback popup's "Plan first") makes the render
+		 * post the agent's diagnosis as a reply on that thread BEFORE any
+		 * edit is allowed — the server gates edit_doc/write_doc on it. */
+		onSubmit?: (trigger?: string, opts?: { planThreadId?: string }) => void;
 		/** One-shot scroll restore. Read once in onMount after the editor's
 		 * content has laid out, then ignored. The parent captures this from
 		 * `getScrollTop()` before tearing the editor down (Accept / Reject /
@@ -154,6 +157,12 @@
 	 * Resets to `auto` whenever the
 	 * popup closes so each feedback session starts fresh. */
 	let feedbackMode = $state<FeedbackMode>('edit');
+	/** "Plan first" for the current feedback submission (Edit mode only).
+	 * When checked, the agent must reflect on WHY the passage was flagged —
+	 * posted as a reply on the feedback thread — before it may propose the
+	 * edit. Mirrors ChatPanel's plan-first checkbox, but the plan lands in
+	 * situ as a comment instead of a modal plan proposal. */
+	let feedbackPlanFirst = $state(false);
 
 	// Comment thread + review state, each mirrored from its store via `$store`
 	// auto-subscription so there's exactly ONE reactive value per concept and
@@ -483,6 +492,7 @@
 		feedbackSelectionRange = null;
 		shouldFocusFeedbackInput = false;
 		feedbackMode = 'edit';
+		feedbackPlanFirst = false;
 		updateDiff();
 		if (preserveSelection && refocusEditor) {
 			requestAnimationFrame(() => editor?.commands.focus());
@@ -515,7 +525,8 @@
 		label: string,
 		passage: string,
 		isCustom: boolean,
-		threadId: string | null
+		threadId: string | null,
+		planFirst = false
 	): string {
 		const mode = feedbackMode;
 		// The agent prompt understands `[mode: edit]` (edit only) and
@@ -529,7 +540,16 @@
 		// The system prompt's "Where a response goes" rules carry the routing;
 		// the trigger only needs the facts (mode tag + thread id).
 		const threadHint = threadId ? ` A thread is open for this feedback (thread_id="${threadId}").` : '';
-		return `${prefix}. ${tag} ${verb} it: "${passage}"${threadHint}`;
+		// Same contract as chat's plan-first mode, but the plan lands on the
+		// thread: diagnosis first (why the user likely flagged it, concretely,
+		// tied to the passage), intended change in one or two sentences, THEN
+		// the edit. The server enforces the ordering by denying edit_doc /
+		// write_doc until the reply_to_comment for this thread has been made.
+		const planHint =
+			planFirst && threadId
+				? ` Plan first: before proposing any edit, reply on thread_id="${threadId}" via reply_to_comment with a short reflection — the diagnosis (why the user likely flagged this passage and why the current text reads wrong, concretely) and the intended change in one or two sentences. Only after that reply, propose the edit via edit_doc with thread_id="${threadId}" so it attaches to the same thread.`
+				: '';
+		return `${prefix}. ${tag} ${verb} it: "${passage}"${threadHint}${planHint}`;
 	}
 
 	/** Open a comment thread with the user's feedback as the first message,
@@ -591,6 +611,9 @@
 		if (!feedbackPopup) return;
 		const text = feedbackPopup.text;
 		const modeSnapshot = feedbackMode;
+		// Plan-first only applies to Edit mode — a Comment response IS the
+		// reflection, there's no edit to gate behind it.
+		const planSnapshot = feedbackPlanFirst && modeSnapshot === 'edit';
 		const relSnapshot = snapshotFeedbackRelPositions();
 		trackActionUsage(action.label);
 		if (!action.pinned) {
@@ -605,9 +628,10 @@
 			newAwaitingThreadId = threadId;
 			tick().then(() => { newAwaitingThreadId = null; });
 		}
-		const trigger = buildFeedbackTrigger(action.label, text, false, threadId);
+		const planFirst = planSnapshot && !!threadId;
+		const trigger = buildFeedbackTrigger(action.label, text, false, threadId, planFirst);
 		feedbackMode = 'edit';
-		if (onSubmit) onSubmit(trigger);
+		if (onSubmit) onSubmit(trigger, planFirst && threadId ? { planThreadId: threadId } : undefined);
 	}
 
 	async function sendCustomFeedback() {
@@ -628,6 +652,7 @@
 		};
 		trackActionUsage(customAction.label);
 		recentActions.update((prev) => [customAction, ...prev.filter((x) => x.label !== customAction.label)].slice(0, 6));
+		const planSnapshot = feedbackPlanFirst && modeSnapshot === 'edit';
 		closeFeedbackPopup();
 		feedbackMode = modeSnapshot;
 		const threadId = await maybeOpenThreadForFeedback(fb, text, relSnapshot);
@@ -635,9 +660,10 @@
 			newAwaitingThreadId = threadId;
 			tick().then(() => { newAwaitingThreadId = null; });
 		}
-		const trigger = buildFeedbackTrigger(fb, text, true, threadId);
+		const planFirst = planSnapshot && !!threadId;
+		const trigger = buildFeedbackTrigger(fb, text, true, threadId, planFirst);
 		feedbackMode = 'edit';
-		if (onSubmit) onSubmit(trigger);
+		if (onSubmit) onSubmit(trigger, planFirst && threadId ? { planThreadId: threadId } : undefined);
 	}
 
 	function syncPlainLineRows() {
@@ -1612,6 +1638,20 @@
 					title="Opens a thread with your feedback; the agent replies in the thread and does not edit."
 					type="button"
 				>Comment</button>
+				<label
+					class="feedback-plan-toggle"
+					class:disabled={feedbackMode === 'comment'}
+					title={feedbackMode === 'comment'
+						? 'Comment mode already replies on the thread — plan-first applies to Edit mode.'
+						: 'The agent first replies on the thread with why this passage reads wrong and what it intends to change, and only then proposes the edit.'}
+				>
+					<input
+						type="checkbox"
+						bind:checked={feedbackPlanFirst}
+						disabled={feedbackMode === 'comment'}
+					/>
+					<span>Plan first</span>
+				</label>
 			</div>
 			<div class="quick-actions">
 				{#each pinnedActions as action}
@@ -2437,6 +2477,34 @@
 		color: var(--text);
 		background: var(--bg);
 		box-shadow: 0 0 0 1px var(--border-light);
+	}
+	/* Mirrors ChatPanel's plan-first toggle, popup-sized. */
+	.feedback-plan-toggle {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		margin-left: 6px;
+		padding-right: 6px;
+		font-size: 11px;
+		font-weight: 500;
+		color: var(--text-faint);
+		cursor: pointer;
+		user-select: none;
+		white-space: nowrap;
+	}
+	.feedback-plan-toggle input {
+		margin: 0;
+		cursor: pointer;
+	}
+	.feedback-plan-toggle:hover:not(.disabled) {
+		color: var(--text-secondary);
+	}
+	.feedback-plan-toggle.disabled {
+		opacity: 0.5;
+		cursor: default;
+	}
+	.feedback-plan-toggle.disabled input {
+		cursor: default;
 	}
 	/* Footer keyboard hint — reminds you the popover is dismissable with
 	 * Esc (and submittable with Enter) so it never feels like a trap. */

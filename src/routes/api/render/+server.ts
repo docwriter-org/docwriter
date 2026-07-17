@@ -665,15 +665,20 @@ function buildHooks(
 export const POST: RequestHandler = async ({ request }) => {
 	try {
 		const body = await request.json();
-		const { userMessage, model, warmup, tab, planMode, images, provider: providerIdRaw } = body as {
+		const { userMessage, model, warmup, tab, planMode, planThreadId: planThreadIdRaw, images, provider: providerIdRaw } = body as {
 			userMessage?: string;
 			model?: string;
 			warmup?: boolean;
 			tab?: string;
 			planMode?: boolean;
+			/** Feedback popup's "Plan first": the agent must reply on this
+			 * thread with its diagnosis before edit_doc/write_doc unlock. */
+			planThreadId?: string;
 			images?: ImageAttachmentPayload[];
 			provider?: string;
 		};
+		const planThreadId =
+			typeof planThreadIdRaw === 'string' && planThreadIdRaw.trim() ? planThreadIdRaw.trim() : null;
 		const providerId = (providerIdRaw || 'claude') as ProviderId;
 		// Switching providers invalidates the persisted session id: each
 		// provider mints ids in its own format (Claude wants a UUID, OpenAI
@@ -731,10 +736,24 @@ export const POST: RequestHandler = async ({ request }) => {
 					'</mode>'
 				].join('\n')
 			: '';
+		// Plan-first FEEDBACK (distinct from full plan mode): the plan is not a
+		// modal proposal — it lands in situ as a reply on the feedback thread,
+		// and only then may the edit be proposed. Mutation tools stay in the
+		// allowed list but are gated in canUseTool until the reply exists.
+		const planThreadInstruction = planThreadId && !planMode
+			? [
+					'',
+					'<mode>',
+					`Plan-first feedback is active for thread_id="${planThreadId}". Before proposing any edit, reply on that thread via reply_to_comment with a short reflection: the diagnosis (why the user likely flagged this passage and why the current text reads wrong, concretely) and the intended change in one or two sentences. Keep it short and concrete.`,
+					`edit_doc and write_doc are blocked until that reply is posted. After replying, propose the edit via edit_doc with thread_id="${planThreadId}" so it attaches to the same thread.`,
+					'</mode>'
+				].join('\n')
+			: '';
 		const prompt = warmup
 			? `You are the user's writing collaborator. The user has files open as tabs. Say you are ready in one or two sentences. Do not edit anything.`
 			: buildMultiTabPrompt(active, tabsForPrompt, message, { isUserMessage: !!userMessage }) +
-				planModeInstruction;
+				planModeInstruction +
+				planThreadInstruction;
 		const baseSystemPromptBlock = warmup ? undefined : buildSystemPrompt();
 		const skillsPromptBlock =
 			!warmup && (providerId === 'openai' || providerId === 'cursor')
@@ -802,8 +821,22 @@ export const POST: RequestHandler = async ({ request }) => {
 						'edit_doc', 'write_doc'
 					]);
 
+					// Plan-first feedback: flips true once the agent has replied on
+					// the flagged thread; until then edit_doc/write_doc are denied.
+					let planReflectionPosted = false;
+
 					// canUseTool logic (provider-agnostic permission checks)
 					const canUseTool = async (toolName: string, toolInput: any) => {
+						if (toolName === REPLY_TO_COMMENT_TOOL_NAME || toolName === 'reply_to_comment') {
+							const target = typeof toolInput?.thread_id === 'string' ? toolInput.thread_id : '';
+							if (!planThreadId || target === planThreadId) planReflectionPosted = true;
+						}
+						if (planThreadId && !planReflectionPosted && mutationToolNames.has(toolName)) {
+							return {
+								behavior: 'deny' as const,
+								message: `Plan-first feedback is active: reply on thread_id="${planThreadId}" via reply_to_comment (the diagnosis and your intended change) before proposing any edit.`
+							};
+						}
 						if (toolName === 'ExitPlanMode') {
 							const plan = typeof toolInput?.plan === 'string' ? toolInput.plan : '';
 							const planId =

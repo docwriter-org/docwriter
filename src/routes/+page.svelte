@@ -158,7 +158,7 @@
 	// await. Prevents two concurrent calls from the same event loop tick (e.g.
 	// a button click firing just as the idle timer callback is about to run).
 	let submitInFlight = false;
-	let queuedSubmissions: Array<{ trigger?: string; planMode?: boolean }> = [];
+	let queuedSubmissions: Array<{ trigger?: string; planMode?: boolean; planThreadId?: string }> = [];
 
 	let currentAbort: AbortController | null = null;
 	/** Which tabs currently have a pending review (drives the tab dot badges
@@ -901,9 +901,16 @@
 		return isAcceptedEditsMessage(trigger) || isImplicitWakeupTrigger(trigger);
 	}
 
-	async function submit(trigger?: string, opts?: { planMode?: boolean; images?: ImageAttachment[] }) {
+	async function submit(
+		trigger?: string,
+		opts?: { planMode?: boolean; images?: ImageAttachment[]; planThreadId?: string }
+	) {
 		const planMode = opts?.planMode ?? false;
 		const images = opts?.images ?? [];
+		// Feedback popup's "Plan first": the server withholds edit_doc /
+		// write_doc until the agent has replied on this thread with its
+		// diagnosis, so the reflection lands as a comment before any edit.
+		const planThreadId = opts?.planThreadId;
 		if (rendering || submitInFlight) {
 			// An implicit "review the docs" wakeup carries no specific intent,
 			// so while the agent is already busy it's always redundant — the
@@ -917,7 +924,7 @@
 			// accepted your edits"), so we keep one queued — but collapse
 			// duplicates when there's already something behind it.
 			if (isSkippableWhenQueued(trigger) && queuedSubmissions.length > 0) return;
-			queuedSubmissions = [...queuedSubmissions, { trigger, planMode }];
+			queuedSubmissions = [...queuedSubmissions, { trigger, planMode, planThreadId }];
 			queuedSubmissionCount.set(queuedSubmissions.length);
 			return;
 		}
@@ -996,6 +1003,7 @@
 					userMessage: trigger,
 					model,
 					planMode,
+					planThreadId,
 					tab: tabId,
 					images: images.length > 0 ? images : undefined,
 					provider
@@ -1415,7 +1423,10 @@
 					queuedSubmissionCount.set(queuedSubmissions.length);
 				}
 				if (!isSkippableWhenQueued(next.trigger) || queuedSubmissions.length === 0) {
-					setTimeout(() => void submit(next.trigger, { planMode: next.planMode }), 0);
+					setTimeout(
+						() => void submit(next.trigger, { planMode: next.planMode, planThreadId: next.planThreadId }),
+						0
+					);
 				}
 			} else {
 				queuedSubmissionCount.set(0);
@@ -2912,7 +2923,7 @@
 							<TiptapEditor
 								tabId={activeTabFilePath}
 								bind:this={editorRef}
-								onSubmit={(trigger) => submit(trigger)}
+								onSubmit={(trigger, opts) => submit(trigger, opts)}
 								initialScrollTop={pendingScrollRestore}
 								onAcceptInlineEdit={(roundId) => {
 									const rounds = currentRounds();
