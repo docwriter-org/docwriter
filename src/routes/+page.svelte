@@ -109,6 +109,7 @@
 		submitCountdown,
 		editorFontScale,
 		editorSoftWrap,
+		editorLineNumbers,
 		historyVerbosity,
 		showFilesPane,
 		showSidebar,
@@ -147,7 +148,7 @@
 		flushAutosave: () => Promise<boolean>;
 		cancelIdleTimer: () => void;
 		getScrollTop: () => number;
-		focusEditor: () => void;
+		focusEditor: (opts?: { scrollIntoView?: boolean }) => void;
 		flashAcceptedRange: (text: string) => void;
 	};
 
@@ -1492,7 +1493,11 @@
 			const data = (await res.json().catch(() => ({}))) as ReviewActionResponse;
 			if (res.ok && data?.ok && Array.isArray(data.rounds) && typeof data.yjsUpdate === 'string') {
 				applyUpdateToTab(tabId, data.yjsUpdate);
-				editorRef?.focusEditor();
+				// Focus so undo (Cmd+Z) works immediately, but don't scroll the
+				// caret into view — the caret is often far from the accepted
+				// edit and the default scroll yanked the user away from the
+				// card they just clicked.
+				editorRef?.focusEditor({ scrollIntoView: false });
 			}
 			return { res, data };
 		} finally {
@@ -1522,7 +1527,7 @@
 			if (res.ok && data?.ok && typeof data.yjsUpdate === 'string') {
 				applyUpdateToTab(tabId, data.yjsUpdate);
 				if (resolved) clearPeekIfMatches(undefined);
-				editorRef?.focusEditor();
+				editorRef?.focusEditor({ scrollIntoView: false });
 			}
 		} catch (e) {
 			console.error('Failed to set thread resolution:', e);
@@ -2001,6 +2006,9 @@
 	let softWrap = $state(false);
 	editorSoftWrap.subscribe((v) => (softWrap = v));
 
+	let lineNumbersOn = $state(false);
+	editorLineNumbers.subscribe((v) => (lineNumbersOn = v));
+
 	// Preset font sizes exposed in the View → Font size submenu. The inline
 	// keyboard path (Ctrl+/Ctrl-) still bumps by 0.1.
 	const FONT_PRESETS: Array<{ label: string; scale: number }> = [
@@ -2048,6 +2056,12 @@
 					checked: softWrap,
 					onClick: () => editorSoftWrap.update((v) => !v)
 				},
+				{
+					kind: 'action',
+					label: 'Line numbers',
+					checked: lineNumbersOn,
+					onClick: () => editorLineNumbers.update((v) => !v)
+				},
 				{ kind: 'panel', label: 'Writing references', panelKey: 'references' },
 				{ kind: 'panel', label: 'Skills', panelKey: 'skills' },
 				{ kind: 'panel', label: 'Hooks', panelKey: 'hooks' },
@@ -2093,9 +2107,10 @@
 		}
 	]);
 
-	// Pane widths (resizable)
-	let leftWidth = $state(240);
-	const MIN_PANE_WIDTH = 180;
+	// Pane widths (resizable). Sidebar starts narrow (Google-Docs-like) so
+	// the canvas + comment margin get the width; still user-resizable.
+	let leftWidth = $state(200);
+	const MIN_PANE_WIDTH = 160;
 	const MAX_PANE_WIDTH = 560;
 	function resizeLeft(delta: number) {
 		leftWidth = Math.max(MIN_PANE_WIDTH, Math.min(MAX_PANE_WIDTH, leftWidth + delta));
@@ -2163,6 +2178,9 @@
 			if (typeof data.editorSoftWrap === 'boolean') {
 				editorSoftWrap.set(data.editorSoftWrap);
 			}
+			if (typeof data.editorLineNumbers === 'boolean') {
+				editorLineNumbers.set(data.editorLineNumbers);
+			}
 			if (typeof data.theme === 'string') {
 				selectedTheme.set(data.theme);
 			}
@@ -2187,6 +2205,8 @@
 			actionUsageCounts.subscribe((v) => (counts = v))();
 			let wrapLongLines = false;
 			editorSoftWrap.subscribe((v) => (wrapLongLines = v))();
+			let lineNumbers = false;
+			editorLineNumbers.subscribe((v) => (lineNumbers = v))();
 			let theme = 'light';
 			selectedTheme.subscribe((v) => (theme = v))();
 			try {
@@ -2197,6 +2217,7 @@
 						recentActions: recent,
 						actionUsageCounts: counts,
 						editorSoftWrap: wrapLongLines,
+						editorLineNumbers: lineNumbers,
 						theme
 					})
 				});
@@ -2259,6 +2280,7 @@
 		recentActions.subscribe(() => schedulePersistSession());
 		actionUsageCounts.subscribe(() => schedulePersistSession());
 		editorSoftWrap.subscribe(() => schedulePersistSession());
+		editorLineNumbers.subscribe(() => schedulePersistSession());
 		selectedTheme.subscribe(() => schedulePersistSession());
 
 		// Subscribe to the file-watcher event bus (used by `docwriter --watch`).
@@ -2879,7 +2901,7 @@
 		{/if}
 		<main class="center-pane">
 			<div class="source-preview-layout" class:split-preview-open={splitPreviewOpen} bind:this={splitLayoutEl}>
-				<section class="source-workspace" aria-label="Source editor">
+				<section class="source-workspace" class:line-numbers-off={!lineNumbersOn} aria-label="Source editor">
 					<!-- Align the tab strip over the page column (same geometry as
 					     `.plain-editor-shell`) so the active tab sits on the page. -->
 					<div class="tab-align">
@@ -3011,9 +3033,13 @@
 		 * Google-Docs gray in Light); fall back to a derived recess. */
 		--canvas: var(--canvas-bg, color-mix(in srgb, var(--text) 6%, var(--bg)));
 		/* Page + comment-gutter widths — single source of truth; the editor
-		 * grid and the tab-align grid both read these. */
+		 * grid and the tab-align grid both read these. The comment margin is
+		 * wide (Google-Docs-like) because line numbers default off and the
+		 * canvas margins are tight — that reclaimed width belongs to the
+		 * cards. */
 		--paper-width: 900px;
-		--gutter-width: 240px;
+		--comment-width: 300px;
+		--gutter-width: var(--comment-width);
 		--line-gutter-width: 52px;
 		--editor-grid-gap: 18px;
 		background: var(--canvas);
@@ -3147,6 +3173,19 @@
 		--line-number-pad-right: 6px;
 		--editor-grid-gap: 10px;
 	}
+	/* Line numbers hidden (the default): collapse the number column and give
+	 * its width to the COMMENT margin, not the paper — the page geometry is
+	 * identical with numbers on or off (total column extras stay equal:
+	 * 52 + 300 = 0 + 352). Second rule outranks the split-preview override
+	 * above and mirrors its narrower (34px) number column. */
+	.source-workspace.line-numbers-off {
+		--line-gutter-width: 0px;
+		--gutter-width: calc(var(--comment-width) + 52px);
+	}
+	.source-preview-layout.split-preview-open .source-workspace.line-numbers-off {
+		--line-gutter-width: 0px;
+		--gutter-width: calc(var(--comment-width) + 34px);
+	}
 	.source-preview-layout.split-preview-open > :global(.resizer) {
 		z-index: 30;
 	}
@@ -3178,10 +3217,12 @@
 	 * so the tab strip lands directly over the page column below it. */
 	.tab-align {
 		display: grid;
-		grid-template-columns: var(--line-gutter-width, 52px) minmax(0, var(--paper-width, 720px)) var(--gutter-width, 240px);
+		grid-template-columns: var(--line-gutter-width, 52px) minmax(0, var(--paper-width, 720px)) var(--gutter-width, 300px);
 		gap: var(--editor-grid-gap, 18px);
 		justify-content: center;
-		padding: 10px 32px 0;
+		/* Tight canvas margins (matches .tiptap-wrapper) — the space lives
+		 * in the comment gutter, not dead margins. */
+		padding: 10px 16px 0;
 		flex-shrink: 0;
 	}
 	.tab-slot {

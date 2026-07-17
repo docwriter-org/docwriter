@@ -44,6 +44,7 @@
 		submitCountdown,
 		editorFontScale,
 		editorSoftWrap,
+		editorLineNumbers,
 		pinnedActions,
 		recentActions,
 		trackActionUsage,
@@ -116,6 +117,7 @@
 	// a live subscriber that keeps firing against a destroyed editor.
 	let fontScale = $derived($editorFontScale);
 	let softWrap = $derived($editorSoftWrap);
+	let lineNumbersOn = $derived($editorLineNumbers);
 	/** Per-paragraph row entries for the line gutter. Each row carries a
 	 * label and an absolute `top` offset (px) from the editor content's
 	 * top. Absolute positioning lets the gutter follow paragraphs through
@@ -148,11 +150,12 @@
 	});
 	let feedbackInputEl: HTMLDivElement | null = $state(null);
 	let feedbackInput = $state('');
-	/** Routing mode for the current feedback submission. `auto` lets the
-	 * agent decide comment vs. edit; `edit` forces an edit_doc call;
-	 * `discuss` forces a reply_to_comment call on the user-opened thread.
-	 * Resets to `auto` whenever the
-	 * popup closes so each feedback session starts fresh. */
+	/** Routing mode for the current feedback submission. `edit` = direct
+	 * edit_doc proposal; `plan` = the agent first replies on the feedback
+	 * thread with WHY the passage was flagged (same reflection contract as
+	 * chat's plan-first mode), then proposes the edit on the same thread.
+	 * Resets to `edit` whenever the popup closes so each feedback session
+	 * starts fresh. */
 	let feedbackMode = $state<FeedbackMode>('edit');
 
 	// Comment thread + review state, each mirrored from its store via `$store`
@@ -167,8 +170,8 @@
 	let newAwaitingThreadId = $state<string | null>(null);
 	let rounds: MaterializedPendingReviewRound[] = $derived($pendingReviewRounds);
 	let baseline = $derived($reviewBaseline);
-	/** The gutter (and its 200px column) shows when there's anything to
-	 * review — unresolved comment threads OR pending edit rounds. */
+	/** The gutter (and its --gutter-width column) shows when there's anything
+	 * to review — unresolved comment threads OR pending edit rounds. */
 	let hasGutterContent = $derived(
 		threadsForTab.some((t) => !t.resolved) || rounds.length > 0
 	);
@@ -504,39 +507,42 @@
 		closeFeedbackPopup();
 	}
 
-	/** Format the trigger string for a feedback submission. The `[mode: …]`
-	 * tag is parsed by the agent prompt to force commenting vs. editing
-	 * (or leave it to auto-routing). The verb ("Rewrite", "Discuss",
-	 * "Consider") also nudges the agent even if it missed the tag.
-	 * When a thread was pre-opened for the feedback (Auto/Discuss modes),
-	 * include its id so the agent replies on that thread rather than
-	 * opening a duplicate one. */
+	/** Format the trigger string for a feedback submission. The pre-opened
+	 * thread id is included so the agent works on that thread rather than
+	 * opening a duplicate one. In `plan` mode the trigger additionally
+	 * requires a reply_to_comment reflection on the thread BEFORE the edit
+	 * (same contract as chat's plan-first mode, landing in situ). */
 	function buildFeedbackTrigger(
 		label: string,
 		passage: string,
 		isCustom: boolean,
 		threadId: string | null
 	): string {
-		const mode = feedbackMode;
-		// The agent prompt understands `[mode: edit]` (edit only) and
-		// `[mode: discuss]` (reply only); "comment" maps to discuss.
-		const agentMode = mode === 'comment' ? 'discuss' : 'edit';
-		const verb = mode === 'comment' ? 'Discuss' : 'Rewrite';
-		const tag = `[mode: ${agentMode}]`;
+		// Both modes end in an edit; `[mode: edit]` keeps the system prompt's
+		// routing rules pointed at edit_doc.
+		const tag = `[mode: edit]`;
 		const prefix = isCustom
 			? `The user flagged this passage with feedback "${label}"`
 			: `The user flagged this passage as "${label}"`;
 		// The system prompt's "Where a response goes" rules carry the routing;
 		// the trigger only needs the facts (mode tag + thread id).
 		const threadHint = threadId ? ` A thread is open for this feedback (thread_id="${threadId}").` : '';
-		return `${prefix}. ${tag} ${verb} it: "${passage}"${threadHint}`;
+		// Plan-first: same reflection contract as chat's plan-first mode, but
+		// the plan lands in situ — the agent MUST post it as a reply on the
+		// feedback thread before proposing the edit, so the reasoning shows
+		// as a comment above the pending-edit card.
+		const planHint =
+			feedbackMode === 'plan' && threadId
+				? ` Plan first: before proposing any edit, you MUST reply on thread_id="${threadId}" via reply_to_comment with your reflection. Explain, in complete sentences, why the user likely flagged this passage, what in the current text reads wrong, and what you intend to change. Write it as plain explanatory prose that carries your reasoning, the way you would explain it out loud. Do not compress it into label-led fragments or bullet points. Only after posting that reply, propose the edit via edit_doc with thread_id="${threadId}" so it attaches to the same thread.`
+				: '';
+		return `${prefix}. ${tag} Rewrite it: "${passage}"${threadHint}${planHint}`;
 	}
 
 	/** Open a comment thread with the user's feedback as the first message,
 	 * so the feedback persists on the passage and the agent prompt's
 	 * transcript starts from the user's voice. Returns the new thread id, or
-	 * null on failure. Fires for BOTH modes now (edit = record, comment =
-	 * conversation).
+	 * null on failure. Fires for BOTH modes (direct edit = record, plan
+	 * first = where the agent's reflection reply lands).
 	 *
 	 * `relPositions` carries the user's actual selection encoded as Yjs
 	 * RelativePositions — when present, the server stores them on the
@@ -549,9 +555,9 @@
 		passage: string,
 		relPositions: { relStart: string; relEnd: string } | null
 	): Promise<string | null> {
-		// Every feedback now opens a thread so it persists on the passage —
-		// in edit mode as a record, in comment mode as the conversation the
-		// agent replies on.
+		// Every feedback opens a thread so it persists on the passage — as a
+		// record in direct-edit mode, and as the conversation the agent's
+		// plan reflection replies on in plan-first mode.
 		try {
 			const res = await fetch('/api/comments', {
 				method: 'POST',
@@ -597,8 +603,8 @@
 			recentActions.update((prev) => [action, ...prev.filter((x) => x.id !== action.id)].slice(0, 6));
 		}
 		closeFeedbackPopup();
-		// Restore the mode for the pre-open call — closeFeedbackPopup reset
-		// it to `auto`, but we want to honor what the user picked.
+		// Restore the mode for the trigger build — closeFeedbackPopup reset
+		// it to `edit`, but we want to honor what the user picked.
 		feedbackMode = modeSnapshot;
 		const threadId = await maybeOpenThreadForFeedback(action.label, text, relSnapshot);
 		if (threadId) {
@@ -642,6 +648,10 @@
 
 	function syncPlainLineRows() {
 		if (!editor) return;
+		// Numbers hidden (the default): skip the per-paragraph rect measuring
+		// entirely — the gutter isn't rendered. The $effect on lineNumbersOn
+		// re-syncs when the user toggles them back on.
+		if (!lineNumbersOn) return;
 		const contentEl = editor.view.dom as HTMLElement | null;
 		if (!contentEl) return;
 		const lineHeight = parseFloat(getComputedStyle(contentEl).lineHeight || '0');
@@ -1369,6 +1379,7 @@
 		if (!editor) return;
 		softWrap;
 		fontScale;
+		lineNumbersOn;
 		schedulePlainLineSync();
 	});
 
@@ -1392,8 +1403,8 @@
 		return wrapperEl?.scrollTop ?? 0;
 	}
 
-	export function focusEditor(): void {
-		editor?.commands.focus();
+	export function focusEditor(opts?: { scrollIntoView?: boolean }): void {
+		editor?.commands.focus(null, { scrollIntoView: opts?.scrollIntoView ?? true });
 	}
 
 	// Flash a sage-green halo on the freshly-accepted text range. Called
@@ -1449,15 +1460,17 @@
 		class="plain-editor-shell"
 		class:soft-wrap-enabled={softWrap}
 	>
-		<div
-			class="plain-line-gutter"
-			aria-hidden="true"
-			style:min-height="{plainGutterMinHeight}px"
-		>
-			{#each plainLineRows as row}
-				<div class="plain-line-number" style:top="{row.top}px">{row.label}</div>
-			{/each}
-		</div>
+		{#if lineNumbersOn}
+			<div
+				class="plain-line-gutter"
+				aria-hidden="true"
+				style:min-height="{plainGutterMinHeight}px"
+			>
+				{#each plainLineRows as row}
+					<div class="plain-line-number" style:top="{row.top}px">{row.label}</div>
+				{/each}
+			</div>
+		{/if}
 		<div class="tiptap-editor plain-mode" class:soft-wrap-enabled={softWrap} bind:this={element}></div>
 		{#if hasGutterContent}
 			<CommentGutter
@@ -1602,16 +1615,16 @@
 					class="mode-chip"
 					class:mode-chip-active={feedbackMode === 'edit'}
 					onclick={() => (feedbackMode = 'edit')}
-					title="Opens a thread with your feedback and has the agent propose an edit to the passage."
+					title="The agent proposes an edit to the passage right away."
 					type="button"
-				>Edit</button>
+				>Direct edit</button>
 				<button
 					class="mode-chip"
-					class:mode-chip-active={feedbackMode === 'comment'}
-					onclick={() => (feedbackMode = 'comment')}
-					title="Opens a thread with your feedback; the agent replies in the thread and does not edit."
+					class:mode-chip-active={feedbackMode === 'plan'}
+					onclick={() => (feedbackMode = 'plan')}
+					title="The agent first replies on the thread with why this passage reads wrong and what it intends to change, then proposes the edit."
 					type="button"
-				>Comment</button>
+				>Plan first</button>
 			</div>
 			<div class="quick-actions">
 				{#each pinnedActions as action}
@@ -1698,8 +1711,9 @@
 		 * it. The dock sits bottom-right over this wrapper. */
 		/* Symmetric L/R padding, constant whether or not comments exist — the
 		 * gutter column is always reserved in the grid, so the page never
-		 * shifts when a thread/card appears. */
-		padding: 0 32px calc(48px + var(--dock-reserved-bottom, 0px)) 32px;
+		 * shifts when a thread/card appears. Tight (16px) so the width goes
+		 * to the page + comment margin instead of dead canvas. */
+		padding: 0 16px calc(48px + var(--dock-reserved-bottom, 0px)) 16px;
 		/* Shared app canvas (defined on .app) — the document is a white sheet
 		 * floating on it; the line-number + comment gutters live on the canvas
 		 * in the margins rather than blending into the page. */
@@ -1732,11 +1746,23 @@
 	 * `.comment-gutter` in CommentGutter.svelte. */
 	.plain-editor-shell {
 		display: grid;
-		grid-template-columns: var(--line-gutter-width, 52px) minmax(0, var(--paper-width, 720px)) var(--gutter-width, 240px);
+		grid-template-columns: var(--line-gutter-width, 52px) minmax(0, var(--paper-width, 720px)) var(--gutter-width, 300px);
 		gap: var(--editor-grid-gap, 18px);
 		width: 100%;
 		justify-content: center;
 		align-items: start;
+	}
+	/* Explicit column assignment: the line gutter is conditionally rendered
+	 * (line-numbers toggle), so auto-placement would otherwise shift the
+	 * page into column 1 when it's absent. */
+	.plain-editor-shell > .plain-line-gutter {
+		grid-column: 1;
+	}
+	.plain-editor-shell > .tiptap-editor.plain-mode {
+		grid-column: 2;
+	}
+	.plain-editor-shell > :global(.comment-gutter) {
+		grid-column: 3;
 	}
 	.plain-line-gutter {
 		position: relative;

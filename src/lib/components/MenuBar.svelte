@@ -95,6 +95,26 @@
 		await item.onClick();
 	}
 
+	/** Keep an open panel/submenu inside the viewport: cap its height to the
+	 * space below its top edge and let the content scroll. Without this a
+	 * tall flyout (e.g. Writing references) runs past the bottom of the
+	 * window and its lower controls are unreachable. */
+	function clampToViewport(node: HTMLElement) {
+		const clamp = () => {
+			node.style.maxHeight = '';
+			const rect = node.getBoundingClientRect();
+			const available = window.innerHeight - rect.top - 12;
+			node.style.maxHeight = `${Math.max(120, Math.round(available))}px`;
+		};
+		clamp();
+		window.addEventListener('resize', clamp);
+		return {
+			destroy() {
+				window.removeEventListener('resize', clamp);
+			}
+		};
+	}
+
 	// Close on outside click / Escape.
 	$effect(() => {
 		if (openMenu === null) return;
@@ -167,7 +187,7 @@
 								<ChevronRight size={12} class="submenu-arrow" />
 
 								{#if openSubmenu === item.label}
-									<div class="submenu-panel" role="menu" tabindex="-1">
+									<div class="submenu-panel" role="menu" tabindex="-1" use:clampToViewport>
 										{#each item.items as sub, subIdx (subIdx)}
 											{#if sub.kind === 'divider'}
 												<div class="menu-divider" role="separator"></div>
@@ -211,6 +231,7 @@
 										class="submenu-panel panel-flyout"
 										role="menu"
 										tabindex="-1"
+										use:clampToViewport
 									>
 										{#if panelSnippet}{@render panelSnippet()}{/if}
 									</div>
@@ -330,6 +351,9 @@
 		border-radius: 6px;
 		box-shadow: 0 8px 24px rgba(0, 0, 0, 0.10), 0 2px 4px rgba(0, 0, 0, 0.04);
 		padding: 4px;
+		/* clampToViewport caps max-height to the space below; overflow makes
+		 * the capped panel scroll instead of clipping its lower controls. */
+		overflow-y: auto;
 	}
 	/* Panel flyouts embed arbitrary content (e.g. RulesPanel) — let that
 	 * content own its own padding and sizing. Reset `white-space` because

@@ -123,6 +123,11 @@ export const editorFontScale = writable<number>(1.0);
  * long lines don't silently clip off the right edge of the editor; the
  * server mirrors this default in `runtime-state.ts`. */
 export const editorSoftWrap = writable<boolean>(true);
+/** User preference: show line numbers in the editor's left gutter. Default
+ * OFF — the gutter column collapses and the reclaimed width goes to the
+ * page + comment margin (Google-Docs-style). The server mirrors this
+ * default in `runtime-state.ts`. */
+export const editorLineNumbers = writable<boolean>(false);
 
 // ── Actions toolbar ───────────────────────────────────────────────────
 

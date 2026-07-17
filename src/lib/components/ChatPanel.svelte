@@ -9,6 +9,8 @@
 
 	interface Props {
 		onSend: (message: string, opts: { planMode: boolean; images: ImageAttachment[] }) => void;
+		/** Renders an explicit ✕ in the header when provided. */
+		onClose?: () => void;
 		/** True while a render is in flight. Sends still work — they get
 		 * appended to the queue and run when the current render finishes. */
 		rendering?: boolean;
@@ -21,6 +23,7 @@
 	}
 	let {
 		onSend,
+		onClose,
 		rendering = false,
 		queuedCount = 0,
 		message = $bindable(''),
@@ -118,6 +121,11 @@
 				free-form request to the agent
 			{/if}
 		</span>
+		{#if onClose}
+			<button class="panel-close" aria-label="Close" title="Close" onclick={onClose}>
+				<X size={12} />
+			</button>
+		{/if}
 	</div>
 
 	<textarea
@@ -209,6 +217,29 @@
 	.panel-subtitle {
 		font-size: 11px;
 		color: var(--text-faint);
+		/* Keep the subtitle hugging the right edge (next to the ✕) instead
+		 * of being centered by the header's space-between. */
+		margin-left: auto;
+	}
+	.panel-close {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 20px;
+		height: 20px;
+		margin-left: 4px;
+		border: none;
+		background: transparent;
+		color: var(--text-faint);
+		border-radius: 4px;
+		cursor: pointer;
+		padding: 0;
+		flex-shrink: 0;
+		align-self: center;
+	}
+	.panel-close:hover {
+		background: var(--bg-hover);
+		color: var(--text-secondary);
 	}
 	textarea {
 		width: 100%;

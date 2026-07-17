@@ -1,4 +1,12 @@
+<script lang="ts" module>
+	/** Draft survives the popover unmounting. Clicking outside the menu
+	 * closes (and destroys) this panel on mousedown — before the input's
+	 * blur handler can fire — so without this a half-typed rule was lost. */
+	let savedDraft = '';
+</script>
+
 <script lang="ts">
+	import { onDestroy } from 'svelte';
 	import { X, Play } from 'lucide-svelte';
 	import { rules, pushHistory } from '$lib/stores';
 	import type { Rule } from '$lib/types';
@@ -9,9 +17,14 @@
 	let { onSubmit }: Props = $props();
 
 	let rulesList: Rule[] = $state([]);
-	rules.subscribe((v) => (rulesList = v));
+	const unsubscribeRules = rules.subscribe((v) => (rulesList = v));
 
-	let newRule = $state('');
+	let newRule = $state(savedDraft);
+
+	onDestroy(() => {
+		savedDraft = newRule;
+		unsubscribeRules();
+	});
 
 	async function saveRules(nextRules: Rule[]) {
 		rules.set(nextRules);
