@@ -533,7 +533,7 @@
 		// as a comment above the pending-edit card.
 		const planHint =
 			feedbackMode === 'plan' && threadId
-				? ` Plan first: before proposing any edit, you MUST reply on thread_id="${threadId}" via reply_to_comment with a short reflection — the diagnosis (why the user likely flagged this passage and why the current text reads wrong, concretely) and the intended change in one or two sentences. Only after posting that reply, propose the edit via edit_doc with thread_id="${threadId}" so it attaches to the same thread.`
+				? ` Plan first: before proposing any edit, you MUST reply on thread_id="${threadId}" via reply_to_comment with your reflection. Explain, in complete sentences, why the user likely flagged this passage, what in the current text reads wrong, and what you intend to change. Write it as plain explanatory prose that carries your reasoning, the way you would explain it out loud. Do not compress it into label-led fragments or bullet points. Only after posting that reply, propose the edit via edit_doc with thread_id="${threadId}" so it attaches to the same thread.`
 				: '';
 		return `${prefix}. ${tag} Rewrite it: "${passage}"${threadHint}${planHint}`;
 	}
