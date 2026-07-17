@@ -7,6 +7,7 @@ import {
 	dbSetSessionOwner,
 	dbSetSessionId,
 	dbSetEditorSoftWrap,
+	dbSetEditorLineNumbers,
 	dbSetTheme,
 	dbUpsertTabs,
 	kvGet
@@ -40,6 +41,9 @@ export type { AgentSettings, Rule };
 // directives) don't silently clip off the right edge of the editor with no
 // visible scroll affordance. Users can still flip it off via Settings.
 const DEFAULT_EDITOR_SOFT_WRAP = true;
+/** Line numbers default OFF — the gutter column collapses so the paper +
+ * comment margin get the space (Google-Docs-style). */
+const DEFAULT_EDITOR_LINE_NUMBERS = false;
 
 export interface TabsState {
 	/** Tab IDs in display order. Tab ID = filename without the .md extension. */
@@ -171,6 +175,16 @@ export function getEditorSoftWrap(): boolean {
 
 export function setEditorSoftWrap(enabled: boolean) {
 	dbSetEditorSoftWrap(enabled);
+}
+
+export function getEditorLineNumbers(): boolean {
+	const raw = kvGet('editorLineNumbers');
+	if (raw === null) return DEFAULT_EDITOR_LINE_NUMBERS;
+	return raw === 'true';
+}
+
+export function setEditorLineNumbers(enabled: boolean) {
+	dbSetEditorLineNumbers(enabled);
 }
 
 export function getTheme(): string {

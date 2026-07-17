@@ -64,7 +64,7 @@ first `synced` event — on localhost this is sub-20ms.
 
 ## Layout
 
-- **Left (`OutlinePane`, 260px):** auto-generated TOC from headings only
+- **Left (`OutlinePane`, 200px default, resizable):** auto-generated TOC from headings only
   (`showOutline`), with the `FileTree` below it. This is the sole
   `OutlinePane` instance — it renders only the TOC. (There used to be a
   second `showReview` instance in a right-hand sidebar; that mode has been

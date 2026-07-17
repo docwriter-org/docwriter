@@ -167,6 +167,18 @@ export function dbSetEditorSoftWrap(enabled: boolean) {
 	}
 }
 
+export function dbSetEditorLineNumbers(enabled: boolean) {
+	try {
+		const db = getDb();
+		db.prepare('INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)').run(
+			'editorLineNumbers',
+			String(enabled)
+		);
+	} catch (err) {
+		logDbError('setEditorLineNumbers', err);
+	}
+}
+
 export function dbSetTheme(theme: string) {
 	try {
 		const db = getDb();

@@ -44,6 +44,7 @@
 		submitCountdown,
 		editorFontScale,
 		editorSoftWrap,
+		editorLineNumbers,
 		pinnedActions,
 		recentActions,
 		trackActionUsage,
@@ -116,6 +117,7 @@
 	// a live subscriber that keeps firing against a destroyed editor.
 	let fontScale = $derived($editorFontScale);
 	let softWrap = $derived($editorSoftWrap);
+	let lineNumbersOn = $derived($editorLineNumbers);
 	/** Per-paragraph row entries for the line gutter. Each row carries a
 	 * label and an absolute `top` offset (px) from the editor content's
 	 * top. Absolute positioning lets the gutter follow paragraphs through
@@ -168,8 +170,8 @@
 	let newAwaitingThreadId = $state<string | null>(null);
 	let rounds: MaterializedPendingReviewRound[] = $derived($pendingReviewRounds);
 	let baseline = $derived($reviewBaseline);
-	/** The gutter (and its 200px column) shows when there's anything to
-	 * review — unresolved comment threads OR pending edit rounds. */
+	/** The gutter (and its --gutter-width column) shows when there's anything
+	 * to review — unresolved comment threads OR pending edit rounds. */
 	let hasGutterContent = $derived(
 		threadsForTab.some((t) => !t.resolved) || rounds.length > 0
 	);
@@ -646,6 +648,10 @@
 
 	function syncPlainLineRows() {
 		if (!editor) return;
+		// Numbers hidden (the default): skip the per-paragraph rect measuring
+		// entirely — the gutter isn't rendered. The $effect on lineNumbersOn
+		// re-syncs when the user toggles them back on.
+		if (!lineNumbersOn) return;
 		const contentEl = editor.view.dom as HTMLElement | null;
 		if (!contentEl) return;
 		const lineHeight = parseFloat(getComputedStyle(contentEl).lineHeight || '0');
@@ -1373,6 +1379,7 @@
 		if (!editor) return;
 		softWrap;
 		fontScale;
+		lineNumbersOn;
 		schedulePlainLineSync();
 	});
 
@@ -1453,15 +1460,17 @@
 		class="plain-editor-shell"
 		class:soft-wrap-enabled={softWrap}
 	>
-		<div
-			class="plain-line-gutter"
-			aria-hidden="true"
-			style:min-height="{plainGutterMinHeight}px"
-		>
-			{#each plainLineRows as row}
-				<div class="plain-line-number" style:top="{row.top}px">{row.label}</div>
-			{/each}
-		</div>
+		{#if lineNumbersOn}
+			<div
+				class="plain-line-gutter"
+				aria-hidden="true"
+				style:min-height="{plainGutterMinHeight}px"
+			>
+				{#each plainLineRows as row}
+					<div class="plain-line-number" style:top="{row.top}px">{row.label}</div>
+				{/each}
+			</div>
+		{/if}
 		<div class="tiptap-editor plain-mode" class:soft-wrap-enabled={softWrap} bind:this={element}></div>
 		{#if hasGutterContent}
 			<CommentGutter
@@ -1702,8 +1711,9 @@
 		 * it. The dock sits bottom-right over this wrapper. */
 		/* Symmetric L/R padding, constant whether or not comments exist — the
 		 * gutter column is always reserved in the grid, so the page never
-		 * shifts when a thread/card appears. */
-		padding: 0 32px calc(48px + var(--dock-reserved-bottom, 0px)) 32px;
+		 * shifts when a thread/card appears. Tight (16px) so the width goes
+		 * to the page + comment margin instead of dead canvas. */
+		padding: 0 16px calc(48px + var(--dock-reserved-bottom, 0px)) 16px;
 		/* Shared app canvas (defined on .app) — the document is a white sheet
 		 * floating on it; the line-number + comment gutters live on the canvas
 		 * in the margins rather than blending into the page. */
@@ -1736,11 +1746,23 @@
 	 * `.comment-gutter` in CommentGutter.svelte. */
 	.plain-editor-shell {
 		display: grid;
-		grid-template-columns: var(--line-gutter-width, 52px) minmax(0, var(--paper-width, 720px)) var(--gutter-width, 240px);
+		grid-template-columns: var(--line-gutter-width, 52px) minmax(0, var(--paper-width, 720px)) var(--gutter-width, 300px);
 		gap: var(--editor-grid-gap, 18px);
 		width: 100%;
 		justify-content: center;
 		align-items: start;
+	}
+	/* Explicit column assignment: the line gutter is conditionally rendered
+	 * (line-numbers toggle), so auto-placement would otherwise shift the
+	 * page into column 1 when it's absent. */
+	.plain-editor-shell > .plain-line-gutter {
+		grid-column: 1;
+	}
+	.plain-editor-shell > .tiptap-editor.plain-mode {
+		grid-column: 2;
+	}
+	.plain-editor-shell > :global(.comment-gutter) {
+		grid-column: 3;
 	}
 	.plain-line-gutter {
 		position: relative;

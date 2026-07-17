@@ -729,9 +729,9 @@
 		position: relative;
 		flex-shrink: 0;
 		/* Reads `--gutter-width` from +page.svelte. */
-		width: var(--gutter-width, 240px);
-		min-width: var(--gutter-width, 240px);
-		max-width: var(--gutter-width, 240px);
+		width: var(--gutter-width, 300px);
+		min-width: var(--gutter-width, 300px);
+		max-width: var(--gutter-width, 300px);
 		height: 100%;
 		/* Extra bottom room so the lowest card can sit clear of the fixed
 		 * agent dock (AgentDockShell publishes its height as the var). */

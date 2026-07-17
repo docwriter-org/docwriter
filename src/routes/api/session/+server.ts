@@ -10,6 +10,8 @@ import {
 	clearSessionState,
 	getEditorSoftWrap,
 	setEditorSoftWrap,
+	getEditorLineNumbers,
+	setEditorLineNumbers,
 	getTheme,
 	setTheme
 } from '$lib/server/runtime-state';
@@ -24,6 +26,7 @@ export const GET: RequestHandler = async () => {
 		recentActions: getRecentActions(),
 		actionUsageCounts: getActionUsageCounts(),
 		editorSoftWrap: getEditorSoftWrap(),
+		editorLineNumbers: getEditorLineNumbers(),
 		theme: getTheme()
 	});
 };
@@ -33,6 +36,7 @@ export const PUT: RequestHandler = async ({ request }) => {
 	if (body.recentActions) setRecentActions(body.recentActions);
 	if (body.actionUsageCounts) setActionUsageCounts(body.actionUsageCounts);
 	if (typeof body.editorSoftWrap === 'boolean') setEditorSoftWrap(body.editorSoftWrap);
+	if (typeof body.editorLineNumbers === 'boolean') setEditorLineNumbers(body.editorLineNumbers);
 	if (typeof body.theme === 'string') setTheme(body.theme);
 	return json({ ok: true });
 };
