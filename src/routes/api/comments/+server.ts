@@ -1,4 +1,5 @@
 import { error, json } from '@sveltejs/kit';
+import { dev } from '$app/environment';
 import type { RequestHandler } from './$types';
 import * as Y from 'yjs';
 import type { Document } from '@hocuspocus/server';
@@ -124,13 +125,19 @@ export const POST: RequestHandler = async ({ request }) => {
 		const messageText = typeof body.message === 'string' ? body.message.trim() : '';
 		if (!threadId) throw error(400, 'threadId is required');
 		if (!messageText) throw error(400, 'message is required');
+		// Dev-only test seam (mirrors dev_fake_agent_edit): allow faking an
+		// agent-authored reply so the plan-first thread rendering can be
+		// exercised locally without a live agent. Real agent replies go
+		// through the reply_to_comment MCP tool, never this route.
+		const author: CommentMessage['author'] =
+			dev && body.author === 'agent' ? 'agent' : 'user';
 		const outcome = await mutateTabYDoc(tabId, (doc) => {
 			const commentsMap = getCommentsMap(doc);
 			const existing = commentsMap.get(threadId);
 			if (!existing) return { ok: false, error: 'Thread not found', status: 404 };
 			const reply: CommentMessage = {
 				id: 'msg_' + cryptoRandomId(),
-				author: 'user',
+				author,
 				text: messageText,
 				timestamp: Date.now()
 			};

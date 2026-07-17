@@ -131,7 +131,8 @@
 	function closePopover() {
 		popoverOpen = false;
 		popoverMode = 'manage';
-		newRule = '';
+		// Deliberately keep `newRule`: clicking out (backdrop / Escape)
+		// shouldn't discard a half-typed rule — it's restored on reopen.
 		cancelEdit();
 	}
 
