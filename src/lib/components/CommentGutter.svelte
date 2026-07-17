@@ -857,22 +857,13 @@
 		0%, 100% { opacity: 0.3; transform: translateY(0); }
 		50% { opacity: 0.9; transform: translateY(-2px); }
 	}
-	/* Per-message: clear author distinction via left-accent + author
-	 * color. No nested box; body sits directly in the card. User is
-	 * blue-ish (cool), agent is amber (warm) to match the thread's
-	 * comment color and the pill in the text. */
+	/* Per-message: author distinction comes from the avatar + name row
+	 * alone (Google-Docs-clean) — no left-accent rules, no nested box;
+	 * the body sits directly in the card. */
 	.message {
 		display: grid;
 		grid-template-columns: auto 1fr auto;
 		column-gap: 6px;
-		padding-left: 8px;
-		border-left: 2px solid var(--border-light);
-	}
-	.message.from-user {
-		border-left-color: color-mix(in srgb, #3b82f6 60%, transparent);
-	}
-	.message.from-agent {
-		border-left-color: color-mix(in srgb, #f59e0b 70%, transparent);
 	}
 	.author {
 		display: inline-flex;

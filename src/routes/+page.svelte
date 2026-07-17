@@ -3038,7 +3038,8 @@
 		 * canvas margins are tight — that reclaimed width belongs to the
 		 * cards. */
 		--paper-width: 900px;
-		--gutter-width: 300px;
+		--comment-width: 300px;
+		--gutter-width: var(--comment-width);
 		--line-gutter-width: 52px;
 		--editor-grid-gap: 18px;
 		background: var(--canvas);
@@ -3172,12 +3173,18 @@
 		--line-number-pad-right: 6px;
 		--editor-grid-gap: 10px;
 	}
-	/* Line numbers hidden (the default): collapse the number column so the
-	 * page + comment margin get the width. Second selector outranks the
-	 * split-preview override above. */
-	.source-workspace.line-numbers-off,
+	/* Line numbers hidden (the default): collapse the number column and give
+	 * its width to the COMMENT margin, not the paper — the page geometry is
+	 * identical with numbers on or off (total column extras stay equal:
+	 * 52 + 300 = 0 + 352). Second rule outranks the split-preview override
+	 * above and mirrors its narrower (34px) number column. */
+	.source-workspace.line-numbers-off {
+		--line-gutter-width: 0px;
+		--gutter-width: calc(var(--comment-width) + 52px);
+	}
 	.source-preview-layout.split-preview-open .source-workspace.line-numbers-off {
 		--line-gutter-width: 0px;
+		--gutter-width: calc(var(--comment-width) + 34px);
 	}
 	.source-preview-layout.split-preview-open > :global(.resizer) {
 		z-index: 30;
