@@ -179,9 +179,12 @@ export interface CommentThread {
 /** Routing hint carried from the feedback popup to the agent prompt. Both
  * modes open a comment thread on the passage (the feedback always persists
  * as a thread); the mode decides how the agent responds:
- *  - `edit`: propose an `edit_doc` change (no `reply_to_comment`).
- *  - `comment`: reply on the thread via `reply_to_comment` — no edit. */
-export type FeedbackMode = 'edit' | 'comment';
+ *  - `edit`: directly propose an `edit_doc` change.
+ *  - `plan`: first reply on the thread via `reply_to_comment` with the
+ *    diagnosis (why the passage was flagged, concretely) and the intended
+ *    change, THEN propose the edit — the reflection shows as a comment
+ *    above the pending-edit card. */
+export type FeedbackMode = 'edit' | 'plan';
 
 export type HistoryEntry =
 	| {

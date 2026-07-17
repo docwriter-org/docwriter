@@ -63,10 +63,7 @@
 	interface Props {
 		/** Workspace path for the tab this editor instance is bound to. */
 		tabId: string;
-		/** `planThreadId` (feedback popup's "Plan first") makes the render
-		 * post the agent's diagnosis as a reply on that thread BEFORE any
-		 * edit is allowed — the server gates edit_doc/write_doc on it. */
-		onSubmit?: (trigger?: string, opts?: { planThreadId?: string }) => void;
+		onSubmit?: (trigger?: string) => void;
 		/** One-shot scroll restore. Read once in onMount after the editor's
 		 * content has laid out, then ignored. The parent captures this from
 		 * `getScrollTop()` before tearing the editor down (Accept / Reject /
@@ -151,18 +148,13 @@
 	});
 	let feedbackInputEl: HTMLDivElement | null = $state(null);
 	let feedbackInput = $state('');
-	/** Routing mode for the current feedback submission. `auto` lets the
-	 * agent decide comment vs. edit; `edit` forces an edit_doc call;
-	 * `discuss` forces a reply_to_comment call on the user-opened thread.
-	 * Resets to `auto` whenever the
-	 * popup closes so each feedback session starts fresh. */
+	/** Routing mode for the current feedback submission. `edit` = direct
+	 * edit_doc proposal; `plan` = the agent first replies on the feedback
+	 * thread with WHY the passage was flagged (same reflection contract as
+	 * chat's plan-first mode), then proposes the edit on the same thread.
+	 * Resets to `edit` whenever the popup closes so each feedback session
+	 * starts fresh. */
 	let feedbackMode = $state<FeedbackMode>('edit');
-	/** "Plan first" for the current feedback submission (Edit mode only).
-	 * When checked, the agent must reflect on WHY the passage was flagged —
-	 * posted as a reply on the feedback thread — before it may propose the
-	 * edit. Mirrors ChatPanel's plan-first checkbox, but the plan lands in
-	 * situ as a comment instead of a modal plan proposal. */
-	let feedbackPlanFirst = $state(false);
 
 	// Comment thread + review state, each mirrored from its store via `$store`
 	// auto-subscription so there's exactly ONE reactive value per concept and
@@ -492,7 +484,6 @@
 		feedbackSelectionRange = null;
 		shouldFocusFeedbackInput = false;
 		feedbackMode = 'edit';
-		feedbackPlanFirst = false;
 		updateDiff();
 		if (preserveSelection && refocusEditor) {
 			requestAnimationFrame(() => editor?.commands.focus());
@@ -514,49 +505,42 @@
 		closeFeedbackPopup();
 	}
 
-	/** Format the trigger string for a feedback submission. The `[mode: …]`
-	 * tag is parsed by the agent prompt to force commenting vs. editing
-	 * (or leave it to auto-routing). The verb ("Rewrite", "Discuss",
-	 * "Consider") also nudges the agent even if it missed the tag.
-	 * When a thread was pre-opened for the feedback (Auto/Discuss modes),
-	 * include its id so the agent replies on that thread rather than
-	 * opening a duplicate one. */
+	/** Format the trigger string for a feedback submission. The pre-opened
+	 * thread id is included so the agent works on that thread rather than
+	 * opening a duplicate one. In `plan` mode the trigger additionally
+	 * requires a reply_to_comment reflection on the thread BEFORE the edit
+	 * (same contract as chat's plan-first mode, landing in situ). */
 	function buildFeedbackTrigger(
 		label: string,
 		passage: string,
 		isCustom: boolean,
-		threadId: string | null,
-		planFirst = false
+		threadId: string | null
 	): string {
-		const mode = feedbackMode;
-		// The agent prompt understands `[mode: edit]` (edit only) and
-		// `[mode: discuss]` (reply only); "comment" maps to discuss.
-		const agentMode = mode === 'comment' ? 'discuss' : 'edit';
-		const verb = mode === 'comment' ? 'Discuss' : 'Rewrite';
-		const tag = `[mode: ${agentMode}]`;
+		// Both modes end in an edit; `[mode: edit]` keeps the system prompt's
+		// routing rules pointed at edit_doc.
+		const tag = `[mode: edit]`;
 		const prefix = isCustom
 			? `The user flagged this passage with feedback "${label}"`
 			: `The user flagged this passage as "${label}"`;
 		// The system prompt's "Where a response goes" rules carry the routing;
 		// the trigger only needs the facts (mode tag + thread id).
 		const threadHint = threadId ? ` A thread is open for this feedback (thread_id="${threadId}").` : '';
-		// Same contract as chat's plan-first mode, but the plan lands on the
-		// thread: diagnosis first (why the user likely flagged it, concretely,
-		// tied to the passage), intended change in one or two sentences, THEN
-		// the edit. The server enforces the ordering by denying edit_doc /
-		// write_doc until the reply_to_comment for this thread has been made.
+		// Plan-first: same reflection contract as chat's plan-first mode, but
+		// the plan lands in situ — the agent MUST post it as a reply on the
+		// feedback thread before proposing the edit, so the reasoning shows
+		// as a comment above the pending-edit card.
 		const planHint =
-			planFirst && threadId
-				? ` Plan first: before proposing any edit, reply on thread_id="${threadId}" via reply_to_comment with a short reflection — the diagnosis (why the user likely flagged this passage and why the current text reads wrong, concretely) and the intended change in one or two sentences. Only after that reply, propose the edit via edit_doc with thread_id="${threadId}" so it attaches to the same thread.`
+			feedbackMode === 'plan' && threadId
+				? ` Plan first: before proposing any edit, you MUST reply on thread_id="${threadId}" via reply_to_comment with a short reflection — the diagnosis (why the user likely flagged this passage and why the current text reads wrong, concretely) and the intended change in one or two sentences. Only after posting that reply, propose the edit via edit_doc with thread_id="${threadId}" so it attaches to the same thread.`
 				: '';
-		return `${prefix}. ${tag} ${verb} it: "${passage}"${threadHint}${planHint}`;
+		return `${prefix}. ${tag} Rewrite it: "${passage}"${threadHint}${planHint}`;
 	}
 
 	/** Open a comment thread with the user's feedback as the first message,
 	 * so the feedback persists on the passage and the agent prompt's
 	 * transcript starts from the user's voice. Returns the new thread id, or
-	 * null on failure. Fires for BOTH modes now (edit = record, comment =
-	 * conversation).
+	 * null on failure. Fires for BOTH modes (direct edit = record, plan
+	 * first = where the agent's reflection reply lands).
 	 *
 	 * `relPositions` carries the user's actual selection encoded as Yjs
 	 * RelativePositions — when present, the server stores them on the
@@ -569,9 +553,9 @@
 		passage: string,
 		relPositions: { relStart: string; relEnd: string } | null
 	): Promise<string | null> {
-		// Every feedback now opens a thread so it persists on the passage —
-		// in edit mode as a record, in comment mode as the conversation the
-		// agent replies on.
+		// Every feedback opens a thread so it persists on the passage — as a
+		// record in direct-edit mode, and as the conversation the agent's
+		// plan reflection replies on in plan-first mode.
 		try {
 			const res = await fetch('/api/comments', {
 				method: 'POST',
@@ -611,27 +595,23 @@
 		if (!feedbackPopup) return;
 		const text = feedbackPopup.text;
 		const modeSnapshot = feedbackMode;
-		// Plan-first only applies to Edit mode — a Comment response IS the
-		// reflection, there's no edit to gate behind it.
-		const planSnapshot = feedbackPlanFirst && modeSnapshot === 'edit';
 		const relSnapshot = snapshotFeedbackRelPositions();
 		trackActionUsage(action.label);
 		if (!action.pinned) {
 			recentActions.update((prev) => [action, ...prev.filter((x) => x.id !== action.id)].slice(0, 6));
 		}
 		closeFeedbackPopup();
-		// Restore the mode for the pre-open call — closeFeedbackPopup reset
-		// it to `auto`, but we want to honor what the user picked.
+		// Restore the mode for the trigger build — closeFeedbackPopup reset
+		// it to `edit`, but we want to honor what the user picked.
 		feedbackMode = modeSnapshot;
 		const threadId = await maybeOpenThreadForFeedback(action.label, text, relSnapshot);
 		if (threadId) {
 			newAwaitingThreadId = threadId;
 			tick().then(() => { newAwaitingThreadId = null; });
 		}
-		const planFirst = planSnapshot && !!threadId;
-		const trigger = buildFeedbackTrigger(action.label, text, false, threadId, planFirst);
+		const trigger = buildFeedbackTrigger(action.label, text, false, threadId);
 		feedbackMode = 'edit';
-		if (onSubmit) onSubmit(trigger, planFirst && threadId ? { planThreadId: threadId } : undefined);
+		if (onSubmit) onSubmit(trigger);
 	}
 
 	async function sendCustomFeedback() {
@@ -652,7 +632,6 @@
 		};
 		trackActionUsage(customAction.label);
 		recentActions.update((prev) => [customAction, ...prev.filter((x) => x.label !== customAction.label)].slice(0, 6));
-		const planSnapshot = feedbackPlanFirst && modeSnapshot === 'edit';
 		closeFeedbackPopup();
 		feedbackMode = modeSnapshot;
 		const threadId = await maybeOpenThreadForFeedback(fb, text, relSnapshot);
@@ -660,10 +639,9 @@
 			newAwaitingThreadId = threadId;
 			tick().then(() => { newAwaitingThreadId = null; });
 		}
-		const planFirst = planSnapshot && !!threadId;
-		const trigger = buildFeedbackTrigger(fb, text, true, threadId, planFirst);
+		const trigger = buildFeedbackTrigger(fb, text, true, threadId);
 		feedbackMode = 'edit';
-		if (onSubmit) onSubmit(trigger, planFirst && threadId ? { planThreadId: threadId } : undefined);
+		if (onSubmit) onSubmit(trigger);
 	}
 
 	function syncPlainLineRows() {
@@ -1628,30 +1606,16 @@
 					class="mode-chip"
 					class:mode-chip-active={feedbackMode === 'edit'}
 					onclick={() => (feedbackMode = 'edit')}
-					title="Opens a thread with your feedback and has the agent propose an edit to the passage."
+					title="The agent proposes an edit to the passage right away."
 					type="button"
-				>Edit</button>
+				>Direct edit</button>
 				<button
 					class="mode-chip"
-					class:mode-chip-active={feedbackMode === 'comment'}
-					onclick={() => (feedbackMode = 'comment')}
-					title="Opens a thread with your feedback; the agent replies in the thread and does not edit."
+					class:mode-chip-active={feedbackMode === 'plan'}
+					onclick={() => (feedbackMode = 'plan')}
+					title="The agent first replies on the thread with why this passage reads wrong and what it intends to change, then proposes the edit."
 					type="button"
-				>Comment</button>
-				<label
-					class="feedback-plan-toggle"
-					class:disabled={feedbackMode === 'comment'}
-					title={feedbackMode === 'comment'
-						? 'Comment mode already replies on the thread — plan-first applies to Edit mode.'
-						: 'The agent first replies on the thread with why this passage reads wrong and what it intends to change, and only then proposes the edit.'}
-				>
-					<input
-						type="checkbox"
-						bind:checked={feedbackPlanFirst}
-						disabled={feedbackMode === 'comment'}
-					/>
-					<span>Plan first</span>
-				</label>
+				>Plan first</button>
 			</div>
 			<div class="quick-actions">
 				{#each pinnedActions as action}
@@ -2477,34 +2441,6 @@
 		color: var(--text);
 		background: var(--bg);
 		box-shadow: 0 0 0 1px var(--border-light);
-	}
-	/* Mirrors ChatPanel's plan-first toggle, popup-sized. */
-	.feedback-plan-toggle {
-		display: inline-flex;
-		align-items: center;
-		gap: 4px;
-		margin-left: 6px;
-		padding-right: 6px;
-		font-size: 11px;
-		font-weight: 500;
-		color: var(--text-faint);
-		cursor: pointer;
-		user-select: none;
-		white-space: nowrap;
-	}
-	.feedback-plan-toggle input {
-		margin: 0;
-		cursor: pointer;
-	}
-	.feedback-plan-toggle:hover:not(.disabled) {
-		color: var(--text-secondary);
-	}
-	.feedback-plan-toggle.disabled {
-		opacity: 0.5;
-		cursor: default;
-	}
-	.feedback-plan-toggle.disabled input {
-		cursor: default;
 	}
 	/* Footer keyboard hint — reminds you the popover is dismissable with
 	 * Esc (and submittable with Enter) so it never feels like a trap. */
