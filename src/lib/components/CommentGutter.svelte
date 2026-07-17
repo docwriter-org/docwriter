@@ -529,21 +529,21 @@
 				<div class="card-messages">
 					{#each thread.messages as message (message.id)}
 						<div class="message" class:from-agent={message.author === 'agent'} class:from-user={message.author === 'user'}>
-							<span class="author">
-								<span
-									class="avatar small"
-									class:avatar-agent={message.author === 'agent'}
-									class:avatar-user={message.author !== 'agent'}
-								>
-									{#if message.author === 'agent'}
-										<Cat size={11} strokeWidth={1.8} />
-									{:else}
-										<User size={11} strokeWidth={1.8} />
-									{/if}
-								</span>
-								<span class="author-name">{message.author === 'agent' ? 'Agent' : 'You'}</span>
+							<span
+								class="avatar msg"
+								class:avatar-agent={message.author === 'agent'}
+								class:avatar-user={message.author !== 'agent'}
+							>
+								{#if message.author === 'agent'}
+									<Cat size={14} strokeWidth={1.8} />
+								{:else}
+									<User size={14} strokeWidth={1.8} />
+								{/if}
 							</span>
-							<span class="timestamp">{formatTimestamp(message.timestamp)}</span>
+							<span class="author-block">
+								<span class="author-name">{message.author === 'agent' ? 'Agent' : 'You'}</span>
+								<span class="timestamp">{formatTimestamp(message.timestamp)}</span>
+							</span>
 							<div class="message-body">{@html renderMarkdown(message.text)}</div>
 							{#if message.author === 'agent' && message.proposedEdit}
 								<button
@@ -763,7 +763,7 @@
 		z-index: 2;
 		box-shadow: 0 10px 30px rgba(0, 0, 0, 0.13), 0 2px 6px rgba(0, 0, 0, 0.05);
 		border-color: color-mix(in srgb, var(--text) 14%, var(--border-light));
-		padding: 13px 14px;
+		padding: 16px;
 	}
 	/* Circular avatars carry the only color on the card (Google-Docs style):
 	 * the card itself stays a neutral white sheet. */
@@ -776,9 +776,11 @@
 		height: 22px;
 		border-radius: 50%;
 	}
-	.avatar.small {
-		width: 18px;
-		height: 18px;
+	/* Message-header avatar: bigger than the collapsed-row one so the
+	 * name + stacked timestamp line up beside it (Google-Docs-sized). */
+	.avatar.msg {
+		width: 26px;
+		height: 26px;
 	}
 	.avatar-agent {
 		background: color-mix(in srgb, var(--accent) 16%, transparent);
@@ -815,11 +817,11 @@
 		border-radius: 9px;
 	}
 	.card-messages {
-		max-height: 260px;
+		max-height: 300px;
 		overflow-y: auto;
 		display: flex;
 		flex-direction: column;
-		gap: 8px;
+		gap: 14px;
 		/* Room at the top-right for the keep-shown toggle (pin-corner) so it
 		 * doesn't sit on the first message's timestamp. */
 		padding-right: 40px;
@@ -857,32 +859,40 @@
 		0%, 100% { opacity: 0.3; transform: translateY(0); }
 		50% { opacity: 0.9; transform: translateY(-2px); }
 	}
-	/* Per-message: author distinction comes from the avatar + name row
-	 * alone (Google-Docs-clean) — no left-accent rules, no nested box;
-	 * the body sits directly in the card. */
+	/* Per-message, Google-Docs anatomy: a roomy avatar, the name in real
+	 * (13px) dark type with the timestamp stacked in small gray UNDER it —
+	 * not competing on the same line — then the body full-width below.
+	 * Author distinction comes from the avatar + name alone; no accent
+	 * rules, no nested box. */
 	.message {
 		display: grid;
-		grid-template-columns: auto 1fr auto;
-		column-gap: 6px;
-	}
-	.author {
-		display: inline-flex;
+		grid-template-columns: auto 1fr;
+		column-gap: 9px;
 		align-items: center;
-		gap: 6px;
-		font-size: 11.5px;
+	}
+	.author-block {
+		display: flex;
+		flex-direction: column;
+		justify-content: center;
+		gap: 1px;
+		min-width: 0;
+	}
+	.author-name {
+		font-size: 13px;
 		font-weight: 600;
+		line-height: 1.2;
 		color: var(--text);
 	}
 	.timestamp {
-		font-size: 10.5px;
+		font-size: 11px;
+		line-height: 1.2;
 		color: var(--text-faint);
-		grid-column: 3;
 	}
 	.message-body {
-		grid-column: 1 / 4;
-		margin-top: 2px;
-		font-size: 12px;
-		line-height: 1.45;
+		grid-column: 1 / 3;
+		margin-top: 7px;
+		font-size: 13px;
+		line-height: 1.5;
 		color: var(--text);
 		word-break: break-word;
 	}
@@ -906,7 +916,7 @@
 		display: block;
 	}
 	.approve-btn {
-		grid-column: 1 / 4;
+		grid-column: 1 / 3;
 		justify-self: start;
 		display: inline-flex;
 		align-items: center;
