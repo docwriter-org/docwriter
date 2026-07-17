@@ -17,7 +17,7 @@
 	queuedSubmissionCount.subscribe((v) => (queuedCount = v));
 
 	let chatOpen = $state(false);
-	let chatPopoverEl: HTMLDivElement | null = $state(null);
+	let dockEl: HTMLDivElement | null = $state(null);
 	let chatMessageDraft = $state('');
 	let chatPlanModeDraft = $state(false);
 
@@ -33,8 +33,12 @@
 	$effect(() => {
 		if (!chatOpen) return;
 		function onDown(e: MouseEvent) {
+			// Check against the whole dock (button + popover), not just the
+			// popover: a mousedown on the Send button would close here and the
+			// button's click would immediately toggle it back open, making the
+			// button unable to ever close the popover.
 			const target = e.target as Node | null;
-			if (chatPopoverEl && target && !chatPopoverEl.contains(target)) chatOpen = false;
+			if (dockEl && target && !dockEl.contains(target)) chatOpen = false;
 		}
 		function onKey(e: KeyboardEvent) {
 			if (e.key === 'Escape') chatOpen = false;
@@ -48,7 +52,7 @@
 	});
 </script>
 
-<div class="agent-dock">
+<div class="agent-dock" bind:this={dockEl}>
 	<button
 		class="dock-message-btn header-pill-btn"
 		class:has-queue={queuedCount > 0}
@@ -68,11 +72,12 @@
 		{/if}
 	</button>
 	{#if chatOpen}
-		<div class="dock-chat-popover" bind:this={chatPopoverEl}>
+		<div class="dock-chat-popover">
 			<ChatPanel
 				bind:message={chatMessageDraft}
 				bind:planMode={chatPlanModeDraft}
 				onSend={sendMessage}
+				onClose={() => (chatOpen = false)}
 				rendering={rendering}
 				queuedCount={queuedCount}
 			/>

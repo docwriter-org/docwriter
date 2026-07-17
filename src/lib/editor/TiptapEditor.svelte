@@ -1392,8 +1392,8 @@
 		return wrapperEl?.scrollTop ?? 0;
 	}
 
-	export function focusEditor(): void {
-		editor?.commands.focus();
+	export function focusEditor(opts?: { scrollIntoView?: boolean }): void {
+		editor?.commands.focus(null, { scrollIntoView: opts?.scrollIntoView ?? true });
 	}
 
 	// Flash a sage-green halo on the freshly-accepted text range. Called

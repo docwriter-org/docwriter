@@ -1,5 +1,18 @@
+<script lang="ts" module>
+	/** Drafts survive the popover unmounting. Clicking outside the menu
+	 * destroys this panel on mousedown, so without this a half-typed
+	 * sample or URL was silently lost. */
+	let savedDrafts = {
+		sampleName: '',
+		sampleContent: '',
+		sampleExpanded: false,
+		urlValue: '',
+		urlLabel: ''
+	};
+</script>
+
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import { Link2, NotebookPen, Plus, Trash2 } from 'lucide-svelte';
 	import { pushHistory } from '$lib/stores';
 
@@ -24,12 +37,16 @@
 	let savingSample = $state(false);
 	let savingUrl = $state(false);
 
-	let sampleName = $state('');
-	let sampleContent = $state('');
-	let sampleExpanded = $state(false);
+	let sampleName = $state(savedDrafts.sampleName);
+	let sampleContent = $state(savedDrafts.sampleContent);
+	let sampleExpanded = $state(savedDrafts.sampleExpanded);
 
-	let urlValue = $state('');
-	let urlLabel = $state('');
+	let urlValue = $state(savedDrafts.urlValue);
+	let urlLabel = $state(savedDrafts.urlLabel);
+
+	onDestroy(() => {
+		savedDrafts = { sampleName, sampleContent, sampleExpanded, urlValue, urlLabel };
+	});
 
 	async function loadReferences() {
 		loading = true;

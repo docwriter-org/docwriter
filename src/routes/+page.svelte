@@ -147,7 +147,7 @@
 		flushAutosave: () => Promise<boolean>;
 		cancelIdleTimer: () => void;
 		getScrollTop: () => number;
-		focusEditor: () => void;
+		focusEditor: (opts?: { scrollIntoView?: boolean }) => void;
 		flashAcceptedRange: (text: string) => void;
 	};
 
@@ -1492,7 +1492,11 @@
 			const data = (await res.json().catch(() => ({}))) as ReviewActionResponse;
 			if (res.ok && data?.ok && Array.isArray(data.rounds) && typeof data.yjsUpdate === 'string') {
 				applyUpdateToTab(tabId, data.yjsUpdate);
-				editorRef?.focusEditor();
+				// Focus so undo (Cmd+Z) works immediately, but don't scroll the
+				// caret into view — the caret is often far from the accepted
+				// edit and the default scroll yanked the user away from the
+				// card they just clicked.
+				editorRef?.focusEditor({ scrollIntoView: false });
 			}
 			return { res, data };
 		} finally {
@@ -1522,7 +1526,7 @@
 			if (res.ok && data?.ok && typeof data.yjsUpdate === 'string') {
 				applyUpdateToTab(tabId, data.yjsUpdate);
 				if (resolved) clearPeekIfMatches(undefined);
-				editorRef?.focusEditor();
+				editorRef?.focusEditor({ scrollIntoView: false });
 			}
 		} catch (e) {
 			console.error('Failed to set thread resolution:', e);
