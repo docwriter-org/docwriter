@@ -1,6 +1,9 @@
 <script lang="ts">
 	import type { Editor } from '@tiptap/core';
-	import { Send, Sparkles, Cat, Check, X, User } from 'lucide-svelte';
+	import { Send, Sparkles, Cat, Check, X, User, Lock } from 'lucide-svelte';
+	import type { Rule } from '$lib/types';
+	import { freezeQuoteFromRule } from '$lib/freeze';
+	import { resolveFreezeAnchorPos } from '$lib/editor/freeze-overlay';
 
 	/** Minimal inline markdown → HTML. Matches the renderer used in
 	 * HistoryPane so assistant_text and comments look the same. Escapes
@@ -54,6 +57,13 @@
 		pinnedRoundIds: Set<string>;
 		/** Accept every still-pending edit for one feedback thread at once. */
 		onAcceptFeedback: (roundIds: string[]) => void;
+		/** Accept / reject every pending round on this tab. */
+		onAcceptAll?: () => void;
+		onRejectAll?: () => void;
+		/** Freeze rules whose quotes resolve in this document. */
+		freezeRules?: Rule[];
+		/** Remove a freeze rule (unlock the passage for the agent). */
+		onUnfreeze?: (ruleId: string) => void;
 		/** Resolve / reopen a thread (undoable; resolving also drops its edits). */
 		onResolveThread: (threadId: string, resolved: boolean) => void;
 		/** Pin/unpin a whole feedback thread's edits so their diffs stay shown
@@ -87,12 +97,19 @@
 		onRejectRound,
 		pinnedRoundIds,
 		onAcceptFeedback,
+		onAcceptAll,
+		onRejectAll,
+		freezeRules = [],
+		onUnfreeze,
 		onPinThreadEdits,
 		onHoverEdit,
 		onResolveThread,
 		muted,
 		newAwaitingThreadId
 	}: Props = $props();
+
+	const BATCH_BAR_HEIGHT = 36;
+	let showBatchBar = $derived(!muted && rounds.length > 0 && !!(onAcceptAll || onRejectAll));
 
 	/** A short one-line snippet — just enough to tell edits apart in the card.
 	 * The full (possibly large) diff is shown in the editor, not here. */
@@ -292,12 +309,16 @@
 		});
 	}
 
+	function freezeCardId(ruleId: string): string {
+		return `freeze:${ruleId}`;
+	}
+
 	function recomputePositions() {
 		if (!editor || !gutterEl) return;
 		const gutterRect = gutterEl.getBoundingClientRect();
 		const entries: Array<{
 			id: string;
-			kind: 'comment' | 'edit';
+			kind: 'comment' | 'edit' | 'freeze';
 			top: number;
 			expanded: boolean;
 			editCount: number;
@@ -344,14 +365,34 @@
 				}
 			}
 		}
+		for (const rule of freezeRules) {
+			const quote = freezeQuoteFromRule(rule);
+			const pos = resolveFreezeAnchorPos(editor, quote);
+			if (pos == null) continue;
+			try {
+				const coords = editor.view.coordsAtPos(pos);
+				entries.push({
+					id: freezeCardId(rule.id),
+					kind: 'freeze',
+					top: coords.top - gutterRect.top,
+					expanded: false,
+					editCount: 0
+				});
+			} catch {
+				// View not mounted.
+			}
+		}
 		entries.sort((a, b) => a.top - b.top);
 		// Collision stack: each card claims [top, top + height + gap]; if
 		// the next card's natural top falls inside that, push it down to
-		// sit right below the previous one.
-		let runningBottom = -Infinity;
+		// sit right below the previous one. Reserve room for the batch bar.
+		let runningBottom = showBatchBar ? BATCH_BAR_HEIGHT + CARD_GAP : -Infinity;
 		const next = new Map<string, number>();
 		for (const entry of entries) {
-			const h = cardHeightFor(entry.id, entry.kind, entry.expanded, entry.editCount);
+			const h =
+				entry.kind === 'freeze'
+					? (cardHeights.get(entry.id) ?? 34)
+					: cardHeightFor(entry.id, entry.kind, entry.expanded, entry.editCount);
 			const top = Math.max(entry.top, runningBottom);
 			next.set(entry.id, top);
 			runningBottom = top + h + CARD_GAP;
@@ -386,6 +427,8 @@
 		looseEditRounds;
 		baseline;
 		muted;
+		freezeRules;
+		showBatchBar;
 		requestAnimationFrame(() => recomputePositions());
 	});
 
@@ -486,6 +529,60 @@
 </script>
 
 <div class="comment-gutter" bind:this={gutterEl}>
+	{#if showBatchBar}
+		<div class="gutter-batch-bar">
+			<span class="batch-count">{rounds.length} suggestion{rounds.length === 1 ? '' : 's'}</span>
+			<div class="batch-actions">
+				<button
+					class="batch-btn reject"
+					type="button"
+					onclick={() => onRejectAll?.()}
+					disabled={!onRejectAll}
+					use:tooltip={`Reject all ${rounds.length} pending suggestion${rounds.length === 1 ? '' : 's'}`}
+				>
+					<X size={11} /> Reject all
+				</button>
+				<button
+					class="batch-btn accept"
+					type="button"
+					onclick={() => onAcceptAll?.()}
+					disabled={!onAcceptAll}
+					use:tooltip={`Accept all ${rounds.length} pending suggestion${rounds.length === 1 ? '' : 's'}`}
+				>
+					<Check size={11} /> Accept all
+				</button>
+			</div>
+		</div>
+	{/if}
+	{#each freezeRules as rule (rule.id)}
+		{@const top = stackedPositions.get(freezeCardId(rule.id))}
+		{#if top != null}
+			{@const quote = freezeQuoteFromRule(rule)}
+			<div
+				class="gutter-card freeze-card"
+				data-card-id={freezeCardId(rule.id)}
+				style:top="{top}px"
+				in:fly={cardIn()}
+			>
+				<div class="card-collapsed-row">
+					<span class="avatar avatar-freeze">
+						<Lock size={12} strokeWidth={1.8} />
+					</span>
+					<div class="card-preview" title={quote}>
+						Frozen — agent won’t edit
+					</div>
+					<button
+						class="mini-btn unlock"
+						type="button"
+						title="Unfreeze this passage"
+						onclick={() => onUnfreeze?.(rule.id)}
+					>
+						<X size={12} />
+					</button>
+				</div>
+			</div>
+		{/if}
+	{/each}
 	{#each visibleThreads as thread (thread.id)}
 		{@const isOpen = thread.id === openThreadId}
 		{@const top = stackedPositions.get(thread.id) ?? 0}
@@ -739,6 +836,82 @@
 		box-sizing: border-box;
 		overflow: visible;
 		font-family: 'Inter', -apple-system, sans-serif;
+	}
+	.gutter-batch-bar {
+		position: absolute;
+		top: 0;
+		left: 10px;
+		right: 10px;
+		z-index: 4;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+		height: 32px;
+		padding: 0 8px;
+		background: var(--bg-elevated);
+		border: 1px solid var(--border-light);
+		border-radius: 8px;
+		box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+	}
+	.batch-count {
+		font-size: 11px;
+		font-weight: 600;
+		color: var(--text-faint);
+		white-space: nowrap;
+	}
+	.batch-actions {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+	}
+	.batch-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 3px;
+		padding: 3px 8px;
+		font: inherit;
+		font-size: 11px;
+		font-weight: 500;
+		border-radius: 5px;
+		cursor: pointer;
+		border: 1px solid var(--border-light);
+		background: transparent;
+		color: var(--text-secondary);
+		white-space: nowrap;
+	}
+	.batch-btn:hover:not(:disabled) {
+		background: var(--bg-hover);
+		color: var(--text);
+	}
+	.batch-btn.accept {
+		background: var(--accent);
+		border-color: var(--accent);
+		color: #fff;
+	}
+	.batch-btn.accept:hover:not(:disabled) {
+		background: color-mix(in srgb, var(--accent) 88%, black);
+		color: #fff;
+	}
+	.batch-btn:disabled {
+		opacity: 0.5;
+		cursor: default;
+	}
+	.freeze-card {
+		cursor: default;
+		border-color: color-mix(in srgb, #0f766e 28%, var(--border-light));
+		background: color-mix(in srgb, #0f766e 6%, var(--bg-elevated));
+	}
+	.avatar-freeze {
+		background: color-mix(in srgb, #0f766e 16%, transparent);
+		color: #0f766e;
+	}
+	.mini-btn.unlock {
+		color: var(--text-faint);
+	}
+	.mini-btn.unlock:hover {
+		color: #0f766e;
+		background: color-mix(in srgb, #0f766e 12%, transparent);
 	}
 	.gutter-card {
 		position: absolute;

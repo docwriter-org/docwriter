@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 /**
  * Capture PR/docs screenshots for:
- *   - Accept all / Reject all in the agent dock
+ *   - Accept all / Reject all in the comment gutter
  *   - Paused agent pill (expanded + collapsed)
+ *   - Freeze-for-agent prototype (selection popup + locked passage)
  *
- * Seeds two pending review rounds over the live Hocuspocus doc so we don't
+ * Seeds pending review rounds over the live Hocuspocus doc so we don't
  * need an agent credential.
  */
 import { spawn } from 'node:child_process';
@@ -129,7 +130,6 @@ async function seedPendingRounds(httpPort, wsPort, tabId) {
 
 	const rounds = ydoc.getArray('rounds');
 	ydoc.transact(() => {
-		// Clear any leftover rounds from a prior attempt.
 		while (rounds.length > 0) rounds.delete(0);
 		rounds.push([
 			{
@@ -161,8 +161,36 @@ async function seedPendingRounds(httpPort, wsPort, tabId) {
 		]);
 	});
 
-	// Let the update flush to the server + browser.
 	await sleep(800);
+	await provider.destroy();
+	ydoc.destroy();
+}
+
+async function clearPendingRounds(httpPort, wsPort, tabId) {
+	const sessionRes = await fetch(`http://127.0.0.1:${httpPort}/api/session`);
+	const session = await sessionRes.json();
+	const ydoc = new Y.Doc();
+	const provider = new HocuspocusProvider({
+		url: `ws://127.0.0.1:${wsPort}`,
+		name: tabId,
+		document: ydoc,
+		token: session.serverInstanceId,
+		WebSocketPolyfill: WebSocket
+	});
+	await new Promise((resolveFn, rejectFn) => {
+		const t = setTimeout(() => rejectFn(new Error('WS sync timeout')), 15_000);
+		const done = () => {
+			clearTimeout(t);
+			resolveFn();
+		};
+		if (provider.synced) done();
+		else provider.on('synced', done);
+	});
+	const rounds = ydoc.getArray('rounds');
+	ydoc.transact(() => {
+		while (rounds.length > 0) rounds.delete(0);
+	});
+	await sleep(400);
 	await provider.destroy();
 	ydoc.destroy();
 }
@@ -190,7 +218,7 @@ async function main() {
 		const context = await browser.newContext({ viewport: VIEWPORT });
 		const page = await context.newPage();
 		await page.addInitScript(() => {
-			localStorage.setItem('docwriter.dockExpanded', 'true');
+			localStorage.setItem('docwriter.dockExpanded', 'false');
 		});
 		await page.goto(`http://127.0.0.1:${httpPort}/`, { waitUntil: 'domcontentloaded' });
 		await sleep(2500);
@@ -202,31 +230,71 @@ async function main() {
 		await seedPendingRounds(httpPort, wsPort, 'essay.md');
 		await sleep(1000);
 
-		// Ensure dock is expanded and Accept/Reject all are visible.
-		await setDockExpanded(page, true);
-		await page.locator('button', { hasText: 'Accept all' }).first().waitFor({
+		// Accept/Reject all live in the gutter — keep dock collapsed.
+		await setDockExpanded(page, false);
+		await page.locator('.gutter-batch-bar').first().waitFor({
 			state: 'visible',
 			timeout: 10_000
 		});
 		await writeShot(page, 'agent-accept-reject-all.png');
 
-		// Pause via double-click on the expanded Agent pill.
+		// Pause via double-click on the collapsed pill, then expand to show dock.
+		const pill = page.locator('.dock-agent-btn').first();
+		await pill.dblclick();
+		await sleep(400);
+		await page.locator('.dock-agent-btn.paused').first().waitFor({
+			state: 'visible',
+			timeout: 5_000
+		});
+		await writeShot(page, 'agent-paused-pill.png');
+
+		// Expand paused dock (single-click is no-op while paused — force expand).
+		await page.evaluate(() => {
+			localStorage.setItem('docwriter.dockExpanded', 'true');
+		});
+		// Toggle store via a resume+expand path: temporarily unpause isn't needed —
+		// set dockExpanded from the page by clicking isn't available while paused.
+		// Use evaluate to set the svelte store if exposed… fall back to keyboard?
+		// Force by dispatching through localStorage + reload is heavy.
+		// Instead: double-click to resume, click to expand, double-click to pause again.
+		await pill.dblclick(); // resume
+		await sleep(300);
+		await setDockExpanded(page, true);
+		await sleep(300);
 		const agentBtn = page.locator('.header-agent-btn').first();
-		await agentBtn.dblclick();
+		await agentBtn.dblclick(); // pause again
 		await sleep(500);
+		// Move mouse away so tooltip doesn't cover the pill.
+		await page.mouse.move(20, 20);
+		await sleep(200);
 		await page.locator('.header-agent-btn.paused').first().waitFor({
 			state: 'visible',
 			timeout: 5_000
 		});
 		await writeShot(page, 'agent-paused.png');
 
-		// Collapsed paused pill.
+		// Freeze prototype: clear rounds, resume agent, select third paragraph, freeze.
+		await agentBtn.dblclick(); // resume
+		await sleep(200);
 		await setDockExpanded(page, false);
-		await page.locator('.dock-agent-btn.paused').first().waitFor({
-			state: 'visible',
-			timeout: 5_000
-		});
-		await writeShot(page, 'agent-paused-pill.png');
+		await clearPendingRounds(httpPort, wsPort, 'essay.md');
+		await sleep(600);
+
+		const editor = page.locator('.tiptap-content').first();
+		await editor.click();
+		await sleep(200);
+		// Triple-click third paragraph via text search.
+		const third = page.getByText('This is the third paragraph, which closes things out.').first();
+		await third.click({ clickCount: 3 });
+		await sleep(500);
+		const freezeBtn = page.locator('.feedback-freeze-btn').first();
+		await freezeBtn.waitFor({ state: 'visible', timeout: 5_000 });
+		await writeShot(page, 'freeze-selection-popup.png');
+		await freezeBtn.click();
+		await sleep(800);
+		await page.locator('.freeze-card').first().waitFor({ state: 'visible', timeout: 5_000 });
+		await page.locator('.freeze-mark').first().waitFor({ state: 'attached', timeout: 5_000 });
+		await writeShot(page, 'freeze-passage.png');
 
 		console.log('done');
 	} finally {

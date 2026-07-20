@@ -19,12 +19,14 @@ Structural (no agent needed):
 - `writing-references-panel.png`. The Writing references panel under
   Settings.
 - `chat-popover.png`. The chat popover opened with a typed prompt.
-- `agent-accept-reject-all.png`. Agent dock with pending suggestions and
-  **Accept all** / **Reject all** in the header.
+- `agent-accept-reject-all.png`. Comment gutter with **Accept all** /
+  **Reject all** above pending suggestion cards (dock collapsed).
 - `agent-paused.png`. Expanded agent dock with the Agent pill showing
   **Paused** after a double-click.
 - `agent-paused-pill.png`. Collapsed floating Agent pill in the paused
   state.
+- `freeze-selection-popup.png`. Feedback popup with **Freeze for agent**.
+- `freeze-passage.png`. Frozen paragraph highlight + gutter lock chip.
 - `inline-feedback-popup.png`. The feedback popup anchored to a
   highlighted paragraph, showing the text input, mode chips, and
   quick-action pills.

@@ -41,10 +41,26 @@ This routes through the `propose_rule` MCP tool. See [How it
 works](/reference/how-it-works) for the architectural details if you're
 curious.
 
+## Freezing a passage
+
+To stop the agent from editing a specific paragraph (or any selection),
+highlight the text and click **Freeze for agent** in the feedback popup.
+That stores a `Freeze: …` rule, paints a teal dashed highlight on the
+passage, and shows a lock chip in the gutter. The agent's `edit_doc`
+tool rejects edits that overlap the frozen quote.
+
+Unlock from the gutter chip or by removing the freeze rule in Writing
+rules.
+
+<Frame>
+  ![A frozen paragraph highlighted in the editor with a Freeze for agent chip in the gutter](/images/freeze-passage.png)
+</Frame>
+
 ## Editing or removing
 
 Each rule in the panel has an edit and a delete affordance. Edits take
 effect on the next agent turn. Deleted rules are gone immediately.
+Freeze rules unlock the passage when removed.
 
 ## Where to go next
 

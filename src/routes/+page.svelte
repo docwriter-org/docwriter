@@ -2988,6 +2988,8 @@
 								onAcceptFeedbackEdits={(roundIds) => {
 									if (roundIds.length > 0) void acceptAgentEdit(roundIds);
 								}}
+								onAcceptAllEdits={() => void acceptAgentEdit()}
+								onRejectAllEdits={() => void rejectAgentEdit()}
 								onResolveThread={(threadId, resolved) => void resolveThread(threadId, resolved)}
 								onOpenSplitPreview={openSplitPreview}
 								splitPreviewOpen={splitPreviewOpen}
@@ -3025,8 +3027,6 @@
 		onCancel={cancelRender}
 		onToggleMuted={toggleMuted}
 		onTogglePaused={togglePaused}
-		onAcceptAll={() => void acceptAgentEdit()}
-		onRejectAll={() => void rejectAgentEdit()}
 	>
 		{#snippet dock()}
 			<AgentDock onSendMessage={(msg, opts) => void submit(msg, opts)} />

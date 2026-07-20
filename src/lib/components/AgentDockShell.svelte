@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onDestroy, type Snippet } from 'svelte';
-	import { Cat } from 'lucide-svelte';
+	import { Cat, Pause } from 'lucide-svelte';
 	import HistoryPane from './HistoryPane.svelte';
 	import ShineBorder from './ShineBorder.svelte';
 	import {
@@ -18,8 +18,6 @@
 		onCancel?: () => void;
 		onToggleMuted?: () => void;
 		onTogglePaused?: () => void;
-		onAcceptAll?: () => void;
-		onRejectAll?: () => void;
 		/** Slot forwarded into HistoryPane's header (the AgentDock buttons). */
 		dock?: Snippet;
 	}
@@ -29,8 +27,6 @@
 		onCancel,
 		onToggleMuted,
 		onTogglePaused,
-		onAcceptAll,
-		onRejectAll,
 		dock
 	}: Props = $props();
 
@@ -130,8 +126,6 @@
 				{onCancel}
 				{onToggleMuted}
 				{onTogglePaused}
-				{onAcceptAll}
-				{onRejectAll}
 				{dock}
 				onCollapse={() => dockExpanded.set(false)}
 			/>
@@ -159,7 +153,11 @@
 						: 'Open the agent dock. Double-click to pause the agent (no auto-wake / Wake up / Send).'}
 				>
 					<span class="mascot-face" aria-hidden="true">
-						<Cat size={16} strokeWidth={1.8} />
+						{#if paused}
+							<Pause size={16} strokeWidth={2.2} />
+						{:else}
+							<Cat size={16} strokeWidth={1.8} />
+						{/if}
 					</span>
 					<span class="dock-label">Agent</span>
 					<span class="header-status" aria-hidden="true">
@@ -241,11 +239,14 @@
 		animation: dock-nudge 1s cubic-bezier(0.22, 1, 0.36, 1), dock-glow 2s ease-in-out 1s infinite;
 	}
 	.dock-agent-btn.paused {
-		opacity: 0.72;
+		opacity: 0.5;
+		filter: grayscale(1);
 		color: var(--text-faint);
-		background: var(--bg-hover);
-		box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+		background: color-mix(in srgb, var(--text) 5%, var(--bg-elevated));
+		border: 1px dashed color-mix(in srgb, var(--text) 22%, var(--border-light));
+		box-shadow: none;
 		animation: none;
+		cursor: default;
 	}
 	@keyframes dock-nudge {
 		0% { transform: scale(1); }
@@ -326,9 +327,10 @@
 		font-variant-numeric: tabular-nums;
 	}
 	.paused-label {
-		font-size: 11px;
-		font-weight: 600;
-		letter-spacing: 0.02em;
+		font-size: 10px;
+		font-weight: 700;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
 		color: var(--text-faint);
 	}
 	.sleep-dots span {

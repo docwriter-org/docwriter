@@ -45,8 +45,9 @@ import type {
 } from '$lib/types';
 import { isValidTabId, tabFile, WORKSPACE_ROOT } from './document-files';
 import { resolveWorkspacePath } from './workspace-path';
-import { getTabsState, setTabsState } from './runtime-state';
+import { getRules, getTabsState, setTabsState } from './runtime-state';
 import { writeTextAtomic } from './file-utils';
+import { findOverlappingFreeze, freezeQuoteFromRule } from '$lib/freeze';
 
 export function toolError(message: string): CallToolResult {
 	return {
@@ -556,6 +557,20 @@ const editDocTool = tool(
 		const opened = ensureWorkspaceTabOpen(file_path, { createIfMissing: false });
 		if (!opened.ok) return opened.error;
 		const tabId = opened.tabId;
+
+		// Soft freeze gate: rules prefixed with "Freeze: " name passages the
+		// agent must not edit. Reject before opening a review round so the
+		// agent can apologize / work around instead of proposing a no-op.
+		{
+			const hit = findOverlappingFreeze([old_string, new_string], getRules());
+			if (hit) {
+				const quote = freezeQuoteFromRule(hit);
+				const preview = quote.length > 80 ? quote.slice(0, 77) + '…' : quote;
+				return toolError(
+					`Frozen: overlapping "${preview}" — leave this passage unchanged.`
+				);
+			}
+		}
 
 		// An explicit thread_id on the call wins over the render-level default
 		// (parsed from the triggering message). Restore the prior value after

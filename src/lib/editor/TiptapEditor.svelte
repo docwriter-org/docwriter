@@ -30,7 +30,10 @@
 	import PreviewButton from '$lib/components/PreviewButton.svelte';
 	import AiProvenanceToggle from '$lib/components/AiProvenanceToggle.svelte';
 	import CommentGutter from '$lib/components/CommentGutter.svelte';
-	import { Crosshair } from 'lucide-svelte';
+	import { Crosshair, Lock } from 'lucide-svelte';
+	import { FreezeOverlay, setFreezeOverlayState } from './freeze-overlay';
+	import { isFreezeRule, makeFreezeRuleText, freezeQuoteFromRule } from '$lib/freeze';
+	import type { Rule } from '$lib/types';
 	// `ySyncPluginKey` MUST come from the same package whose ySyncPlugin the
 	// Collaboration extension installs (@tiptap/y-tiptap), re-exported here via
 	// editor-extensions. Importing it from `y-prosemirror` yields a different
@@ -48,6 +51,8 @@
 		pinnedActions,
 		recentActions,
 		trackActionUsage,
+		rules,
+		pushHistory,
 		pendingReviewRounds,
 		commentThreads,
 		openCommentThreadId,
@@ -76,6 +81,9 @@
 		onRejectInlineEdit?: (roundId: string | null) => void;
 		/** Accept every pending edit for one feedback thread at once. */
 		onAcceptFeedbackEdits?: (roundIds: string[]) => void;
+		/** Accept / reject every pending round on this tab. */
+		onAcceptAllEdits?: () => void;
+		onRejectAllEdits?: () => void;
 		/** Resolve / reopen a thread (undoable; also drops its pending edits). */
 		onResolveThread?: (threadId: string, resolved: boolean) => void;
 		/** Open the resolved preview output beside the source editor. */
@@ -89,6 +97,8 @@
 		onAcceptInlineEdit,
 		onRejectInlineEdit,
 		onAcceptFeedbackEdits,
+		onAcceptAllEdits,
+		onRejectAllEdits,
 		onResolveThread,
 		onOpenSplitPreview,
 		splitPreviewOpen = false
@@ -173,6 +183,7 @@
 	/** The gutter (and its --gutter-width column) shows when there's anything
 	 * to review — unresolved comment threads OR pending edit rounds. */
 	let hasGutterContent = $derived(
+		$rules.some(isFreezeRule) ||
 		threadsForTab.some((t) => !t.resolved) || rounds.length > 0
 	);
 	let recent: Action[] = $derived($recentActions);
@@ -1024,7 +1035,68 @@
 				threads: threadsForTab.filter((t) => !pendingEditThreadIds.has(t.id)),
 				openThreadId
 			});
+			setFreezeOverlayState(editor, { rules: $rules });
 		});
+	}
+
+	// Keep freeze decorations in sync when rules change outside the editor
+	// update path (Rules panel delete, freeze from popup, etc.).
+	$effect(() => {
+		$rules;
+		if (editor) setFreezeOverlayState(editor, { rules: $rules });
+	});
+
+	async function freezeSelection() {
+		if (!feedbackPopup) return;
+		const quote = feedbackPopup.text.trim();
+		if (!quote) return;
+		const text = makeFreezeRuleText(quote);
+		if ($rules.some((r) => r.text === text)) {
+			closeFeedbackPopup({ preserveSelection: false, refocusEditor: true });
+			return;
+		}
+		const next: Rule[] = [...$rules, { id: 'r' + Date.now(), text }];
+		rules.set(next);
+		try {
+			await fetch('/api/document', {
+				method: 'PUT',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ meta: { rules: next } })
+			});
+		} catch (e) {
+			console.error('Failed to persist freeze rule:', e);
+		}
+		pushHistory({
+			type: 'user_action',
+			timestamp: Date.now(),
+			description: `Froze passage for the agent: "${quote.length > 60 ? quote.slice(0, 57) + '…' : quote}"`
+		});
+		if (editor) setFreezeOverlayState(editor, { rules: next });
+		closeFeedbackPopup({ preserveSelection: false, refocusEditor: true });
+	}
+
+	async function unfreezeRule(ruleId: string) {
+		const rule = $rules.find((r) => r.id === ruleId);
+		const next = $rules.filter((r) => r.id !== ruleId);
+		rules.set(next);
+		try {
+			await fetch('/api/document', {
+				method: 'PUT',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ meta: { rules: next } })
+			});
+		} catch (e) {
+			console.error('Failed to remove freeze rule:', e);
+		}
+		if (rule) {
+			const quote = freezeQuoteFromRule(rule);
+			pushHistory({
+				type: 'user_action',
+				timestamp: Date.now(),
+				description: `Unfroze passage: "${quote.length > 60 ? quote.slice(0, 57) + '…' : quote}"`
+			});
+		}
+		if (editor) setFreezeOverlayState(editor, { rules: next });
 	}
 
 	// Whether a diff-state update is already queued for this microtask checkpoint.
@@ -1195,6 +1267,7 @@
 				...collaborativeExtensions(ydoc, { placeholder: 'Start writing...' }),
 				DiffOverlay,
 				CommentOverlay,
+				FreezeOverlay,
 				CelebrationOverlay,
 				FindOverlay,
 				MediaOverlay,
@@ -1494,12 +1567,16 @@
 				tabId={tabId}
 				openThreadId={openThreadId}
 				{newAwaitingThreadId}
+				freezeRules={$rules.filter(isFreezeRule)}
 				onOpen={(id) => openCommentThreadId.set(id)}
 				onClose={() => openCommentThreadId.set(null)}
 				onAcceptRound={(roundId) => onAcceptInlineEdit?.(roundId)}
 				onRejectRound={(roundId) => onRejectInlineEdit?.(roundId)}
 				pinnedRoundIds={pinnedRoundIds}
 				onAcceptFeedback={(roundIds) => onAcceptFeedbackEdits?.(roundIds)}
+				onAcceptAll={() => onAcceptAllEdits?.()}
+				onRejectAll={() => onRejectAllEdits?.()}
+				onUnfreeze={(ruleId) => void unfreezeRule(ruleId)}
 				onResolveThread={(threadId, resolved) => onResolveThread?.(threadId, resolved)}
 				muted={muted}
 				onPinThreadEdits={(roundIds, pinned) =>
@@ -1560,17 +1637,28 @@
 			<div class="feedback-quote">
 				"{feedbackPopup.text.slice(0, 200)}{feedbackPopup.text.length > 200 ? '…' : ''}"
 			</div>
-			{#if previewOutputPath}
+			<div class="feedback-secondary-row">
+				{#if previewOutputPath}
+					<button
+						class="feedback-show-in-pdf"
+						type="button"
+						onclick={showInPdf}
+						title="Locate this passage in the PDF preview"
+					>
+						<Crosshair size={11} />
+						<span>Locate in PDF</span>
+					</button>
+				{/if}
 				<button
-					class="feedback-show-in-pdf"
+					class="feedback-freeze-btn"
 					type="button"
-					onclick={showInPdf}
-					title="Locate this passage in the PDF preview"
+					onclick={() => void freezeSelection()}
+					title="Stop the agent from editing this passage. Stored as a Freeze rule; unlock from the gutter or Rules panel."
 				>
-					<Crosshair size={11} />
-					<span>Locate in PDF</span>
+					<Lock size={11} />
+					<span>Freeze for agent</span>
 				</button>
-			{/if}
+			</div>
 				<div class="feedback-input-row">
 				<div
 					class="feedback-input"
@@ -2380,7 +2468,14 @@
 	 * hook exists for the active tab. Ghost styling so it sits quietly
 	 * with the popover's other secondary affordances (mode toggles,
 	 * recent-feedback chips) instead of competing for attention. */
-	.feedback-show-in-pdf {
+	.feedback-secondary-row {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px;
+		margin-bottom: 8px;
+	}
+	.feedback-show-in-pdf,
+	.feedback-freeze-btn {
 		font: inherit;
 		font-size: 11px;
 		color: var(--text-faint);
@@ -2388,17 +2483,35 @@
 		border: 1px solid var(--border-light);
 		border-radius: 999px;
 		padding: 3px 9px 3px 7px;
-		margin-bottom: 8px;
+		margin-bottom: 0;
 		cursor: pointer;
 		display: inline-flex;
 		align-items: center;
 		gap: 4px;
 		transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
 	}
-	.feedback-show-in-pdf:hover {
+	.feedback-show-in-pdf:hover,
+	.feedback-freeze-btn:hover {
 		color: var(--text);
 		background: var(--bg-hover);
 		border-color: var(--border);
+	}
+	.feedback-freeze-btn {
+		color: color-mix(in srgb, var(--text) 70%, #0f766e);
+		border-color: color-mix(in srgb, #0f766e 28%, var(--border-light));
+		background: color-mix(in srgb, #0f766e 8%, transparent);
+	}
+	.feedback-freeze-btn:hover {
+		color: #0f766e;
+		background: color-mix(in srgb, #0f766e 14%, transparent);
+		border-color: color-mix(in srgb, #0f766e 40%, var(--border-light));
+	}
+	:global(.tiptap-content .freeze-mark) {
+		background: color-mix(in srgb, #0f766e 12%, transparent);
+		box-decoration-break: clone;
+		-webkit-box-decoration-break: clone;
+		border-bottom: 1.5px dashed color-mix(in srgb, #0f766e 55%, transparent);
+		border-radius: 2px;
 	}
 	.feedback-input-row {
 		display: flex;

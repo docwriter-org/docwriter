@@ -7,9 +7,10 @@
 
 <script lang="ts">
 	import { onDestroy } from 'svelte';
-	import { X, Play } from 'lucide-svelte';
+	import { X, Play, Lock } from 'lucide-svelte';
 	import { rules, pushHistory } from '$lib/stores';
 	import type { Rule } from '$lib/types';
+	import { isFreezeRule, freezeQuoteFromRule } from '$lib/freeze';
 
 	interface Props {
 		onSubmit?: (trigger: string) => void;
@@ -85,9 +86,22 @@
 			<div class="rules-empty">No rules yet. Add writing constraints the agent should follow.</div>
 		{/if}
 		{#each rulesList as rule}
-			<div class="rule-row">
-				<span class="rule-text">{rule.text}</span>
-				<button class="rule-remove" onclick={() => removeRule(rule.id)} title="Remove rule">
+			<div class="rule-row" class:freeze-rule={isFreezeRule(rule)}>
+				{#if isFreezeRule(rule)}
+					<span class="rule-freeze-icon" title="Frozen passage — agent will not edit this text">
+						<Lock size={11} />
+					</span>
+					<span class="rule-text" title={freezeQuoteFromRule(rule)}>
+						Freeze: “{freezeQuoteFromRule(rule)}”
+					</span>
+				{:else}
+					<span class="rule-text">{rule.text}</span>
+				{/if}
+				<button
+					class="rule-remove"
+					onclick={() => removeRule(rule.id)}
+					title={isFreezeRule(rule) ? 'Unfreeze' : 'Remove rule'}
+				>
 					<X size={11} />
 				</button>
 			</div>
@@ -148,6 +162,15 @@
 		max-height: 420px;
 		overflow-y: auto;
 		scrollbar-width: thin;
+	}
+	.rule-row.freeze-rule {
+		background: color-mix(in srgb, #0f766e 8%, var(--bg-surface));
+		border-color: color-mix(in srgb, #0f766e 22%, var(--border-light));
+	}
+	.rule-freeze-icon {
+		display: inline-flex;
+		color: #0f766e;
+		flex-shrink: 0;
 	}
 	.rule-row {
 		display: flex;

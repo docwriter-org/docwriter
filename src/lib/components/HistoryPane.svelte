@@ -3,7 +3,7 @@
 	import { flip } from 'svelte/animate';
 	import { cubicOut } from 'svelte/easing';
 	import { marked } from 'marked';
-	import { FileEdit, User, Bot, Play, CheckCircle, XCircle, Eye, Terminal, Maximize2, X, RotateCcw, MessagesSquare, Cat, Sparkles, BellOff, Bell, ChevronDown, Check } from 'lucide-svelte';
+	import { FileEdit, User, Bot, Play, CheckCircle, XCircle, Eye, Terminal, Maximize2, X, RotateCcw, MessagesSquare, Cat, Sparkles, BellOff, Bell, ChevronDown, Pause } from 'lucide-svelte';
 	import type { HistoryEntry } from '$lib/types';
 	import { agentHistory, isRendering, historyVerbosity, sessionCost, agentSettings, pendingReviewRounds, submitCountdown, type SessionCost } from '$lib/stores';
 	import type { HistoryVerbosity } from '$lib/stores';
@@ -24,10 +24,6 @@
 		onToggleMuted?: () => void;
 		/** Fully pause / unpause the agent (double-click the Agent pill). */
 		onTogglePaused?: () => void;
-		/** Accept every pending review round on the active tab. */
-		onAcceptAll?: () => void;
-		/** Reject every pending review round on the active tab. */
-		onRejectAll?: () => void;
 		/** When provided, a chevron-down button is shown that collapses the
 		 * floating dock back to its pill (AgentDockShell). */
 		onCollapse?: () => void;
@@ -40,8 +36,6 @@
 		onCancel,
 		onToggleMuted,
 		onTogglePaused,
-		onAcceptAll,
-		onRejectAll,
 		onCollapse,
 		dock
 	}: Props = $props();
@@ -401,7 +395,11 @@
 					use:tooltip={agentTooltip}
 				>
 					<span class="mascot-face" aria-hidden="true">
-						<Cat size={13} strokeWidth={1.8} />
+						{#if paused}
+							<Pause size={13} strokeWidth={2.2} />
+						{:else}
+							<Cat size={13} strokeWidth={1.8} />
+						{/if}
 					</span>
 					<span class="header-label">Agent</span>
 					<span class="header-status" aria-hidden="true">
@@ -420,26 +418,6 @@
 		</ShineBorder>
 		{#if dock}
 			<div class="header-actions">
-				{#if pendingCount > 0 && (onAcceptAll || onRejectAll)}
-					<button
-						class="header-pill-btn"
-						onclick={() => onAcceptAll?.()}
-						disabled={!onAcceptAll}
-						use:tooltip={`Accept all ${pendingCount} pending suggestion${pendingCount === 1 ? '' : 's'} on this tab.`}
-					>
-						<Check size={12} />
-						<span>Accept all</span>
-					</button>
-					<button
-						class="header-pill-btn"
-						onclick={() => onRejectAll?.()}
-						disabled={!onRejectAll}
-						use:tooltip={`Reject all ${pendingCount} pending suggestion${pendingCount === 1 ? '' : 's'} on this tab.`}
-					>
-						<X size={12} />
-						<span>Reject all</span>
-					</button>
-				{/if}
 				{#if onToggleMuted}
 					<button
 						class="header-pill-btn icon-only"
@@ -842,9 +820,10 @@
 		font-variant-numeric: tabular-nums;
 	}
 	.paused-label {
-		font-size: 11px;
-		font-weight: 600;
-		letter-spacing: 0.02em;
+		font-size: 10px;
+		font-weight: 700;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
 		color: var(--text-faint);
 	}
 	.bounce-dots {
@@ -901,15 +880,22 @@
 		border-color: transparent !important;
 	}
 	.header-agent-btn.paused {
-		opacity: 0.72;
+		opacity: 0.5;
+		filter: grayscale(1);
 		color: var(--text-faint) !important;
-		background: var(--bg-hover) !important;
-		border-color: var(--border-light) !important;
+		background: color-mix(in srgb, var(--text) 5%, var(--bg-elevated)) !important;
+		border: 1px dashed color-mix(in srgb, var(--text) 22%, var(--border-light)) !important;
+		box-shadow: none !important;
+		cursor: default;
 	}
 	.header-agent-btn.paused .header-label,
-	.header-agent-btn.paused .mascot-face {
-		color: var(--text-faint);
-		animation: none;
+	.header-agent-btn.paused .mascot-face,
+	.header-agent-btn.paused .paused-label {
+		color: var(--text-faint) !important;
+		animation: none !important;
+	}
+	.header-agent-btn.paused:hover {
+		background: color-mix(in srgb, var(--text) 7%, var(--bg-elevated)) !important;
 	}
 	.header-agent-btn:not(:disabled):hover .header-label {
 		color: var(--text);
