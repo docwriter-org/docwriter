@@ -19,6 +19,12 @@ Structural (no agent needed):
 - `writing-references-panel.png`. The Writing references panel under
   Settings.
 - `chat-popover.png`. The chat popover opened with a typed prompt.
+- `agent-accept-reject-all.png`. Agent dock with pending suggestions and
+  **Accept all** / **Reject all** in the header.
+- `agent-paused.png`. Expanded agent dock with the Agent pill showing
+  **Paused** after a double-click.
+- `agent-paused-pill.png`. Collapsed floating Agent pill in the paused
+  state.
 - `inline-feedback-popup.png`. The feedback popup anchored to a
   highlighted paragraph, showing the text input, mode chips, and
   quick-action pills.
@@ -66,6 +72,9 @@ Intro hero GIF (requires `ffmpeg` on PATH):
 
 To regenerate everything: `npm run docs:screenshots` (one-time setup:
 `npx playwright install chromium` and `brew install ffmpeg`).
+
+To regenerate only the Accept-all / pause shots (no agent credential
+needed): `node scripts/capture-pause-and-review-all.mjs`.
 
 Env flags:
 
