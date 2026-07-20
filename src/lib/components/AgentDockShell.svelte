@@ -3,7 +3,13 @@
 	import { Cat } from 'lucide-svelte';
 	import HistoryPane from './HistoryPane.svelte';
 	import ShineBorder from './ShineBorder.svelte';
-	import { dockExpanded, isRendering, submitCountdown, queuedSubmissionCount } from '$lib/stores';
+	import {
+		dockExpanded,
+		isRendering,
+		submitCountdown,
+		queuedSubmissionCount,
+		agentSettings
+	} from '$lib/stores';
 	import { tooltip } from '$lib/actions/tooltip';
 
 	interface Props {
@@ -11,10 +17,22 @@
 		onWakeUp?: () => void;
 		onCancel?: () => void;
 		onToggleMuted?: () => void;
+		onTogglePaused?: () => void;
+		onAcceptAll?: () => void;
+		onRejectAll?: () => void;
 		/** Slot forwarded into HistoryPane's header (the AgentDock buttons). */
 		dock?: Snippet;
 	}
-	let { onNewSession, onWakeUp, onCancel, onToggleMuted, dock }: Props = $props();
+	let {
+		onNewSession,
+		onWakeUp,
+		onCancel,
+		onToggleMuted,
+		onTogglePaused,
+		onAcceptAll,
+		onRejectAll,
+		dock
+	}: Props = $props();
 
 	let expanded = $state(false);
 	dockExpanded.subscribe((v) => (expanded = v));
@@ -44,6 +62,31 @@
 	let queued = $state(0);
 	queuedSubmissionCount.subscribe((v) => (queued = v));
 
+	let paused = $state(false);
+	agentSettings.subscribe((v) => {
+		paused = v.paused;
+	});
+
+	/** Delay expand-on-click so double-click can toggle pause without also
+	 * opening the dock. */
+	let pillClickTimer: ReturnType<typeof setTimeout> | null = null;
+	function handlePillClick() {
+		if (pillClickTimer) clearTimeout(pillClickTimer);
+		pillClickTimer = setTimeout(() => {
+			pillClickTimer = null;
+			if (paused) return;
+			dockExpanded.set(true);
+		}, 280);
+	}
+	function handlePillDblClick(e: MouseEvent) {
+		e.preventDefault();
+		if (pillClickTimer) {
+			clearTimeout(pillClickTimer);
+			pillClickTimer = null;
+		}
+		onTogglePaused?.();
+	}
+
 	// Reserve bottom space so the lowest gutter card can scroll above the
 	// fixed dock instead of hiding behind it. Measured from the live shell
 	// element and published as a CSS var the editor gutter can consume.
@@ -69,6 +112,7 @@
 	}
 
 	onDestroy(() => {
+		if (pillClickTimer) clearTimeout(pillClickTimer);
 		resizeObserver?.disconnect();
 		resizeObserver = null;
 		if (typeof document !== 'undefined') {
@@ -85,13 +129,16 @@
 				{onWakeUp}
 				{onCancel}
 				{onToggleMuted}
+				{onTogglePaused}
+				{onAcceptAll}
+				{onRejectAll}
 				{dock}
 				onCollapse={() => dockExpanded.set(false)}
 			/>
 		</div>
 	{:else}
 		<ShineBorder
-			active={rendering}
+			active={rendering && !paused}
 			radius={999}
 			duration={2.5}
 			borderWidth={1.5}
@@ -102,17 +149,23 @@
 			{#snippet children()}
 				<button
 					class="dock-agent-btn"
-					class:awake={rendering}
-					class:nudge
-					onclick={() => dockExpanded.set(true)}
-					use:tooltip={'Open the agent dock'}
+					class:awake={rendering && !paused}
+					class:nudge={nudge && !paused}
+					class:paused
+					onclick={handlePillClick}
+					ondblclick={handlePillDblClick}
+					use:tooltip={paused
+						? 'Agent paused — double-click to resume. Single-click does nothing while paused.'
+						: 'Open the agent dock. Double-click to pause the agent (no auto-wake / Wake up / Send).'}
 				>
 					<span class="mascot-face" aria-hidden="true">
 						<Cat size={16} strokeWidth={1.8} />
 					</span>
 					<span class="dock-label">Agent</span>
 					<span class="header-status" aria-hidden="true">
-						{#if rendering}
+						{#if paused}
+							<span class="paused-label">Paused</span>
+						{:else if rendering}
 							<span class="bounce-dots"><span>.</span><span>.</span><span>.</span></span>
 						{:else if countdown > 0}
 							<span class="countdown">{countdown}s</span>
@@ -120,7 +173,7 @@
 							<span class="sleep-dots"><span>z</span><span>z</span><span>z</span></span>
 						{/if}
 					</span>
-					{#if queued > 0}
+					{#if queued > 0 && !paused}
 						<span class="pill-badge" aria-label="{queued} message{queued === 1 ? '' : 's'} queued">{queued}</span>
 					{/if}
 				</button>
@@ -173,7 +226,7 @@
 		cursor: pointer;
 		white-space: nowrap;
 		position: relative;
-		transition: transform 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease, background 0.3s ease;
+		transition: transform 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease, background 0.3s ease, opacity 0.2s ease;
 	}
 	.dock-agent-btn:hover {
 		box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18), 0 2px 6px rgba(0, 0, 0, 0.08);
@@ -186,6 +239,13 @@
 	}
 	.dock-agent-btn.nudge {
 		animation: dock-nudge 1s cubic-bezier(0.22, 1, 0.36, 1), dock-glow 2s ease-in-out 1s infinite;
+	}
+	.dock-agent-btn.paused {
+		opacity: 0.72;
+		color: var(--text-faint);
+		background: var(--bg-hover);
+		box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+		animation: none;
 	}
 	@keyframes dock-nudge {
 		0% { transform: scale(1); }
@@ -210,6 +270,11 @@
 	}
 	.dock-agent-btn.awake .dock-label {
 		color: var(--accent);
+	}
+	.dock-agent-btn.paused .dock-label,
+	.dock-agent-btn.paused .mascot-face {
+		color: var(--text-faint);
+		animation: none;
 	}
 	.mascot-face {
 		display: inline-flex;
@@ -259,6 +324,12 @@
 		font-weight: 600;
 		color: var(--accent);
 		font-variant-numeric: tabular-nums;
+	}
+	.paused-label {
+		font-size: 11px;
+		font-weight: 600;
+		letter-spacing: 0.02em;
+		color: var(--text-faint);
 	}
 	.sleep-dots span {
 		opacity: 0;

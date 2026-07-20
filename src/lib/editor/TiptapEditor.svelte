@@ -1128,6 +1128,11 @@
 	}
 
 	function restartIdleCountdown() {
+		// Fully paused: never start the 3-2-1 auto-wake countdown.
+		if ($agentSettings.paused) {
+			cancelIdleTimer();
+			return;
+		}
 		if (idleTimer) clearTimeout(idleTimer);
 		startCountdown();
 		idleTimer = setTimeout(() => {
@@ -1141,6 +1146,12 @@
 			if (!unchanged && onSubmit) onSubmit();
 		}, IDLE_MS);
 	}
+
+	// If the user pauses mid-countdown, clear it immediately so the pill
+	// stops showing 3s/2s/1s and no pending timeout can still fire.
+	$effect(() => {
+		if ($agentSettings.paused) cancelIdleTimer();
+	});
 
 	/**
 	 * Decide whether a PM transaction should restart the auto-submit idle
@@ -1220,8 +1231,10 @@
 					if (handleSourceCommentShortcut(event)) return true;
 					// Cmd/Ctrl+Enter wakes the agent immediately, skipping the
 					// idle countdown. Plain Enter still inserts a new line.
+					// No-op while paused — same gate as Wake up / Send.
 					if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
 						event.preventDefault();
+						if ($agentSettings.paused) return true;
 						if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
 						clearCountdown();
 						if (onSubmit) onSubmit();

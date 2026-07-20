@@ -823,6 +823,44 @@
 		}
 	}
 
+	/** Fully pause / unpause the agent. Pause cancels any in-flight render,
+	 * clears the idle countdown, and blocks Wake up / Send / auto-submit
+	 * until the user double-clicks the Agent pill again. */
+	function togglePaused() {
+		let next: AgentSettings | null = null;
+		let becamePaused = false;
+		agentSettings.update((prev) => {
+			becamePaused = !prev.paused;
+			next = { ...prev, paused: becamePaused };
+			return next;
+		});
+		if (!next) return;
+		if (becamePaused) {
+			editorRef?.cancelIdleTimer();
+			if (rendering || submitInFlight || queuedSubmissions.length > 0) {
+				cancelRender();
+			}
+			pushHistory({
+				type: 'user_action',
+				timestamp: Date.now(),
+				description: 'Paused the agent'
+			});
+		} else {
+			pushHistory({
+				type: 'user_action',
+				timestamp: Date.now(),
+				description: 'Resumed the agent'
+			});
+		}
+		void persistAgentSettings(next);
+	}
+
+	function isAgentPaused(): boolean {
+		let paused = false;
+		agentSettings.subscribe((v) => (paused = v.paused))();
+		return paused;
+	}
+
 	/** Persist agent settings through `/api/document` so the server can read
 	 * them at render time (for agency-level prompt injection). */
 	async function persistAgentSettings(next: AgentSettings) {
@@ -878,7 +916,7 @@
 
 	async function handleAgentSettingsChange(next: AgentSettings, change?: AgentSettingsChange) {
 		await persistAgentSettings(next);
-		if (change?.type === 'agency') {
+		if (change?.type === 'agency' && !next.paused) {
 			void submit(buildAutonomyChangeMessage(change));
 		}
 	}
@@ -905,6 +943,11 @@
 	async function submit(trigger?: string, opts?: { planMode?: boolean; images?: ImageAttachment[] }) {
 		const planMode = opts?.planMode ?? false;
 		const images = opts?.images ?? [];
+		if (isAgentPaused()) {
+			// Fully paused: drop idle wakes, Wake up, Send, and accept-followups.
+			// The user must double-click the Agent pill to resume first.
+			return;
+		}
 		if (rendering || submitInFlight) {
 			// An implicit "review the docs" wakeup carries no specific intent,
 			// so while the agent is already busy it's always redundant — the
@@ -2981,6 +3024,9 @@
 		onWakeUp={docLoaded && activeTabFilePath && !activeTabIsPdf ? () => submit() : undefined}
 		onCancel={cancelRender}
 		onToggleMuted={toggleMuted}
+		onTogglePaused={togglePaused}
+		onAcceptAll={() => void acceptAgentEdit()}
+		onRejectAll={() => void rejectAgentEdit()}
 	>
 		{#snippet dock()}
 			<AgentDock onSendMessage={(msg, opts) => void submit(msg, opts)} />
