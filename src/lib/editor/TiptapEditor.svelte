@@ -596,7 +596,10 @@
 	async function sendFeedback(action: Action) {
 		if (!feedbackPopup) return;
 		const text = feedbackPopup.text;
-		const modeSnapshot = feedbackMode;
+		// "AI smell" always runs plan-first, regardless of the mode chips: the
+		// agent must reply on the thread with what reads as AI and what it will
+		// change before proposing the edit.
+		const modeSnapshot: FeedbackMode = action.id === 'a_ai' ? 'plan' : feedbackMode;
 		const relSnapshot = snapshotFeedbackRelPositions();
 		trackActionUsage(action.label);
 		if (!action.pinned) {
