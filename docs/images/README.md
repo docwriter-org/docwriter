@@ -26,7 +26,7 @@ Structural (no agent needed):
 - `agent-paused-pill.png`. Collapsed floating Agent pill in the paused
   state.
 - `freeze-selection-popup.png`. Feedback popup with **Freeze for agent**.
-- `freeze-passage.png`. Frozen paragraph highlight + gutter lock chip.
+- `freeze-passage.png`. Frozen paragraph with inline lock + light tint.
 - `inline-feedback-popup.png`. The feedback popup anchored to a
   highlighted paragraph, showing the text input, mode chips, and
   quick-action pills.

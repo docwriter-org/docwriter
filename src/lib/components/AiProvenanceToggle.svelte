@@ -3,12 +3,11 @@
 	import { showAiProvenance } from '$lib/stores';
 
 	/**
-	 * Top-right sticky toggle for the AI-provenance view (next to the
-	 * preview buttons). When on, agent-written text — tracked as the `ai`
-	 * format attribute stamped at accept time — is colored in the editor,
-	 * iA-Writer-authorship style: your words render normal, the AI's words
-	 * render in the provenance color. Pure view state; toggling never
-	 * touches the document.
+	 * Toggle for the AI-provenance view. Lives in the tab row (right side),
+	 * above the comment gutter. When on, agent-written text — tracked as the
+	 * `ai` format attribute stamped at accept time — is colored in the editor,
+	 * iA-Writer-authorship style. Pure view state; toggling never touches the
+	 * document.
 	 */
 </script>
 
@@ -17,19 +16,18 @@
 	class:active={$showAiProvenance}
 	onclick={() => showAiProvenance.update((v) => !v)}
 	title={$showAiProvenance
-		? 'Hide AI authorship highlighting'
-		: 'Show AI authorship: color text the AI wrote'}
-	aria-label="Toggle AI authorship highlighting"
+		? 'Hide highlighting of AI-generated text'
+		: 'Highlight AI-generated text in the document'}
+	aria-label="Highlight AI-generated text"
 	aria-pressed={$showAiProvenance}
 	type="button"
 >
 	<Sparkles size={12} />
-	<span>AI text</span>
+	<span>Highlight AI text</span>
 </button>
 
 <style>
-	/* Mirrors PreviewButton's .preview-btn so the top-right chrome cluster
-	 * reads as one control group. */
+	/* Matches PreviewButton / tab-row chrome. */
 	.ai-provenance-btn {
 		display: inline-flex;
 		align-items: center;
@@ -46,7 +44,7 @@
 		border: 1px solid var(--border-light);
 		border-radius: 8px;
 		cursor: pointer;
-		box-shadow: 0 6px 20px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+		box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
 		transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
 	}
 	.ai-provenance-btn:hover {

@@ -94,9 +94,8 @@
 {/if}
 
 <style>
-	/* Laid out inside the editor's top-right chrome cluster
-	 * (.editor-topright-chrome in TiptapEditor), which owns the absolute
-	 * pin-to-corner positioning for the whole button row. */
+	/* Laid out in the tab row's right chrome (.tab-chrome in +page), above
+	 * the comment gutter / suggestions bar. */
 	.preview-control {
 		display: inline-flex;
 		align-items: center;
@@ -118,7 +117,7 @@
 		border: 1px solid var(--border-light);
 		border-radius: 8px;
 		cursor: pointer;
-		box-shadow: 0 6px 20px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+		box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
 		transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
 	}
 	.preview-btn:hover {

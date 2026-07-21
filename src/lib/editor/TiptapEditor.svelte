@@ -27,12 +27,10 @@
 	} from './source-comment-overlay';
 	import { handleEditorPaste, handleEditorDrop } from './media-paste';
 	import FindBar from '$lib/components/FindBar.svelte';
-	import PreviewButton from '$lib/components/PreviewButton.svelte';
-	import AiProvenanceToggle from '$lib/components/AiProvenanceToggle.svelte';
 	import CommentGutter from '$lib/components/CommentGutter.svelte';
 	import { Crosshair, Lock } from 'lucide-svelte';
 	import { FreezeOverlay, setFreezeOverlayState } from './freeze-overlay';
-	import { isFreezeRule, makeFreezeRuleText, freezeQuoteFromRule } from '$lib/freeze';
+	import { makeFreezeRuleText, freezeQuoteFromRule } from '$lib/freeze';
 	import type { Rule } from '$lib/types';
 	// `ySyncPluginKey` MUST come from the same package whose ySyncPlugin the
 	// Collaboration extension installs (@tiptap/y-tiptap), re-exported here via
@@ -86,7 +84,8 @@
 		onRejectAllEdits?: () => void;
 		/** Resolve / reopen a thread (undoable; also drops its pending edits). */
 		onResolveThread?: (threadId: string, resolved: boolean) => void;
-		/** Open the resolved preview output beside the source editor. */
+		/** Open the resolved preview output beside the source editor
+		 * (used by "Locate in PDF" on the feedback popup). */
 		onOpenSplitPreview?: (path: string) => void;
 		splitPreviewOpen?: boolean;
 	}
@@ -183,7 +182,6 @@
 	/** The gutter (and its --gutter-width column) shows when there's anything
 	 * to review — unresolved comment threads OR pending edit rounds. */
 	let hasGutterContent = $derived(
-		$rules.some(isFreezeRule) ||
 		threadsForTab.some((t) => !t.resolved) || rounds.length > 0
 	);
 	let recent: Action[] = $derived($recentActions);
@@ -1367,6 +1365,12 @@
 		};
 		editorRoot.addEventListener('docwriter:open-thread', handleOpenThread as EventListener);
 
+		const handleUnfreeze = (ev: Event) => {
+			const { ruleId } = (ev as CustomEvent).detail as { ruleId?: string };
+			if (ruleId) void unfreezeRule(ruleId);
+		};
+		editorRoot.addEventListener('docwriter:unfreeze', handleUnfreeze as EventListener);
+
 		// Mousedown anywhere outside a gutter card collapses the open
 		// thread AND the open edit card. Pill clicks stop propagation on
 		// mousedown, so window won't see those; inline-highlight clicks
@@ -1400,6 +1404,7 @@
 
 		const detachOpenThread = () => {
 			editorRoot.removeEventListener('docwriter:open-thread', handleOpenThread as EventListener);
+			editorRoot.removeEventListener('docwriter:unfreeze', handleUnfreeze as EventListener);
 			editorRoot.removeEventListener('d3-code-visibility-changed', handlePreviewLayoutChanged);
 			editorRoot.removeEventListener('docwriter:media-layout-changed', handlePreviewLayoutChanged);
 			editorRoot.removeEventListener('docwriter:markdown-layout-changed', handlePreviewLayoutChanged);
@@ -1509,22 +1514,7 @@
 	class="tiptap-host"
 	class:find-open={findState.open}
 	class:show-ai-provenance={$showAiProvenance}
-	class:has-gutter={hasGutterContent}
 >
-	<!-- Top-right floating chrome: AI-provenance toggle + preview button +
-	     find bar. All live outside the scroll container so they pin
-	     regardless of scroll. When find is open, the button cluster shifts
-	     down so the two don't overlap (FindBar wins the corner). When the
-	     comment gutter is open, shift left so we don't cover Accept all /
-	     freeze chips in that column. -->
-	<div class="editor-topright-chrome">
-		<AiProvenanceToggle />
-		<PreviewButton
-			activeTabPath={tabId}
-			onOpenSplit={onOpenSplitPreview}
-			splitOpen={splitPreviewOpen}
-		/>
-	</div>
 	{#if findState.open}
 		<FindBar
 			findState={findState}
@@ -1574,7 +1564,6 @@
 				tabId={tabId}
 				openThreadId={openThreadId}
 				{newAwaitingThreadId}
-				freezeRules={$rules.filter(isFreezeRule)}
 				onOpen={(id) => openCommentThreadId.set(id)}
 				onClose={() => openCommentThreadId.set(null)}
 				onAcceptRound={(roundId) => onAcceptInlineEdit?.(roundId)}
@@ -1583,7 +1572,6 @@
 				onAcceptFeedback={(roundIds) => onAcceptFeedbackEdits?.(roundIds)}
 				onAcceptAll={() => onAcceptAllEdits?.()}
 				onRejectAll={() => onRejectAllEdits?.()}
-				onUnfreeze={(ruleId) => void unfreezeRule(ruleId)}
 				onResolveThread={(threadId, resolved) => onResolveThread?.(threadId, resolved)}
 				muted={muted}
 				onPinThreadEdits={(roundIds, pinned) =>
@@ -1776,30 +1764,6 @@
 		min-width: 0;
 		min-height: 0;
 	}
-	/* Top-right button cluster (AI-provenance toggle + preview controls).
-	 * One absolutely-positioned flex row so the buttons stack leftward from
-	 * the corner regardless of which ones are visible. */
-	.editor-topright-chrome {
-		position: absolute;
-		top: 12px;
-		right: 16px;
-		z-index: 11;
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-	}
-	/* Gutter column owns the top-right margin (Accept all, freeze chips).
-	 * Park the chrome just left of that column so "AI text" never covers
-	 * Accept all. */
-	.tiptap-host.has-gutter .editor-topright-chrome {
-		right: calc(var(--gutter-width, 300px) + 28px);
-	}
-	/* When the FindBar is open, drop the button cluster below it so the
-	 * two don't collide in the corner. */
-	.tiptap-host.find-open .editor-topright-chrome {
-		top: 50px;
-	}
-
 	/* AI-provenance view: agent-written text carries the `ai` mark
 	 * (span[data-ai-text], see AiProvenanceMark). It renders as normal prose
 	 * until the toggle turns the view on — then it takes the theme's
@@ -2510,21 +2474,42 @@
 		border-color: var(--border);
 	}
 	.feedback-freeze-btn {
-		color: color-mix(in srgb, var(--text) 70%, #0f766e);
-		border-color: color-mix(in srgb, #0f766e 28%, var(--border-light));
-		background: color-mix(in srgb, #0f766e 8%, transparent);
+		color: var(--color-agent-edit);
+		border-color: color-mix(in srgb, var(--color-agent-edit) 35%, var(--border-light));
+		background: color-mix(in srgb, var(--color-agent-edit) 10%, transparent);
 	}
 	.feedback-freeze-btn:hover {
-		color: #0f766e;
-		background: color-mix(in srgb, #0f766e 14%, transparent);
-		border-color: color-mix(in srgb, #0f766e 40%, var(--border-light));
+		color: var(--color-agent-edit);
+		background: color-mix(in srgb, var(--color-agent-edit) 16%, transparent);
+		border-color: color-mix(in srgb, var(--color-agent-edit) 50%, var(--border-light));
 	}
+	/* Frozen passage: light tint under the text + a lock widget to its left.
+	 * Uses --color-agent-edit so it tracks every theme palette. */
 	:global(.tiptap-content .freeze-mark) {
-		background: color-mix(in srgb, #0f766e 12%, transparent);
+		background: color-mix(in srgb, var(--color-agent-edit) 12%, var(--bg-elevated));
 		box-decoration-break: clone;
 		-webkit-box-decoration-break: clone;
-		border-bottom: 1.5px dashed color-mix(in srgb, #0f766e 55%, transparent);
-		border-radius: 2px;
+		border-radius: 3px;
+		box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-agent-edit) 22%, transparent);
+	}
+	:global(.tiptap-content .freeze-lock) {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 18px;
+		height: 18px;
+		margin: 0 5px 0 0;
+		padding: 0;
+		vertical-align: -3px;
+		border: none;
+		border-radius: 4px;
+		background: color-mix(in srgb, var(--color-agent-edit) 14%, transparent);
+		color: var(--color-agent-edit);
+		cursor: pointer;
+		line-height: 0;
+	}
+	:global(.tiptap-content .freeze-lock:hover) {
+		background: color-mix(in srgb, var(--color-agent-edit) 24%, transparent);
 	}
 	.feedback-input-row {
 		display: flex;

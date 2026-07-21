@@ -40,18 +40,53 @@ function resolveQuoteRange(
 	return { from, to };
 }
 
+function lockWidget(ruleId: string): HTMLElement {
+	const btn = document.createElement('button');
+	btn.type = 'button';
+	btn.className = 'freeze-lock';
+	btn.title = 'Unfreeze — allow the agent to edit this passage';
+	btn.setAttribute('aria-label', 'Unfreeze passage');
+	btn.setAttribute('data-freeze-rule', ruleId);
+	// Inline SVG (lucide Lock) — no component tree in a PM widget.
+	btn.innerHTML =
+		'<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
+	btn.addEventListener('mousedown', (e) => {
+		// Keep the editor from taking focus / collapsing selection first.
+		e.preventDefault();
+		e.stopPropagation();
+	});
+	btn.addEventListener('click', (e) => {
+		e.preventDefault();
+		e.stopPropagation();
+		btn.dispatchEvent(
+			new CustomEvent('docwriter:unfreeze', {
+				bubbles: true,
+				detail: { ruleId }
+			})
+		);
+	});
+	return btn;
+}
+
 function buildDecorations(doc: Parameters<typeof buildCharIndex>[0], rules: Rule[]): DecorationSet {
-	const quotes = rules.filter(isFreezeRule).map(freezeQuoteFromRule).filter(Boolean);
-	if (quotes.length === 0) return DecorationSet.empty;
+	const freezes = rules.filter(isFreezeRule);
+	if (freezes.length === 0) return DecorationSet.empty;
 	const { plainText, charPositions } = buildCharIndex(doc);
 	const decorations: ReturnType<typeof Decoration.inline>[] = [];
 	const seen = new Set<string>();
-	for (const quote of quotes) {
+	for (const rule of freezes) {
+		const quote = freezeQuoteFromRule(rule);
 		const range = resolveQuoteRange(plainText, charPositions, quote);
 		if (!range) continue;
 		const key = `${range.from}:${range.to}`;
 		if (seen.has(key)) continue;
 		seen.add(key);
+		decorations.push(
+			Decoration.widget(range.from, () => lockWidget(rule.id), {
+				side: -1,
+				key: `freeze-lock-${rule.id}`
+			})
+		);
 		decorations.push(
 			Decoration.inline(range.from, range.to, {
 				class: 'freeze-mark',

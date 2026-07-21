@@ -292,7 +292,7 @@ async function main() {
 		await writeShot(page, 'freeze-selection-popup.png');
 		await freezeBtn.click();
 		await sleep(800);
-		await page.locator('.freeze-card').first().waitFor({ state: 'visible', timeout: 5_000 });
+		await page.locator('.freeze-lock').first().waitFor({ state: 'visible', timeout: 5_000 });
 		await page.locator('.freeze-mark').first().waitFor({ state: 'attached', timeout: 5_000 });
 		await writeShot(page, 'freeze-passage.png');
 

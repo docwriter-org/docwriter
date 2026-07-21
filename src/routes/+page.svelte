@@ -127,6 +127,8 @@
 		queuedSubmissionCount
 	} from '$lib/stores';
 	import TabBar from '$lib/components/TabBar.svelte';
+	import AiProvenanceToggle from '$lib/components/AiProvenanceToggle.svelte';
+	import PreviewButton from '$lib/components/PreviewButton.svelte';
 	import type { AgentSettings, CommentThread, HistoryEntry, ImageAttachment, PendingReviewRound, ProposedRule, ProposedHook } from '$lib/types';
 	import type { MaterializedPendingReviewRound } from '$lib/review-rounds';
 
@@ -2958,6 +2960,16 @@
 								onDropFile={handleDropFiles}
 							/>
 						</div>
+						{#if docLoaded && activeTabFilePath && !activeTabIsPdf}
+							<div class="tab-chrome">
+								<AiProvenanceToggle />
+								<PreviewButton
+									activeTabPath={activeTabFilePath}
+									onOpenSplit={openSplitPreview}
+									splitOpen={splitPreviewOpen}
+								/>
+							</div>
+						{/if}
 					</div>
 					{#if docLoaded && activeTabFilePath}
 						{#key activeTabFilePath}
@@ -3274,6 +3286,17 @@
 	.tab-slot {
 		grid-column: 2;
 		min-width: 0;
+	}
+	/* AI-text toggle + Preview sit in the gutter column of the tab row —
+	 * above the suggestions bar, never overlapping Accept all. */
+	.tab-chrome {
+		grid-column: 3;
+		display: flex;
+		align-items: center;
+		justify-content: flex-end;
+		gap: 6px;
+		min-width: 0;
+		padding-right: 2px;
 	}
 	.empty-editor-state {
 		flex: 1;
