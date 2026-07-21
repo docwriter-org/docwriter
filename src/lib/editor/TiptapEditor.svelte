@@ -2474,42 +2474,61 @@
 		border-color: var(--border);
 	}
 	.feedback-freeze-btn {
-		color: var(--color-agent-edit);
-		border-color: color-mix(in srgb, var(--color-agent-edit) 35%, var(--border-light));
-		background: color-mix(in srgb, var(--color-agent-edit) 10%, transparent);
+		color: var(--text-secondary);
+		border-color: var(--border-light);
+		background: color-mix(in srgb, var(--text) 4%, transparent);
 	}
 	.feedback-freeze-btn:hover {
-		color: var(--color-agent-edit);
-		background: color-mix(in srgb, var(--color-agent-edit) 16%, transparent);
-		border-color: color-mix(in srgb, var(--color-agent-edit) 50%, var(--border-light));
+		color: var(--text);
+		background: var(--bg-hover);
+		border-color: var(--border);
 	}
-	/* Frozen passage: light tint under the text + a lock widget to its left.
-	 * Uses --color-agent-edit so it tracks every theme palette. */
+	/* Frozen passage: flat wash under the text (no border / card chrome).
+	 * Lock hangs in the left page margin via a zero-width widget slot so
+	 * the prose itself stays flush with neighboring paragraphs. */
 	:global(.tiptap-content .freeze-mark) {
-		background: color-mix(in srgb, var(--color-agent-edit) 12%, var(--bg-elevated));
+		background: color-mix(in srgb, var(--text) 4%, transparent);
 		box-decoration-break: clone;
 		-webkit-box-decoration-break: clone;
-		border-radius: 3px;
-		box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-agent-edit) 22%, transparent);
+		border: none;
+		border-radius: 0;
+		box-shadow: none;
+		outline: none;
+	}
+	/* ProseMirror wraps widgets in .ProseMirror-widget — collapse that too. */
+	:global(.tiptap-content .ProseMirror-widget:has(.freeze-lock-slot)),
+	:global(.tiptap-content .freeze-lock-slot) {
+		position: relative;
+		display: inline-block;
+		width: 0 !important;
+		max-width: 0 !important;
+		height: 0 !important;
+		margin: 0 !important;
+		padding: 0 !important;
+		border: 0 !important;
+		overflow: visible;
+		vertical-align: baseline;
 	}
 	:global(.tiptap-content .freeze-lock) {
+		position: absolute;
+		left: -24px;
+		top: -2px;
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
 		width: 18px;
 		height: 18px;
-		margin: 0 5px 0 0;
 		padding: 0;
-		vertical-align: -3px;
 		border: none;
 		border-radius: 4px;
-		background: color-mix(in srgb, var(--color-agent-edit) 14%, transparent);
-		color: var(--color-agent-edit);
+		background: transparent;
+		color: var(--text-faint);
 		cursor: pointer;
 		line-height: 0;
 	}
 	:global(.tiptap-content .freeze-lock:hover) {
-		background: color-mix(in srgb, var(--color-agent-edit) 24%, transparent);
+		color: var(--text-secondary);
+		background: color-mix(in srgb, var(--text) 6%, transparent);
 	}
 	.feedback-input-row {
 		display: flex;

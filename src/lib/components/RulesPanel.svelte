@@ -164,11 +164,11 @@
 		scrollbar-width: thin;
 	}
 	.rule-row.freeze-rule {
-		background: color-mix(in srgb, var(--color-agent-edit) 10%, var(--bg-surface));
+		background: color-mix(in srgb, var(--text) 4%, var(--bg-surface));
 	}
 	.rule-freeze-icon {
 		display: inline-flex;
-		color: var(--color-agent-edit);
+		color: var(--text-faint);
 		flex-shrink: 0;
 	}
 	.rule-row {

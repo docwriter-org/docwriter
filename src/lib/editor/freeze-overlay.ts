@@ -41,6 +41,12 @@ function resolveQuoteRange(
 }
 
 function lockWidget(ruleId: string): HTMLElement {
+	// Zero-width slot so the lock can hang in the left page margin without
+	// shoving the frozen text to the right.
+	const slot = document.createElement('span');
+	slot.className = 'freeze-lock-slot';
+	slot.contentEditable = 'false';
+
 	const btn = document.createElement('button');
 	btn.type = 'button';
 	btn.className = 'freeze-lock';
@@ -65,7 +71,8 @@ function lockWidget(ruleId: string): HTMLElement {
 			})
 		);
 	});
-	return btn;
+	slot.appendChild(btn);
+	return slot;
 }
 
 function buildDecorations(doc: Parameters<typeof buildCharIndex>[0], rules: Rule[]): DecorationSet {
