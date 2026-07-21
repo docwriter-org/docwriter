@@ -41,6 +41,9 @@ function renderManagedBlock(rules: Rule[]): string {
 	} else {
 		for (const r of rules) {
 			lines.push(`- ${r.text}`);
+			for (const ex of r.examples ?? []) {
+				lines.push(`  - Violation example: "${ex.violation}"${ex.note ? ` — ${ex.note}` : ''}`);
+			}
 		}
 	}
 	lines.push('');

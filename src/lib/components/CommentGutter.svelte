@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { Editor } from '@tiptap/core';
-	import { Send, Sparkles, Cat, Check, X, User } from 'lucide-svelte';
+	import { Send, Sparkles, Cat, Check, Copy, X, User } from 'lucide-svelte';
 
 	/** Minimal inline markdown → HTML. Matches the renderer used in
 	 * HistoryPane so assistant_text and comments look the same. Escapes
@@ -132,6 +132,19 @@
 	}
 	function editCardId(roundId: string): string {
 		return `edit:${roundId}`;
+	}
+	/** Copy a round's full proposed text — the user may want the agent's
+	 * wording (or part of it) without accepting the edit. */
+	async function copyProposedText(round: MaterializedPendingReviewRound): Promise<void> {
+		const op = round.operation;
+		const text =
+			op?.type === 'edit' ? op.newString : op?.type === 'write' ? op.content : round.afterMd;
+		if (typeof text !== 'string' || !text) return;
+		try {
+			await navigator.clipboard.writeText(text);
+		} catch {
+			/* clipboard permission denied; nothing sensible to do */
+		}
 	}
 	let looseEditRounds = $derived(
 		muted
@@ -638,6 +651,16 @@
 									{/if}
 								</span>
 								<span class="edit-row-actions">
+									<button
+										class="mini-btn copy"
+										title="Copy proposed text"
+										onclick={(e) => {
+											e.stopPropagation();
+											void copyProposedText(ed);
+										}}
+									>
+										<Copy size={11} />
+									</button>
 									<button class="mini-btn reject" title="Reject this edit" onclick={() => onRejectRound(ed.id)}>
 										<X size={12} />
 									</button>
@@ -741,6 +764,16 @@
 					{summarizeRound(round)}
 				</div>
 				<span class="edit-row-actions">
+					<button
+						class="mini-btn copy"
+						title="Copy proposed text"
+						onclick={(e) => {
+							e.stopPropagation();
+							void copyProposedText(round);
+						}}
+					>
+						<Copy size={11} />
+					</button>
 					<button class="mini-btn reject" title="Reject this edit" onclick={() => onRejectRound(round.id)}>
 						<X size={12} />
 					</button>
@@ -1283,5 +1316,10 @@
 	.mini-btn.reject:hover {
 		background: var(--bg-hover);
 		border-color: color-mix(in srgb, #ef4444 40%, var(--border-light));
+	}
+	.mini-btn.copy:hover {
+		background: var(--bg-hover);
+		border-color: color-mix(in srgb, var(--accent) 40%, var(--border-light));
+		color: var(--accent);
 	}
 </style>

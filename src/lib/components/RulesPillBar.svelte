@@ -16,9 +16,38 @@
 	let newRule = $state('');
 	let editingRuleId: string | null = $state(null);
 	let draftRule = $state('');
+	let addingExampleFor: string | null = $state(null);
+	let exampleDraft = $state('');
 	let inputEl: HTMLInputElement | undefined = $state();
 	let editInputEl: HTMLTextAreaElement | undefined = $state();
 	let anchorEl: HTMLDivElement | undefined = $state();
+	let popoverEl: HTMLDivElement | undefined = $state();
+
+	// Non-modal close behavior. Outside mousedown closes the popover only
+	// when nothing is in progress: a non-empty draft (or edit-in-place)
+	// keeps it open so the user can scroll and click around the document
+	// while composing a rule that references it. Escape and the toggle
+	// button always close.
+	$effect(() => {
+		if (!popoverOpen) return;
+		function onDown(e: MouseEvent) {
+			const target = e.target as Node | null;
+			if (!target) return;
+			if (popoverEl?.contains(target) || anchorEl?.contains(target)) return;
+			if (popoverMode === 'edit' || newRule.trim() || addingExampleFor !== null) return;
+			closePopover();
+		}
+		function onKey(e: KeyboardEvent) {
+			// Edit mode's textarea has its own Escape handling (cancel edit).
+			if (e.key === 'Escape' && popoverMode === 'manage') closePopover();
+		}
+		document.addEventListener('mousedown', onDown);
+		document.addEventListener('keydown', onKey);
+		return () => {
+			document.removeEventListener('mousedown', onDown);
+			document.removeEventListener('keydown', onKey);
+		};
+	});
 
 	const MAX_VISIBLE_PILLS = 3;
 	let visibleRules = $derived(rulesList.slice(0, MAX_VISIBLE_PILLS));
@@ -52,6 +81,37 @@
 		if (rule) {
 			pushHistory({ type: 'user_action', timestamp: Date.now(), description: `Removed rule: "${rule.text}"` });
 		}
+	}
+
+	/** Attach a violation example to a rule. Examples ride along in the
+	 * rule prompt as few-shot negatives, so the best ones are passages
+	 * lifted verbatim from this document. */
+	function saveExample(ruleId: string) {
+		const text = exampleDraft.trim();
+		if (!text) return;
+		const rule = rulesList.find((r) => r.id === ruleId);
+		const next = rulesList.map((r) =>
+			r.id === ruleId ? { ...r, examples: [...(r.examples ?? []), { violation: text }] } : r
+		);
+		void saveRules(next);
+		if (rule) {
+			pushHistory({
+				type: 'user_action',
+				timestamp: Date.now(),
+				description: `Added violation example to rule "${rule.text}"`
+			});
+		}
+		addingExampleFor = null;
+		exampleDraft = '';
+	}
+
+	function removeExample(ruleId: string, index: number) {
+		const next = rulesList.map((r) => {
+			if (r.id !== ruleId) return r;
+			const examples = (r.examples ?? []).filter((_, i) => i !== index);
+			return { ...r, examples: examples.length > 0 ? examples : undefined };
+		});
+		void saveRules(next);
 	}
 
 	function startEditingRule(id: string) {
@@ -118,14 +178,6 @@
 			if (popoverMode === 'edit') closePopover();
 			else cancelEdit();
 		}
-	}
-
-	function handlePopoverPointerdown(e: PointerEvent) {
-		e.stopPropagation();
-	}
-
-	function handleBackdropClick() {
-		closePopover();
 	}
 
 	function closePopover() {
@@ -202,17 +254,17 @@
 	{/if}
 </div>
 
-<!-- Popover (portal-style, outside the flex row) -->
+<!-- Popover (portal-style, outside the flex row). Deliberately NON-modal:
+     the old full-viewport backdrop swallowed wheel events, so the document
+     couldn't be scrolled while composing a rule. Outside interaction is
+     handled by a document-level mousedown listener instead (see $effect),
+     which never blocks scrolling. -->
 {#if popoverOpen}
-	<!-- svelte-ignore a11y_no_static_element_interactions -->
-	<!-- svelte-ignore a11y_click_events_have_key_events -->
-	<div class="popover-backdrop" onclick={handleBackdropClick}>
-		<!-- svelte-ignore a11y_no_static_element_interactions -->
-		<div class="rules-popover" onpointerdown={handlePopoverPointerdown} onclick={(e) => e.stopPropagation()}>
-			<div class="popover-header">
-				<BookOpen size={13} strokeWidth={1.8} />
-				<span>{popoverMode === 'edit' ? 'Edit rule' : 'Writing rules'}</span>
-			</div>
+	<div class="rules-popover" bind:this={popoverEl}>
+		<div class="popover-header">
+			<BookOpen size={13} strokeWidth={1.8} />
+			<span>{popoverMode === 'edit' ? 'Edit rule' : 'Writing rules'}</span>
+		</div>
 
 			{#if popoverMode === 'edit'}
 				{@const editingRule = rulesList.find((rule) => rule.id === editingRuleId)}
@@ -244,22 +296,70 @@
 			{:else if rulesList.length > 0}
 				<div class="popover-rules-list">
 					{#each rulesList as rule (rule.id)}
-						<div class="popover-rule-row">
-							<button
-								type="button"
-								class="popover-rule-edit-body"
-								onclick={() => startEditingRule(rule.id)}
-								title="Edit rule"
-							>
-								<span class="popover-rule-text">{rule.text}</span>
-							</button>
-							<button
-								class="popover-rule-remove"
-								onclick={() => removeRule(rule.id)}
-								title="Remove"
-							>
-								<X size={11} strokeWidth={2} />
-							</button>
+						<div class="popover-rule-item">
+							<div class="popover-rule-row">
+								<button
+									type="button"
+									class="popover-rule-edit-body"
+									onclick={() => startEditingRule(rule.id)}
+									title="Edit rule"
+								>
+									<span class="popover-rule-text">{rule.text}</span>
+								</button>
+								<button
+									class="popover-rule-remove"
+									onclick={() => removeRule(rule.id)}
+									title="Remove"
+								>
+									<X size={11} strokeWidth={2} />
+								</button>
+							</div>
+							{#if rule.examples && rule.examples.length > 0}
+								<div class="rule-examples">
+									{#each rule.examples as ex, i (i)}
+										<div class="rule-example">
+											<span class="rule-example-text" title={ex.violation}>“{ex.violation}”</span>
+											<button
+												class="rule-example-remove"
+												onclick={() => removeExample(rule.id, i)}
+												title="Remove example"
+											>
+												<X size={9} strokeWidth={2.5} />
+											</button>
+										</div>
+									{/each}
+								</div>
+							{/if}
+							{#if addingExampleFor === rule.id}
+								<!-- svelte-ignore a11y_autofocus -->
+								<textarea
+									class="rule-example-input"
+									bind:value={exampleDraft}
+									rows="2"
+									autofocus
+									placeholder="Paste a passage that breaks this rule…"
+									onkeydown={(e) => {
+										if (e.key === 'Enter' && !e.shiftKey) {
+											e.preventDefault();
+											saveExample(rule.id);
+										}
+										if (e.key === 'Escape') {
+											e.stopPropagation();
+											addingExampleFor = null;
+											exampleDraft = '';
+										}
+									}}
+								></textarea>
+							{:else}
+								<button
+									class="rule-example-add"
+									onclick={() => {
+										addingExampleFor = rule.id;
+										exampleDraft = '';
+									}}
+									title="Attach a passage that violates this rule — shown to the agent as a concrete example"
+								>+ example violation</button>
+							{/if}
 						</div>
 					{/each}
 				</div>
@@ -290,7 +390,6 @@
 					</button>
 				{/if}
 			{/if}
-		</div>
 	</div>
 {/if}
 
@@ -431,11 +530,6 @@
 	}
 
 	/* ── Popover ── */
-	.popover-backdrop {
-		position: fixed;
-		inset: 0;
-		z-index: 200;
-	}
 	.rules-popover {
 		position: fixed;
 		top: 80px;
@@ -506,6 +600,96 @@
 		line-height: 1.4;
 		min-width: 0;
 		overflow-wrap: break-word;
+	}
+	.popover-rule-item {
+		display: flex;
+		flex-direction: column;
+	}
+	/* ── Violation examples under a rule ── */
+	.rule-examples {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		margin: 1px 0 2px;
+		padding-left: 14px;
+	}
+	.rule-example {
+		display: flex;
+		align-items: flex-start;
+		gap: 5px;
+	}
+	.rule-example-text {
+		flex: 1;
+		min-width: 0;
+		font-size: 11.5px;
+		font-style: italic;
+		color: var(--text-faint);
+		line-height: 1.35;
+		border-left: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+		padding-left: 6px;
+		display: -webkit-box;
+		-webkit-line-clamp: 2;
+		line-clamp: 2;
+		-webkit-box-orient: vertical;
+		overflow: hidden;
+	}
+	.rule-example-remove {
+		background: none;
+		border: none;
+		color: var(--text-faint);
+		cursor: pointer;
+		padding: 2px;
+		border-radius: 3px;
+		display: flex;
+		align-items: center;
+		flex-shrink: 0;
+		opacity: 0;
+	}
+	.rule-example:hover .rule-example-remove {
+		opacity: 1;
+	}
+	.rule-example-remove:hover {
+		color: #ef4444;
+		background: var(--bg-hover);
+	}
+	.rule-example-add {
+		align-self: flex-start;
+		margin: 0 0 4px 14px;
+		padding: 1px 4px;
+		border: none;
+		border-radius: 3px;
+		background: none;
+		font: inherit;
+		font-size: 10.5px;
+		color: var(--text-faint);
+		cursor: pointer;
+		opacity: 0.65;
+	}
+	.rule-example-add:hover {
+		opacity: 1;
+		color: var(--accent);
+		background: var(--bg-hover);
+	}
+	.rule-example-input {
+		width: 100%;
+		box-sizing: border-box;
+		resize: vertical;
+		min-height: 46px;
+		max-height: 120px;
+		margin: 2px 0 6px;
+		font: inherit;
+		font-size: 11.5px;
+		line-height: 1.4;
+		border: 1px solid var(--border-light);
+		border-radius: 6px;
+		padding: 6px 8px;
+		outline: none;
+		color: var(--text);
+		background: var(--bg);
+	}
+	.rule-example-input:focus {
+		border-color: var(--accent);
+		box-shadow: 0 0 0 2px var(--accent-bg);
 	}
 	.popover-rule-editor {
 		display: flex;

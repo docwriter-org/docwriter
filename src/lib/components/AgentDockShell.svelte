@@ -370,4 +370,16 @@
 		font-size: 11px;
 		font-weight: 600;
 	}
+	/* 14" laptop widths: the fixed pill starts eating into the comment
+	 * margin, so drop the AGENT wordmark and keep just the mascot + live
+	 * status (countdown / dots / zzz). Pairs with the narrower
+	 * --paper-width / --comment-width overrides in +page.svelte. */
+	@media (max-width: 1600px) {
+		.dock-label {
+			display: none;
+		}
+		.dock-agent-btn {
+			padding: 0 13px;
+		}
+	}
 </style>

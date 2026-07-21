@@ -139,9 +139,21 @@ export function setActionUsageCounts(counts: Record<string, number>) {
 }
 
 export function getRules(): Rule[] {
-	return getDb()
-		.prepare('SELECT id, text FROM rules ORDER BY rowid ASC')
-		.all() as Rule[];
+	const rows = getDb()
+		.prepare('SELECT id, text, examples FROM rules ORDER BY rowid ASC')
+		.all() as Array<{ id: string; text: string; examples: string | null }>;
+	return rows.map((row) => {
+		const rule: Rule = { id: row.id, text: row.text };
+		if (row.examples) {
+			try {
+				const parsed = JSON.parse(row.examples);
+				if (Array.isArray(parsed) && parsed.length > 0) rule.examples = parsed;
+			} catch {
+				/* malformed examples JSON — treat as none */
+			}
+		}
+		return rule;
+	});
 }
 
 export function setRules(rules: Rule[]) {

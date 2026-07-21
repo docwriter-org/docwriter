@@ -60,7 +60,8 @@ function buildDocwriterMcp() {
 			'Propose a writing rule for the user to review. Follow the Proposing rules section: at most one per turn, and only with evidence.',
 			{
 				text: z.string().describe('The rule, a short imperative.'),
-				reason: z.string().optional().describe('The evidence in one sentence, e.g. "you removed em dashes in three edits today".')
+				reason: z.string().optional().describe('The evidence in one sentence, e.g. "you removed em dashes in three edits today".'),
+				example_violation: z.string().optional().describe('A verbatim passage that breaks the rule, ideally from this session (a rejected edit, a sentence the user flagged). Stored with the rule as a few-shot example.')
 			},
 			async () => ({ content: [{ type: 'text', text: 'Rule proposal sent to the user for review.' }] })
 		),

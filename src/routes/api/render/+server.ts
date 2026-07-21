@@ -251,9 +251,20 @@ interface QueryRoundOutcome {
  * boilerplate and burning context + tokens. */
 function buildSystemPrompt(): string {
 	const meta = readMeta();
-	const ruleTexts = meta.rules.map((r) => r.text);
-	const rulesBlock = ruleTexts.length > 0
-		? ruleTexts.map((t, i) => `${i + 1}. ${t}`).join('\n')
+	// Each rule renders with any stored violation examples indented under
+	// it — real passages from this user's sessions (rejected edits, flagged
+	// text). A concrete "what breaking this looks like" beats restating the
+	// rule, so keep them verbatim.
+	const rulesBlock = meta.rules.length > 0
+		? meta.rules
+				.map((r, i) => {
+					const lines = [`${i + 1}. ${r.text}`];
+					for (const ex of r.examples ?? []) {
+						lines.push(`   Violation example: "${ex.violation}"${ex.note ? ` (${ex.note})` : ''}`);
+					}
+					return lines.join('\n');
+				})
+				.join('\n')
 		: 'None.';
 
 	return `# Who you are
@@ -354,7 +365,7 @@ Propose at most one rule per turn with propose_rule, and only with evidence. Evi
 
 A flagged tell alone is not yet a rule: fix the flagged instance with edit_doc, and propose the rule when the user accepts a fix for that feedback. A rejected edit is the opposite signal — do not propose a rule from feedback whose edit the user rejected.
 
-Write rules as short imperatives that are specific enough to check, e.g. "Never use em dashes". When unsure, do not propose.
+Write rules as short imperatives that are specific enough to check, e.g. "Never use em dashes". When a concrete passage shows what breaking the rule looks like — a sentence the user flagged, the passage a tell appeared in — quote it verbatim in the example_violation field so the rule carries a real example. When unsure, do not propose.
 
 ## Style references
 

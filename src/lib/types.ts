@@ -1,6 +1,16 @@
+/** A concrete violation of a rule, ideally lifted verbatim from the
+ * user's own session (a rejected agent edit, a passage they flagged).
+ * Rendered under the rule in the agent prompt as a few-shot negative
+ * example — "what this rule looks like when broken". */
+export interface RuleExample {
+	violation: string;
+	note?: string;
+}
+
 export interface Rule {
 	id: string;
 	text: string;
+	examples?: RuleExample[];
 }
 
 export const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'] as const;
@@ -21,6 +31,9 @@ export interface ProposedRule {
 	id: string;
 	text: string;
 	reason?: string;
+	/** Offending passage the agent quoted when proposing (usually from a
+	 * rejected edit). Stored as the rule's first example on accept. */
+	exampleViolation?: string;
 	timestamp: number;
 }
 
