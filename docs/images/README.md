@@ -19,6 +19,18 @@ Structural (no agent needed):
 - `writing-references-panel.png`. The Writing references panel under
   Settings.
 - `chat-popover.png`. The chat popover opened with a typed prompt.
+- `agent-accept-reject-all.png`. Comment gutter with **Accept all** /
+  **Reject all** above pending suggestion cards (dock collapsed).
+- `agent-paused.png`. Expanded agent dock with the Agent pill showing
+  **Paused** after a double-click.
+- `agent-paused-pill.png`. Collapsed floating Agent pill in the paused
+  state.
+- `freeze-selection-popup.png`. Feedback popup with **Freeze for agent**
+  (provenance highlighting on).
+- `freeze-passage.png`. Frozen paragraph with margin lock + muted
+  underline; provenance highlighting on for contrast.
+- `freeze-unlock-menu.png`. Lock-click popover: **Unlock — allow agent
+  to edit**.
 - `inline-feedback-popup.png`. The feedback popup anchored to a
   highlighted paragraph, showing the text input, mode chips, and
   quick-action pills.
@@ -66,6 +78,9 @@ Intro hero GIF (requires `ffmpeg` on PATH):
 
 To regenerate everything: `npm run docs:screenshots` (one-time setup:
 `npx playwright install chromium` and `brew install ffmpeg`).
+
+To regenerate only the Accept-all / pause shots (no agent credential
+needed): `node scripts/capture-pause-and-review-all.mjs`.
 
 Env flags:
 

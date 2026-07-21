@@ -21,7 +21,8 @@ you've actually stopped. While the agent is rendering, the countdown is
 paused, so typing during a run does not queue another one.
 
 `Cmd+Enter` (macOS) or `Ctrl+Enter` (Linux/Windows) in the editor skips
-the countdown and triggers a review immediately.
+the countdown and triggers a review immediately — unless the agent is
+[paused](#pausing-the-agent).
 
 You can also click the **Agent** button at the top of the history
 pane (the sleeping-cat icon). Clicking it wakes the agent on demand —
@@ -30,6 +31,26 @@ for the idle timer or typing a prompt.
 
 <Frame>
   ![The Agent wake-up button at the top of the history pane, highlighted with a bounding box](/images/agent-wakeup-button.png)
+</Frame>
+
+## Pausing the agent
+
+When you need room to think — refactoring a passage, drafting without
+interruption — **double-click the Agent pill** (the sleeping-cat button
+in the floating dock, collapsed or expanded). The pill shows **Paused**.
+
+While paused:
+
+- The 3-second idle auto-wake does not run.
+- Clicking Wake up, sending a chat message, and `Cmd/Ctrl+Enter` do nothing.
+- An in-flight turn is cancelled, and any queued messages are dropped.
+
+Double-click the pill again to resume. Pause is separate from **Mute**,
+which only hides the green/red diff overlay; mute does not stop the agent
+from running.
+
+<Frame>
+  ![The agent dock with the Agent pill showing Paused after a double-click](/images/agent-paused.png)
 </Frame>
 
 ## Inline feedback

@@ -575,7 +575,8 @@ if (typeof window !== 'undefined') {
  * layer (SQLite-backed) whenever the user changes them via the settings UI. */
 export const agentSettings = writable<AgentSettings>({
 	agency: 'conservative',
-	muted: false
+	muted: false,
+	paused: false
 });
 
 /** When the agent is muted, the editor's diff overlay stays hidden by
