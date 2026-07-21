@@ -45,11 +45,14 @@ curious.
 
 To stop the agent from editing a specific paragraph (or any selection),
 highlight the text and click **Freeze for agent** in the feedback popup.
-That stores a `Freeze: …` rule, tints the passage lightly, and places a
+That stores a `Freeze: …` rule, underlines the passage, and places a
 lock icon in the left margin (text stays flush). The agent's `edit_doc`
-tool rejects edits that overlap the frozen quote.
+tool rejects edits that overlap the frozen quote. Locking also wakes the
+agent with a message so it knows the passage is off-limits.
 
-Click the lock (or remove the freeze rule in Writing rules) to unlock.
+Click the lock to open an **Unlock — allow agent to edit** menu (or
+remove the freeze rule in Writing rules). Unlocking persists the rule
+change and wakes the agent again.
 
 <Frame>
   ![A frozen paragraph with a lock icon to its left and a light highlight under the text](/images/freeze-passage.png)

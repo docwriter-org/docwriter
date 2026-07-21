@@ -72,6 +72,12 @@
 		void saveRules(next);
 		if (rule) {
 			pushHistory({ type: 'user_action', timestamp: Date.now(), description: `Removed rule: "${rule.text}"` });
+			if (isFreezeRule(rule)) {
+				const quote = freezeQuoteFromRule(rule);
+				onSubmit?.(
+					`The user unlocked a previously frozen passage — you may edit it again if needed:\n"${quote}"`
+				);
+			}
 		}
 	}
 </script>

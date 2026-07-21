@@ -28,9 +28,9 @@
 	import { handleEditorPaste, handleEditorDrop } from './media-paste';
 	import FindBar from '$lib/components/FindBar.svelte';
 	import CommentGutter from '$lib/components/CommentGutter.svelte';
-	import { Crosshair, Lock } from 'lucide-svelte';
+	import { Crosshair, Lock, Unlock } from 'lucide-svelte';
 	import { FreezeOverlay, setFreezeOverlayState } from './freeze-overlay';
-	import { makeFreezeRuleText, freezeQuoteFromRule } from '$lib/freeze';
+	import { makeFreezeRuleText, freezeQuoteFromRule, isFreezeRule } from '$lib/freeze';
 	import type { Rule } from '$lib/types';
 	// `ySyncPluginKey` MUST come from the same package whose ySyncPlugin the
 	// Collaboration extension installs (@tiptap/y-tiptap), re-exported here via
@@ -146,6 +146,8 @@
 	// pinned actions + LRU recent actions + an open-ended text input.
 	let feedbackPopup = $state<{ text: string; x: number; y: number; flipBelow: boolean; anchorTop: number; anchorBottom: number } | null>(null);
 	let feedbackPopupEl: HTMLDivElement | null = $state(null);
+	/** Lock-icon menu: Unlock / allow agent for a frozen passage. */
+	let freezeMenu = $state<{ ruleId: string; quote: string; x: number; y: number } | null>(null);
 
 	// Mirror of the FindOverlay plugin state, kept in sync via the editor's
 	// `update` event below. Drives the FindBar's input, counter, and
@@ -503,7 +505,14 @@
 
 	function handleFeedbackWindowKeydown(e: KeyboardEvent) {
 		if (handleSourceCommentShortcut(e)) return;
-		if (!feedbackPopup || e.key !== 'Escape') return;
+		if (e.key !== 'Escape') return;
+		if (freezeMenu) {
+			e.preventDefault();
+			e.stopPropagation();
+			freezeMenu = null;
+			return;
+		}
+		if (!feedbackPopup) return;
 		e.preventDefault();
 		e.stopPropagation();
 		closeFeedbackPopup({ preserveSelection: true, refocusEditor: true });
@@ -1044,6 +1053,11 @@
 		if (editor) setFreezeOverlayState(editor, { rules: $rules });
 	});
 
+	function shortQuote(quote: string, max = 60): string {
+		const q = quote.trim().replace(/\s+/g, ' ');
+		return q.length > max ? q.slice(0, max - 1) + '…' : q;
+	}
+
 	async function freezeSelection() {
 		if (!feedbackPopup) return;
 		const quote = feedbackPopup.text.trim();
@@ -1067,16 +1081,24 @@
 		pushHistory({
 			type: 'user_action',
 			timestamp: Date.now(),
-			description: `Froze passage for the agent: "${quote.length > 60 ? quote.slice(0, 57) + '…' : quote}"`
+			description: `Froze passage for the agent: "${shortQuote(quote)}"`
 		});
 		if (editor) setFreezeOverlayState(editor, { rules: next });
 		closeFeedbackPopup({ preserveSelection: false, refocusEditor: true });
+		// Wake the agent so it knows this passage is off-limits going forward.
+		onSubmit?.(
+			`The user froze this passage — do not edit it (a Freeze rule was added):\n"${quote}"`
+		);
 	}
 
-	async function unfreezeRule(ruleId: string) {
+	async function unfreezeRule(ruleId: string, opts?: { wakeAgent?: boolean }) {
+		const wakeAgent = opts?.wakeAgent !== false;
 		const rule = $rules.find((r) => r.id === ruleId);
+		if (!rule || !isFreezeRule(rule)) return;
+		const quote = freezeQuoteFromRule(rule);
 		const next = $rules.filter((r) => r.id !== ruleId);
 		rules.set(next);
+		freezeMenu = null;
 		try {
 			await fetch('/api/document', {
 				method: 'PUT',
@@ -1086,15 +1108,29 @@
 		} catch (e) {
 			console.error('Failed to remove freeze rule:', e);
 		}
-		if (rule) {
-			const quote = freezeQuoteFromRule(rule);
-			pushHistory({
-				type: 'user_action',
-				timestamp: Date.now(),
-				description: `Unfroze passage: "${quote.length > 60 ? quote.slice(0, 57) + '…' : quote}"`
-			});
-		}
+		pushHistory({
+			type: 'user_action',
+			timestamp: Date.now(),
+			description: `Unfroze passage: "${shortQuote(quote)}"`
+		});
 		if (editor) setFreezeOverlayState(editor, { rules: next });
+		if (wakeAgent) {
+			onSubmit?.(
+				`The user unlocked a previously frozen passage — you may edit it again if needed:\n"${quote}"`
+			);
+		}
+	}
+
+	function openFreezeMenu(ruleId: string, x: number, y: number) {
+		const rule = $rules.find((r) => r.id === ruleId);
+		if (!rule || !isFreezeRule(rule)) return;
+		const quote = freezeQuoteFromRule(rule);
+		// Toggle closed if the same lock is clicked again.
+		if (freezeMenu?.ruleId === ruleId) {
+			freezeMenu = null;
+			return;
+		}
+		freezeMenu = { ruleId, quote, x, y };
 	}
 
 	// Whether a diff-state update is already queued for this microtask checkpoint.
@@ -1365,11 +1401,17 @@
 		};
 		editorRoot.addEventListener('docwriter:open-thread', handleOpenThread as EventListener);
 
-		const handleUnfreeze = (ev: Event) => {
-			const { ruleId } = (ev as CustomEvent).detail as { ruleId?: string };
-			if (ruleId) void unfreezeRule(ruleId);
+		const handleFreezeMenu = (ev: Event) => {
+			const { ruleId, x, y } = (ev as CustomEvent).detail as {
+				ruleId?: string;
+				x?: number;
+				y?: number;
+			};
+			if (ruleId && typeof x === 'number' && typeof y === 'number') {
+				openFreezeMenu(ruleId, x, y);
+			}
 		};
-		editorRoot.addEventListener('docwriter:unfreeze', handleUnfreeze as EventListener);
+		editorRoot.addEventListener('docwriter:freeze-menu', handleFreezeMenu as EventListener);
 
 		// Mousedown anywhere outside a gutter card collapses the open
 		// thread AND the open edit card. Pill clicks stop propagation on
@@ -1381,8 +1423,11 @@
 			if (!target) return;
 			if (target.closest?.('.gutter-card')) return;
 			if (target.closest?.('.comment-thread-pill')) return;
+			if (target.closest?.('.freeze-lock-menu')) return;
+			if (target.closest?.('.freeze-lock')) return;
 			openCommentThreadId.set(null);
 			expandedReviewRoundId.set(null);
+			freezeMenu = null;
 		};
 		window.addEventListener('mousedown', handleOutsideMousedown);
 
@@ -1404,7 +1449,7 @@
 
 		const detachOpenThread = () => {
 			editorRoot.removeEventListener('docwriter:open-thread', handleOpenThread as EventListener);
-			editorRoot.removeEventListener('docwriter:unfreeze', handleUnfreeze as EventListener);
+			editorRoot.removeEventListener('docwriter:freeze-menu', handleFreezeMenu as EventListener);
 			editorRoot.removeEventListener('d3-code-visibility-changed', handlePreviewLayoutChanged);
 			editorRoot.removeEventListener('docwriter:media-layout-changed', handlePreviewLayoutChanged);
 			editorRoot.removeEventListener('docwriter:markdown-layout-changed', handlePreviewLayoutChanged);
@@ -1747,6 +1792,28 @@
 			<div class="feedback-hint">
 				<kbd>Enter</kbd> to send · <kbd>Esc</kbd> to dismiss
 			</div>
+		</div>
+	{/if}
+	{#if freezeMenu}
+		<div
+			class="freeze-lock-menu"
+			style:left="{freezeMenu.x}px"
+			style:top="{freezeMenu.y}px"
+			role="menu"
+			aria-label="Frozen passage"
+		>
+			<div class="freeze-lock-menu-quote">
+				“{shortQuote(freezeMenu.quote, 72)}”
+			</div>
+			<button
+				class="freeze-lock-menu-action"
+				type="button"
+				role="menuitem"
+				onclick={() => void unfreezeRule(freezeMenu!.ruleId)}
+			>
+				<Unlock size={12} />
+				<span>Unlock — allow agent to edit</span>
+			</button>
 		</div>
 	{/if}
 </div>
@@ -2483,16 +2550,15 @@
 		background: color-mix(in srgb, var(--accent) 16%, var(--accent-bg));
 		border-color: var(--accent);
 	}
-	/* Frozen passage: clear accent wash under the text (no border/card).
-	 * Lock hangs in the left page margin via a zero-width widget slot so
-	 * the prose itself stays flush with neighboring paragraphs. */
+	/* Frozen passage: no purple/accent wash (that reads as human highlight
+	 * or feedback). Soft ink underline + muted lock in the left margin. */
 	:global(.tiptap-content .freeze-mark) {
-		background: color-mix(in srgb, var(--accent) 14%, var(--bg-elevated));
+		background: transparent;
 		box-decoration-break: clone;
 		-webkit-box-decoration-break: clone;
 		border: none;
 		border-radius: 0;
-		box-shadow: none;
+		box-shadow: inset 0 -1px 0 0 color-mix(in srgb, var(--text-faint) 55%, transparent);
 		outline: none;
 	}
 	/* ProseMirror wraps widgets in .ProseMirror-widget — collapse that too. */
@@ -2522,13 +2588,53 @@
 		border: none;
 		border-radius: 4px;
 		background: transparent;
-		color: var(--accent);
+		color: var(--text-faint);
 		cursor: pointer;
 		line-height: 0;
 	}
 	:global(.tiptap-content .freeze-lock:hover) {
-		color: var(--accent-subject, var(--accent));
-		background: var(--accent-bg);
+		color: var(--text-muted);
+		background: var(--bg-hover);
+	}
+	.freeze-lock-menu {
+		position: fixed;
+		z-index: 40;
+		transform: translateX(-50%);
+		min-width: 200px;
+		max-width: 280px;
+		padding: 8px;
+		border: 1px solid var(--border-light);
+		border-radius: 8px;
+		background: var(--bg-elevated);
+		box-shadow: 0 8px 24px color-mix(in srgb, var(--text) 12%, transparent);
+		font-family: 'Inter', -apple-system, sans-serif;
+	}
+	.freeze-lock-menu-quote {
+		padding: 2px 4px 8px;
+		font-size: 11px;
+		line-height: 1.35;
+		color: var(--text-faint);
+		font-style: italic;
+	}
+	.freeze-lock-menu-action {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		width: 100%;
+		padding: 7px 8px;
+		border: none;
+		border-radius: 6px;
+		background: transparent;
+		color: var(--text-secondary);
+		font: inherit;
+		font-size: 12px;
+		font-weight: 500;
+		text-align: left;
+		cursor: pointer;
+	}
+	.freeze-lock-menu-action:hover {
+		background: var(--bg-hover);
+		color: var(--text);
 	}
 	.feedback-input-row {
 		display: flex;

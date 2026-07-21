@@ -50,8 +50,9 @@ function lockWidget(ruleId: string): HTMLElement {
 	const btn = document.createElement('button');
 	btn.type = 'button';
 	btn.className = 'freeze-lock';
-	btn.title = 'Unfreeze — allow the agent to edit this passage';
-	btn.setAttribute('aria-label', 'Unfreeze passage');
+	btn.title = 'Frozen — click to unlock';
+	btn.setAttribute('aria-label', 'Frozen passage — open unlock menu');
+	btn.setAttribute('aria-haspopup', 'menu');
 	btn.setAttribute('data-freeze-rule', ruleId);
 	// Inline SVG (lucide Lock) — no component tree in a PM widget.
 	btn.innerHTML =
@@ -64,10 +65,15 @@ function lockWidget(ruleId: string): HTMLElement {
 	btn.addEventListener('click', (e) => {
 		e.preventDefault();
 		e.stopPropagation();
+		const rect = btn.getBoundingClientRect();
 		btn.dispatchEvent(
-			new CustomEvent('docwriter:unfreeze', {
+			new CustomEvent('docwriter:freeze-menu', {
 				bubbles: true,
-				detail: { ruleId }
+				detail: {
+					ruleId,
+					x: rect.left + rect.width / 2,
+					y: rect.bottom + 6
+				}
 			})
 		);
 	});
