@@ -170,11 +170,11 @@
 		scrollbar-width: thin;
 	}
 	.rule-row.freeze-rule {
-		background: var(--accent-bg);
+		background: var(--bg-hover);
 	}
 	.rule-freeze-icon {
 		display: inline-flex;
-		color: var(--accent);
+		color: var(--text-faint);
 		flex-shrink: 0;
 	}
 	.rule-row {
