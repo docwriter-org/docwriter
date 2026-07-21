@@ -2474,20 +2474,20 @@
 		border-color: var(--border);
 	}
 	.feedback-freeze-btn {
-		color: var(--text-secondary);
-		border-color: var(--border-light);
-		background: color-mix(in srgb, var(--text) 4%, transparent);
+		color: var(--accent);
+		border-color: var(--accent-light);
+		background: var(--accent-bg);
 	}
 	.feedback-freeze-btn:hover {
-		color: var(--text);
-		background: var(--bg-hover);
-		border-color: var(--border);
+		color: var(--accent-subject, var(--accent));
+		background: color-mix(in srgb, var(--accent) 16%, var(--accent-bg));
+		border-color: var(--accent);
 	}
-	/* Frozen passage: flat wash under the text (no border / card chrome).
+	/* Frozen passage: clear accent wash under the text (no border/card).
 	 * Lock hangs in the left page margin via a zero-width widget slot so
 	 * the prose itself stays flush with neighboring paragraphs. */
 	:global(.tiptap-content .freeze-mark) {
-		background: color-mix(in srgb, var(--text) 4%, transparent);
+		background: color-mix(in srgb, var(--accent) 14%, var(--bg-elevated));
 		box-decoration-break: clone;
 		-webkit-box-decoration-break: clone;
 		border: none;
@@ -2522,13 +2522,13 @@
 		border: none;
 		border-radius: 4px;
 		background: transparent;
-		color: var(--text-faint);
+		color: var(--accent);
 		cursor: pointer;
 		line-height: 0;
 	}
 	:global(.tiptap-content .freeze-lock:hover) {
-		color: var(--text-secondary);
-		background: color-mix(in srgb, var(--text) 6%, transparent);
+		color: var(--accent-subject, var(--accent));
+		background: var(--accent-bg);
 	}
 	.feedback-input-row {
 		display: flex;
