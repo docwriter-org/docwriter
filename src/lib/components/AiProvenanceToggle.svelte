@@ -9,21 +9,21 @@
 	 * iA-Writer-authorship style. Pure view state; toggling never touches the
 	 * document.
 	 */
+	let on = $derived($showAiProvenance);
+	let label = $derived(on ? 'Disable provenance highlighting' : 'Enable provenance highlighting');
 </script>
 
 <button
 	class="ai-provenance-btn"
-	class:active={$showAiProvenance}
+	class:active={on}
 	onclick={() => showAiProvenance.update((v) => !v)}
-	title={$showAiProvenance
-		? 'Hide highlighting of AI-generated text'
-		: 'Highlight AI-generated text in the document'}
-	aria-label="Highlight AI-generated text"
-	aria-pressed={$showAiProvenance}
+	title="Highlights agent-written text"
+	aria-label={label}
+	aria-pressed={on}
 	type="button"
 >
 	<Sparkles size={12} />
-	<span>Highlight AI text</span>
+	<span>{label}</span>
 </button>
 
 <style>
