@@ -796,7 +796,7 @@ function createAgentCommentThread(
 
 const commentDocTool = tool(
 	'comment_doc',
-	'Create a new comment thread anchored to existing text in a workspace document. Allowed at Medium or High autonomy, or when the user asks for a comment. The comment appears in the document gutter and does not change document text. At Low autonomy you may only reply on threads the user opened.',
+	'Create a new comment thread anchored to existing text in a workspace document. Use it, at any autonomy level, as the announce thread before an edit proposal (see "Announce edits on a thread" in your instructions). Unprompted observation comments are allowed only at Medium or High autonomy, or when the user asks for a comment; at Low autonomy you may otherwise only reply on threads the user opened. The comment appears in the document gutter and does not change document text.',
 	{
 		file_path: z
 			.string()
