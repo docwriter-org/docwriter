@@ -347,6 +347,18 @@
 
 	function updateFeedbackPopup(autoFocus = false) {
 		if (!editor || !editor.isFocused) return;
+		// No feedback while the agent is paused: a paused agent won't act on
+		// edits or comments, so the selection popup would be a dead end. Same
+		// gate as Wake up / Send / auto-wake.
+		if ($agentSettings.paused) {
+			dismissedFeedbackSelectionRange = null;
+			feedbackPopup = null;
+			feedbackInput = '';
+			feedbackSelectionRange = null;
+			shouldFocusFeedbackInput = false;
+			updateDiff();
+			return;
+		}
 		const selection = editor.state.selection;
 		const { from, to, empty } = selection;
 		// Clicking a contenteditable=false diff widget (agent-added block) creates
@@ -409,6 +421,18 @@
 		if (pointerSelecting) return;
 		updateFeedbackPopup(false);
 	}
+
+	// Pausing (e.g. double-clicking the Agent pill) closes any open feedback
+	// popup — the selection stays, but the way to send it to the agent is gone
+	// until the user resumes.
+	$effect(() => {
+		if ($agentSettings.paused && feedbackPopup) {
+			feedbackPopup = null;
+			feedbackInput = '';
+			feedbackSelectionRange = null;
+			shouldFocusFeedbackInput = false;
+		}
+	});
 
 	$effect(() => {
 		if (!feedbackPopup || !shouldFocusFeedbackInput) return;

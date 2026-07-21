@@ -10,14 +10,14 @@
 	 * document.
 	 */
 	let on = $derived($showAiProvenance);
-	let label = $derived(on ? 'Disable provenance highlighting' : 'Enable provenance highlighting');
+	let label = $derived(on ? 'Hide AI-written text' : 'Highlight AI-written text');
 </script>
 
 <button
 	class="ai-provenance-btn"
 	class:active={on}
 	onclick={() => showAiProvenance.update((v) => !v)}
-	title="Highlights agent-written text"
+	title={label}
 	aria-label={label}
 	aria-pressed={on}
 	type="button"

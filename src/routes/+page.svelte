@@ -3296,7 +3296,9 @@
 		justify-content: flex-end;
 		gap: 6px;
 		min-width: 0;
-		padding-right: 2px;
+		/* Match the suggestion cards' / batch bar's 10px inset so the chrome's
+		 * right edge lines up with them, not 8px further out. */
+		padding-right: 10px;
 	}
 	.empty-editor-state {
 		flex: 1;
