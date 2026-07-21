@@ -99,9 +99,16 @@ export function dbReplaceRules(rules: Rule[]) {
 			db.prepare('DELETE FROM rules').run();
 			const now = Date.now();
 			const insert = db.prepare(
-				'INSERT INTO rules (id, text, created_at) VALUES (?, ?, ?)'
+				'INSERT INTO rules (id, text, created_at, examples) VALUES (?, ?, ?, ?)'
 			);
-			for (const r of rules) insert.run(r.id, r.text, now);
+			for (const r of rules) {
+				insert.run(
+					r.id,
+					r.text,
+					now,
+					r.examples && r.examples.length > 0 ? JSON.stringify(r.examples) : null
+				);
+			}
 		})();
 	} catch (err) {
 		logDbError('replaceRules', err);
