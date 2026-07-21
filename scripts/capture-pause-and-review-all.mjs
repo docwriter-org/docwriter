@@ -205,6 +205,54 @@ async function writeShot(page, basename) {
 	console.log(`  wrote ${basename}`);
 }
 
+/** Stamp the `ai` provenance attribute on the first prose paragraph so the
+ * provenance toggle has something visible to color. */
+async function seedAiProvenance(httpPort, wsPort, tabId) {
+	const sessionRes = await fetch(`http://127.0.0.1:${httpPort}/api/session`);
+	const session = await sessionRes.json();
+	const ydoc = new Y.Doc();
+	const provider = new HocuspocusProvider({
+		url: `ws://127.0.0.1:${wsPort}`,
+		name: tabId,
+		document: ydoc,
+		token: session.serverInstanceId,
+		WebSocketPolyfill: WebSocket
+	});
+	await new Promise((resolveFn, rejectFn) => {
+		const t = setTimeout(() => rejectFn(new Error('WS sync timeout')), 15_000);
+		const done = () => {
+			clearTimeout(t);
+			resolveFn();
+		};
+		if (provider.synced) done();
+		else provider.on('synced', done);
+	});
+	await sleep(300);
+	const fragment = ydoc.getXmlFragment('default');
+	ydoc.transact(() => {
+		let stamped = false;
+		fragment.forEach((child) => {
+			if (stamped) return;
+			if (!(child instanceof Y.XmlElement) || child.nodeName !== 'paragraph') return;
+			if (child.length === 0) return;
+			const text = child.get(0);
+			if (!(text instanceof Y.XmlText) || text.length === 0) return;
+			// XmlText.toString() can emit format tags — use delta plain text.
+			const plain = text
+				.toDelta()
+				.map((d) => (typeof d.insert === 'string' ? d.insert : ''))
+				.join('');
+			// Skip the heading-ish short lines; mark the first real paragraph.
+			if (plain.length < 40) return;
+			text.format(0, text.length, { ai: true });
+			stamped = true;
+		});
+	}, 'agent');
+	await sleep(400);
+	await provider.destroy();
+	ydoc.destroy();
+}
+
 async function main() {
 	const workspace = await seedFixture();
 	const httpPort = await findFreePort();
@@ -219,6 +267,9 @@ async function main() {
 		const page = await context.newPage();
 		await page.addInitScript(() => {
 			localStorage.setItem('docwriter.dockExpanded', 'false');
+			// Provenance view on for freeze shots — shows agent-colored prose
+			// alongside the muted freeze underline (not purple wash).
+			localStorage.setItem('docwriter.showAiProvenance', 'true');
 		});
 		await page.goto(`http://127.0.0.1:${httpPort}/`, { waitUntil: 'domcontentloaded' });
 		await sleep(2500);
@@ -227,6 +278,8 @@ async function main() {
 		await essay.click();
 		await sleep(1500);
 
+		await seedAiProvenance(httpPort, wsPort, 'essay.md');
+		await sleep(600);
 		await seedPendingRounds(httpPort, wsPort, 'essay.md');
 		await sleep(1000);
 
@@ -273,12 +326,17 @@ async function main() {
 		});
 		await writeShot(page, 'agent-paused.png');
 
-		// Freeze prototype: clear rounds, resume agent, select third paragraph, freeze.
-		await agentBtn.dblclick(); // resume
-		await sleep(200);
+		// Freeze prototype: clear rounds, keep agent paused so freeze's wake
+		// message doesn't kick off a render mid-shot. Provenance stays on.
 		await setDockExpanded(page, false);
 		await clearPendingRounds(httpPort, wsPort, 'essay.md');
 		await sleep(600);
+		// Ensure paused (we left it paused from the dock shot above).
+		const pausedPill = page.locator('.dock-agent-btn.paused').first();
+		if ((await pausedPill.count()) === 0) {
+			await page.locator('.dock-agent-btn').first().dblclick();
+			await sleep(400);
+		}
 
 		const editor = page.locator('.tiptap-content').first();
 		await editor.click();
@@ -294,7 +352,18 @@ async function main() {
 		await sleep(800);
 		await page.locator('.freeze-lock').first().waitFor({ state: 'visible', timeout: 5_000 });
 		await page.locator('.freeze-mark').first().waitFor({ state: 'attached', timeout: 5_000 });
+		await page.mouse.move(20, 20);
+		await sleep(200);
 		await writeShot(page, 'freeze-passage.png');
+
+		// Unlock popover from the margin lock.
+		await page.locator('.freeze-lock').first().click();
+		await sleep(400);
+		await page.locator('.freeze-lock-menu').first().waitFor({
+			state: 'visible',
+			timeout: 5_000
+		});
+		await writeShot(page, 'freeze-unlock-menu.png');
 
 		console.log('done');
 	} finally {
