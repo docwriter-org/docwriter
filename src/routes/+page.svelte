@@ -127,6 +127,8 @@
 		queuedSubmissionCount
 	} from '$lib/stores';
 	import TabBar from '$lib/components/TabBar.svelte';
+	import AiProvenanceToggle from '$lib/components/AiProvenanceToggle.svelte';
+	import PreviewButton from '$lib/components/PreviewButton.svelte';
 	import type { AgentSettings, CommentThread, HistoryEntry, ImageAttachment, PendingReviewRound, ProposedRule, ProposedHook } from '$lib/types';
 	import type { MaterializedPendingReviewRound } from '$lib/review-rounds';
 
@@ -823,6 +825,44 @@
 		}
 	}
 
+	/** Fully pause / unpause the agent. Pause cancels any in-flight render,
+	 * clears the idle countdown, and blocks Wake up / Send / auto-submit
+	 * until the user double-clicks the Agent pill again. */
+	function togglePaused() {
+		let next: AgentSettings | null = null;
+		let becamePaused = false;
+		agentSettings.update((prev) => {
+			becamePaused = !prev.paused;
+			next = { ...prev, paused: becamePaused };
+			return next;
+		});
+		if (!next) return;
+		if (becamePaused) {
+			editorRef?.cancelIdleTimer();
+			if (rendering || submitInFlight || queuedSubmissions.length > 0) {
+				cancelRender();
+			}
+			pushHistory({
+				type: 'user_action',
+				timestamp: Date.now(),
+				description: 'Paused the agent'
+			});
+		} else {
+			pushHistory({
+				type: 'user_action',
+				timestamp: Date.now(),
+				description: 'Resumed the agent'
+			});
+		}
+		void persistAgentSettings(next);
+	}
+
+	function isAgentPaused(): boolean {
+		let paused = false;
+		agentSettings.subscribe((v) => (paused = v.paused))();
+		return paused;
+	}
+
 	/** Persist agent settings through `/api/document` so the server can read
 	 * them at render time (for agency-level prompt injection). */
 	async function persistAgentSettings(next: AgentSettings) {
@@ -878,7 +918,7 @@
 
 	async function handleAgentSettingsChange(next: AgentSettings, change?: AgentSettingsChange) {
 		await persistAgentSettings(next);
-		if (change?.type === 'agency') {
+		if (change?.type === 'agency' && !next.paused) {
 			void submit(buildAutonomyChangeMessage(change));
 		}
 	}
@@ -905,6 +945,11 @@
 	async function submit(trigger?: string, opts?: { planMode?: boolean; images?: ImageAttachment[] }) {
 		const planMode = opts?.planMode ?? false;
 		const images = opts?.images ?? [];
+		if (isAgentPaused()) {
+			// Fully paused: drop idle wakes, Wake up, Send, and accept-followups.
+			// The user must double-click the Agent pill to resume first.
+			return;
+		}
 		if (rendering || submitInFlight) {
 			// An implicit "review the docs" wakeup carries no specific intent,
 			// so while the agent is already busy it's always redundant — the
@@ -2915,6 +2960,16 @@
 								onDropFile={handleDropFiles}
 							/>
 						</div>
+						{#if docLoaded && activeTabFilePath && !activeTabIsPdf}
+							<div class="tab-chrome">
+								<AiProvenanceToggle />
+								<PreviewButton
+									activeTabPath={activeTabFilePath}
+									onOpenSplit={openSplitPreview}
+									splitOpen={splitPreviewOpen}
+								/>
+							</div>
+						{/if}
 					</div>
 					{#if docLoaded && activeTabFilePath}
 						{#key activeTabFilePath}
@@ -2945,6 +3000,8 @@
 								onAcceptFeedbackEdits={(roundIds) => {
 									if (roundIds.length > 0) void acceptAgentEdit(roundIds);
 								}}
+								onAcceptAllEdits={() => void acceptAgentEdit()}
+								onRejectAllEdits={() => void rejectAgentEdit()}
 								onResolveThread={(threadId, resolved) => void resolveThread(threadId, resolved)}
 								onOpenSplitPreview={openSplitPreview}
 								splitPreviewOpen={splitPreviewOpen}
@@ -2981,6 +3038,7 @@
 		onWakeUp={docLoaded && activeTabFilePath && !activeTabIsPdf ? () => submit() : undefined}
 		onCancel={cancelRender}
 		onToggleMuted={toggleMuted}
+		onTogglePaused={togglePaused}
 	>
 		{#snippet dock()}
 			<AgentDock onSendMessage={(msg, opts) => void submit(msg, opts)} />
@@ -3228,6 +3286,19 @@
 	.tab-slot {
 		grid-column: 2;
 		min-width: 0;
+	}
+	/* AI-text toggle + Preview sit in the gutter column of the tab row —
+	 * above the suggestions bar, never overlapping Accept all. */
+	.tab-chrome {
+		grid-column: 3;
+		display: flex;
+		align-items: center;
+		justify-content: flex-end;
+		gap: 6px;
+		min-width: 0;
+		/* Match the suggestion cards' / batch bar's 10px inset so the chrome's
+		 * right edge lines up with them, not 8px further out. */
+		padding-right: 10px;
 	}
 	.empty-editor-state {
 		flex: 1;

@@ -287,6 +287,11 @@ export interface AgentSettings {
 	 * Lets you keep writing without the green/red overlay competing for
 	 * attention while the agent works in the background. */
 	muted: boolean;
+	/** When true, the agent is fully paused: no idle auto-wake, no Wake up,
+	 * no Send / Cmd+Enter, and in-flight renders are cancelled on pause.
+	 * Distinct from `muted` (which only hides the diff overlay). Toggled by
+	 * double-clicking the Agent pill. */
+	paused: boolean;
 }
 
 /** Canonical default agent settings. Imported by the server runtime-state.
@@ -294,5 +299,6 @@ export interface AgentSettings {
  * default; it should also import this constant in a later pass. */
 export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
 	agency: 'conservative',
-	muted: false
+	muted: false,
+	paused: false
 };
