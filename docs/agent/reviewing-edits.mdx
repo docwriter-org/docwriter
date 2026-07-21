@@ -49,11 +49,16 @@ restores the pending review.
 
 The agent can produce several edits in a single turn (for example, when
 asked to "tighten every section"). Each becomes its own card in the
-outline pane and its own highlight in the document.
+comment gutter and its own highlight in the document.
 
-Each card shows the diff and has its own Accept, Reject, and
-Retry-with-feedback buttons. You must accept or reject the oldest card
-before the next one becomes actionable (FIFO order).
+Each card has its own Accept and Reject controls. When the active tab has
+any pending suggestions, the comment gutter shows an **Accept all** /
+**Reject all** bar at the top so you can clear the whole stack in one
+click.
+
+<Frame>
+  ![The comment gutter with Accept all and Reject all above pending suggestion cards](/images/agent-accept-reject-all.png)
+</Frame>
 
 ## Typing while a review is open
 

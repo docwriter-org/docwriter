@@ -3,7 +3,7 @@
 	import { flip } from 'svelte/animate';
 	import { cubicOut } from 'svelte/easing';
 	import { marked } from 'marked';
-	import { FileEdit, User, Bot, Play, CheckCircle, XCircle, Eye, Terminal, Maximize2, X, RotateCcw, MessagesSquare, Cat, Sparkles, BellOff, Bell, ChevronDown } from 'lucide-svelte';
+	import { FileEdit, User, Bot, Play, CheckCircle, XCircle, Eye, Terminal, Maximize2, X, RotateCcw, MessagesSquare, Cat, Sparkles, BellOff, Bell, ChevronDown, Pause } from 'lucide-svelte';
 	import type { HistoryEntry } from '$lib/types';
 	import { agentHistory, isRendering, historyVerbosity, sessionCost, agentSettings, pendingReviewRounds, submitCountdown, type SessionCost } from '$lib/stores';
 	import type { HistoryVerbosity } from '$lib/stores';
@@ -22,13 +22,23 @@
 		 * in the pending-review array but the editor's inline diff overlay
 		 * stays hidden until the user clicks a pending card. */
 		onToggleMuted?: () => void;
+		/** Fully pause / unpause the agent (double-click the Agent pill). */
+		onTogglePaused?: () => void;
 		/** When provided, a chevron-down button is shown that collapses the
 		 * floating dock back to its pill (AgentDockShell). */
 		onCollapse?: () => void;
 		/** Optional slot for the remaining action buttons (Send, etc.). */
 		dock?: Snippet;
 	}
-	let { onNewSession, onWakeUp, onCancel, onToggleMuted, onCollapse, dock }: Props = $props();
+	let {
+		onNewSession,
+		onWakeUp,
+		onCancel,
+		onToggleMuted,
+		onTogglePaused,
+		onCollapse,
+		dock
+	}: Props = $props();
 
 	let pendingCount = $state(0);
 	pendingReviewRounds.subscribe((v) => (pendingCount = v.length));
@@ -96,17 +106,43 @@
 	let countdown = $state(0);
 	submitCountdown.subscribe((v) => (countdown = v));
 	let muted = $state(false);
+	let paused = $state(false);
 	agentSettings.subscribe((v) => {
 		muted = v.muted;
+		paused = v.paused;
 	});
+
+	/** Delay single-click wake/cancel so a double-click can toggle pause
+	 * without also firing Wake up. */
+	let agentClickTimer: ReturnType<typeof setTimeout> | null = null;
+	function handleAgentClick() {
+		if (agentClickTimer) clearTimeout(agentClickTimer);
+		agentClickTimer = setTimeout(() => {
+			agentClickTimer = null;
+			if (paused) return;
+			if (rendering) onCancel?.();
+			else onWakeUp?.();
+		}, 280);
+	}
+	function handleAgentDblClick(e: MouseEvent) {
+		e.preventDefault();
+		if (agentClickTimer) {
+			clearTimeout(agentClickTimer);
+			agentClickTimer = null;
+		}
+		onTogglePaused?.();
+	}
 
 	/** Tooltip for the Agent pill. Always describes what the button does;
 	 * folds in cost / token breakdown when the session has run at least
 	 * one round, so the cost stays accessible without cluttering the pill. */
 	let agentTooltip = $derived.by(() => {
-		const action = rendering
-			? 'Click to stop the agent and cancel any queued messages.'
-			: 'Wake up the agent. It reviews the open files, reacts to any pending changes, and proposes edits or comments based on the current agency setting.';
+		const pauseHint = 'Double-click to pause or resume the agent.';
+		const action = paused
+			? `Agent paused — no auto-wake, Wake up, or Send until you resume. ${pauseHint}`
+			: rendering
+				? `Click to stop the agent and cancel any queued messages. ${pauseHint}`
+				: `Wake up the agent. It reviews the open files, reacts to any pending changes, and proposes edits or comments based on the current agency setting. ${pauseHint}`;
 		if (cost.rounds === 0) return action;
 		const costLine = `Session so far: ${formatCost(cost.totalCostUsd)} across ${cost.rounds} round${cost.rounds === 1 ? '' : 's'}. ${formatTokens(cost.inputTokens)} in, ${formatTokens(cost.outputTokens)} out, ${formatTokens(cost.cacheReadTokens)} cache read.`;
 		return `${action}\n\n${costLine}`;
@@ -149,6 +185,7 @@
 	});
 	onDestroy(() => {
 		if (tickHandle) clearInterval(tickHandle);
+		if (agentClickTimer) clearTimeout(agentClickTimer);
 	});
 
 	function relativeTime(ts: number): string {
@@ -348,18 +385,27 @@
 			{#snippet children()}
 				<button
 					class="header-agent-btn header-pill-btn"
-					class:awake={rendering}
-					class:pending={!rendering && pendingCount > 0}
-					onclick={rendering ? onCancel : onWakeUp}
-					disabled={rendering ? !onCancel : !onWakeUp}
+					class:awake={rendering && !paused}
+					class:pending={!rendering && !paused && pendingCount > 0}
+					class:paused
+					onclick={handleAgentClick}
+					ondblclick={handleAgentDblClick}
+					disabled={!paused && (rendering ? !onCancel : !onWakeUp)}
+					aria-pressed={paused}
 					use:tooltip={agentTooltip}
 				>
 					<span class="mascot-face" aria-hidden="true">
-						<Cat size={13} strokeWidth={1.8} />
+						{#if paused}
+							<Pause size={13} strokeWidth={2.2} />
+						{:else}
+							<Cat size={13} strokeWidth={1.8} />
+						{/if}
 					</span>
 					<span class="header-label">Agent</span>
 					<span class="header-status" aria-hidden="true">
-						{#if rendering}
+						{#if paused}
+							<span class="paused-label">Paused</span>
+						{:else if rendering}
 							<span class="bounce-dots"><span>.</span><span>.</span><span>.</span></span>
 						{:else if countdown > 0}
 							<span class="countdown" title="Auto-wake in {countdown}s — click Wake up to skip">{countdown}s</span>
@@ -773,6 +819,13 @@
 		color: var(--accent);
 		font-variant-numeric: tabular-nums;
 	}
+	.paused-label {
+		font-size: 10px;
+		font-weight: 700;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: var(--text-faint);
+	}
 	.bounce-dots {
 		color: var(--accent);
 		font-weight: 700;
@@ -825,6 +878,24 @@
 	.header-agent-btn.awake,
 	.header-agent-btn.pending {
 		border-color: transparent !important;
+	}
+	.header-agent-btn.paused {
+		opacity: 0.5;
+		filter: grayscale(1);
+		color: var(--text-faint) !important;
+		background: color-mix(in srgb, var(--text) 5%, var(--bg-elevated)) !important;
+		border: 1px dashed color-mix(in srgb, var(--text) 22%, var(--border-light)) !important;
+		box-shadow: none !important;
+		cursor: default;
+	}
+	.header-agent-btn.paused .header-label,
+	.header-agent-btn.paused .mascot-face,
+	.header-agent-btn.paused .paused-label {
+		color: var(--text-faint) !important;
+		animation: none !important;
+	}
+	.header-agent-btn.paused:hover {
+		background: color-mix(in srgb, var(--text) 7%, var(--bg-elevated)) !important;
 	}
 	.header-agent-btn:not(:disabled):hover .header-label {
 		color: var(--text);

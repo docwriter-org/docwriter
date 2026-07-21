@@ -41,10 +41,32 @@ This routes through the `propose_rule` MCP tool. See [How it
 works](/reference/how-it-works) for the architectural details if you're
 curious.
 
+## Freezing a passage
+
+To stop the agent from editing a specific paragraph (or any selection),
+highlight the text and click **Freeze for agent** in the feedback popup.
+That stores a `Freeze: …` rule, underlines the passage, and places a
+lock icon in the left margin (text stays flush). The agent's `edit_doc`
+tool rejects edits that overlap the frozen quote. Locking also wakes the
+agent with a message so it knows the passage is off-limits.
+
+Click the lock to open an **Unlock — allow agent to edit** menu (or
+remove the freeze rule in Writing rules). Unlocking persists the rule
+change and wakes the agent again.
+
+<Frame>
+  ![A frozen paragraph with a margin lock and muted underline; provenance highlighting is on for contrast](/images/freeze-passage.png)
+</Frame>
+
+<Frame>
+  ![Unlock popover from the freeze lock: Unlock — allow agent to edit](/images/freeze-unlock-menu.png)
+</Frame>
+
 ## Editing or removing
 
 Each rule in the panel has an edit and a delete affordance. Edits take
 effect on the next agent turn. Deleted rules are gone immediately.
+Freeze rules unlock the passage when removed.
 
 ## Where to go next
 
