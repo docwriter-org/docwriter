@@ -1505,11 +1505,18 @@
 
 <svelte:window onkeydown={handleFeedbackWindowKeydown} />
 
-<div class="tiptap-host" class:find-open={findState.open} class:show-ai-provenance={$showAiProvenance}>
+<div
+	class="tiptap-host"
+	class:find-open={findState.open}
+	class:show-ai-provenance={$showAiProvenance}
+	class:has-gutter={hasGutterContent}
+>
 	<!-- Top-right floating chrome: AI-provenance toggle + preview button +
 	     find bar. All live outside the scroll container so they pin
 	     regardless of scroll. When find is open, the button cluster shifts
-	     down so the two don't overlap (FindBar wins the corner). -->
+	     down so the two don't overlap (FindBar wins the corner). When the
+	     comment gutter is open, shift left so we don't cover Accept all /
+	     freeze chips in that column. -->
 	<div class="editor-topright-chrome">
 		<AiProvenanceToggle />
 		<PreviewButton
@@ -1780,6 +1787,12 @@
 		display: inline-flex;
 		align-items: center;
 		gap: 6px;
+	}
+	/* Gutter column owns the top-right margin (Accept all, freeze chips).
+	 * Park the chrome just left of that column so "AI text" never covers
+	 * Accept all. */
+	.tiptap-host.has-gutter .editor-topright-chrome {
+		right: calc(var(--gutter-width, 300px) + 28px);
 	}
 	/* When the FindBar is open, drop the button cluster below it so the
 	 * two don't collide in the corner. */
