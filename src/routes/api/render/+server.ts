@@ -251,9 +251,20 @@ interface QueryRoundOutcome {
  * boilerplate and burning context + tokens. */
 function buildSystemPrompt(): string {
 	const meta = readMeta();
-	const ruleTexts = meta.rules.map((r) => r.text);
-	const rulesBlock = ruleTexts.length > 0
-		? ruleTexts.map((t, i) => `${i + 1}. ${t}`).join('\n')
+	// Each rule renders with any stored violation examples indented under
+	// it — real passages from this user's sessions (rejected edits, flagged
+	// text). A concrete "what breaking this looks like" beats restating the
+	// rule, so keep them verbatim.
+	const rulesBlock = meta.rules.length > 0
+		? meta.rules
+				.map((r, i) => {
+					const lines = [`${i + 1}. ${r.text}`];
+					for (const ex of r.examples ?? []) {
+						lines.push(`   Violation example: "${ex.violation}"${ex.note ? ` (${ex.note})` : ''}`);
+					}
+					return lines.join('\n');
+				})
+				.join('\n')
 		: 'None.';
 
 	return `# Who you are
@@ -335,7 +346,7 @@ Subagents inherit this system prompt, so they have the instructions above. They 
 
 ## Proposing rules
 
-Propose at most one rule per turn with propose_rule, and only with evidence. Evidence is one of: the same pattern in the user's edits more than once, an explicit standing preference ("never use X"), or the user flagging anything on THE TELL LIST or calling something AI-sounding. For a tell, fix the flagged instance with edit_doc and propose the rule in the same turn, with the evidence in the reason field. Write rules as short imperatives that are specific enough to check, e.g. "Never use em dashes". When unsure, do not propose.
+Propose at most one rule per turn with propose_rule, and only with evidence. Evidence is one of: the same pattern in the user's edits more than once, an explicit standing preference ("never use X"), or the user flagging anything on THE TELL LIST or calling something AI-sounding. For a tell, fix the flagged instance with edit_doc and propose the rule in the same turn, with the evidence in the reason field. Write rules as short imperatives that are specific enough to check, e.g. "Never use em dashes". When the evidence is a concrete passage — a rejected edit of yours, a sentence the user flagged — quote it verbatim in the example_violation field so the rule carries a real example of what breaking it looks like. When unsure, do not propose.
 
 ## Style references
 

@@ -1966,13 +1966,48 @@
 	}
 	.tiptap-editor :global(.diff-added-line) {
 		display: block;
+		position: relative;
 		color: var(--diff-added-color);
 		background: var(--diff-added-bg);
 		white-space: pre-wrap;
 		cursor: text;
-		user-select: none;
+		/* Selectable on purpose: the proposal is decoration DOM, and being
+		 * able to drag-copy a phrase out of it (then reject the round) is a
+		 * real workflow. Copying routes through the diff overlay's `copy`
+		 * handler. */
+		user-select: text;
 		transform-origin: top;
 		animation: diffSlideIn 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
+	}
+	/* Hover copy affordance on proposed lines. */
+	.tiptap-editor :global(.proposal-copy-btn) {
+		position: absolute;
+		top: 3px;
+		right: 3px;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 20px;
+		height: 20px;
+		padding: 0;
+		border: 1px solid color-mix(in srgb, var(--diff-added-color) 35%, transparent);
+		border-radius: 5px;
+		background: color-mix(in srgb, var(--bg-elevated, #fff) 92%, transparent);
+		color: var(--diff-added-color);
+		cursor: pointer;
+		opacity: 0;
+		transition: opacity 0.12s, background 0.12s;
+		user-select: none;
+	}
+	.tiptap-editor :global(.diff-added-line:hover .proposal-copy-btn) {
+		opacity: 1;
+	}
+	.tiptap-editor :global(.proposal-copy-btn:hover) {
+		background: color-mix(in srgb, var(--diff-added-color) 14%, var(--bg-elevated, #fff));
+	}
+	.tiptap-editor :global(.proposal-copy-btn.copied) {
+		opacity: 1;
+		background: color-mix(in srgb, var(--diff-added-color) 22%, var(--bg-elevated, #fff));
 	}
 	.tiptap-editor :global(.diff-added[data-thread-id]),
 	.tiptap-editor :global(.diff-added-line[data-thread-id]),

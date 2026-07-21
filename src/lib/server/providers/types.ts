@@ -46,7 +46,7 @@ export type ProviderEvent =
 	| { type: 'sdk_status'; status: string; compactResult?: string; error?: string }
 	| { type: 'sdk_notification'; text: string; priority?: string }
 	| { type: 'task_event'; taskId: string; phase: string; description?: string; summary?: string; taskType?: string; lastToolName?: string }
-	| { type: 'rule_proposal'; text: string; reason?: string }
+	| { type: 'rule_proposal'; text: string; reason?: string; exampleViolation?: string }
 	| { type: 'hook_proposal'; event: string; matcher?: string; command: string; reason?: string }
 	| { type: 'plan_proposed'; id: string; plan: string; originalMessage: string }
 	| { type: 'user_question'; id: string; questions: unknown[] }

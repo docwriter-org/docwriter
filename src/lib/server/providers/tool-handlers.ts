@@ -361,7 +361,12 @@ export function buildToolDefinitions(): ToolDefinition[] {
 				type: 'object',
 				properties: {
 					text: { type: 'string', description: 'The rule text.' },
-					reason: { type: 'string', description: 'Why you are proposing this rule.' }
+					reason: { type: 'string', description: 'Why you are proposing this rule.' },
+					example_violation: {
+						type: 'string',
+						description:
+							'A verbatim passage that breaks the rule, ideally from this session (a rejected edit, a sentence the user flagged). Stored with the rule as a few-shot example.'
+					}
 				},
 				required: ['text']
 			},

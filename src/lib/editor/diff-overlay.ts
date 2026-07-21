@@ -334,9 +334,44 @@ export const DiffOverlay = Extension.create({
 					handleDOMEvents: {
 						mousedown(view, event) {
 							const target = event.target as Element | null;
+							// Green proposal blocks: don't hijack mousedown — the
+							// browser needs it to start a native drag-selection on
+							// the proposed text. Their click behavior (open thread /
+							// caret redirect) moved to `click` below, which can tell
+							// a plain click from a finished drag.
+							if (target?.closest('.diff-added-line')) {
+								return !!target.closest('.proposal-copy-btn');
+							}
 							if (openThreadFromDiff(view, event)) return true;
 							if (!target?.closest(DIFF_NODE_SELECTOR)) return false;
 							return placeCaretFromClick(editor, view, event);
+						},
+						click(view, event) {
+							const target = event.target as Element | null;
+							if (!target?.closest('.diff-added-line')) return false;
+							if (target.closest('.proposal-copy-btn')) return true;
+							const sel = window.getSelection();
+							// A completed drag-selection inside the proposal: keep
+							// it (the user is about to copy), don't open the thread.
+							if (sel && !sel.isCollapsed && sel.toString().length > 0) return true;
+							if (openThreadFromDiff(view, event)) return true;
+							return placeCaretFromClick(editor, view, event);
+						},
+						copy(view, event) {
+							// A DOM selection inside proposal decorations has no
+							// corresponding PM selection, so PM's copy handler
+							// would write the wrong thing (or nothing). Serialize
+							// the visible selection ourselves.
+							const sel = window.getSelection();
+							if (!sel || sel.isCollapsed) return false;
+							const anchor =
+								sel.anchorNode instanceof Element
+									? sel.anchorNode
+									: sel.anchorNode?.parentElement;
+							if (!anchor?.closest?.('.diff-added-line, .diff-added')) return false;
+							event.clipboardData?.setData('text/plain', sel.toString());
+							event.preventDefault();
+							return true;
 						}
 					},
 					decorations(state) {
@@ -1043,7 +1078,40 @@ function createAddedLineWidget(
 	// (and so the closure stays out of the way of HMR / view re-mounts).
 	block.setAttribute('contenteditable', 'false');
 	if (threadId) block.setAttribute('data-thread-id', threadId);
+	block.appendChild(createProposalCopyButton(line));
 	return block;
+}
+
+/** Hover copy button for a proposed (green) line — the text is decoration
+ * DOM, not document content, so Cmd+C on an editor selection can never
+ * reach it; this and the drag-select path in `handleDOMEvents` are how
+ * the user gets proposal text out without accepting it. Per-widget
+ * listeners are fine here (same pattern as createThreadButton). */
+function createProposalCopyButton(text: string): HTMLElement {
+	const button = document.createElement('button');
+	button.className = 'proposal-copy-btn';
+	button.type = 'button';
+	button.title = 'Copy proposed text';
+	button.setAttribute('aria-label', 'Copy proposed text');
+	button.setAttribute('contenteditable', 'false');
+	button.innerHTML = `
+		<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<rect x="9" y="9" width="13" height="13" rx="2"></rect>
+			<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+		</svg>
+	`;
+	button.addEventListener('mousedown', (event) => {
+		event.preventDefault();
+		event.stopPropagation();
+	});
+	button.addEventListener('click', (event) => {
+		event.preventDefault();
+		event.stopPropagation();
+		void navigator.clipboard?.writeText(text);
+		button.classList.add('copied');
+		setTimeout(() => button.classList.remove('copied'), 900);
+	});
+	return button;
 }
 
 function createThreadButton(view: EditorView, threadId: string, stackIdx: number): HTMLElement {

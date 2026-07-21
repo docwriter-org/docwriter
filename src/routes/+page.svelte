@@ -127,7 +127,7 @@
 		queuedSubmissionCount
 	} from '$lib/stores';
 	import TabBar from '$lib/components/TabBar.svelte';
-	import type { AgentSettings, CommentThread, HistoryEntry, ImageAttachment, PendingReviewRound, ProposedRule, ProposedHook } from '$lib/types';
+	import type { AgentSettings, CommentThread, HistoryEntry, ImageAttachment, PendingReviewRound, ProposedRule, ProposedHook, Rule } from '$lib/types';
 	import type { MaterializedPendingReviewRound } from '$lib/review-rounds';
 
 	type AgentSettingsChange = {
@@ -205,7 +205,12 @@
 		const ruleIds = new Set(proposedRulesList.map((r) => r.id));
 		const hookIds = new Set(proposedHooksList.map((h) => h.id));
 		for (const r of proposedRulesList) {
-			pushToast({ kind: 'rule', title: 'Agent proposed a rule', body: r.text, refId: r.id });
+			pushToast({
+				kind: 'rule',
+				title: 'Agent proposed a rule',
+				body: r.exampleViolation ? `${r.text}\n\nViolation it caught: "${r.exampleViolation}"` : r.text,
+				refId: r.id
+			});
 		}
 		for (const h of proposedHooksList) {
 			pushToast({
@@ -1315,6 +1320,10 @@
 									id: 'pr_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
 									text: parsed.text.trim(),
 									reason: typeof parsed.reason === 'string' ? parsed.reason : undefined,
+									exampleViolation:
+										typeof parsed.exampleViolation === 'string' && parsed.exampleViolation.trim()
+											? parsed.exampleViolation.trim()
+											: undefined,
 									timestamp: Date.now()
 								}
 							]);
@@ -1651,7 +1660,7 @@
 				feedback,
 				'```',
 				'',
-				'If the feedback sounds like a standing preference rather than a one-off request, you may also propose a rule.'
+				'If the feedback sounds like a standing preference rather than a one-off request, you may also propose a rule. Quote the offending passage from the rejected edit verbatim in example_violation so the rule keeps a concrete example of the violation.'
 			);
 		}
 		lines.push('', 'Propose a new edit that takes the feedback into account.');
@@ -1712,14 +1721,23 @@
 	/** Accept a rule the agent proposed: append it to the rules list and
 	 * persist via /api/document. Removes the proposal from the pending set. */
 	async function acceptProposedRule(id: string) {
-		let proposal: { id: string; text: string } | undefined;
+		let proposal: ProposedRule | undefined;
 		proposedRules.update((list) => {
 			proposal = list.find((p) => p.id === id);
 			return list.filter((p) => p.id !== id);
 		});
 		if (!proposal) return;
-		const rule = { id: 'r' + Date.now(), text: proposal.text };
-		let currentRules: { id: string; text: string }[] = [];
+		// The offending passage the agent quoted becomes the rule's first
+		// example — the reject-with-feedback → propose_rule loop lands the
+		// user's inline feedback in the rule set with evidence attached.
+		const rule: Rule = {
+			id: 'r' + Date.now(),
+			text: proposal.text,
+			...(proposal.exampleViolation
+				? { examples: [{ violation: proposal.exampleViolation }] }
+				: {})
+		};
+		let currentRules: Rule[] = [];
 		rules.subscribe((v) => (currentRules = v))();
 		const nextRules = [...currentRules, rule];
 		rules.set(nextRules);
@@ -3251,6 +3269,25 @@
 		font-size: 14px;
 		line-height: 1.5;
 		color: var(--text-faint);
+	}
+	/* Narrow-window geometry (14" laptops and below). The editor grid is
+	 * 900px paper + 352px comment margin + gaps ≈ 1320px; under ~1600px of
+	 * window that leaves no slack and the floating agent dock pill lands on
+	 * top of the review cards. Trade paper + comment width for clearance —
+	 * both .tab-align and .plain-editor-shell read these vars, so the tab
+	 * strip stays aligned with the page column. The dock pill also drops
+	 * its wordmark at this width (AgentDockShell). */
+	@media (max-width: 1600px) {
+		.app {
+			--paper-width: 760px;
+			--comment-width: 260px;
+		}
+	}
+	@media (max-width: 1280px) {
+		.app {
+			--paper-width: 660px;
+			--comment-width: 240px;
+		}
 	}
 	@media (max-width: 1600px) {
 		.source-preview-layout.split-preview-open {

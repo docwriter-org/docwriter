@@ -124,6 +124,12 @@ const MIGRATIONS: Array<{ version: number; sql: string }> = [
 			CREATE INDEX IF NOT EXISTS conversation_sessions_updated
 				ON conversation_sessions(updated);
 		`
+	},
+	{
+		version: 7,
+		// JSON array of RuleExample ({violation, note?}) attached to a rule;
+		// NULL for rules without examples.
+		sql: `ALTER TABLE rules ADD COLUMN examples TEXT;`
 	}
 ];
 

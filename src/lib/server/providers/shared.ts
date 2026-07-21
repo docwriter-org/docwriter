@@ -101,7 +101,11 @@ export function emitProposalEvents(
 			{
 				type: 'rule_proposal',
 				text: typeof input.text === 'string' ? input.text : '',
-				reason: typeof input.reason === 'string' ? input.reason : undefined
+				reason: typeof input.reason === 'string' ? input.reason : undefined,
+				exampleViolation:
+					typeof input.example_violation === 'string' && input.example_violation.trim()
+						? input.example_violation
+						: undefined
 			}
 		];
 	}
