@@ -25,8 +25,12 @@ Structural (no agent needed):
   **Paused** after a double-click.
 - `agent-paused-pill.png`. Collapsed floating Agent pill in the paused
   state.
-- `freeze-selection-popup.png`. Feedback popup with **Freeze for agent**.
-- `freeze-passage.png`. Frozen paragraph with inline lock + light tint.
+- `freeze-selection-popup.png`. Feedback popup with **Freeze for agent**
+  (provenance highlighting on).
+- `freeze-passage.png`. Frozen paragraph with margin lock + muted
+  underline; provenance highlighting on for contrast.
+- `freeze-unlock-menu.png`. Lock-click popover: **Unlock — allow agent
+  to edit**.
 - `inline-feedback-popup.png`. The feedback popup anchored to a
   highlighted paragraph, showing the text input, mode chips, and
   quick-action pills.
