@@ -61,6 +61,30 @@ export const AI_ATTR = 'ai';
 /** One contiguous span of paragraph text with a single provenance flag. */
 export type ProvenanceRun = { text: string; ai: boolean };
 
+/** How much surrounding plain text (each side) a comment-thread anchor
+ * snapshots as its context. Shared by the server (captures at thread
+ * creation from the newline-joined serialization) and the client (captures
+ * via backfill from the editor's paragraph-concatenated plain text, and
+ * validates fallback re-attachment against it). Newlines are stripped so
+ * both text spaces agree. */
+export const ANCHOR_CONTEXT_RADIUS = 32;
+
+/** Capture the anchor context around [idx, idx + quoteLen) in `text`. */
+export function captureAnchorContext(
+	text: string,
+	idx: number,
+	quoteLen: number
+): { contextBefore: string; contextAfter: string } {
+	return {
+		contextBefore: text
+			.slice(Math.max(0, idx - ANCHOR_CONTEXT_RADIUS), idx)
+			.replace(/\n/g, ''),
+		contextAfter: text
+			.slice(idx + quoteLen, idx + quoteLen + ANCHOR_CONTEXT_RADIUS)
+			.replace(/\n/g, '')
+	};
+}
+
 export function getFragment(ydoc: Y.Doc): Y.XmlFragment {
 	return ydoc.getXmlFragment(FRAGMENT_NAME);
 }

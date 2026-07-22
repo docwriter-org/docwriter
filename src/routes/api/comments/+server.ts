@@ -6,6 +6,7 @@ import type { Document } from '@hocuspocus/server';
 import {
 	getCommentsMap,
 	serializeYDoc,
+	captureAnchorContext,
 	USER_ORIGIN
 } from '$lib/shared/ydoc-codec';
 import { isValidTabId } from '$lib/server/document-files';
@@ -100,12 +101,20 @@ export const POST: RequestHandler = async ({ request }) => {
 				text: messageText,
 				timestamp: now
 			});
+			// Snapshot the anchor's surroundings when the occurrence is
+			// unambiguous, so the client's quote fallback can refuse to
+			// re-attach to an unrelated occurrence typed later. With multiple
+			// occurrences the client backfill stamps context from the actual
+			// resolved range instead.
+			const anchorIdx =
+				countOccurrences(liveText, anchorText) === 1 ? liveText.indexOf(anchorText) : -1;
 			const thread: CommentThread = {
 				id: threadId,
 				anchor: {
 					quote: anchorText,
 					occurrenceIndex: 0,
-					...(relStart && relEnd ? { relStart, relEnd } : {})
+					...(relStart && relEnd ? { relStart, relEnd } : {}),
+					...(anchorIdx >= 0 ? captureAnchorContext(liveText, anchorIdx, anchorText.length) : {})
 				},
 				messages,
 				resolved: false,

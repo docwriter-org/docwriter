@@ -12,7 +12,12 @@ import {
 	absolutePositionToRelativePosition,
 	relativePositionToAbsolutePosition
 } from '$lib/editor-extensions';
-import { getCommentsMap, SYSTEM_ORIGIN } from '$lib/shared/ydoc-codec';
+import {
+	getCommentsMap,
+	SYSTEM_ORIGIN,
+	ANCHOR_CONTEXT_RADIUS,
+	captureAnchorContext
+} from '$lib/shared/ydoc-codec';
 import { buildCharIndex as cachedBuildCharIndex } from './char-index';
 import type { CommentThread } from '$lib/types';
 
@@ -148,10 +153,82 @@ function getYBinding(state: EditorState): {
 	return { doc: binding.doc, type: binding.type, mapping: binding.mapping };
 }
 
+/** How many characters of stored anchor context must still match for a
+ * quote fallback to re-attach a thread whose rel-position anchor died.
+ * (The context itself is captured via `captureAnchorContext`, radius
+ * `ANCHOR_CONTEXT_RADIUS`, shared with the server in ydoc-codec.) */
+const ANCHOR_CONTEXT_MIN_MATCH = 8;
+
+/** Contexts are compared in the editor's paragraph-concatenated plain-text
+ * space (no separators), while server-captured contexts come from the
+ * newline-joined serialization — strip newlines so both agree. */
+function normalizeAnchorContext(s: string): string {
+	return s.replace(/\n/g, '');
+}
+
+function commonSuffixLen(a: string, b: string): number {
+	let n = 0;
+	while (n < a.length && n < b.length && a[a.length - 1 - n] === b[b.length - 1 - n]) n += 1;
+	return n;
+}
+
+function commonPrefixLen(a: string, b: string): number {
+	let n = 0;
+	while (n < a.length && n < b.length && a[n] === b[n]) n += 1;
+	return n;
+}
+
+/** Among all occurrences of `quote`, pick the one whose surroundings best
+ * match the anchor's stored context; -1 when none matches well enough.
+ * `preferredIdx` breaks score ties (the plain occurrenceIndex match). */
+function findContextMatch(
+	plainText: string,
+	quote: string,
+	contextBefore: string,
+	contextAfter: string,
+	preferredIdx: number
+): number {
+	const storedBefore = normalizeAnchorContext(contextBefore);
+	const storedAfter = normalizeAnchorContext(contextAfter);
+	// The bar adapts to how much context exists: a quote at the very start
+	// of a short document may have less than ANCHOR_CONTEXT_MIN_MATCH chars
+	// of context in total, and that's fine.
+	const required = Math.min(ANCHOR_CONTEXT_MIN_MATCH, storedBefore.length + storedAfter.length);
+	let bestIdx = -1;
+	let bestScore = -1;
+	let scan = 0;
+	while ((scan = plainText.indexOf(quote, scan)) !== -1) {
+		const actualBefore = normalizeAnchorContext(
+			plainText.slice(Math.max(0, scan - ANCHOR_CONTEXT_RADIUS), scan)
+		);
+		const actualAfter = normalizeAnchorContext(
+			plainText.slice(scan + quote.length, scan + quote.length + ANCHOR_CONTEXT_RADIUS)
+		);
+		const score =
+			commonSuffixLen(storedBefore, actualBefore) + commonPrefixLen(storedAfter, actualAfter);
+		if (score >= required && (score > bestScore || (score === bestScore && scan === preferredIdx))) {
+			bestScore = score;
+			bestIdx = scan;
+		}
+		scan += quote.length;
+	}
+	return bestIdx;
+}
+
 /** Resolve a thread's anchor to PM positions. Tries rel positions first
  * (live, CRDT-tracked); falls back to indexOf when rel positions are
  * missing or no longer resolvable. Returns null when neither finds a
- * range — the thread is detached. */
+ * range — the thread is detached.
+ *
+ * The quote fallback is context-aware: when the anchor stores the text
+ * that surrounded the passage (captured at creation or backfilled while
+ * the anchor was alive), a fallback match must ALSO match that context.
+ * Without this, a thread whose passage was deleted (e.g. the user
+ * accepted an agent edit replacing it) re-attached to ANY occurrence of
+ * the same string typed anywhere later — feedback left on "ABC" and long
+ * dealt with popped back up as soon as "ABC" was typed elsewhere (a real
+ * shipped bug). Undo still re-attaches: restored text brings its
+ * original surroundings back, so the context matches. */
 function resolveAnchorPMRange(
 	state: EditorState,
 	thread: CommentThread
@@ -182,7 +259,7 @@ function resolveAnchorPMRange(
 		}
 	}
 
-	// Tier 2: indexOf fallback.
+	// Tier 2: indexOf fallback, context-checked when context is stored.
 	const { charPositions, plainText } = buildCharIndex(state.doc);
 	let quote = anchor.quote;
 	let idx = nthIndexOf(plainText, quote, anchor.occurrenceIndex);
@@ -193,14 +270,27 @@ function resolveAnchorPMRange(
 	// Fall back to the first non-empty line, which matches reliably and is
 	// enough to position the card. Without this, a multi-line edit's thread
 	// card silently disappears even though its diff renders.
+	let usedFirstLineFallback = false;
 	if (idx < 0 && quote.includes('\n')) {
 		const firstLine = quote.split('\n').find((l) => l.trim()) ?? '';
 		if (firstLine) {
 			quote = firstLine;
 			idx = nthIndexOf(plainText, quote, 0);
+			usedFirstLineFallback = true;
 		}
 	}
 	if (idx < 0) return null;
+	const hasContext = !!(anchor.contextBefore || anchor.contextAfter);
+	if (hasContext && !usedFirstLineFallback) {
+		idx = findContextMatch(
+			plainText,
+			quote,
+			anchor.contextBefore ?? '',
+			anchor.contextAfter ?? '',
+			idx
+		);
+		if (idx < 0) return null;
+	}
 	const endOffset = idx + quote.length - 1;
 	if (endOffset >= charPositions.length) return null;
 	const from = charPositions[idx];
@@ -314,14 +404,16 @@ export const CommentOverlay = Extension.create({
 					}
 				},
 				view(editorView) {
-					// Backfill rel positions for any thread that doesn't have them
-					// yet (server-created or pre-rel-position legacy). Runs after
-					// every state update; cheap because the filter exits early
-					// once every thread has rel positions. Threads in the local
-					// `attempted` set are skipped to avoid re-attempting in the
-					// (rare) case `absolutePositionToRelativePosition` returns a
-					// position that re-resolves to a different range — the loop
-					// would otherwise repeatedly write back.
+					// Backfill anchor metadata for any thread that is missing it:
+					// rel positions (server-created or pre-rel-position legacy
+					// threads) and the surrounding-text context that the quote
+					// fallback validates against. Runs after every state update;
+					// cheap because the filter exits early once every thread is
+					// fully stamped. Threads in the local `attempted` set are
+					// skipped to avoid re-attempting in the (rare) case
+					// `absolutePositionToRelativePosition` returns a position that
+					// re-resolves to a different range — the loop would otherwise
+					// repeatedly write back.
 					const attempted = new Set<string>();
 					const tryBackfill = () => {
 						const binding = getYBinding(editorView.state);
@@ -330,7 +422,10 @@ export const CommentOverlay = Extension.create({
 						const candidates = pluginState.threads.filter(
 							(t) =>
 								!t.resolved &&
-								(!t.anchor.relStart || !t.anchor.relEnd) &&
+								(!t.anchor.relStart ||
+									!t.anchor.relEnd ||
+									(t.anchor.contextBefore === undefined &&
+										t.anchor.contextAfter === undefined)) &&
 								!attempted.has(t.id)
 						);
 						if (candidates.length === 0) return;
@@ -339,10 +434,28 @@ export const CommentOverlay = Extension.create({
 						const updates: { id: string; thread: CommentThread }[] = [];
 						for (const thread of candidates) {
 							attempted.add(thread.id);
-							const idx = nthIndexOf(plainText, thread.anchor.quote, thread.anchor.occurrenceIndex);
-							const resolvedIdx = idx >= 0 ? idx : nthIndexOf(plainText, thread.anchor.quote, 0);
+							// Prefer the LIVE rel-position range when present — it is
+							// the authoritative anchor location (an exact selection may
+							// not be the occurrenceIndex-th quote match). Fall back to
+							// the quote lookup for threads without rel positions.
+							let resolvedIdx = -1;
+							let quoteLen = thread.anchor.quote.length;
+							const live = resolveAnchorPMRange(editorView.state, thread);
+							if (live && thread.anchor.relStart && thread.anchor.relEnd) {
+								const startIdx = charPositions.indexOf(live.from);
+								const endIdx = charPositions.indexOf(live.to - 1);
+								if (startIdx >= 0 && endIdx >= startIdx) {
+									resolvedIdx = startIdx;
+									quoteLen = endIdx - startIdx + 1;
+								}
+							}
+							if (resolvedIdx < 0) {
+								const idx = nthIndexOf(plainText, thread.anchor.quote, thread.anchor.occurrenceIndex);
+								resolvedIdx = idx >= 0 ? idx : nthIndexOf(plainText, thread.anchor.quote, 0);
+								quoteLen = thread.anchor.quote.length;
+							}
 							if (resolvedIdx < 0) continue;
-							const endOffset = resolvedIdx + thread.anchor.quote.length - 1;
+							const endOffset = resolvedIdx + quoteLen - 1;
 							if (endOffset >= charPositions.length) continue;
 							const fromPM = charPositions[resolvedIdx];
 							const toPM = charPositions[endOffset] + 1;
@@ -360,12 +473,18 @@ export const CommentOverlay = Extension.create({
 							} catch {
 								continue;
 							}
+							const context =
+								thread.anchor.contextBefore === undefined &&
+								thread.anchor.contextAfter === undefined
+									? captureAnchorContext(plainText, resolvedIdx, quoteLen)
+									: {};
 							const updated: CommentThread = {
 								...thread,
 								anchor: {
 									...thread.anchor,
-									relStart: encodeRelPos(relStart),
-									relEnd: encodeRelPos(relEnd)
+									relStart: thread.anchor.relStart ?? encodeRelPos(relStart),
+									relEnd: thread.anchor.relEnd ?? encodeRelPos(relEnd),
+									...context
 								}
 							};
 							updates.push({ id: thread.id, thread: updated });

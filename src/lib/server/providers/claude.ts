@@ -237,6 +237,19 @@ export class ClaudeProvider implements AgentProvider {
 					usage: anyMsg.usage,
 					subtype: anyMsg.subtype
 				};
+				// Surface failed runs. The CLI does not always exit non-zero
+				// after an error result (in which case query() never throws),
+				// so without this the render ends looking successful and the
+				// failure — e.g. an expired-OAuth 401 — is completely silent.
+				if (anyMsg.is_error || (anyMsg.subtype && anyMsg.subtype !== 'success')) {
+					const detail =
+						(anyMsg.subtype === 'success'
+							? anyMsg.result
+							: Array.isArray(anyMsg.errors) && anyMsg.errors.length > 0
+								? anyMsg.errors.map((e: unknown) => String(e)).join('\n')
+								: anyMsg.result) || `run failed (${anyMsg.subtype ?? 'unknown error'})`;
+					yield { type: 'error', error: String(detail) };
+				}
 			}
 
 			if (msg.type === 'user') {

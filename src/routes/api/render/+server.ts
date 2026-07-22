@@ -883,7 +883,11 @@ export const POST: RequestHandler = async ({ request }) => {
 							const id = 'q_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 							const questions = toolInput?.questions ?? [];
 							send('user_question', { id, questions });
-							const answers = await new Promise<string[]>((resolve) => {
+							// The SDK's AskUserQuestion schema requires `answers` to be a
+							// record keyed by question text (multi-select answers
+							// comma-joined). An array here fails schema validation and the
+							// tool call errors out for every question the agent asks.
+							const answers = await new Promise<Record<string, string>>((resolve) => {
 								registerPendingAskUser(id, resolve, 15 * 60_000);
 							});
 							return { behavior: 'allow' as const, updatedInput: { ...toolInput, answers } };
