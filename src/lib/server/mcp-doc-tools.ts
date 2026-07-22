@@ -163,6 +163,16 @@ export function setActiveFeedbackThreadId(id: string | null) {
 	activeFeedbackThreadId = id;
 }
 
+/** Reviewer running the current critique pass, if any. Set by /api/render
+ * for the duration of a critique render (same lifecycle as
+ * `activeFeedbackThreadId`) and stamped onto every review round and
+ * agent-authored comment the pass creates, so the gutter can attribute
+ * them to the reviewer instead of the plain agent. */
+let activeReviewerId: string | null = null;
+export function setActiveReviewerId(id: string | null) {
+	activeReviewerId = id;
+}
+
 export async function runTabWrite(
 	tabId: string,
 	trigger: PendingReviewRound['trigger'],
@@ -269,7 +279,8 @@ export async function runTabWrite(
 					feedbackThreadId: threadId,
 					timestamp: Date.now(),
 					kind: classifyRoundKind(baseForRound, afterMd),
-					stepCount: 1
+					stepCount: 1,
+					...(activeReviewerId ? { reviewerId: activeReviewerId } : {})
 				};
 				// Revise-in-place: a new edit made for a feedback thread replaces
 				// any older still-pending edits for that same thread, so the
@@ -363,7 +374,8 @@ function createAgentEditThread(
 				id: 'msg_' + cryptoRandomId(),
 				author: 'agent',
 				text: 'Suggested an edit.',
-				timestamp: now
+				timestamp: now,
+				...(activeReviewerId ? { reviewerId: activeReviewerId } : {})
 			}
 		],
 		resolved: false,
@@ -826,6 +838,7 @@ function createAgentCommentThread(
 				author: 'agent',
 				text: message,
 				timestamp: now,
+				...(activeReviewerId ? { reviewerId: activeReviewerId } : {}),
 				...(proposedEdit
 					? {
 							proposedEdit: {
@@ -969,6 +982,7 @@ const replyToCommentTool = tool(
 				author: 'agent',
 				text: trimmedMessage,
 				timestamp: now,
+				...(activeReviewerId ? { reviewerId: activeReviewerId } : {}),
 				...(proposed_edit
 					? {
 							proposedEdit: {
