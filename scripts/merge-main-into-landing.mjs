@@ -73,7 +73,7 @@ try {
 	resolveMainOwned(conflicts);
 
 	if (conflicts.some((f) => f === 'package.json' || f === 'package-lock.json')) {
-		mergePackageJson();
+		if (conflicts.includes('package.json')) mergePackageJson();
 		try {
 			unlinkSync('package-lock.json');
 		} catch {
