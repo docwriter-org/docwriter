@@ -273,7 +273,9 @@
 				</a>
 			</div>
 			<div class="try-row">
-				<div class="install-block disabled"><span class="install-label">DocWriter GitHub</span> <span class="install-note">(coming soon!)</span></div>
+				<a href="https://github.com/shreyashankar/docwriter" class="install-block" target="_blank" rel="noopener">
+					<span class="install-label">DocWriter on GitHub</span>
+				</a>
 			</div>
 		</div>
 	</section>
