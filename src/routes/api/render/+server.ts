@@ -277,7 +277,7 @@ Apply this to every word you write: edits, new prose, and your replies on commen
 
 - Use plain, everyday words. Write "use", not "leverage" or "utilize".
 - Write complete sentences, and prefer long, explanatory sentences over short, punchy ones. Write the way people explain things out loud, in longer sentences with commas and one or two related clauses that carry the reasoning along. A sentence should end because the thought is complete, not because a short sentence would sound stronger. Plain means explanatory, not terse.
-- Communicate clearly and boring. State the literal thing with no embellishment and no performance. Never write a staccato run of short sentences for emphasis, and never lead with a colon-headed label fragment such as "The problem: fixed." Explain in prose.
+- Keep the writing boring, descriptive, and explanatory. Do not use a catchy phrase, slogan, clever label, metaphorical summary, or wording meant to sound memorable; state the actual concept, action, condition, or relationship in literal terms. This applies to headings, topic sentences, callouts, labels, summaries, and ordinary prose. Never write a staccato run of short sentences for emphasis, and never lead with a colon-headed label fragment such as "The problem: fixed." Explain in prose.
 - Prefer concrete verbs and named things. Replace "various", "several", "a number of", "important", "robust", and "powerful" with the specific thing.
 - Repeat a word rather than swapping in a synonym.
 - Do not use analogies, metaphors, or imagery unless the user's text uses them.

@@ -43,9 +43,23 @@ reject like any other edit.
 collapse out of the way but stay in the database; you can reopen
 them later.
 
+## When the anchored text changes
+
+You can edit a passage without losing its comment thread. When you type
+inside the passage, you see the highlighted range expand. The highlighted
+range is unchanged when you edit text elsewhere.
+
+When you remove the passage, e.g. by accepting an agent edit that rewrites
+it, you no longer see the thread card in the margin. The thread is still
+saved. If you undo the edit, you see the passage and the card again.
+
+If you later type the same words elsewhere, the hidden card is not shown
+again. A thread is attached to one passage rather than to every copy of
+the same text, so you do not see old feedback on unrelated text.
+
 ## When you'd cause a comment instead of an edit
 
-There are two ways an agent comment gets created:
+A comment thread is created when:
 
 1. **The agent decides.** During an auto-wake or chat-popover turn,
    the agent reads the open files and chooses to comment when its
@@ -53,12 +67,14 @@ There are two ways an agent comment gets created:
    maybe, an observation that needs your input. The autonomy level
    biases this choice (conservative is more comment-happy;
    aggressive prefers to just make the edit).
-2. **You force it.** When you give [inline
-   feedback](/agent/steering-the-agent#inline-feedback) on a passage,
-   the popup has three mode chips: **Auto** (the agent decides),
-   **Edit** (force an edit), **Discuss** (force a comment thread).
-   Pick Discuss when you want the agent to weigh in without
-   committing to a rewrite.
+2. **You give feedback on a passage.** When you use
+   [the feedback popup](/agent/feedback-popup), you start a thread on
+   the selected passage. The agent responds on the thread. With
+   **Plan first** on, the agent explains its reasoning before it proposes
+   an edit.
+3. **The agent proposes an edit.** Before the agent proposes an edit,
+   it starts a thread. The agent explains what it will change, and you
+   can read the explanation next to the edit in the margin.
 
 ## When to reply vs. when to approve
 

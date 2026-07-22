@@ -21,14 +21,16 @@ else.
 
 ## In the inline-feedback popup
 
-The popup auto-focuses its text input, so most keys go to the input.
-A few are routed elsewhere:
+You can use the mouse or keyboard to select text and open the popup. For
+example, hold Shift while you use the arrow keys, or press `Cmd/Ctrl+A`.
+The cursor is already in the input when you finish the selection, so
+you enter text there with most keys. Use these keys for other actions:
 
 | Shortcut                    | What it does                                                                  |
 | --------------------------- | ----------------------------------------------------------------------------- |
 | `Enter`                     | Submit the typed feedback to the agent.                                       |
 | `Shift+Enter`               | Newline in the input (multi-line feedback).                                   |
-| `Esc`                       | Close the popup and collapse the selection.                                   |
+| `Esc`                       | Close the popup, keep the selection, and return the caret to the document. The popup does not reopen for that same selection. |
 | `Cmd/Ctrl+A` (empty input)  | Select all in the editor (not the input).                                     |
 | `Backspace` / `Delete` (empty input) | Delete the highlighted text from the document. Useful when you highlighted a passage planning to give feedback but then decided to just cut it. |
 
