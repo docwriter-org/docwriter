@@ -41,6 +41,22 @@ This routes through the `propose_rule` MCP tool. See [How it
 works](/reference/how-it-works) for the architectural details if you're
 curious.
 
+## Violation examples
+
+You can give the agent a violation example for each rule. The agent
+compares new prose with each example, so it does not have to infer your
+meaning from abstract wording.
+
+To add an example yourself, click **+ example violation** under the rule
+and paste the passage that broke it. Use the remove control next to an
+example when you no longer need it.
+
+The agent can also propose an example. When you reject an edit with
+feedback, the agent may propose a rule based on your feedback. If you
+accept the rule, the agent saves the original passage as its first
+example. For example, the rule "Never hedge with 'quite', 'rather', or
+'somewhat'" can include the sentence that led you to write the rule.
+
 ## Freezing a passage
 
 To stop the agent from editing a specific paragraph (or any selection),
