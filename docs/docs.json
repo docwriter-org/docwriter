@@ -47,6 +47,7 @@
 				"group": "Working with the agent",
 				"pages": [
 					"agent/steering-the-agent",
+					"agent/feedback-popup",
 					"agent/inline-directives",
 					"agent/reviewing-edits",
 					"agent/delegating-tasks",
@@ -92,6 +93,7 @@
 			{
 				"group": "Changelog",
 				"pages": [
+					"changelog/2026-07-22",
 					"changelog/2026-05-22",
 					"changelog/2026-05-15"
 				]

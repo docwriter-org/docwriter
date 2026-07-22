@@ -55,35 +55,28 @@ from running.
 
 ## Inline feedback
 
-Highlight any passage in the editor and a feedback popup appears
-anchored to the selection.
+Select any passage, with the mouse or the keyboard, and a feedback
+popup appears anchored to the selection with its input focused. Type
+what is wrong and press Enter, or use one of the quick actions. The
+popup, its Direct edit and Plan first modes, the quick actions, and
+its keyboard behavior have their own page. See
+[The feedback popup](/agent/feedback-popup).
 
-<Frame>
-  ![The inline feedback popup, with text input, mode chips, and quick-action pills](/images/inline-feedback-popup.png)
-</Frame>
+## Questions from the agent
 
-The popup has three things:
+When the agent needs a decision it cannot infer, e.g. which of two
+tones you want, it pauses its turn and shows a question card over the
+editor. Each card holds up to four multiple-choice questions.
 
-- A **text input** auto-focused for typing custom feedback. Hit Enter
-  (or click **Go**) to submit. The agent receives the selected passage
-  plus your feedback and runs in the next turn.
-- **Mode chips**: **Auto** (the agent decides whether to edit or
-  comment), **Edit** (force an edit), **Discuss** (force a comment
-  thread). Auto is the default.
-- **Quick-action pills** below the input. The first three are pinned
-  defaults — *Too verbose*, *AI smell*, *Incorrect* — that send the
-  passage with that label as the feedback. The remaining pills are
-  your most recent custom feedbacks, kept as an LRU cache (up to six).
-  Whatever you type as custom feedback becomes a pill on the next
-  selection.
+A card with one question submits your answer as soon as you click an
+option. A card with several questions stays open until every question
+has an answer. The footer shows how many questions you have answered,
+and you can submit once every question has an answer. A multi-select
+question uses checkboxes, and the agent receives your picks as a
+comma-separated list.
 
-Two keyboard shortcuts that aren't obvious:
-
-- **Backspace** (with the feedback input empty) deletes the highlighted
-  text from the document instead of doing nothing. Useful when you
-  highlighted a passage planning to give feedback but then decide to
-  just cut it.
-- **Esc** closes the popup and collapses the selection.
+The agent waits up to 15 minutes for your answer. If the card times
+out, the agent continues without your input.
 
 ## Sending a typed prompt
 
@@ -171,6 +164,8 @@ already proposed remains. Cancellation only stops further tool calls.
 
 ## Where to go next
 
+- [The feedback popup](/agent/feedback-popup). Give feedback on a
+  selected passage.
 - [Inline directives](/agent/inline-directives). Leave `[[ ... ]]`
   notes in the prose for the agent to pick up.
 - [Reviewing edits](/agent/reviewing-edits). Accept and reject in

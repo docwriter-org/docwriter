@@ -1,0 +1,69 @@
+---
+title: "July 2026"
+description: "Feedback popup parity, agent questions, error toasts, AI-written text highlighting, plan-first feedback, pause, freeze, and rule violation examples."
+---
+
+## New features
+
+- **Highlight AI-written text.** A button in the top right of the
+  editor colors the text that came from accepted agent edits, at the
+  level of single words. Typing over a marked word removes the mark.
+  See [Reviewing edits](/agent/reviewing-edits#seeing-which-text-the-agent-wrote).
+- **Plan-first feedback.** The feedback popup has **Direct edit** and
+  **Plan first** modes. With Plan first, the agent explains its
+  reasoning on the comment thread before it proposes the edit. The
+  **AI smell** quick action always runs plan first. See
+  [The feedback popup](/agent/feedback-popup).
+- **Pause the agent.** Double-click the Agent pill to stop auto-wake,
+  sends, and in-flight turns until you resume. See
+  [Steering the agent](/agent/steering-the-agent#pausing-the-agent).
+- **Accept all and Reject all.** When a tab has pending suggestions,
+  the comment gutter shows a bar that clears the whole stack in one
+  click. See [Reviewing edits](/agent/reviewing-edits#multiple-pending-rounds).
+- **Freeze a passage.** Select text and click **Freeze for agent** to
+  make it off-limits until you unlock it. See
+  [Writing rules](/customize/rules#freezing-a-passage).
+- **Rule violation examples.** A rule can carry the passage that broke
+  it, added by hand or captured when you reject an edit with feedback
+  and accept the rule the agent proposes from it. See
+  [Writing rules](/customize/rules#violation-examples).
+
+## Updates
+
+- **Every edit is announced on a thread.** An edit proposal now comes
+  with a comment that says what is changing and why, so a pending edit
+  never appears as a bare diff. See [Comments](/agent/comments).
+- **Proposed text is copyable.** Select and copy green proposal text,
+  or use the copy button on a proposed line or an edit row, without
+  accepting the edit. See
+  [Reviewing edits](/agent/reviewing-edits#copying-proposed-text).
+- **The agent writes plainer prose.** The agent's default register
+  prefers long explanatory sentences over short punchy ones, keeps
+  wording boring rather than catchy, and still matches your voice when
+  your document has one.
+- **Smaller screens.** The floating agent pill and the editor columns
+  narrow below 1600px, so the pill no longer overlaps the margin cards
+  on a 14-inch display.
+
+## Bug fixes
+
+- **Agent questions work.** Question cards from the agent failed on
+  every answer, and a card with several questions closed after the
+  first click. A card now stays open until every question has an
+  answer. See
+  [Steering the agent](/agent/steering-the-agent#questions-from-the-agent).
+- **Failed runs are visible.** A failed run shows a dismissable toast,
+  and an authentication failure says to re-authenticate, instead of a
+  row buried in the collapsed history pane. See
+  [Observability](/agent/observability#when-a-run-fails).
+- **Handled feedback stays gone.** A thread whose passage was edited
+  away no longer reappears when you type the same words elsewhere.
+  Undo still restores it with the passage. See
+  [Comments](/agent/comments#when-the-anchored-text-changes).
+- **Keyboard selections open the feedback popup.** Selecting with
+  Shift and the arrow keys now focuses the popup the same way a mouse
+  selection does, so Esc-then-type works everywhere. See
+  [The feedback popup](/agent/feedback-popup).
+- **The document scrolls under the rules popover.** Composing a rule
+  no longer blocks scrolling and clicking in the document, and an
+  unfinished draft survives.

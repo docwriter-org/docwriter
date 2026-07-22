@@ -43,9 +43,23 @@ reject like any other edit.
 collapse out of the way but stay in the database; you can reopen
 them later.
 
+## When the anchored text changes
+
+A thread follows its passage through edits. Typing inside the passage
+grows the highlight, and edits elsewhere leave it in place.
+
+When the passage itself is removed, e.g. you accepted an agent edit
+that rewrote it, the thread's card disappears from the margin. The
+thread is not deleted. Undo restores the passage and the card together.
+
+A hidden card stays hidden when you later type the same words
+somewhere else in the document. The thread belongs to the passage it
+was anchored to, not to every occurrence of the same string, so
+feedback you already handled does not resurface on unrelated text.
+
 ## When you'd cause a comment instead of an edit
 
-There are two ways an agent comment gets created:
+There are three ways a comment thread gets created:
 
 1. **The agent decides.** During an auto-wake or chat-popover turn,
    the agent reads the open files and chooses to comment when its
@@ -53,12 +67,15 @@ There are two ways an agent comment gets created:
    maybe, an observation that needs your input. The autonomy level
    biases this choice (conservative is more comment-happy;
    aggressive prefers to just make the edit).
-2. **You force it.** When you give [inline
-   feedback](/agent/steering-the-agent#inline-feedback) on a passage,
-   the popup has three mode chips: **Auto** (the agent decides),
-   **Edit** (force an edit), **Discuss** (force a comment thread).
-   Pick Discuss when you want the agent to weigh in without
-   committing to a rewrite.
+2. **You give feedback on a passage.** Feedback you send from
+   [the feedback popup](/agent/feedback-popup) opens a thread anchored
+   to the selected passage, and the agent responds on that thread.
+   With **Plan first** on, the agent replies with its reasoning there
+   before it proposes the edit.
+3. **The agent announces an edit.** Every edit proposal comes with a
+   thread that explains what the agent is about to change and why, so
+   a pending edit never appears as a bare diff. The explanation sits
+   next to the edit in the margin.
 
 ## When to reply vs. when to approve
 

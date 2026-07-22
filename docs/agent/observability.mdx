@@ -25,6 +25,20 @@ The history pane only covers the current turn (the latest agent pass).
 For the full session — every turn since the last `--new-session` —
 open the transcript viewer.
 
+## When a run fails
+
+A failed run shows a red toast in the top right of the window, in
+addition to the error row in the history pane. The toast stays until
+you dismiss it, so a failure cannot pass silently while the history
+pane is collapsed.
+
+An authentication failure gets its own label and tells you to
+re-authenticate with your provider, e.g. run `claude` in a terminal
+and use `/login`. The provider can retry quietly for a couple of
+minutes before it reports the failure, so an auth problem often looks
+like a long stall and then a toast. If runs keep failing after you
+re-authenticate, start a new session from the agent dock.
+
 ## The transcript viewer
 
 At the top of the history pane is a **Transcript** button. Clicking it
