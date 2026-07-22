@@ -13,6 +13,10 @@ npm run build   # production build
 npm run check   # type-check
 ```
 
+When you run `npm install`, you also download the pinned PDF.js viewer
+used for local PDF previews. We exclude the generated files under
+`static/pdfjs/` from Git.
+
 Docs preview:
 
 ```sh
