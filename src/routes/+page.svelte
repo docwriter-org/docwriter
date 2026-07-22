@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount, onDestroy } from 'svelte';
+	import { onMount, onDestroy, type Component } from 'svelte';
 	import type * as Y from 'yjs';
 	import MenuBar, { type MenuSpec } from '$lib/components/MenuBar.svelte';
 	import ModelPicker from '$lib/components/ModelPicker.svelte';
@@ -124,8 +124,14 @@
 		commentThreads,
 		allTabCommentThreads,
 		openCommentThreadId,
-		queuedSubmissionCount
+		queuedSubmissionCount,
+		activeReviewer,
+		customReviewers,
+		type ActiveReviewerInfo
 	} from '$lib/stores';
+	import ReviewerEditorDialog from '$lib/components/ReviewerEditorDialog.svelte';
+	import ReviewerMascot from '$lib/components/ReviewerMascot.svelte';
+	import { BUILTIN_REVIEWERS, type Reviewer } from '$lib/shared/reviewers';
 	import TabBar from '$lib/components/TabBar.svelte';
 	import AiProvenanceToggle from '$lib/components/AiProvenanceToggle.svelte';
 	import PreviewButton from '$lib/components/PreviewButton.svelte';
@@ -161,7 +167,11 @@
 	// await. Prevents two concurrent calls from the same event loop tick (e.g.
 	// a button click firing just as the idle timer callback is about to run).
 	let submitInFlight = false;
-	let queuedSubmissions: Array<{ trigger?: string; planMode?: boolean }> = [];
+	let queuedSubmissions: Array<{
+		trigger?: string;
+		planMode?: boolean;
+		reviewer?: ActiveReviewerInfo;
+	}> = [];
 
 	let currentAbort: AbortController | null = null;
 	/** Which tabs currently have a pending review (drives the tab dot badges
@@ -947,9 +957,13 @@
 		return isAcceptedEditsMessage(trigger) || isImplicitWakeupTrigger(trigger);
 	}
 
-	async function submit(trigger?: string, opts?: { planMode?: boolean; images?: ImageAttachment[] }) {
+	async function submit(
+		trigger?: string,
+		opts?: { planMode?: boolean; images?: ImageAttachment[]; reviewer?: ActiveReviewerInfo }
+	) {
 		const planMode = opts?.planMode ?? false;
 		const images = opts?.images ?? [];
+		const reviewer = opts?.reviewer ?? null;
 		if (isAgentPaused()) {
 			// Fully paused: drop idle wakes, Wake up, Send, and accept-followups.
 			// The user must double-click the Agent pill to resume first.
@@ -963,12 +977,13 @@
 			// the next keystroke queues another, a never-ending treadmill of
 			// re-reviews. An implicit wakeup only fires when the agent is idle
 			// (handled below), in which case it runs immediately, never queued.
-			if (isImplicitWakeupTrigger(trigger)) return;
+			if (isImplicitWakeupTrigger(trigger) && !reviewer) return;
 			// The accepted-edits auto-wake carries real state ("the user
 			// accepted your edits"), so we keep one queued — but collapse
-			// duplicates when there's already something behind it.
-			if (isSkippableWhenQueued(trigger) && queuedSubmissions.length > 0) return;
-			queuedSubmissions = [...queuedSubmissions, { trigger, planMode }];
+			// duplicates when there's already something behind it. Critique
+			// passes always queue: the user picked a reviewer on purpose.
+			if (isSkippableWhenQueued(trigger) && !reviewer && queuedSubmissions.length > 0) return;
+			queuedSubmissions = [...queuedSubmissions, { trigger, planMode, reviewer: reviewer ?? undefined }];
 			queuedSubmissionCount.set(queuedSubmissions.length);
 			return;
 		}
@@ -1011,11 +1026,14 @@
 		pushHistory({
 			type: 'user_action',
 			timestamp: Date.now(),
-			description: shortDescription(trigger),
+			description: reviewer ? `${reviewer.name} critique pass` : shortDescription(trigger),
 			quote: feedbackQuoteMatch?.[1]
 		});
 
 		isRendering.set(true);
+		// The agent pill hands itself to the reviewer for the duration of a
+		// critique pass (mascot + name in the dock and pane header).
+		if (reviewer) activeReviewer.set(reviewer);
 		const renderStart = Date.now();
 
 		currentAbort = new AbortController();
@@ -1044,11 +1062,12 @@
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
-					userMessage: trigger,
+					userMessage: reviewer ? undefined : trigger,
 					model,
 					planMode,
 					tab: tabId,
 					images: images.length > 0 ? images : undefined,
+					reviewerId: reviewer?.id,
 					provider
 				}),
 				signal: currentAbort.signal
@@ -1458,6 +1477,7 @@
 		} finally {
 			currentAbort = null;
 			submitInFlight = false;
+			activeReviewer.set(null);
 			isRendering.set(false);
 			// Agent shell tools can create folders/files without opening tabs.
 			// Refresh visible file-tree nodes at the end of each run so those
@@ -1479,13 +1499,16 @@
 				// Skip generic auto-wakeups (accepted-edits, implicit "review
 				// docs" wakeup) when more specific user messages are queued
 				// behind them — they'd just duplicate the work.
-				while (isSkippableWhenQueued(next.trigger) && queuedSubmissions.length > 0) {
+				while (isSkippableWhenQueued(next.trigger) && !next.reviewer && queuedSubmissions.length > 0) {
 					next = queuedSubmissions[0];
 					queuedSubmissions = queuedSubmissions.slice(1);
 					queuedSubmissionCount.set(queuedSubmissions.length);
 				}
-				if (!isSkippableWhenQueued(next.trigger) || queuedSubmissions.length === 0) {
-					setTimeout(() => void submit(next.trigger, { planMode: next.planMode }), 0);
+				if (!isSkippableWhenQueued(next.trigger) || next.reviewer || queuedSubmissions.length === 0) {
+					setTimeout(
+						() => void submit(next.trigger, { planMode: next.planMode, reviewer: next.reviewer }),
+						0
+					);
 				}
 			} else {
 				queuedSubmissionCount.set(0);
@@ -2104,12 +2127,54 @@
 	 * (selected model / theme / font scale / history pane visibility) and
 	 * each open/close of a submenu picks up current state.
 	 */
+	// ── Critique passes (reviewer agents) ────────────────────────────────
+	let reviewerDialogOpen = $state(false);
+
+	async function loadReviewers() {
+		try {
+			const res = await fetch('/api/reviewers');
+			if (!res.ok) return;
+			const data = (await res.json()) as { reviewers?: Reviewer[] };
+			customReviewers.set((data.reviewers ?? []).filter((r) => !r.builtin));
+		} catch {
+			// The menu falls back to built-in reviewers only.
+		}
+	}
+
+	function runCritique(r: Reviewer) {
+		void submit(undefined, {
+			reviewer: { id: r.id, name: r.name, icon: r.icon, color: r.color }
+		});
+	}
+
 	const menus = $derived<MenuSpec[]>([
 		{
 			label: 'Settings',
 			items: [
 				{ kind: 'panel', label: 'API keys', panelKey: 'apiKeys' },
 				{ kind: 'panel', label: 'Agent behavior', panelKey: 'agentSettings' },
+				{
+					kind: 'submenu',
+					label: 'Critique pass',
+					items: [
+						...[...BUILTIN_REVIEWERS, ...$customReviewers].map((r) => ({
+							kind: 'action' as const,
+							label: r.name,
+							icon: ReviewerMascot as unknown as Component,
+							iconProps: { icon: r.icon },
+							iconColor: r.color,
+							onClick: () => runCritique(r)
+						})),
+						{ kind: 'divider' as const },
+						{
+							kind: 'action' as const,
+							label: 'New reviewer…',
+							onClick: () => {
+								reviewerDialogOpen = true;
+							}
+						}
+					]
+				},
 				{
 					kind: 'submenu',
 					label: 'Theme',
@@ -2337,6 +2402,10 @@
 		// mounts and before we attach the persist subscribers, otherwise
 		// defaults could overwrite the real values.
 		await restoreSessionState();
+
+		// Custom reviewers for the Settings → Critique pass menu. Fire and
+		// forget: until it lands, the menu shows the built-ins.
+		void loadReviewers();
 
 		const initialTheme = themes.find((t) => t.name === themeName) || themes[0];
 		applyTheme(initialTheme);
@@ -3111,6 +3180,12 @@
 		setCustomModel(id, currentProvider);
 		customModelOpen = false;
 	}}
+/>
+
+<ReviewerEditorDialog
+	open={reviewerDialogOpen}
+	onClose={() => (reviewerDialogOpen = false)}
+	onCreated={(r) => customReviewers.update((list) => [...list, r])}
 />
 
 <style>

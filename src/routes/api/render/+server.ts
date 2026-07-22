@@ -34,8 +34,11 @@ import {
 	WRITE_DOC_TOOL_NAME,
 	COMMENT_DOC_TOOL_NAME,
 	REPLY_TO_COMMENT_TOOL_NAME,
-	setActiveFeedbackThreadId
+	setActiveFeedbackThreadId,
+	setActiveReviewerId
 } from '$lib/server/mcp-doc-tools';
+import { getReviewerById, buildCritiqueMessage } from '$lib/server/reviewers';
+import type { Reviewer } from '$lib/shared/reviewers';
 
 /** Read the live authoritative markdown for a tab, including any pending
  * review rounds materialized on top. Prefers the Hocuspocus in-memory
@@ -696,13 +699,16 @@ function buildHooks(
 export const POST: RequestHandler = async ({ request }) => {
 	try {
 		const body = await request.json();
-		const { userMessage, model, warmup, tab, planMode, images, provider: providerIdRaw } = body as {
+		const { userMessage, model, warmup, tab, planMode, images, reviewerId, provider: providerIdRaw } = body as {
 			userMessage?: string;
 			model?: string;
 			warmup?: boolean;
 			tab?: string;
 			planMode?: boolean;
 			images?: ImageAttachmentPayload[];
+			/** Reviewer agent id — runs a critique pass on the active tab
+			 * instead of an ordinary render. */
+			reviewerId?: string;
 			provider?: string;
 		};
 		const providerId = (providerIdRaw || 'claude') as ProviderId;
@@ -726,6 +732,15 @@ export const POST: RequestHandler = async ({ request }) => {
 			candidateActive && isValidTabId(candidateActive) && allTabIds.includes(candidateActive)
 				? candidateActive
 				: null;
+		// Critique pass: resolve the reviewer up front. It needs an active
+		// tab — the pass reviews one concrete draft.
+		let critiqueReviewer: Reviewer | null = null;
+		if (reviewerId) {
+			critiqueReviewer = getReviewerById(String(reviewerId));
+			if (!critiqueReviewer) throw error(400, `Unknown reviewer: ${reviewerId}`);
+			if (!active) throw error(400, 'Open a file to run a critique pass');
+		}
+
 		// With no anchor (no tab) AND no user message, there's nothing to do
 		// — the agent has no prompt context. Warmup is exempt because it's a
 		// dry "are you alive?" ping.
@@ -746,13 +761,14 @@ export const POST: RequestHandler = async ({ request }) => {
 		}));
 
 		const currentSessionId = getSessionId();
-		const isImplicitWakeup = !userMessage && !warmup;
+		const isImplicitWakeup = !userMessage && !warmup && !critiqueReviewer;
 		const activeTabInfo = tabsForPrompt.find((info) => info.tabId === active) ?? null;
 		const activeInlineDirectives = activeTabInfo
 			? extractInlineDirectives(activeTabInfo.currentMd)
 			: [];
-		const message =
-			userMessage || buildImplicitWakeupMessage(active, tabsForPrompt);
+		const message = critiqueReviewer
+			? buildCritiqueMessage(critiqueReviewer, active as string)
+			: userMessage || buildImplicitWakeupMessage(active, tabsForPrompt);
 		const planModeInstruction = planMode
 			? [
 					'',
@@ -943,7 +959,9 @@ export const POST: RequestHandler = async ({ request }) => {
 							canUseTool,
 							abortSignal: abortController.signal,
 							images: roundImages,
-							effort: 'low',
+							// Critique passes read the whole draft and judge it;
+							// give them more thinking room than routine edits.
+							effort: critiqueReviewer ? 'medium' : 'low',
 							hooks
 						}, tools)) {
 							// Track mutation tool usage
@@ -995,6 +1013,7 @@ export const POST: RequestHandler = async ({ request }) => {
 
 					const feedbackThreadId = message.match(/thread_id="([^"]+)"/)?.[1] ?? null;
 					setActiveFeedbackThreadId(feedbackThreadId);
+					setActiveReviewerId(critiqueReviewer?.id ?? null);
 					try {
 					const firstOutcome = await runQueryRound(prompt, images);
 					if (
@@ -1024,6 +1043,7 @@ export const POST: RequestHandler = async ({ request }) => {
 					}
 					} finally {
 						setActiveFeedbackThreadId(null);
+						setActiveReviewerId(null);
 					}
 				} catch (err) {
 					// Plan-mode aborts the controller from canUseTool once we've

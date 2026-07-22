@@ -96,6 +96,10 @@ export interface PendingReviewRound {
 	 * against the current live doc and needs regeneration. */
 	stale?: boolean;
 	staleReason?: string;
+	/** Reviewer agent that proposed this round during a critique pass
+	 * (Settings → Critique pass). Absent on ordinary agent edits. The
+	 * gutter uses it to show the reviewer's mascot and name on the card. */
+	reviewerId?: string;
 }
 
 /** Character-delta threshold for classifying rounds as `tiny` vs `big`.
@@ -192,6 +196,10 @@ export interface CommentMessage {
 	 * thread popover shows an "Approve & propose edit" button that asks
 	 * the agent to apply it via `edit_doc` in the next render. */
 	proposedEdit?: { oldString: string; newString: string };
+	/** Reviewer agent that wrote this message during a critique pass.
+	 * Only meaningful when author is 'agent'; the gutter renders the
+	 * reviewer's mascot and name instead of the default cat. */
+	reviewerId?: string;
 }
 
 export interface CommentThread {

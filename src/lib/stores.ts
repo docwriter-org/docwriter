@@ -112,6 +112,24 @@ export const pendingPlanProposals = writable<PendingPlanProposal[]>([]);
 
 export const isRendering = writable(false);
 
+// ── Critique passes (reviewer agents) ─────────────────────────────────
+
+/** Display info for the reviewer whose critique pass is currently
+ * rendering. While set, the agent pill hands itself to the reviewer:
+ * mascot + name in the reviewer's color, in the dock and the pane header.
+ * Cleared when the render ends. */
+export interface ActiveReviewerInfo {
+	id: string;
+	name: string;
+	icon: string;
+	color: string;
+}
+export const activeReviewer = writable<ActiveReviewerInfo | null>(null);
+
+/** User-created reviewers, loaded from /api/reviewers at boot and updated
+ * when one is created. Built-ins come from $lib/shared/reviewers. */
+export const customReviewers = writable<import('./shared/reviewers').Reviewer[]>([]);
+
 /** Seconds remaining until the editor auto-submits after user stops typing.
  * 0 means no countdown active. Updated by the editor's idle timer. */
 export const submitCountdown = writable<number>(0);

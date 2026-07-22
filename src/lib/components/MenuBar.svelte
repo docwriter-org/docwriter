@@ -9,6 +9,11 @@
 		checked?: boolean;
 		disabled?: boolean;
 		icon?: Component;
+		/** Extra props for `icon` — for icon components that need more than
+		 * `size` (e.g. ReviewerMascot's `icon` variant key). */
+		iconProps?: Record<string, unknown>;
+		/** Color for the icon (CSS color). Defaults to the muted item color. */
+		iconColor?: string;
 	};
 
 	/** Parent item — hovering it opens a side submenu one level deep. */
@@ -169,7 +174,7 @@
 								<span class="menu-item-check">
 									{#if item.checked}<Check size={12} strokeWidth={2.5} />{/if}
 								</span>
-								{#if Icon}<span class="menu-item-icon"><Icon size={13} /></span>{/if}
+								{#if Icon}<span class="menu-item-icon" style:color={item.iconColor}><Icon {...(item.iconProps ?? {})} size={13} /></span>{/if}
 								<span class="menu-item-label">{item.label}</span>
 							</button>
 						{:else if item.kind === 'submenu'}
@@ -203,7 +208,7 @@
 													<span class="menu-item-check">
 														{#if sub.checked}<Check size={12} strokeWidth={2.5} />{/if}
 													</span>
-													{#if SubIcon}<span class="menu-item-icon"><SubIcon size={13} /></span>{/if}
+													{#if SubIcon}<span class="menu-item-icon" style:color={sub.iconColor}><SubIcon {...(sub.iconProps ?? {})} size={13} /></span>{/if}
 													<span class="menu-item-label">{sub.label}</span>
 												</button>
 											{/if}

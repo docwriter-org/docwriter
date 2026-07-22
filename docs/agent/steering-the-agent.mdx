@@ -1,12 +1,15 @@
 ---
 title: "Steering the agent"
-description: "Auto-wake, inline feedback, typed prompts, autonomy, models."
+description: "Auto-wake, inline feedback, typed prompts, critique passes, autonomy, and models."
 ---
 
-The agent has one automatic trigger (auto-wake on idle) and three ways
-to trigger it manually: clicking the **Agent** button in the history
-pane, giving inline feedback on a passage, or typing a prompt in the
-chat popover.
+The agent wakes on its own when you stop typing. You can also start a
+turn in four ways:
+
+- Click the **Agent** button in the history pane.
+- Give inline feedback on a passage.
+- Type a prompt in the chat popover.
+- Choose a reviewer under **Settings → Critique pass**.
 
 ## Auto-wake on idle
 
@@ -95,6 +98,44 @@ something is already running.
 
 There's a **Plan first** toggle in the popover. With it on, the agent
 produces a written plan you approve before any edits land.
+
+## Running a critique pass
+
+Use a critique pass when you want a reviewer to read the active file
+with a specific goal. Choose **Settings → Critique pass**, then choose
+a reviewer. If the agent is already working, it runs the critique pass
+after the current turn.
+
+The reviewer reads the whole active file before leaving feedback. It
+ranks the most important problems and leaves no more than six findings.
+If the reviewer does not find a problem, it leaves one comment about
+what works instead of inventing a finding.
+
+You can choose one of four built-in reviewers:
+
+| Reviewer | What the reviewer checks |
+| --- | --- |
+| **PhD Advisor** | Checks whether the argument, evidence, structure, and scope hold together. |
+| **Copy Editor** | Fixes errors and inconsistencies without changing the author's style. |
+| **Skeptic** | Raises counterexamples, alternative explanations, and unsupported claims. |
+| **Fresh Eyes** | Marks places where a first-time reader may become confused. |
+
+To create your own reviewer, choose **Settings → Critique pass → New
+reviewer**. Give the reviewer a name, mascot, color, and prompt. In the
+prompt, say what the reviewer should check and what it should leave
+alone. After you save the reviewer, you can choose it from the same
+menu as the built-in reviewers.
+
+Every reviewer writes in the language of the document and follows your
+writing rules. A reviewer does not keep a separate conversation or
+remember earlier passes. Run another critique pass after you revise the
+file if you want the reviewer to check it again.
+
+The reviewer leaves each finding as a [comment](/agent/comments) on the
+relevant passage. When a small change can fix the problem, the reviewer
+may also propose an edit. With track changes on, you can [accept or
+reject the edit](/agent/reviewing-edits) through the normal review
+controls.
 
 ## What the agent sees
 
