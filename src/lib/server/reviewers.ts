@@ -78,7 +78,7 @@ export function buildCritiqueMessage(reviewer: Reviewer, tabId: string): string 
 	return [
 		'<mode>',
 		`Critique pass. The user asked the reviewer "${reviewer.name}" to review ${tabId}.`,
-		'Spawn exactly one subagent with the Agent tool and pass it the reviewer_brief below verbatim as its task, nothing else. Do not read, comment, or edit the document yourself this turn. Leave assistant text empty; the review lands on the document. If the Agent tool is unavailable, execute the brief yourself exactly as written.',
+		'Spawn exactly one subagent with the Agent tool, with run_in_background: true, and pass it the reviewer_brief below verbatim as its task, nothing else. Running it in the background keeps you free while the reviewer reads; end your message after launching and wait for its completion notification. Do not read, comment, or edit the document yourself this turn, and do not summarize the findings when the pass ends — they land on the document. If the Agent tool is unavailable, execute the brief yourself exactly as written.',
 		'</mode>',
 		'',
 		'<reviewer_brief>',
@@ -90,8 +90,9 @@ export function buildCritiqueMessage(reviewer: Reviewer, tabId: string): string 
 		`1. Call read_doc("${tabId}") and read the whole piece before judging any of it.`,
 		'2. Work finding by finding, most important first. Stop at 6 findings; a pass that flags everything ranks nothing.',
 		'3. Rationale first: for each finding call comment_doc anchored to the exact passage, with one to three first-person sentences on what is wrong and why it matters. If a local edit fixes it, then call edit_doc with that thread_id and the minimal fix. If only the author can resolve it, leave the comment without an edit.',
-		'4. The rules in your instructions are binding. Do not rewrite the author\'s voice. Work in the document\'s own language; never translate.',
-		'5. If the draft passes your lens, leave one comment on the opening line saying what works, and stop. Do not invent findings.',
+		'4. Write every comment in plain, explanatory, complete sentences, the way an advisor talks to the author. Be clear, simple, and straightforward. No catchy phrases, no punchy fragments, no clever labels. The writing instructions in your system prompt apply to your comments too.',
+		'5. The rules in your instructions are binding. Do not rewrite the author\'s voice. Work in the document\'s own language; never translate.',
+		'6. If the draft passes your lens, leave one comment on the opening line saying what works, and stop. Do not invent findings.',
 		'</reviewer_brief>'
 	].join('\n');
 }

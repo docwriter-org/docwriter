@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount, onDestroy } from 'svelte';
+	import { onMount, onDestroy, type Component } from 'svelte';
 	import type * as Y from 'yjs';
 	import MenuBar, { type MenuSpec } from '$lib/components/MenuBar.svelte';
 	import ModelPicker from '$lib/components/ModelPicker.svelte';
@@ -130,6 +130,7 @@
 		type ActiveReviewerInfo
 	} from '$lib/stores';
 	import ReviewerEditorDialog from '$lib/components/ReviewerEditorDialog.svelte';
+	import ReviewerMascot from '$lib/components/ReviewerMascot.svelte';
 	import { BUILTIN_REVIEWERS, type Reviewer } from '$lib/shared/reviewers';
 	import TabBar from '$lib/components/TabBar.svelte';
 	import AiProvenanceToggle from '$lib/components/AiProvenanceToggle.svelte';
@@ -2159,13 +2160,18 @@
 						...[...BUILTIN_REVIEWERS, ...$customReviewers].map((r) => ({
 							kind: 'action' as const,
 							label: r.name,
+							icon: ReviewerMascot as unknown as Component,
+							iconProps: { icon: r.icon },
+							iconColor: r.color,
 							onClick: () => runCritique(r)
 						})),
 						{ kind: 'divider' as const },
 						{
 							kind: 'action' as const,
 							label: 'New reviewer…',
-							onClick: () => (reviewerDialogOpen = true)
+							onClick: () => {
+								reviewerDialogOpen = true;
+							}
 						}
 					]
 				},

@@ -993,9 +993,13 @@
 		display: flex;
 		flex-direction: column;
 		gap: 14px;
-		/* Room at the top-right for the keep-shown toggle (pin-corner) so it
-		 * doesn't sit on the first message's timestamp. */
-		padding-right: 40px;
+	}
+	/* Room at the top-right for the keep-shown toggle (pin-corner) so it
+	 * doesn't sit on the first message's timestamp. Only the first message's
+	 * header row needs it — padding the whole column squeezed every message
+	 * body by 40px of dead space on the right. */
+	.message:first-child .author-block {
+		padding-right: 36px;
 	}
 	/* "Agent is responding…" — shown after sending a reply until the agent
 	 * posts a new message or edit (or the safety timeout fires). */
