@@ -1,91 +1,83 @@
 ---
 title: "The feedback popup"
-description: "Give the agent feedback on a selected passage, choose how it responds, and control the popup from the keyboard."
+description: "Give the agent feedback on a selected passage and choose how it responds. You can also use the popup with the keyboard."
 ---
 
-Select any passage in the editor and a feedback popup appears anchored
-to the selection. The popup is how you tell the agent what is wrong
-with a specific piece of text, and every action you can take on a
-selection is in it.
+When you select a passage in the editor, you see a feedback popup next
+to the selected text. Use the popup to tell the agent what is wrong or
+choose another action for the selected text.
 
 <Frame>
   ![The inline feedback popup, with text input, mode chips, and quick-action pills](/images/inline-feedback-popup.png)
 </Frame>
 
-The popup opens with its input focused, so you can type your feedback
-right away. Focus moves when the selection gesture ends. For a mouse
-selection that is when you release the button, and for a keyboard
-selection that is when you release the modifier key, e.g. releasing
-Shift after extending a selection with the arrow keys. Both kinds of
-selection behave the same, so the habit is the same everywhere. If you
-selected text because you want to edit it yourself, press Esc and keep
-typing.
+You can type as soon as you finish selecting text, because the input is
+already focused. With a mouse, finish the selection by releasing the
+button. With a keyboard, release the modifier key, e.g. release Shift
+after extending a selection with the arrow keys. If you selected text
+because you want to edit it yourself, press Esc and keep typing.
 
 ## Sending feedback
 
 Type what is wrong and press Enter, or click **Go**. The agent
-receives the selected passage and your feedback, opens a comment
-thread anchored to the passage, and responds on that thread in the
-next turn. Whatever you type also becomes a quick-action pill for
-later, as described below.
+receives the selected passage and your feedback, then starts a comment
+thread on the passage. The agent responds on that thread in the next
+turn. Your message is then available as a quick action for later use.
 
 ## Direct edit and plan first
 
 You choose how the agent responds with the two chips under the input.
 
 - **Direct edit.** The agent proposes its edit right away. The edit
-  appears as a pending review on the thread, and you accept or reject
-  it as usual.
-- **Plan first.** The agent first replies on the thread and explains
-  what it thinks is wrong and what it intends to change, and only then
-  proposes the edit on the same thread. The explanation sits in the
-  margin next to the pending edit, so you can read the reasoning
-  before you decide.
+  is shown as a pending review on the thread, where you can accept or
+  reject it.
+- **Plan first.** The agent first explains the problem and its planned
+  change. It then proposes an edit on the same
+  thread, so you can read the explanation before you decide.
 
-Direct edit is the default. The choice applies to the feedback you are
-about to send, and the popup returns to Direct edit the next time it
-opens.
+Direct edit is selected by default. Your selection is used for the
+current feedback only. When you select another passage, Direct edit is
+selected again.
 
 ## Quick actions
 
-The pills under the mode chips send the passage with a preset
-label, so common feedback takes one click.
+Use the quick actions under the mode choices when you want to send
+common feedback with one click.
 
-- **Too verbose** and **Incorrect** send the passage with that label
-  in the mode the chips show.
-- **AI smell** always runs plan first, whatever the chips show. The
-  agent explains on the thread why the passage reads as
-  machine-written before it proposes a fix.
+- **Too verbose** and **Incorrect** give the agent the selected passage
+  and the label you clicked. The agent follows the mode you chose.
+- **AI smell** always asks the agent to explain its reasoning first. The
+  agent explains why it thinks a machine wrote the passage. After the
+  explanation, it proposes a fix.
 
-The remaining pills are your own recent feedback messages. The popup
-keeps up to six of them, most recent first, and anything you type as
-custom feedback joins the list.
+Your six most recent feedback messages are also available as quick
+actions, with the newest message first. When you enter a new message,
+it is added to the list.
 
 ## Freeze for agent
 
-The **Freeze for agent** chip marks the selection as off-limits, so
-the agent cannot edit it until you unlock it. Freezing is described in
-[Writing rules](/customize/rules#freezing-a-passage).
+Click **Freeze for agent** to prevent the agent from editing the selected
+text. The selected text is locked until you unlock it. Read
+[Writing rules](/customize/rules#freezing-a-passage) for details.
 
 ## Keyboard behavior
 
-- **Esc** closes the popup, keeps your selection, and puts the caret
-  back in the document. The popup does not reopen for that same
-  selection, so you can type, copy, or delete without it coming back.
-  Selecting a different range brings it back.
-- **Backspace** or **Delete** with the input empty deletes the
-  selected text from the document. Use it when you selected a passage
-  to comment on and then decide to cut it instead.
-- Selections made with the keyboard open the popup too. Extend a
-  selection with Shift and the arrow keys, or select everything with
-  `Cmd/Ctrl+A`, and the popup opens with its input focused when you
-  release the modifier key.
+- Press **Esc** to close the popup without clearing your selection.
+  You can then type, copy, or delete in the document without
+  seeing the popup again for that selection. When you select a different
+  range, you see the popup again.
+- Press **Backspace** or **Delete** while the input is empty to delete
+  the selected text. Use either key when you decide to cut the passage
+  instead of commenting on it.
+- You can also select text with the keyboard. Hold Shift while you use
+  the arrow keys, or select everything with `Cmd/Ctrl+A`. When you
+  release the modifier key, you can type in the focused input.
 
 ## Where to go next
 
-- [Comments](/agent/comments). What happens on the thread your
-  feedback opens.
-- [Reviewing edits](/agent/reviewing-edits). Accept and reject the
-  edits your feedback produces.
-- [Writing rules](/customize/rules). Turn recurring feedback into a
-  standing rule.
+- Read [Comments](/agent/comments) to learn how to reply to or resolve
+  the thread that you started with your feedback.
+- Read [Reviewing edits](/agent/reviewing-edits) to learn how you can
+  accept or reject an edit from the agent.
+- Read [Writing rules](/customize/rules) to turn repeated feedback into
+  a rule for the agent.
