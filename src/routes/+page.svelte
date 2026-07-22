@@ -1426,10 +1426,25 @@
 						});
 					} else if (event === 'error') {
 						success = false;
+						const errText = String(parsed.error ?? 'Unknown error');
 						pushHistory({
 							type: 'assistant_text',
 							timestamp: Date.now(),
-							text: `Error: ${parsed.error}`
+							text: `Error: ${errText}`
+						});
+						// Errors buried in the collapsed history pane are
+						// effectively silent — surface a sticky toast too. Keyed
+						// by renderStart so repeat errors from one render (e.g.
+						// an error result followed by the SDK throwing on exit)
+						// collapse into a single toast.
+						const isAuthError = /auth|401|oauth|credential|api key/i.test(errText);
+						pushToast({
+							kind: 'error',
+							title: isAuthError ? 'Agent auth failed' : 'Agent run failed',
+							body: isAuthError
+								? `${errText}\n\nRe-authenticate your provider (e.g. run \`claude\` in a terminal and /login), then try again.`
+								: errText,
+							refId: String(renderStart)
 						});
 					}
 				}
@@ -1865,8 +1880,10 @@
 
 	/** Send the user's selections for an AskUserQuestion card back to the
 	 * server, which resolves the SDK's paused tool call and lets the
-	 * agent continue with the answers in context. */
-	async function answerUserQuestion(id: string, answers: string[]) {
+	 * agent continue with the answers in context. `answers` is keyed by
+	 * question text (multi-select labels comma-joined) — the shape the
+	 * SDK's AskUserQuestion input schema requires. */
+	async function answerUserQuestion(id: string, answers: Record<string, string>) {
 		pendingUserQuestions.update((list) => list.filter((q) => q.id !== id));
 		try {
 			await fetch('/api/ask-user-reply', {
@@ -1880,7 +1897,7 @@
 		pushHistory({
 			type: 'user_action',
 			timestamp: Date.now(),
-			description: `Answered: ${answers.join(', ')}`
+			description: `Answered: ${Object.values(answers).join(' · ')}`
 		});
 	}
 
@@ -3065,8 +3082,15 @@
 {/if}
 
 <ToastStack
-	onAccept={(t) => (t.kind === 'rule' ? acceptProposedRule(t.refId) : acceptProposedHook(t.refId))}
-	onDismiss={(t) => (t.kind === 'rule' ? rejectProposedRule(t.refId) : rejectProposedHook(t.refId))}
+	onAccept={(t) => {
+		if (t.kind === 'rule') acceptProposedRule(t.refId);
+		else if (t.kind === 'hook') acceptProposedHook(t.refId);
+	}}
+	onDismiss={(t) => {
+		if (t.kind === 'rule') rejectProposedRule(t.refId);
+		else if (t.kind === 'hook') rejectProposedHook(t.refId);
+		else dismissToast(t.id);
+	}}
 />
 
 <Dialog />

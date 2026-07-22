@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { fly } from 'svelte/transition';
 	import { cubicOut } from 'svelte/easing';
-	import { Check, X, Sparkles, Terminal } from 'lucide-svelte';
+	import { Check, X, Sparkles, Terminal, AlertTriangle } from 'lucide-svelte';
 	import { toastQueue, type ToastSpec } from '$lib/toasts';
 
 	interface Props {
@@ -19,25 +19,33 @@
 {#if toasts.length > 0}
 	<div class="toast-stack" role="region" aria-label="Agent proposals">
 		{#each toasts as toast (toast.id)}
-			<div class="toast" transition:fly={{ x: 16, duration: 220, easing: cubicOut }}>
+			<div
+				class="toast"
+				class:toast-error={toast.kind === 'error'}
+				transition:fly={{ x: 16, duration: 220, easing: cubicOut }}
+			>
 				<div class="toast-header">
 					<span class="toast-avatar">
 						{#if toast.kind === 'rule'}
 							<Sparkles size={12} strokeWidth={1.9} />
+						{:else if toast.kind === 'error'}
+							<AlertTriangle size={12} strokeWidth={1.9} />
 						{:else}
 							<Terminal size={12} strokeWidth={1.9} />
 						{/if}
 					</span>
-					<span class="toast-kicker">Proposed {toast.kind}</span>
+					<span class="toast-kicker">{toast.kind === 'error' ? toast.title : `Proposed ${toast.kind}`}</span>
 				</div>
 				<div class="toast-body">{toast.body}</div>
 				<div class="toast-footer">
 					<button class="toast-btn dismiss" onclick={() => onDismiss(toast)}>
 						<X size={12} /> Dismiss
 					</button>
-					<button class="toast-btn accept" onclick={() => onAccept(toast)}>
-						<Check size={12} /> Accept
-					</button>
+					{#if toast.kind !== 'error'}
+						<button class="toast-btn accept" onclick={() => onAccept(toast)}>
+							<Check size={12} /> Accept
+						</button>
+					{/if}
 				</div>
 			</div>
 		{/each}
@@ -132,5 +140,15 @@
 	}
 	.toast-btn.accept:hover {
 		filter: brightness(1.05);
+	}
+	.toast-error {
+		border-color: color-mix(in srgb, #d5484f 45%, var(--border-light));
+	}
+	.toast-error .toast-avatar {
+		background: color-mix(in srgb, #d5484f 14%, transparent);
+		color: #d5484f;
+	}
+	.toast-error .toast-kicker {
+		color: #d5484f;
 	}
 </style>

@@ -15,7 +15,11 @@ import { writable } from 'svelte/store';
 
 export interface ToastSpec {
 	id: string;
-	kind: 'rule' | 'hook';
+	/** 'rule' / 'hook' are agent proposals (Accept / Dismiss); 'error' is a
+	 * dismiss-only notification for failed agent runs — errors used to be
+	 * visible only inside the collapsed history pane, i.e. effectively
+	 * silent. */
+	kind: 'rule' | 'hook' | 'error';
 	title: string;
 	body: string;
 	/** The ProposedRule / ProposedHook id this toast represents. */

@@ -29,7 +29,8 @@ import {
 	readReviewRounds,
 	getCommentsMap,
 	AGENT_ORIGIN,
-	normalizeTypography
+	normalizeTypography,
+	captureAnchorContext
 } from '$lib/shared/ydoc-codec';
 import { isScratchPath, resolveTabFromPath, isOpenTab } from './path-router';
 import { classifyRoundKind } from '$lib/review-diff';
@@ -254,7 +255,7 @@ export async function runTabWrite(
 						const occIdx = computeAnchorOccurrenceIndex(
 							baseForRound, anchorQuote, fullOldStr
 						);
-						threadId = createAgentEditThread(doc, anchorQuote, occIdx);
+						threadId = createAgentEditThread(doc, anchorQuote, occIdx, baseForRound);
 					}
 				}
 				const round: PendingReviewRound = {
@@ -338,12 +339,25 @@ function computeAnchorOccurrenceIndex(
 	}
 }
 
-function createAgentEditThread(doc: Y.Doc, oldString: string, occurrenceIndex: number): string {
+function createAgentEditThread(
+	doc: Y.Doc,
+	oldString: string,
+	occurrenceIndex: number,
+	docText: string
+): string {
 	const threadId = 'thread_' + cryptoRandomId();
 	const now = Date.now();
+	const anchorIdx = nthOccurrenceIndex(docText, oldString, occurrenceIndex);
 	const thread: CommentThread = {
 		id: threadId,
-		anchor: { quote: oldString, occurrenceIndex },
+		anchor: {
+			quote: oldString,
+			occurrenceIndex,
+			// Snapshot the surroundings so the client's quote fallback can
+			// tell "this text came back" (undo) apart from "the same string
+			// was typed somewhere else" once the passage is deleted.
+			...(anchorIdx >= 0 ? captureAnchorContext(docText, anchorIdx, oldString.length) : {})
+		},
 		messages: [
 			{
 				id: 'msg_' + cryptoRandomId(),
@@ -357,6 +371,20 @@ function createAgentEditThread(doc: Y.Doc, oldString: string, occurrenceIndex: n
 	};
 	getCommentsMap(doc).set(threadId, thread);
 	return threadId;
+}
+
+/** Character index of the `occurrenceIndex`-th occurrence of `needle` in
+ * `haystack`, or -1 when there are fewer occurrences. */
+function nthOccurrenceIndex(haystack: string, needle: string, occurrenceIndex: number): number {
+	if (!needle) return -1;
+	let idx = 0;
+	let found = 0;
+	while ((idx = haystack.indexOf(needle, idx)) !== -1) {
+		if (found === occurrenceIndex) return idx;
+		found += 1;
+		idx += needle.length;
+	}
+	return -1;
 }
 
 // ---- Auto-open-as-tab -----------------------------------------------------
@@ -783,9 +811,15 @@ function createAgentCommentThread(
 ): string {
 	const threadId = 'thread_' + cryptoRandomId();
 	const now = Date.now();
+	const liveText = serializeYDoc(doc);
+	const anchorIdx = nthOccurrenceIndex(liveText, anchorText, occurrenceIndex);
 	const thread: CommentThread = {
 		id: threadId,
-		anchor: { quote: anchorText, occurrenceIndex },
+		anchor: {
+			quote: anchorText,
+			occurrenceIndex,
+			...(anchorIdx >= 0 ? captureAnchorContext(liveText, anchorIdx, anchorText.length) : {})
+		},
 		messages: [
 			{
 				id: 'msg_' + cryptoRandomId(),

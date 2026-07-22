@@ -10,7 +10,7 @@
 	} from '$lib/stores';
 
 	interface Props {
-		onAnswerQuestion: (id: string, answers: string[]) => void;
+		onAnswerQuestion: (id: string, answers: Record<string, string>) => void;
 		onRunPlan: (id: string) => void;
 		onDismissPlan: (id: string) => void;
 		onRejectPlan: (id: string, feedback: string) => void;
@@ -30,7 +30,12 @@
 	let activePlan = $derived(!activeQuestion ? (plans[0] ?? null) : null);
 	let visible = $derived(activeQuestion !== null || activePlan !== null);
 
-	let multiSelections = $state<Record<string, Set<string>>>({});
+	/** Per-question selections, keyed `${cardId}:${questionIdx}`. Single-select
+	 * questions hold a one-element set (radio behavior); multiSelect questions
+	 * hold any number. The card is only submitted once EVERY question has a
+	 * selection — a card with several questions must not vanish after the
+	 * first click. */
+	let selections = $state<Record<string, Set<string>>>({});
 
 	// "Reject with feedback" flow for plan cards. Null = footer shows the
 	// primary action buttons; non-null = textarea is open for this plan id.
@@ -71,34 +76,61 @@
 
 	function toggleMultiSelection(cardId: string, qIdx: number, label: string) {
 		const key = `${cardId}:${qIdx}`;
-		const current = multiSelections[key] ?? new Set<string>();
+		const current = selections[key] ?? new Set<string>();
 		const next = new Set(current);
 		if (next.has(label)) next.delete(label);
 		else next.add(label);
-		multiSelections = { ...multiSelections, [key]: next };
+		selections = { ...selections, [key]: next };
 	}
 
-	function isMultiSelected(cardId: string, qIdx: number, label: string): boolean {
-		return multiSelections[`${cardId}:${qIdx}`]?.has(label) ?? false;
+	function isSelected(cardId: string, qIdx: number, label: string): boolean {
+		return selections[`${cardId}:${qIdx}`]?.has(label) ?? false;
 	}
 
-	function submitMultiAnswer(card: PendingUserQuestion) {
-		const answers: string[] = [];
+	/** Build the record the SDK schema expects: question text → answer
+	 * (multi-select labels comma-joined, matching the SDK's documented
+	 * "multi-select answers are comma-separated" output shape). Option
+	 * order is preserved so the joined answer reads in display order. */
+	function buildAnswers(card: PendingUserQuestion): Record<string, string> | null {
+		const answers: Record<string, string> = {};
 		for (let i = 0; i < card.questions.length; i++) {
-			const sel = multiSelections[`${card.id}:${i}`];
-			if (sel && sel.size > 0) {
-				for (const label of sel) answers.push(label);
-			}
+			const q = card.questions[i];
+			const sel = selections[`${card.id}:${i}`];
+			if (!sel || sel.size === 0) return null;
+			const ordered = q.options.map((o) => o.label).filter((l) => sel.has(l));
+			answers[q.question] = ordered.join(', ');
 		}
-		if (answers.length === 0) return;
-		const next = { ...multiSelections };
+		return answers;
+	}
+
+	function allQuestionsAnswered(card: PendingUserQuestion): boolean {
+		return card.questions.every((_, i) => (selections[`${card.id}:${i}`]?.size ?? 0) > 0);
+	}
+
+	function clearCardSelections(card: PendingUserQuestion) {
+		const next = { ...selections };
 		for (let i = 0; i < card.questions.length; i++) delete next[`${card.id}:${i}`];
-		multiSelections = next;
+		selections = next;
+	}
+
+	function submitAnswers(card: PendingUserQuestion) {
+		const answers = buildAnswers(card);
+		if (!answers) return;
+		clearCardSelections(card);
 		onAnswerQuestion(card.id, answers);
 	}
 
-	function pickSingle(card: PendingUserQuestion, label: string) {
-		onAnswerQuestion(card.id, [label]);
+	/** Single-select click. A one-question card submits immediately (the
+	 * common quick-clarification case keeps its one-click feel); a card
+	 * with more questions records the choice radio-style and waits for
+	 * the Submit button so every question gets answered. */
+	function pickSingle(card: PendingUserQuestion, qIdx: number, label: string) {
+		if (card.questions.length === 1) {
+			clearCardSelections(card);
+			onAnswerQuestion(card.id, { [card.questions[0].question]: label });
+			return;
+		}
+		selections = { ...selections, [`${card.id}:${qIdx}`]: new Set([label]) };
 	}
 
 	// Render the plan as minimally-formatted markdown-ish HTML. Full
@@ -187,12 +219,12 @@
 									<!-- svelte-ignore a11y_no_static_element_interactions -->
 									<div
 										class="question-option multi"
-										class:selected={isMultiSelected(card.id, qIdx, opt.label)}
+										class:selected={isSelected(card.id, qIdx, opt.label)}
 										onclick={() => toggleMultiSelection(card.id, qIdx, opt.label)}
 									>
 										<div class="question-option-label">
 											<span class="question-checkbox">
-												{#if isMultiSelected(card.id, qIdx, opt.label)}
+												{#if isSelected(card.id, qIdx, opt.label)}
 													<Check size={10} />
 												{/if}
 											</span>
@@ -203,8 +235,21 @@
 										{/if}
 									</div>
 								{:else}
-									<button class="question-option single" onclick={() => pickSingle(card, opt.label)}>
-										<div class="question-option-label">{opt.label}</div>
+									<button
+										class="question-option single"
+										class:selected={isSelected(card.id, qIdx, opt.label)}
+										onclick={() => pickSingle(card, qIdx, opt.label)}
+									>
+										<div class="question-option-label">
+											{#if card.questions.length > 1}
+												<span class="question-radio">
+													{#if isSelected(card.id, qIdx, opt.label)}
+														<Check size={10} />
+													{/if}
+												</span>
+											{/if}
+											{opt.label}
+										</div>
 										{#if opt.description}
 											<div class="question-option-desc">{opt.description}</div>
 										{/if}
@@ -214,9 +259,17 @@
 						</div>
 					{/each}
 				</div>
-				{#if card.questions.some((q) => q.multiSelect)}
+				{#if card.questions.length > 1 || card.questions.some((q) => q.multiSelect)}
 					<div class="modal-footer">
-						<button class="btn-primary" onclick={() => submitMultiAnswer(card)}>
+						<span class="answer-progress">
+							{card.questions.filter((_, i) => (selections[`${card.id}:${i}`]?.size ?? 0) > 0).length}
+							/ {card.questions.length} answered
+						</span>
+						<button
+							class="btn-primary"
+							onclick={() => submitAnswers(card)}
+							disabled={!allQuestionsAnswered(card)}
+						>
 							<Check size={12} /> Submit
 						</button>
 					</div>
@@ -525,9 +578,35 @@
 		border-color: var(--accent-light);
 		background: var(--bg);
 	}
-	.question-option.multi.selected {
+	.question-option.multi.selected,
+	.question-option.single.selected {
 		border-color: var(--accent);
 		background: var(--accent-bg);
+	}
+	.question-radio {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 14px;
+		height: 14px;
+		border-radius: 50%;
+		border: 1px solid var(--border-light);
+		background: var(--bg);
+		color: var(--accent);
+	}
+	.question-option.single.selected .question-radio {
+		background: var(--accent);
+		color: white;
+		border-color: var(--accent);
+	}
+	.answer-progress {
+		margin-right: auto;
+		font-size: 11px;
+		color: var(--text-faint);
+	}
+	.btn-primary:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
 	}
 	.question-option-label {
 		display: flex;

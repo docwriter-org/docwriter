@@ -166,6 +166,19 @@ interface CommentThreadAnchor {
 	 * When absent, the overlay falls back to indexOf-based anchoring. */
 	relStart?: string;
 	relEnd?: string;
+	/** Plain-text snapshot of what surrounded the anchored passage when the
+	 * anchor was (last) known to be alive — up to ~32 chars each side,
+	 * newlines stripped. Used by the overlay's quote fallback: when the rel
+	 * positions die (the anchored text was deleted, e.g. by accepting an
+	 * agent edit), the thread may only re-attach to an occurrence of the
+	 * quote whose surroundings match this context. That keeps undo working
+	 * (restored text brings back the same context) while preventing the
+	 * thread from resurrecting on an unrelated occurrence of the same
+	 * string typed elsewhere later. Optional: captured server-side at
+	 * creation when the occurrence is unambiguous, and backfilled by the
+	 * client whenever the thread renders anchored. */
+	contextBefore?: string;
+	contextAfter?: string;
 }
 
 type CommentAuthor = 'user' | 'agent';

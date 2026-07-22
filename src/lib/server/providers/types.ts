@@ -50,7 +50,12 @@ export type ProviderEvent =
 	| { type: 'hook_proposal'; event: string; matcher?: string; command: string; reason?: string }
 	| { type: 'plan_proposed'; id: string; plan: string; originalMessage: string }
 	| { type: 'user_question'; id: string; questions: unknown[] }
-	| { type: 'hook_run'; hookId: string; event: string; command: string; status: string; exitCode?: number; stdout?: string; stderr?: string; durationMs?: number };
+	| { type: 'hook_run'; hookId: string; event: string; command: string; status: string; exitCode?: number; stdout?: string; stderr?: string; durationMs?: number }
+	/** A run that finished with an error result. Providers MUST yield this for
+	 * failed runs even when their SDK doesn't throw (e.g. the Claude CLI can
+	 * exit 0 after an error result) — otherwise the failure is invisible to
+	 * the user. */
+	| { type: 'error'; error: string };
 
 // ── canUseTool callback ─────────────────────────────────────────────────────
 
