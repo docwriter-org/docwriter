@@ -7,6 +7,7 @@ node_modules
 .wrangler
 /.svelte-kit
 /build
+/static/pdfjs/
 
 # OS
 .DS_Store
@@ -43,10 +44,16 @@ vite.config.ts.timestamp-*
 
 # Agent worktrees and locks
 .agents/
+/.codex/
 .claude/skills/*/.docwriter-bundled-skill
 .claude/skills/plain-writing/
 .claude/worktrees/
 .claude/scheduled_tasks.lock
+
+# Local architecture and session notes
+/ARCHITECTURE.md
+/architecture.html
+/session-viewer.html
 
 # bug-hunting scratch scripts
 scratch-*.ts

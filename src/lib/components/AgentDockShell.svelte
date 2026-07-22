@@ -2,13 +2,15 @@
 	import { onDestroy, type Snippet } from 'svelte';
 	import { Cat, Pause } from 'lucide-svelte';
 	import HistoryPane from './HistoryPane.svelte';
+	import ReviewerMascot from './ReviewerMascot.svelte';
 	import ShineBorder from './ShineBorder.svelte';
 	import {
 		dockExpanded,
 		isRendering,
 		submitCountdown,
 		queuedSubmissionCount,
-		agentSettings
+		agentSettings,
+		activeReviewer
 	} from '$lib/stores';
 	import { tooltip } from '$lib/actions/tooltip';
 
@@ -152,14 +154,20 @@
 						? 'Agent paused — double-click to resume. Single-click does nothing while paused.'
 						: 'Open the agent dock. Double-click to pause the agent (no auto-wake / Wake up / Send).'}
 				>
-					<span class="mascot-face" aria-hidden="true">
+					<span
+						class="mascot-face"
+						aria-hidden="true"
+						style:color={$activeReviewer && !paused ? $activeReviewer.color : undefined}
+					>
 						{#if paused}
 							<Pause size={16} strokeWidth={2.2} />
+						{:else if $activeReviewer}
+							<ReviewerMascot icon={$activeReviewer.icon} size={16} />
 						{:else}
 							<Cat size={16} strokeWidth={1.8} />
 						{/if}
 					</span>
-					<span class="dock-label">Agent</span>
+					<span class="dock-label">{$activeReviewer && !paused ? $activeReviewer.name : 'Agent'}</span>
 					<span class="header-status" aria-hidden="true">
 						{#if paused}
 							<span class="paused-label">Paused</span>

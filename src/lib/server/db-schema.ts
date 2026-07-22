@@ -130,6 +130,22 @@ const MIGRATIONS: Array<{ version: number; sql: string }> = [
 		// JSON array of RuleExample ({violation, note?}) attached to a rule;
 		// NULL for rules without examples.
 		sql: `ALTER TABLE rules ADD COLUMN examples TEXT;`
+	},
+	{
+		version: 8,
+		// User-created reviewer agents for critique passes. Built-in
+		// reviewers ship as code constants (src/lib/shared/reviewers.ts) so
+		// their prompts version with the app; only custom ones live here.
+		sql: `
+			CREATE TABLE IF NOT EXISTS reviewers (
+				id         TEXT PRIMARY KEY,
+				name       TEXT NOT NULL,
+				icon       TEXT NOT NULL DEFAULT 'owl',
+				color      TEXT NOT NULL DEFAULT '#57534e',
+				prompt     TEXT NOT NULL,
+				created_at INTEGER NOT NULL
+			);
+		`
 	}
 ];
 

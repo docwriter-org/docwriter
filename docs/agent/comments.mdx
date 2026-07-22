@@ -26,6 +26,11 @@ Comment threads are persistent. They survive reloads, sessions, and
 git commits (the threads live in `.docwriter/docwriter.db`, not in
 your tab files).
 
+When you run a [critique pass](/agent/steering-the-agent#running-a-critique-pass),
+the reviewer leaves each finding as a comment on the relevant passage.
+You see the reviewer's name, mascot, and color on the comment. You can
+reply to or resolve the comment like any other thread.
+
 ## What you can do with a thread
 
 **Reply** by typing in the thread input and submitting. The reply
@@ -75,6 +80,9 @@ A comment thread is created when:
 3. **The agent proposes an edit.** Before the agent proposes an edit,
    it starts a thread. The agent explains what it will change, and you
    can read the explanation next to the edit in the margin.
+4. **You run a critique pass.** The reviewer reads the active file and
+   leaves up to six findings. When a small change can fix a problem, the
+   reviewer may propose an edit on the same thread.
 
 ## When to reply vs. when to approve
 

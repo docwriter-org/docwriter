@@ -5,10 +5,11 @@
 	import { marked } from 'marked';
 	import { FileEdit, User, Bot, Play, CheckCircle, XCircle, Eye, Terminal, Maximize2, X, RotateCcw, MessagesSquare, Cat, Sparkles, BellOff, Bell, ChevronDown, Pause } from 'lucide-svelte';
 	import type { HistoryEntry } from '$lib/types';
-	import { agentHistory, isRendering, historyVerbosity, sessionCost, agentSettings, pendingReviewRounds, submitCountdown, type SessionCost } from '$lib/stores';
+	import { agentHistory, isRendering, historyVerbosity, sessionCost, agentSettings, pendingReviewRounds, submitCountdown, activeReviewer, type SessionCost } from '$lib/stores';
 	import type { HistoryVerbosity } from '$lib/stores';
 	import { onMount, onDestroy, type Snippet } from 'svelte';
 	import SessionViewer from './SessionViewer.svelte';
+	import ReviewerMascot from './ReviewerMascot.svelte';
 	import ShineBorder from './ShineBorder.svelte';
 	import { tooltip } from '$lib/actions/tooltip';
 
@@ -394,14 +395,20 @@
 					aria-pressed={paused}
 					use:tooltip={agentTooltip}
 				>
-					<span class="mascot-face" aria-hidden="true">
+					<span
+						class="mascot-face"
+						aria-hidden="true"
+						style:color={$activeReviewer && !paused ? $activeReviewer.color : undefined}
+					>
 						{#if paused}
 							<Pause size={13} strokeWidth={2.2} />
+						{:else if $activeReviewer}
+							<ReviewerMascot icon={$activeReviewer.icon} size={13} />
 						{:else}
 							<Cat size={13} strokeWidth={1.8} />
 						{/if}
 					</span>
-					<span class="header-label">Agent</span>
+					<span class="header-label">{$activeReviewer && !paused ? $activeReviewer.name : 'Agent'}</span>
 					<span class="header-status" aria-hidden="true">
 						{#if paused}
 							<span class="paused-label">Paused</span>
@@ -465,6 +472,15 @@
 			</div>
 		{/if}
 	</div>
+
+	{#if $activeReviewer}
+		<div class="reviewer-strip" style:--reviewer-color={$activeReviewer.color}>
+			<span class="reviewer-strip-face">
+				<ReviewerMascot icon={$activeReviewer.icon} size={13} />
+			</span>
+			<span><b>{$activeReviewer.name}</b> is reviewing the draft. Findings arrive as comments.</span>
+		</div>
+	{/if}
 
 	<div
 		class="entries"
@@ -782,6 +798,28 @@
 		border: 1px solid var(--border-light);
 		border-radius: 10px;
 		box-shadow: 0 4px 14px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.03);
+	}
+	/* Reviewer strip — shown under the header while a critique pass runs. */
+	.reviewer-strip {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		margin: 0 8px 8px;
+		padding: 6px 12px;
+		font-size: 11.5px;
+		line-height: 1.45;
+		color: var(--text-secondary);
+		background: color-mix(in srgb, var(--reviewer-color, var(--accent)) 10%, var(--bg-elevated));
+		border: 1px solid color-mix(in srgb, var(--reviewer-color, var(--accent)) 25%, var(--border-light));
+		border-radius: 8px;
+	}
+	.reviewer-strip-face {
+		display: inline-flex;
+		flex-shrink: 0;
+		color: var(--reviewer-color, var(--accent));
+	}
+	.reviewer-strip b {
+		font-weight: 600;
 	}
 	.header-label {
 		font-size: 11px;

@@ -46,7 +46,7 @@ project-root/
                          server Y.Doc; git-friendly)
   drafts/chapter-1.md  ← any workspace file can be an open tab
   .docwriter/
-    docwriter.db       ← SQLite: yjs_updates, tabs, rules,
+    docwriter.db       ← SQLite: yjs_updates, tabs, rules, reviewers,
                          recent_actions, action_usage_counts,
                          provider_session_entries, conversation_events,
                          kv (sessionId, agentSettings, last_seen:<tabId>…)
@@ -164,6 +164,31 @@ local typing ⇒ restart the idle timer).
 
 Edited via the `AgentDock` settings popover (click the gear icon pinned to
 the mascot card).
+
+## Critique passes (reviewer agents)
+
+Settings → **Critique pass** lists reviewer agents — built-ins (PhD
+Advisor, Copy Editor, Skeptic, Fresh Eyes) from
+`src/lib/shared/reviewers.ts`, custom ones from the SQLite `reviewers`
+table (`/api/reviewers` CRUD; created via `ReviewerEditorDialog`, which
+collects name, mascot, color, and the reviewer's system prompt). Picking
+one POSTs `/api/render` with `reviewerId`:
+
+- The server resolves the reviewer, builds a `<mode>` message
+  (`buildCritiqueMessage` in `src/lib/server/reviewers.ts`) instructing
+  the main agent to spawn ONE subagent via the Agent tool with the
+  reviewer's brief (its prompt + the shared pass procedure: read the
+  whole draft, rationale comment before each edit, ≤6 findings, honest
+  "no findings" allowed). Critique renders run at `effort: 'medium'`.
+- `setActiveReviewerId` in `mcp-doc-tools.ts` (same lifecycle as
+  `setActiveFeedbackThreadId`) stamps `reviewerId` onto every review
+  round and agent comment the pass creates. Findings are ordinary
+  threads + pending rounds — Accept/Reject/reply machinery unchanged.
+- Client: the `activeReviewer` store makes the agent pill hand itself to
+  the reviewer while the pass runs (mascot + name, reviewer-tinted, in
+  `AgentDockShell` and `HistoryPane`); `CommentGutter` renders the
+  reviewer's mascot + name on attributed cards via `ReviewerMascot`
+  (line-icon set keyed by the reviewer's `icon` field).
 
 ## Conventions
 

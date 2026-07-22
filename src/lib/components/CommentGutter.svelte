@@ -21,13 +21,15 @@
 	import { onDestroy, onMount } from 'svelte';
 	import { fly } from 'svelte/transition';
 	import { cubicOut } from 'svelte/easing';
-	import type { CommentThread } from '$lib/types';
+	import type { CommentMessage, CommentThread } from '$lib/types';
 	import { resolveThreadRange } from '$lib/editor/comment-overlay';
 	import { resolveRoundAnchorPos } from '$lib/editor/diff-overlay';
 	import { tooltip } from '$lib/actions/tooltip';
 	import type { MaterializedPendingReviewRound } from '$lib/review-rounds';
 	import { summarizeRound } from '$lib/review-diff';
-	import { isRendering } from '$lib/stores';
+	import { isRendering, customReviewers } from '$lib/stores';
+	import { BUILTIN_REVIEWERS, type Reviewer } from '$lib/shared/reviewers';
+	import ReviewerMascot from '$lib/components/ReviewerMascot.svelte';
 
 	interface Props {
 		threads: CommentThread[];
@@ -155,6 +157,28 @@
 	 * mute mode. User-opened threads always show. */
 	function isAgentThread(thread: CommentThread): boolean {
 		return thread.messages[0]?.author === 'agent';
+	}
+
+	// ── Reviewer attribution ──────────────────────────────────────────────
+	// Messages and rounds created during a critique pass carry a
+	// `reviewerId`; render the reviewer's mascot + name in place of the
+	// default agent cat. Unknown ids (a deleted custom reviewer) fall back
+	// to the plain agent style.
+	let reviewerById = $derived(
+		new Map<string, Reviewer>(
+			[...BUILTIN_REVIEWERS, ...$customReviewers].map((r) => [r.id, r])
+		)
+	);
+	function messageReviewer(message: CommentMessage | undefined): Reviewer | null {
+		if (!message?.reviewerId) return null;
+		return reviewerById.get(message.reviewerId) ?? null;
+	}
+	function threadReviewer(thread: CommentThread): Reviewer | null {
+		return messageReviewer(thread.messages.find((m) => m.author === 'agent'));
+	}
+	function roundReviewer(round: MaterializedPendingReviewRound): Reviewer | null {
+		if (!round.reviewerId) return null;
+		return reviewerById.get(round.reviewerId) ?? null;
 	}
 
 	// Cards that appear during the initial mount / position pass shouldn't
@@ -575,20 +599,28 @@
 				{/if}
 				<div class="card-messages">
 					{#each thread.messages as message (message.id)}
+						{@const rv = message.author === 'agent' ? messageReviewer(message) : null}
 						<div class="message" class:from-agent={message.author === 'agent'} class:from-user={message.author === 'user'}>
 							<span
 								class="avatar msg"
 								class:avatar-agent={message.author === 'agent'}
 								class:avatar-user={message.author !== 'agent'}
+								style:color={rv?.color}
 							>
 								{#if message.author === 'agent'}
-									<Cat size={14} strokeWidth={1.8} />
+									{#if rv}
+										<ReviewerMascot icon={rv.icon} size={14} />
+									{:else}
+										<Cat size={14} strokeWidth={1.8} />
+									{/if}
 								{:else}
 									<User size={14} strokeWidth={1.8} />
 								{/if}
 							</span>
 							<span class="author-block">
-								<span class="author-name">{message.author === 'agent' ? 'Agent' : 'You'}</span>
+								<span class="author-name" style:color={rv?.color}
+									>{message.author === 'agent' ? (rv?.name ?? 'Agent') : 'You'}</span
+								>
 								<span class="timestamp">{formatTimestamp(message.timestamp)}</span>
 							</span>
 							<div class="message-body">{@html renderMarkdown(message.text)}</div>
@@ -718,14 +750,21 @@
 					</div>
 				</div>
 			{:else}
+				{@const collapsedReviewer =
+					firstMessageAuthor(thread) === 'agent' ? threadReviewer(thread) : null}
 				<div class="card-collapsed-row">
 					<span
 						class="avatar"
 						class:avatar-agent={firstMessageAuthor(thread) === 'agent'}
 						class:avatar-user={firstMessageAuthor(thread) !== 'agent'}
+						style:color={collapsedReviewer?.color}
 					>
 						{#if firstMessageAuthor(thread) === 'agent'}
-							<Cat size={12} strokeWidth={1.8} />
+							{#if collapsedReviewer}
+								<ReviewerMascot icon={collapsedReviewer.icon} size={12} />
+							{:else}
+								<Cat size={12} strokeWidth={1.8} />
+							{/if}
 						{:else}
 							<User size={12} strokeWidth={1.8} />
 						{/if}
@@ -746,6 +785,7 @@
 	{/each}
 	{#each visibleLooseEditRounds as round (round.id)}
 		{@const top = stackedPositions.get(editCardId(round.id)) ?? 0}
+		{@const looseReviewer = roundReviewer(round)}
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<div
 			class="gutter-card loose-edit-card"
@@ -757,8 +797,12 @@
 			onmouseleave={() => onHoverEdit(null)}
 		>
 			<div class="card-collapsed-row">
-				<span class="avatar avatar-agent">
-					<Sparkles size={12} strokeWidth={1.8} />
+				<span class="avatar avatar-agent" style:color={looseReviewer?.color}>
+					{#if looseReviewer}
+						<ReviewerMascot icon={looseReviewer.icon} size={12} />
+					{:else}
+						<Sparkles size={12} strokeWidth={1.8} />
+					{/if}
 				</span>
 				<div class="card-preview" title={summarizeRound(round)}>
 					{summarizeRound(round)}
@@ -949,9 +993,13 @@
 		display: flex;
 		flex-direction: column;
 		gap: 14px;
-		/* Room at the top-right for the keep-shown toggle (pin-corner) so it
-		 * doesn't sit on the first message's timestamp. */
-		padding-right: 40px;
+	}
+	/* Room at the top-right for the keep-shown toggle (pin-corner) so it
+	 * doesn't sit on the first message's timestamp. Only the first message's
+	 * header row needs it — padding the whole column squeezed every message
+	 * body by 40px of dead space on the right. */
+	.message:first-child .author-block {
+		padding-right: 36px;
 	}
 	/* "Agent is responding…" — shown after sending a reply until the agent
 	 * posts a new message or edit (or the safety timeout fires). */
