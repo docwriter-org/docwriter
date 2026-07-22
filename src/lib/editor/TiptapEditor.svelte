@@ -1418,6 +1418,27 @@
 		editorRoot.addEventListener('pointerdown', handlePointerDown);
 		window.addEventListener('pointerup', handlePointerUp);
 
+		// Keyboard selections get the same treatment as mouse selections: the
+		// feedback popup takes focus when the selection GESTURE ends. For the
+		// mouse that's pointerup (above); for the keyboard it's releasing the
+		// modifier that drove the selection — Shift for shift+arrow/Home/End,
+		// Meta/Ctrl for select-all. Focusing on every selectionUpdate would
+		// break mid-gesture extension (the first shift+arrow would yank focus
+		// out of the editor), so only the modifier release promotes the
+		// popup to focused. Without this, mouse selections focused the
+		// feedback box while keyboard selections silently didn't, and the
+		// "press Esc to type into the document" habit never formed.
+		// updateFeedbackPopup carries all the guards this needs: it no-ops
+		// unless the editor itself is focused (so releasing Shift while
+		// typing IN the popup can't re-trigger), requires a non-empty
+		// TextSelection, and respects an Esc-dismissed range.
+		const handleSelectionKeyup = (e: KeyboardEvent) => {
+			if (e.key !== 'Shift' && e.key !== 'Meta' && e.key !== 'Control') return;
+			if (pointerSelecting) return;
+			requestAnimationFrame(() => updateFeedbackPopup(true));
+		};
+		editorRoot.addEventListener('keyup', handleSelectionKeyup);
+
 		// Comment thread decorations dispatch this event when the user
 		// clicks an inline highlight or the gutter pill. With cards in
 		// the right-side comment gutter we just set the store — the
@@ -1513,6 +1534,7 @@
 		detachFeedbackPointerHandlers = () => {
 			editorRoot.removeEventListener('pointerdown', handlePointerDown);
 			window.removeEventListener('pointerup', handlePointerUp);
+			editorRoot.removeEventListener('keyup', handleSelectionKeyup);
 			detachOpenThread();
 		};
 	});
