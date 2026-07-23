@@ -87,7 +87,7 @@ const BUNDLED_SKILLS: BundledSkill[] = [
 	},
 	{
 		id: 'plain-writing',
-		source: 'https://github.com/shreyashankar/plain-writing-skill',
+		source: 'https://github.com/docwriter-org/plain-writing-skill',
 		files: [
 			{ relativePath: 'SKILL.md', content: plainWritingSkill },
 			{ relativePath: join('assets', 'revision_template.html'), content: plainWritingTemplate }

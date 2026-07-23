@@ -102,14 +102,14 @@
 	},
 	"footer": {
 		"socials": {
-			"github": "https://github.com/shreyashankar/docwriter",
+			"github": "https://github.com/docwriter-org/docwriter",
 			"website": "https://sh-reya.com"
 		},
 		"links": [
 			{
 				"header": "Project",
 				"items": [
-					{ "label": "GitHub", "href": "https://github.com/shreyashankar/docwriter" }
+					{ "label": "GitHub", "href": "https://github.com/docwriter-org/docwriter" }
 				]
 			},
 			{

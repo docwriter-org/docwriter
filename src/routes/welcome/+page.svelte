@@ -27,7 +27,7 @@
 
 	onMount(() => {
 		mounted = true;
-		fetch('https://api.github.com/repos/shreyashankar/plain-writing-skill', {
+		fetch('https://api.github.com/repos/docwriter-org/plain-writing-skill', {
 			headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'docwriter-landing' }
 		})
 			.then((res) => (res.ok ? res.json() : null))
@@ -265,7 +265,7 @@
 		<div class="try-buttons">
 			<div class="try-row">
 				<div class="install-block disabled"><code>npx docwriter</code> <span class="install-note">(coming soon!)</span></div>
-				<a href="https://github.com/shreyashankar/plain-writing-skill" class="install-block" target="_blank" rel="noopener">
+				<a href="https://github.com/docwriter-org/plain-writing-skill" class="install-block" target="_blank" rel="noopener">
 					<span class="install-label">Plain writing skill</span>
 					{#if plainWritingStars !== null}
 						<span class="install-stars" aria-label="{plainWritingStars} GitHub stars">★ {plainWritingStars.toLocaleString()}</span>
@@ -273,7 +273,7 @@
 				</a>
 			</div>
 			<div class="try-row">
-				<a href="https://github.com/shreyashankar/docwriter" class="install-block" target="_blank" rel="noopener">
+				<a href="https://github.com/docwriter-org/docwriter" class="install-block" target="_blank" rel="noopener">
 					<span class="install-label">DocWriter on GitHub</span>
 				</a>
 			</div>

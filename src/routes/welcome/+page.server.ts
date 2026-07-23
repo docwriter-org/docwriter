@@ -1,4 +1,4 @@
-const PLAIN_WRITING_SKILL_REPO = 'shreyashankar/plain-writing-skill';
+const PLAIN_WRITING_SKILL_REPO = 'docwriter-org/plain-writing-skill';
 
 async function fetchPlainWritingStars(): Promise<number | null> {
 	try {
