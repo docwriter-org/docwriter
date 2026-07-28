@@ -22,6 +22,7 @@
 		FolderPlus
 	} from 'lucide-svelte';
 	import { showAlert, showConfirm } from '$lib/dialogs';
+	import { logUi } from '$lib/interaction-log-client';
 
 	interface Props {
 		/** Fires when the user clicks a file (not a folder). */
@@ -171,6 +172,7 @@
 	function openMenu(e: MouseEvent, entry: FileEntry) {
 		e.preventDefault();
 		e.stopPropagation();
+		logUi('ui.menu_open', { menu: 'tree_context' });
 		selectedPath = entry.path;
 		menu = { entry, x: e.clientX, y: e.clientY };
 	}

@@ -7,11 +7,15 @@
  */
 import type { Handle } from '@sveltejs/kit';
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { getRules, getSessionId, setSessionId } from '$lib/server/runtime-state';
 import { syncRulesToClaudeMemory } from '$lib/server/claude-memory';
 import { installBundledSkills } from '$lib/server/skills-install';
 import { createWsServer } from '$lib/server/ws-server';
 import { loadGlobalKeys, loadRepoEnv } from '$lib/server/api-keys';
+import { kvGet, kvSet } from '$lib/server/db-writes';
+import { logInteraction, PARTICIPANT_KV_KEY } from '$lib/server/interaction-log';
 
 // Load repo .env, then ~/.docwriter/keys.env into process.env so provider API
 // keys are available before any render path reads process.env.<KEY>. The
@@ -28,7 +32,8 @@ loadGlobalKeys();
 // Stashed on globalThis so the same module scope survives Vite HMR.
 const SERVER_INSTANCE_ID_KEY = '__docwriterServerInstanceId';
 const globalAny = globalThis as unknown as Record<string, string | undefined>;
-if (!globalAny[SERVER_INSTANCE_ID_KEY]) {
+const freshBoot = !globalAny[SERVER_INSTANCE_ID_KEY];
+if (freshBoot) {
 	globalAny[SERVER_INSTANCE_ID_KEY] = randomUUID();
 }
 
@@ -62,6 +67,35 @@ try {
 	syncRulesToClaudeMemory(getRules());
 } catch {
 	/* fresh workspace or DB not yet initialized — ignore */
+}
+
+// Study instrumentation: stamp the participant ID (from the --participant
+// CLI flag via DOCWRITER_PARTICIPANT) into kv, and log one app.boot per
+// server process. Guarded by the same freshness check that protects the
+// instance ID, so Vite HMR re-executions of this module can't double-log.
+if (freshBoot) {
+	try {
+		const participant = process.env.DOCWRITER_PARTICIPANT?.trim() || null;
+		if (participant) kvSet(PARTICIPANT_KV_KEY, participant);
+		let version: string | null = null;
+		try {
+			// cwd is the package root both in dev (repo root) and under
+			// bin/docwriter.js (which spawns with cwd: pkgRoot).
+			version =
+				(JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8')) as {
+					version?: string;
+				}).version ?? null;
+		} catch {
+			// Version is nice-to-have; never block boot logging on it.
+		}
+		logInteraction('app.boot', {
+			version,
+			participant: participant ?? kvGet(PARTICIPANT_KV_KEY),
+			newSession: process.env.DOCWRITER_NEW_SESSION === '1'
+		});
+	} catch {
+		// Fresh workspace or early DB init failure — ignore.
+	}
 }
 
 // Run at module load (= server startup), not per-request.

@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { Columns2, ExternalLink } from 'lucide-svelte';
 	import { selectedTheme } from '$lib/stores';
+	import { logUi } from '$lib/interaction-log-client';
 
 	/**
 	 * Top-right floating preview button. On click, opens /preview in a
@@ -66,6 +67,7 @@
 
 	function openPreview() {
 		if (!outputPath) return;
+		logUi('ui.preview', { mode: 'window', open: true });
 		const url = `/preview?path=${encodeURIComponent(outputPath)}&theme=${encodeURIComponent(theme)}`;
 		window.open(url, 'docwriter-preview', 'width=900,height=1200,resizable=yes,scrollbars=yes');
 	}
@@ -82,7 +84,10 @@
 				class="preview-btn icon-only"
 				class:active={splitOpen}
 				onclick={() => {
-					if (outputPath) onOpenSplit?.(outputPath);
+					if (outputPath) {
+						logUi('ui.preview', { mode: 'split', open: true });
+						onOpenSplit?.(outputPath);
+					}
 				}}
 				title={`Open side preview: ${outputPath.split('/').pop()}`}
 				aria-label="Open side preview"

@@ -61,13 +61,18 @@
 	} from '$lib/stores';
 	import type { Action, CommentThread, FeedbackMode } from '$lib/types';
 	import type { MaterializedPendingReviewRound } from '$lib/review-rounds';
+	import { logUi } from '$lib/interaction-log-client';
+	import type { RenderTrigger } from '$lib/shared/interaction-events';
 
 	const IDLE_MS = 3_000;
 
 	interface Props {
 		/** Workspace path for the tab this editor instance is bound to. */
 		tabId: string;
-		onSubmit?: (trigger?: string) => void;
+		/** Wake the agent. `trigger` is the user-facing message (undefined =
+		 * implicit wakeup); `opts.trigger` is the interaction-log label naming
+		 * which UI path submitted (idle countdown vs Cmd+Enter vs feedback…). */
+		onSubmit?: (trigger?: string, opts?: { trigger?: RenderTrigger }) => void;
 		/** One-shot scroll restore. Read once in onMount after the editor's
 		 * content has laid out, then ignored. The parent captures this from
 		 * `getScrollTop()` before tearing the editor down (Accept / Reject /
@@ -492,10 +497,19 @@
 		}
 	});
 
+	// Set by sendFeedback / sendCustomFeedback / freezeSelection before they
+	// close the popup, so closeFeedbackPopup can tell an acted-on popup from
+	// an abandoned one (blur, Escape, outside click) for the interaction log.
+	let feedbackActed = false;
+
 	function closeFeedbackPopup({
 		preserveSelection = false,
 		refocusEditor = false
 	}: { preserveSelection?: boolean; refocusEditor?: boolean } = {}) {
+		if (feedbackPopup && !feedbackActed) {
+			logUi('ui.feedback_abandoned', { hadCustomText: !!feedbackInput.trim() }, tabId);
+		}
+		feedbackActed = false;
 		// Most close paths collapse the selection so the blue highlight does
 		// not linger after a submit/outside click. Escape is different: the
 		// user may want to keep the range selected for copy, drag, delete, or
@@ -595,7 +609,8 @@
 	async function maybeOpenThreadForFeedback(
 		feedback: string,
 		passage: string,
-		relPositions: { relStart: string; relEnd: string } | null
+		relPositions: { relStart: string; relEnd: string } | null,
+		actionLabel?: string
 	): Promise<string | null> {
 		// Every feedback opens a thread so it persists on the passage — as a
 		// record in direct-edit mode, and as the conversation the agent's
@@ -609,6 +624,7 @@
 					tabId,
 					anchorText: passage,
 					message: feedback,
+					...(actionLabel ? { actionLabel } : {}),
 					...(relPositions ?? {})
 				})
 			});
@@ -647,18 +663,26 @@
 		if (!action.pinned) {
 			recentActions.update((prev) => [action, ...prev.filter((x) => x.id !== action.id)].slice(0, 6));
 		}
+		feedbackActed = true;
 		closeFeedbackPopup();
 		// Restore the mode for the trigger build — closeFeedbackPopup reset
 		// it to `edit`, but we want to honor what the user picked.
 		feedbackMode = modeSnapshot;
-		const threadId = await maybeOpenThreadForFeedback(action.label, text, relSnapshot);
+		// actionLabel only for built-in chips; custom chips resurfacing from
+		// recentActions carry user text, which stays out of the event log.
+		const threadId = await maybeOpenThreadForFeedback(
+			action.label,
+			text,
+			relSnapshot,
+			action.id.startsWith('custom_') ? undefined : action.label
+		);
 		if (threadId) {
 			newAwaitingThreadId = threadId;
 			tick().then(() => { newAwaitingThreadId = null; });
 		}
 		const trigger = buildFeedbackTrigger(action.label, text, false, threadId);
 		feedbackMode = 'edit';
-		if (onSubmit) onSubmit(trigger);
+		if (onSubmit) onSubmit(trigger, { trigger: 'feedback_chip' });
 	}
 
 	async function sendCustomFeedback() {
@@ -679,6 +703,7 @@
 		};
 		trackActionUsage(customAction.label);
 		recentActions.update((prev) => [customAction, ...prev.filter((x) => x.label !== customAction.label)].slice(0, 6));
+		feedbackActed = true;
 		closeFeedbackPopup();
 		feedbackMode = modeSnapshot;
 		const threadId = await maybeOpenThreadForFeedback(fb, text, relSnapshot);
@@ -688,7 +713,7 @@
 		}
 		const trigger = buildFeedbackTrigger(fb, text, true, threadId);
 		feedbackMode = 'edit';
-		if (onSubmit) onSubmit(trigger);
+		if (onSubmit) onSubmit(trigger, { trigger: 'feedback_chip' });
 	}
 
 	function syncPlainLineRows() {
@@ -1089,6 +1114,7 @@
 		if (!feedbackPopup) return;
 		const quote = feedbackPopup.text.trim();
 		if (!quote) return;
+		feedbackActed = true;
 		const text = makeFreezeRuleText(quote);
 		if ($rules.some((r) => r.text === text)) {
 			closeFeedbackPopup({ preserveSelection: false, refocusEditor: true });
@@ -1114,7 +1140,8 @@
 		closeFeedbackPopup({ preserveSelection: false, refocusEditor: true });
 		// Wake the agent so it knows this passage is off-limits going forward.
 		onSubmit?.(
-			`The user froze this passage — do not edit it (a Freeze rule was added):\n"${quote}"`
+			`The user froze this passage — do not edit it (a Freeze rule was added):\n"${quote}"`,
+			{ trigger: 'freeze' }
 		);
 	}
 
@@ -1143,7 +1170,8 @@
 		if (editor) setFreezeOverlayState(editor, { rules: next });
 		if (wakeAgent) {
 			onSubmit?.(
-				`The user unlocked a previously frozen passage — you may edit it again if needed:\n"${quote}"`
+				`The user unlocked a previously frozen passage — you may edit it again if needed:\n"${quote}"`,
+				{ trigger: 'freeze' }
 			);
 		}
 	}
@@ -1276,7 +1304,7 @@
 			const current = editor ? docPlainText(editor.state.doc) : null;
 			const unchanged = idleBaselineText !== null && current === idleBaselineText;
 			idleBaselineText = null;
-			if (!unchanged && onSubmit) onSubmit();
+			if (!unchanged && onSubmit) onSubmit(undefined, { trigger: 'idle' });
 		}, IDLE_MS);
 	}
 
@@ -1359,7 +1387,10 @@
 						!event.altKey
 					) {
 						event.preventDefault();
-						if (editor) openFind(editor);
+						if (editor) {
+							openFind(editor);
+							logUi('ui.find_open', {}, tabId);
+						}
 						return true;
 					}
 					if (handleSourceCommentShortcut(event)) return true;
@@ -1371,7 +1402,7 @@
 						if ($agentSettings.paused) return true;
 						if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
 						clearCountdown();
-						if (onSubmit) onSubmit();
+						if (onSubmit) onSubmit(undefined, { trigger: 'keyboard' });
 						return true;
 					}
 					return false;
@@ -1446,6 +1477,7 @@
 		const handleOpenThread = (ev: Event) => {
 			const { threadId } = (ev as CustomEvent).detail as { threadId: string };
 			openCommentThreadId.set(threadId);
+			logUi('thread.open', { threadId, via: 'highlight' }, tabId);
 		};
 		editorRoot.addEventListener('docwriter:open-thread', handleOpenThread as EventListener);
 
@@ -1658,8 +1690,14 @@
 				tabId={tabId}
 				openThreadId={openThreadId}
 				{newAwaitingThreadId}
-				onOpen={(id) => openCommentThreadId.set(id)}
-				onClose={() => openCommentThreadId.set(null)}
+				onOpen={(id) => {
+					openCommentThreadId.set(id);
+					logUi('thread.open', { threadId: id, via: 'gutter' }, tabId);
+				}}
+				onClose={() => {
+					openCommentThreadId.set(null);
+					logUi('thread.close', {}, tabId);
+				}}
 				onAcceptRound={(roundId) => onAcceptInlineEdit?.(roundId)}
 				onRejectRound={(roundId) => onRejectInlineEdit?.(roundId)}
 				pinnedRoundIds={pinnedRoundIds}
@@ -1668,12 +1706,14 @@
 				onRejectAll={() => onRejectAllEdits?.()}
 				onResolveThread={(threadId, resolved) => onResolveThread?.(threadId, resolved)}
 				muted={muted}
-				onPinThreadEdits={(roundIds, pinned) =>
+				onPinThreadEdits={(roundIds, pinned) => {
+					logUi('ui.pin_diff', { pinned, count: roundIds.length }, tabId);
 					pinnedDiffRounds.update((s) => {
 						const n = new Set(s);
 						for (const id of roundIds) pinned ? n.add(id) : n.delete(id);
 						return n;
-					})}
+					});
+				}}
 				onHoverEdit={(roundId) => setHoverFlash(roundId)}
 				onApprove={(t, msgId) => {
 					const msg = t.messages.find((m) => m.id === msgId);
@@ -1684,7 +1724,7 @@
 					const trigger = suggestion
 						? `The user approved the suggestion in comment thread "${t.id}" on this tab. Apply this edit via edit_doc with thread_id="${t.id}" so it attaches to this thread:\n\nold_string: "${suggestion.oldString}"\nnew_string: "${suggestion.newString}"\n\nAnchor passage: "${t.anchor.quote}"\nFull thread:\n${transcript}`
 						: `The user approved comment thread "${t.id}" on this tab. Apply the edit you described via edit_doc with thread_id="${t.id}" so it attaches to this thread.\n\nAnchor passage: "${t.anchor.quote}"\nFull thread:\n${transcript}`;
-					onSubmit?.(trigger);
+					onSubmit?.(trigger, { trigger: 'approve_thread' });
 					openCommentThreadId.set(null);
 				}}
 				onReply={(t, replyText) => {
@@ -1709,7 +1749,7 @@
 						`Anchor passage: "${t.anchor.quote}"\n` +
 						`User's latest reply: "${replyText}"\n` +
 						`Full thread (latest reply included):\n${transcript}`;
-					onSubmit?.(trigger);
+					onSubmit?.(trigger, { trigger: 'comment_reply' });
 				}}
 			/>
 		{/if}

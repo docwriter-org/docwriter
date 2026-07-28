@@ -12,6 +12,7 @@ import {
 import { Mark, type Extensions } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import * as Y from 'yjs';
+import { logUi } from '$lib/interaction-log-client';
 import {
 	AI_ATTR,
 	FRAGMENT_NAME,
@@ -154,6 +155,12 @@ export function collaborativeExtensions(
 	const commentsMap = ydoc.getMap(COMMENTS_MAP_NAME);
 	const undoManager = new Y.UndoManager([fragment, reviewArray, commentsMap], {
 		trackedOrigins: new Set([ySyncPluginKey, USER_ORIGIN])
+	});
+	// Interaction log: undo/redo are keyboard-only (yUndoPlugin's default
+	// keymap) and never touch HTTP, so the manager itself is their sole
+	// observation point.
+	undoManager.on('stack-item-popped', (event: { type: 'undo' | 'redo' }) => {
+		logUi(event.type === 'redo' ? 'editor.redo' : 'editor.undo');
 	});
 	return [
 		...plainBaseExtensions(options),

@@ -11,6 +11,7 @@ import {
 } from '$lib/shared/ydoc-codec';
 import { isValidTabId } from '$lib/server/document-files';
 import type { CommentMessage, CommentThread } from '$lib/types';
+import { logInteraction } from '$lib/server/interaction-log';
 
 /** Resolve the live Hocuspocus server (stashed on globalThis by
  * ws-server.ts) so we can mutate a tab's Y.Doc via DirectConnection. */
@@ -126,6 +127,20 @@ export const POST: RequestHandler = async ({ request }) => {
 			return { ok: true };
 		});
 		if (!outcome.ok) throw error(outcome.status, outcome.error);
+		// actionLabel: the built-in feedback-chip label ("Too verbose"…) when
+		// the thread came from the selection toolbar — UI taxonomy, not text.
+		const actionLabel =
+			typeof body.actionLabel === 'string' ? body.actionLabel.slice(0, 48) : undefined;
+		logInteraction(
+			'thread.new',
+			{
+				threadId: outcomeBox.threadId,
+				...(actionLabel ? { actionLabel } : {}),
+				anchorChars: anchorText.length,
+				msgChars: messageText.length
+			},
+			{ tabId }
+		);
 		return json({ threadId: outcomeBox.threadId });
 	}
 
@@ -160,6 +175,9 @@ export const POST: RequestHandler = async ({ request }) => {
 			return { ok: true };
 		});
 		if (!outcome.ok) throw error(outcome.status, outcome.error);
+		if (author === 'user') {
+			logInteraction('thread.reply', { threadId, msgChars: messageText.length }, { tabId });
+		}
 		return json({ ok: true });
 	}
 
@@ -183,6 +201,7 @@ export const PATCH: RequestHandler = async ({ request }) => {
 		return { ok: true };
 	});
 	if (!outcome.ok) throw error(outcome.status, outcome.error);
+	logInteraction('thread.resolve', { threadId, resolved }, { tabId });
 	return json({ ok: true });
 };
 
@@ -199,5 +218,6 @@ export const DELETE: RequestHandler = async ({ url }) => {
 		return { ok: true };
 	});
 	if (!outcome.ok) throw error(outcome.status, outcome.error);
+	logInteraction('thread.delete', { threadId }, { tabId });
 	return json({ ok: true });
 };

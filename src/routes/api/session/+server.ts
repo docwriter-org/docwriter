@@ -18,6 +18,7 @@ import {
 import { getEffectiveScratchDir } from '$lib/server/document-files';
 import { existsSync, readdirSync, rmSync } from 'fs';
 import { join } from 'path';
+import { logInteraction } from '$lib/server/interaction-log';
 
 export const GET: RequestHandler = async () => {
 	return json({
@@ -35,13 +36,35 @@ export const PUT: RequestHandler = async ({ request }) => {
 	const body = await request.json();
 	if (body.recentActions) setRecentActions(body.recentActions);
 	if (body.actionUsageCounts) setActionUsageCounts(body.actionUsageCounts);
-	if (typeof body.editorSoftWrap === 'boolean') setEditorSoftWrap(body.editorSoftWrap);
-	if (typeof body.editorLineNumbers === 'boolean') setEditorLineNumbers(body.editorLineNumbers);
-	if (typeof body.theme === 'string') setTheme(body.theme);
+	// Interaction log: prefs are pushed wholesale on a debounced timer, so
+	// diff against current values to log only genuine changes. The
+	// recentActions/actionUsageCounts mirrors are deliberately not logged —
+	// the feedback-chip interactions behind them are captured as thread.new.
+	if (typeof body.editorSoftWrap === 'boolean') {
+		if (body.editorSoftWrap !== getEditorSoftWrap()) {
+			logInteraction('pref.change', { key: 'editorSoftWrap', value: body.editorSoftWrap });
+		}
+		setEditorSoftWrap(body.editorSoftWrap);
+	}
+	if (typeof body.editorLineNumbers === 'boolean') {
+		if (body.editorLineNumbers !== getEditorLineNumbers()) {
+			logInteraction('pref.change', { key: 'editorLineNumbers', value: body.editorLineNumbers });
+		}
+		setEditorLineNumbers(body.editorLineNumbers);
+	}
+	if (typeof body.theme === 'string') {
+		if (body.theme !== getTheme()) {
+			logInteraction('pref.change', { key: 'theme', value: body.theme });
+		}
+		setTheme(body.theme);
+	}
 	return json({ ok: true });
 };
 
 export const DELETE: RequestHandler = async () => {
+	// Log before clearing: interaction_events itself is never cleared —
+	// session.new marks the boundary in the timeline instead.
+	logInteraction('session.new');
 	clearSessionState();
 	const scratchDir = getEffectiveScratchDir();
 	// Empty the scratch dir's contents on New session so the next run

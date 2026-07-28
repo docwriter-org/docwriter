@@ -146,6 +146,34 @@ const MIGRATIONS: Array<{ version: number; sql: string }> = [
 				created_at INTEGER NOT NULL
 			);
 		`
+	},
+	{
+		version: 9,
+		// Append-only interaction log (user-study instrumentation). Rows are
+		// written by src/lib/server/interaction-log.ts — from HTTP choke
+		// points (source='server') and from the client batcher via /api/log
+		// (source='client'). `created` is the server clock (the canonical
+		// timeline, same clock as yjs_updates/conversation_events);
+		// `client_ts` is the emitting browser's clock for client events.
+		// Nothing ever deletes from this table — "New session" logs a
+		// session.new event instead of clearing it. Taxonomy:
+		// src/lib/shared/interaction-events.ts.
+		sql: `
+			CREATE TABLE IF NOT EXISTS interaction_events (
+				id        INTEGER PRIMARY KEY AUTOINCREMENT,
+				boot_id   TEXT NOT NULL,
+				source    TEXT NOT NULL,
+				event     TEXT NOT NULL,
+				tab_id    TEXT,
+				data      TEXT NOT NULL DEFAULT '{}',
+				client_ts INTEGER,
+				created   INTEGER NOT NULL
+			);
+			CREATE INDEX IF NOT EXISTS interaction_events_created
+				ON interaction_events(created);
+			CREATE INDEX IF NOT EXISTS interaction_events_event
+				ON interaction_events(event);
+		`
 	}
 ];
 

@@ -22,6 +22,7 @@ import { join, dirname } from 'path';
 import { resolveWorkspacePath } from '$lib/server/workspace-path';
 import { getTabsState, setTabsState } from '$lib/server/runtime-state';
 import { destroyTabState } from '$lib/server/ws-server';
+import { logInteraction } from '$lib/server/interaction-log';
 
 /** Names we always hide from the tree — noise that obscures the writing
  * workspace. `.docwriter/` is intentionally NOT here; the user wants to
@@ -101,6 +102,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		const buf = body.encoding === 'base64' ? Buffer.from(raw, 'base64') : Buffer.from(raw, 'utf-8');
 		writeFileSync(abs, buf);
 	}
+	logInteraction('file.op', { op: 'create', kind, path: relPath });
 	return json({ ok: true, path: relPath, kind });
 };
 
@@ -117,6 +119,7 @@ export const PATCH: RequestHandler = async ({ request }) => {
 	if (existsSync(absTo)) throw error(409, `Target exists: ${to}`);
 	mkdirSync(dirname(absTo), { recursive: true });
 	renameSync(absFrom, absTo);
+	logInteraction('file.op', { op: 'move', from, to });
 	return json({ ok: true, from, to });
 };
 
@@ -129,6 +132,7 @@ export const DELETE: RequestHandler = async ({ url }) => {
 	if (!existsSync(abs)) return json({ ok: true, path: relPath });
 	const wasDir = statSync(abs).isDirectory();
 	rmSync(abs, { recursive: true, force: true });
+	logInteraction('file.op', { op: 'delete', path: relPath, wasDir });
 
 	// Any open tab whose id is (or is under) the deleted path must also
 	// have its Hocuspocus Document + CRDT log torn down — otherwise

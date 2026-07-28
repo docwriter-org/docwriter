@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Sparkles } from 'lucide-svelte';
 	import { showAiProvenance } from '$lib/stores';
+	import { logUi } from '$lib/interaction-log-client';
 
 	/**
 	 * Toggle for the AI-provenance view. Lives in the tab row (right side),
@@ -16,7 +17,10 @@
 <button
 	class="ai-provenance-btn"
 	class:active={on}
-	onclick={() => showAiProvenance.update((v) => !v)}
+	onclick={() => {
+		logUi('ui.provenance', { on: !on });
+		showAiProvenance.update((v) => !v);
+	}}
 	title={label}
 	aria-label={label}
 	aria-pressed={on}

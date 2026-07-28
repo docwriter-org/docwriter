@@ -5,6 +5,7 @@
 	import { activeTab } from '$lib/stores';
 	import { getYDocForTab } from '$lib/yjs-doc';
 	import { serializeFragment as plainTextFromFragment } from '$lib/shared/ydoc-codec';
+	import { logUi } from '$lib/interaction-log-client';
 
 	interface Props {
 		showOutline?: boolean;
@@ -54,7 +55,8 @@
 		detachOutlineObserver();
 	});
 
-	function scrollToHeading(text: string) {
+	function scrollToHeading(text: string, level?: number) {
+		logUi('ui.outline_jump', level ? { level } : {});
 		const editor = document.querySelector('.tiptap-content');
 		if (!editor) return;
 		for (const h of Array.from(editor.querySelectorAll('h1,h2,h3,h4,h5,h6'))) {
@@ -78,7 +80,7 @@
 							class="toc-item"
 							data-level={h.level}
 							style:padding-left={`${Math.max(0, h.level - 1) * 14}px`}
-							onclick={() => scrollToHeading(h.text)}
+							onclick={() => scrollToHeading(h.text, h.level)}
 						>
 							<span>{h.text}</span>
 						</div>

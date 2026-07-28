@@ -12,6 +12,8 @@ import {
 } from '$lib/server/ws-server';
 import { setActiveFeedbackThreadId } from '$lib/server/mcp-doc-tools';
 import { runTabWrite } from '$lib/server/mcp-doc-tools';
+import { logInteraction } from '$lib/server/interaction-log';
+import type { Rule, AgentSettings } from '$lib/types';
 
 function countOccurrences(haystack: string, needle: string): number {
 	if (!needle) return 0;
@@ -75,6 +77,7 @@ export const PUT: RequestHandler = async ({ request }) => {
 	try {
 		const body = await request.json().catch(() => ({}));
 		if (body && body.meta) {
+			logMetaChanges(body.meta);
 			await writeMeta(body.meta);
 		}
 		return json({ ok: true });
@@ -82,6 +85,55 @@ export const PUT: RequestHandler = async ({ request }) => {
 		return json({ error: String(e) }, { status: 500 });
 	}
 };
+
+/** Interaction log: diff incoming meta against current state before
+ * writeMeta persists it — one settings.change per changed agentSettings
+ * key, one rules.change with add/remove/edit counts. This is the single
+ * funnel for autonomy changes, pause/mute, toast-accepted rules, and
+ * freeze/unfreeze, so no client-side logging is needed for any of them. */
+function logMetaChanges(meta: { rules?: Rule[]; agentSettings?: AgentSettings }) {
+	try {
+		const current = readMeta();
+		if (meta.agentSettings) {
+			const prev = current.agentSettings as unknown as Record<string, unknown>;
+			const next = meta.agentSettings as unknown as Record<string, unknown>;
+			for (const key of new Set([...Object.keys(prev), ...Object.keys(next)])) {
+				if (prev[key] !== next[key]) {
+					logInteraction('settings.change', {
+						key,
+						from: prev[key] ?? null,
+						to: next[key] ?? null
+					});
+				}
+			}
+		}
+		if (meta.rules) {
+			const prevById = new Map(current.rules.map((r) => [r.id, r]));
+			const nextById = new Map(meta.rules.map((r) => [r.id, r]));
+			let added = 0;
+			let removed = 0;
+			let edited = 0;
+			for (const [id, rule] of nextById) {
+				const prevRule = prevById.get(id);
+				if (!prevRule) added += 1;
+				else if (
+					prevRule.text !== rule.text ||
+					JSON.stringify(prevRule.examples ?? null) !== JSON.stringify(rule.examples ?? null)
+				) {
+					edited += 1;
+				}
+			}
+			for (const id of prevById.keys()) {
+				if (!nextById.has(id)) removed += 1;
+			}
+			if (added || removed || edited) {
+				logInteraction('rules.change', { added, removed, edited, total: nextById.size });
+			}
+		}
+	} catch (err) {
+		console.error('[docwriter] meta-change logging failed:', err);
+	}
+}
 
 export const POST: RequestHandler = async ({ request, url }) => {
 	try {
@@ -102,6 +154,14 @@ export const POST: RequestHandler = async ({ request, url }) => {
 						staleRoundId?: string;
 						staleRound?: { operation?: { type?: string } };
 					};
+					logInteraction(
+						'review.stale',
+						{
+							roundId: stale.staleRoundId ?? null,
+							kind: stale.staleRound?.operation?.type ?? null
+						},
+						{ tabId }
+					);
 					return json(
 						{
 							error: stale.message,
@@ -114,6 +174,19 @@ export const POST: RequestHandler = async ({ request, url }) => {
 				}
 				throw e;
 			}
+			logInteraction(
+				'review.accept',
+				{
+					scope: roundIds ? 'thread' : roundId ? 'single' : 'all',
+					count: result.acceptedCount,
+					roundIds: roundIds ?? (roundId ? [roundId] : []),
+					opTypes: result.rounds.map((r) => r.operation?.type ?? 'unknown'),
+					reviewerIds: [
+						...new Set(result.rounds.map((r) => r.reviewerId).filter(Boolean))
+					]
+				},
+				{ tabId }
+			);
 			try {
 				flushTabMarkdownNow(tabId);
 				return json({ ok: true, diskFlushed: true, ...result });
@@ -129,6 +202,15 @@ export const POST: RequestHandler = async ({ request, url }) => {
 		}
 		if (body?.action === 'reject_rounds') {
 			const result = await rejectTabRounds(tabId, roundId);
+			logInteraction(
+				'review.reject',
+				{
+					scope: roundId ? 'single' : 'all',
+					count: result.rejectedCount,
+					roundIds: roundId ? [roundId] : []
+				},
+				{ tabId }
+			);
 			return json({ ok: true, ...result });
 		}
 		if (body?.action === 'set_thread_resolution') {
@@ -136,6 +218,7 @@ export const POST: RequestHandler = async ({ request, url }) => {
 			const resolved = body.resolved === true;
 			if (!threadId) return json({ error: 'threadId required' }, { status: 400 });
 			const result = await setThreadResolution(tabId, threadId, resolved);
+			logInteraction('thread.resolve', { threadId, resolved }, { tabId });
 			return json({ ...result });
 		}
 		if (body?.action === 'dev_fake_agent_write') {

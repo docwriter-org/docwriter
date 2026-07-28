@@ -39,6 +39,7 @@ import {
 } from '$lib/server/mcp-doc-tools';
 import { getReviewerById, buildCritiqueMessage } from '$lib/server/reviewers';
 import type { Reviewer } from '$lib/shared/reviewers';
+import { logInteraction } from '$lib/server/interaction-log';
 
 /** Read the live authoritative markdown for a tab, including any pending
  * review rounds materialized on top. Prefers the Hocuspocus in-memory
@@ -699,7 +700,7 @@ function buildHooks(
 export const POST: RequestHandler = async ({ request }) => {
 	try {
 		const body = await request.json();
-		const { userMessage, model, warmup, tab, planMode, images, reviewerId, provider: providerIdRaw } = body as {
+		const { userMessage, model, warmup, tab, planMode, images, reviewerId, provider: providerIdRaw, trigger: triggerRaw } = body as {
 			userMessage?: string;
 			model?: string;
 			warmup?: boolean;
@@ -710,7 +711,17 @@ export const POST: RequestHandler = async ({ request }) => {
 			 * instead of an ordinary render. */
 			reviewerId?: string;
 			provider?: string;
+			/** What caused this submission (RenderTrigger) — logged on
+			 * render.start so idle auto-submits, Cmd+Enter, and wake-button
+			 * clicks are distinguishable in the interaction log. */
+			trigger?: string;
 		};
+		const trigger =
+			typeof triggerRaw === 'string' && triggerRaw
+				? triggerRaw.slice(0, 32)
+				: reviewerId
+					? 'reviewer'
+					: 'unknown';
 		const providerId = (providerIdRaw || 'claude') as ProviderId;
 		// Switching providers invalidates the persisted session id: each
 		// provider mints ids in its own format (Claude wants a UUID, OpenAI
@@ -800,6 +811,23 @@ export const POST: RequestHandler = async ({ request }) => {
 			async start(controller) {
 				const encoder = new TextEncoder();
 				const renderStart = Date.now();
+				let renderEndStatus: 'ok' | 'error' | 'aborted' | 'plan' = 'ok';
+				if (!warmup) {
+					logInteraction(
+						'render.start',
+						{
+							trigger,
+							provider: providerId,
+							model: model ?? null,
+							reviewerId: critiqueReviewer?.id ?? null,
+							planMode: !!planMode,
+							implicit: isImplicitWakeup,
+							msgChars: userMessage?.length ?? 0,
+							images: images?.length ?? 0
+						},
+						{ tabId: active }
+					);
+				}
 				let currentModelForTranscript = '';
 
 				const persistableEvents = new Set([
@@ -1051,6 +1079,11 @@ export const POST: RequestHandler = async ({ request }) => {
 					// which is expected and should not show up as an error to
 					// the user.
 					const isPlanAbort = planMode && abortController.signal.aborted;
+					renderEndStatus = isPlanAbort
+						? 'plan'
+						: abortController.signal.aborted
+							? 'aborted'
+							: 'error';
 					if (!isPlanAbort) {
 						send('error', { error: String(err) });
 					}
@@ -1070,6 +1103,17 @@ export const POST: RequestHandler = async ({ request }) => {
 					send('error', { error: 'Failed to update last_seen kv: ' + String(err) });
 				}
 
+				if (!warmup) {
+					logInteraction(
+						'render.end',
+						{
+							status: renderEndStatus,
+							durationMs: Date.now() - renderStart,
+							sessionId: getSessionId()
+						},
+						{ tabId: active }
+					);
+				}
 				send('result', { activeTabId: active });
 				send('done', {});
 				controller.close();

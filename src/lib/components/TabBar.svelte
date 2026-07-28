@@ -2,6 +2,7 @@
 	import { X, FileCode } from 'lucide-svelte';
 	import { tabs, activeTab } from '$lib/stores';
 	import { showConfirm } from '$lib/dialogs';
+	import { logUi } from '$lib/interaction-log-client';
 
 	interface Props {
 		onSwitch: (id: string) => void | Promise<void>;
@@ -133,6 +134,7 @@
 	function openMenu(e: MouseEvent, id: string) {
 		e.preventDefault();
 		e.stopPropagation();
+		logUi('ui.menu_open', { menu: 'tab_context' }, id);
 		menu = { id, x: e.clientX, y: e.clientY };
 	}
 	function closeMenu() {

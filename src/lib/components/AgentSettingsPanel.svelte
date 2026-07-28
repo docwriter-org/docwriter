@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { agentSettings } from '$lib/stores';
 	import type { AgentSettings } from '$lib/types';
+	import { logUi } from '$lib/interaction-log-client';
 
 	type Agency = AgentSettings['agency'];
 	type SettingsChange = { type: 'agency'; from: Agency; to: Agency };
@@ -69,7 +70,10 @@
 					class:active={settings.agency === level}
 					type="button"
 					aria-pressed={settings.agency === level}
-					onmouseenter={() => (previewAgency = level)}
+					onmouseenter={() => {
+						if (level !== settings.agency) logUi('ui.autonomy_preview', { level });
+						previewAgency = level;
+					}}
 					onmouseleave={() => (previewAgency = null)}
 					onfocus={() => (previewAgency = level)}
 					onblur={() => (previewAgency = null)}

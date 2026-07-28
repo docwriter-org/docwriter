@@ -49,7 +49,10 @@ project-root/
     docwriter.db       ← SQLite: yjs_updates, tabs, rules, reviewers,
                          recent_actions, action_usage_counts,
                          provider_session_entries, conversation_events,
-                         kv (sessionId, agentSettings, last_seen:<tabId>…)
+                         interaction_events (append-only user-interaction
+                         log; see src/lib/shared/interaction-events.ts),
+                         kv (sessionId, agentSettings, participantId,
+                         last_seen:<tabId>…)
     hooks.json         ← user-defined shell hooks (read by hooks-config.ts)
     agent/scratch/     ← agent scratch workspace (lazy-created on first
                          scratch write; cleared on "New session")

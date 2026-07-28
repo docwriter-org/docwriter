@@ -12,6 +12,7 @@
 	import ReviewerMascot from './ReviewerMascot.svelte';
 	import ShineBorder from './ShineBorder.svelte';
 	import { tooltip } from '$lib/actions/tooltip';
+	import { logUi } from '$lib/interaction-log-client';
 
 	let transcriptOpen = $state(false);
 
@@ -444,7 +445,10 @@
 				{/if}
 				<button
 					class="header-pill-btn icon-only"
-					onclick={() => (transcriptOpen = true)}
+					onclick={() => {
+					logUi('ui.transcript_open');
+					transcriptOpen = true;
+				}}
 					aria-label="Transcript"
 					use:tooltip={'Open the current session transcript. Shows user messages, agent responses, tool calls, and tool results.'}
 				>

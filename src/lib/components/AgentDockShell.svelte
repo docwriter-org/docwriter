@@ -13,6 +13,7 @@
 		activeReviewer
 	} from '$lib/stores';
 	import { tooltip } from '$lib/actions/tooltip';
+	import { logUi } from '$lib/interaction-log-client';
 
 	interface Props {
 		onNewSession?: () => void | Promise<void>;
@@ -73,6 +74,7 @@
 		pillClickTimer = setTimeout(() => {
 			pillClickTimer = null;
 			if (paused) return;
+			logUi('ui.dock', { expanded: true });
 			dockExpanded.set(true);
 		}, 280);
 	}
@@ -129,7 +131,10 @@
 				{onToggleMuted}
 				{onTogglePaused}
 				{dock}
-				onCollapse={() => dockExpanded.set(false)}
+				onCollapse={() => {
+					logUi('ui.dock', { expanded: false });
+					dockExpanded.set(false);
+				}}
 			/>
 		</div>
 	{:else}

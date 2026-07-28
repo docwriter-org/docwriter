@@ -10,6 +10,7 @@ import {
 import { getTabsState, setTabsState } from '$lib/server/runtime-state';
 import { writeTextAtomic } from '$lib/server/file-utils';
 import { destroyTabState } from '$lib/server/ws-server';
+import { logInteraction } from '$lib/server/interaction-log';
 
 /** GET /api/tabs  →  { order, active, tabs: string[] }
  *
@@ -41,7 +42,8 @@ export const POST: RequestHandler = async ({ request }) => {
 	}
 	ensureDocWriterDir();
 	const path = tabFile(id);
-	if (!existsSync(path)) {
+	const existed = existsSync(path);
+	if (!existed) {
 		mkdirSync(dirname(path), { recursive: true });
 		writeTextAtomic(path, '');
 		await destroyTabState(id);
@@ -52,6 +54,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	state.active = id;
 	setTabsState(state);
 
+	logInteraction('tab.open', { created: !existed }, { tabId: id });
 	return json({ ok: true, id, active: id, order: state.order });
 };
 
@@ -83,6 +86,7 @@ export const DELETE: RequestHandler = async ({ url }) => {
 	let active = stored.active === id ? null : stored.active;
 	if (!active && order.length > 0) active = order[0];
 	setTabsState({ order, active });
+	logInteraction('tab.close', { deletedFile: deleteFile }, { tabId: id });
 	return json({ ok: true, order, active });
 };
 
@@ -110,6 +114,7 @@ export const PATCH: RequestHandler = async ({ request }) => {
 		state.order = state.order.map((t) => (t === id ? newId : t));
 		if (state.active === id) state.active = newId;
 		setTabsState(state);
+		logInteraction('tab.rename', { from: id, to: newId }, { tabId: newId });
 		return json({ ok: true, id: newId, order: state.order, active: state.active });
 	}
 
@@ -117,6 +122,7 @@ export const PATCH: RequestHandler = async ({ request }) => {
 		if (!state.order.includes(id)) throw error(404, `Tab "${id}" not found`);
 		state.active = id;
 		setTabsState(state);
+		logInteraction('tab.switch', {}, { tabId: id });
 	}
 
 	return json({ ok: true, id, order: state.order, active: state.active });

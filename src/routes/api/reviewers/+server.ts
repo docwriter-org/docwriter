@@ -6,6 +6,7 @@ import {
 	deleteReviewer
 } from '$lib/server/reviewers';
 import { findReviewer } from '$lib/shared/reviewers';
+import { logInteraction } from '$lib/server/interaction-log';
 
 export const GET: RequestHandler = async () => {
 	return json({ reviewers: listReviewers() });
@@ -28,6 +29,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		icon: (body.icon ?? '').trim() || 'owl',
 		color: (body.color ?? '').trim() || '#57534e'
 	});
+	logInteraction('reviewer.create', { reviewerId: reviewer.id });
 	return json({ reviewer });
 };
 
@@ -37,5 +39,6 @@ export const DELETE: RequestHandler = async ({ url }) => {
 	if (findReviewer(id)?.builtin) throw error(400, 'Built-in reviewers cannot be deleted');
 	const deleted = deleteReviewer(id);
 	if (!deleted) throw error(404, 'Reviewer not found');
+	logInteraction('reviewer.delete', { reviewerId: id });
 	return json({ ok: true });
 };

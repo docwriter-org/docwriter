@@ -29,6 +29,7 @@
 	import { summarizeRound } from '$lib/review-diff';
 	import { isRendering, customReviewers } from '$lib/stores';
 	import { BUILTIN_REVIEWERS, type Reviewer } from '$lib/shared/reviewers';
+	import { logUi } from '$lib/interaction-log-client';
 	import ReviewerMascot from '$lib/components/ReviewerMascot.svelte';
 
 	interface Props {
@@ -142,6 +143,7 @@
 		const text =
 			op?.type === 'edit' ? op.newString : op?.type === 'write' ? op.content : round.afterMd;
 		if (typeof text !== 'string' || !text) return;
+		logUi('ui.copy_proposal', { roundId: round.id });
 		try {
 			await navigator.clipboard.writeText(text);
 		} catch {

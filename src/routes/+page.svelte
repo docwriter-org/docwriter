@@ -137,6 +137,8 @@
 	import PreviewButton from '$lib/components/PreviewButton.svelte';
 	import type { AgentSettings, CommentThread, HistoryEntry, ImageAttachment, PendingReviewRound, ProposedRule, ProposedHook, Rule } from '$lib/types';
 	import type { MaterializedPendingReviewRound } from '$lib/review-rounds';
+	import { logUi, setLogTabContext } from '$lib/interaction-log-client';
+	import type { RenderTrigger } from '$lib/shared/interaction-events';
 
 	type AgentSettingsChange = {
 		type: 'agency';
@@ -171,6 +173,9 @@
 		trigger?: string;
 		planMode?: boolean;
 		reviewer?: ActiveReviewerInfo;
+		/** Interaction-log label for the UI path that queued this submission,
+		 * so the eventual render.start reports the original trigger. */
+		logTrigger?: RenderTrigger;
 	}> = [];
 
 	let currentAbort: AbortController | null = null;
@@ -290,6 +295,8 @@
 	let currentActiveTabId = $state<string | null>(null);
 	activeTab.subscribe((value) => {
 		currentActiveTabId = value;
+		// Ambient tab context for client-emitted interaction events.
+		setLogTabContext(value ?? null);
 	});
 
 	let editorRef: EditorRef | undefined = $state();
@@ -633,7 +640,9 @@
 		await removeTab(id, /* deleteFile */ true);
 		// Wake the agent so it can react — e.g. drop references to the
 		// deleted file from whatever's still open.
-		void submit(`The user deleted the file "${id}". Update any open files that referenced it.`);
+		void submit(`The user deleted the file "${id}". Update any open files that referenced it.`, {
+			trigger: 'tab_delete'
+		});
 	}
 
 	/** No open tabs: tear down review/editor state and show the empty pane. */
@@ -748,6 +757,7 @@
 	}
 
 	function closeSplitPreview() {
+		if (splitPreviewPath) logUi('ui.preview', { mode: 'split', open: false });
 		splitPreviewPath = null;
 		splitPreviewSourcePath = null;
 	}
@@ -934,7 +944,7 @@
 	async function handleAgentSettingsChange(next: AgentSettings, change?: AgentSettingsChange) {
 		await persistAgentSettings(next);
 		if (change?.type === 'agency' && !next.paused) {
-			void submit(buildAutonomyChangeMessage(change));
+			void submit(buildAutonomyChangeMessage(change), { trigger: 'autonomy_change' });
 		}
 	}
 
@@ -959,11 +969,20 @@
 
 	async function submit(
 		trigger?: string,
-		opts?: { planMode?: boolean; images?: ImageAttachment[]; reviewer?: ActiveReviewerInfo }
+		opts?: {
+			planMode?: boolean;
+			images?: ImageAttachment[];
+			reviewer?: ActiveReviewerInfo;
+			/** Interaction-log label for the UI path that submitted (idle
+			 * countdown, Cmd+Enter, wake button…). Sent to /api/render as
+			 * `trigger` and logged server-side on render.start. */
+			trigger?: RenderTrigger;
+		}
 	) {
 		const planMode = opts?.planMode ?? false;
 		const images = opts?.images ?? [];
 		const reviewer = opts?.reviewer ?? null;
+		const submitTrigger: RenderTrigger = opts?.trigger ?? (reviewer ? 'reviewer' : 'unknown');
 		if (isAgentPaused()) {
 			// Fully paused: drop idle wakes, Wake up, Send, and accept-followups.
 			// The user must double-click the Agent pill to resume first.
@@ -977,13 +996,19 @@
 			// the next keystroke queues another, a never-ending treadmill of
 			// re-reviews. An implicit wakeup only fires when the agent is idle
 			// (handled below), in which case it runs immediately, never queued.
-			if (isImplicitWakeupTrigger(trigger) && !reviewer) return;
+			if (isImplicitWakeupTrigger(trigger) && !reviewer) {
+				logUi('render.queue_drop', { reason: 'implicit_during_render', trigger: submitTrigger });
+				return;
+			}
 			// The accepted-edits auto-wake carries real state ("the user
 			// accepted your edits"), so we keep one queued — but collapse
 			// duplicates when there's already something behind it. Critique
 			// passes always queue: the user picked a reviewer on purpose.
-			if (isSkippableWhenQueued(trigger) && !reviewer && queuedSubmissions.length > 0) return;
-			queuedSubmissions = [...queuedSubmissions, { trigger, planMode, reviewer: reviewer ?? undefined }];
+			if (isSkippableWhenQueued(trigger) && !reviewer && queuedSubmissions.length > 0) {
+				logUi('render.queue_drop', { reason: 'duplicate_queued', trigger: submitTrigger });
+				return;
+			}
+			queuedSubmissions = [...queuedSubmissions, { trigger, planMode, reviewer: reviewer ?? undefined, logTrigger: submitTrigger }];
 			queuedSubmissionCount.set(queuedSubmissions.length);
 			return;
 		}
@@ -1068,7 +1093,8 @@
 					tab: tabId,
 					images: images.length > 0 ? images : undefined,
 					reviewerId: reviewer?.id,
-					provider
+					provider,
+					trigger: submitTrigger
 				}),
 				signal: currentAbort.signal
 			});
@@ -1500,13 +1526,20 @@
 				// docs" wakeup) when more specific user messages are queued
 				// behind them — they'd just duplicate the work.
 				while (isSkippableWhenQueued(next.trigger) && !next.reviewer && queuedSubmissions.length > 0) {
+					logUi('render.queue_drop', { reason: 'superseded', trigger: next.logTrigger });
 					next = queuedSubmissions[0];
 					queuedSubmissions = queuedSubmissions.slice(1);
 					queuedSubmissionCount.set(queuedSubmissions.length);
 				}
 				if (!isSkippableWhenQueued(next.trigger) || next.reviewer || queuedSubmissions.length === 0) {
+					const queued = next;
 					setTimeout(
-						() => void submit(next.trigger, { planMode: next.planMode, reviewer: next.reviewer }),
+						() =>
+							void submit(queued.trigger, {
+								planMode: queued.planMode,
+								reviewer: queued.reviewer,
+								trigger: queued.logTrigger
+							}),
 						0
 					);
 				}
@@ -1666,7 +1699,7 @@
 				});
 				if (staleRound) {
 					const followup = buildStaleAcceptFollowup(tabId, staleRound, reason);
-					setTimeout(() => void submit(followup), 50);
+					setTimeout(() => void submit(followup, { trigger: 'retry_stale' }), 50);
 				}
 				return;
 			}
@@ -1698,7 +1731,7 @@
 				timestamp: Date.now(),
 				description: acceptedMsg
 			});
-			void submit(acceptedMsg);
+			void submit(acceptedMsg, { trigger: 'accept_followup' });
 		} catch (e) {
 			console.error('Failed to accept agent edit:', e);
 			pushHistory({
@@ -1793,7 +1826,7 @@
 		// Retry-with-feedback re-runs the agent with the rejection quoted.
 		if (retryFeedback && rejectedIdx >= 0) {
 			const followup = buildRejectedEditFollowup(tabId, rounds[rejectedIdx], retryFeedback);
-			setTimeout(() => void submit(followup), 50);
+			setTimeout(() => void submit(followup, { trigger: 'retry_feedback' }), 50);
 		}
 	}
 
@@ -1938,7 +1971,7 @@
 			timestamp: Date.now(),
 			description: 'Approved plan — running it'
 		});
-		void submit(proposal.originalMessage || undefined, { planMode: false });
+		void submit(proposal.originalMessage || undefined, { planMode: false, trigger: 'plan_approve' });
 	}
 
 	function dismissPlanProposal(id: string) {
@@ -1978,7 +2011,7 @@
 			'',
 			'Produce a revised plan that addresses the feedback.'
 		].join('\n');
-		void submit(revisedMessage, { planMode: true });
+		void submit(revisedMessage, { planMode: true, trigger: 'plan_feedback' });
 	}
 
 	function rejectProposedHook(id: string) {
@@ -2143,7 +2176,8 @@
 
 	function runCritique(r: Reviewer) {
 		void submit(undefined, {
-			reviewer: { id: r.id, name: r.name, icon: r.icon, color: r.color }
+			reviewer: { id: r.id, name: r.name, icon: r.icon, color: r.color },
+			trigger: 'reviewer'
 		});
 	}
 
@@ -2170,6 +2204,7 @@
 							kind: 'action' as const,
 							label: 'New reviewer…',
 							onClick: () => {
+								logUi('ui.dialog_open', { name: 'reviewer_editor' });
 								reviewerDialogOpen = true;
 							}
 						}
@@ -2192,7 +2227,10 @@
 						kind: 'action' as const,
 						label: p.label,
 						checked: Math.abs(fontScale - p.scale) < 0.01,
-						onClick: () => editorFontScale.set(p.scale)
+						onClick: () => {
+							logUi('ui.view_pref', { key: 'fontScale', value: p.scale });
+							editorFontScale.set(p.scale);
+						}
 					}))
 				},
 				{
@@ -2215,6 +2253,7 @@
 					kind: 'action',
 					label: 'Sessions',
 					onClick: () => {
+						logUi('ui.sessions_open');
 						sessionsOpen = true;
 					}
 				},
@@ -2226,13 +2265,19 @@
 							kind: 'action',
 							label: 'Verbose',
 							checked: currentVerbosity === 'verbose',
-							onClick: () => historyVerbosity.set('verbose')
+							onClick: () => {
+								logUi('ui.view_pref', { key: 'historyVerbosity', value: 'verbose' });
+								historyVerbosity.set('verbose');
+							}
 						},
 						{
 							kind: 'action',
 							label: 'Minimal',
 							checked: currentVerbosity === 'minimal',
-							onClick: () => historyVerbosity.set('minimal')
+							onClick: () => {
+								logUi('ui.view_pref', { key: 'historyVerbosity', value: 'minimal' });
+								historyVerbosity.set('minimal');
+							}
 						}
 					]
 				},
@@ -2240,13 +2285,19 @@
 					kind: 'action',
 					label: 'Sidebar',
 					checked: sidebarVisible,
-					onClick: () => showSidebar.set(!sidebarVisible)
+					onClick: () => {
+						logUi('ui.view_pref', { key: 'sidebar', value: !sidebarVisible });
+						showSidebar.set(!sidebarVisible);
+					}
 				},
 				{
 					kind: 'action',
 					label: 'Files pane',
 					checked: filesVisible,
-					onClick: () => showFilesPane.set(!filesVisible)
+					onClick: () => {
+						logUi('ui.view_pref', { key: 'filesPane', value: !filesVisible });
+						showFilesPane.set(!filesVisible);
+					}
 				}
 			]
 		}
@@ -2982,23 +3033,32 @@
 			<ModelPicker
 				providers={AVAILABLE_PROVIDERS}
 				{currentProvider}
-				onSelectProvider={(id) => setSelectedProvider(id)}
+				onSelectProvider={(id) => {
+					logUi('ui.model_change', { provider: id });
+					setSelectedProvider(id);
+				}}
 				models={providerModels}
 				currentModel={model}
-				onSelectModel={(id) => setSelectedModel(id)}
-				onCustomModel={() => (customModelOpen = true)}
+				onSelectModel={(id) => {
+					logUi('ui.model_change', { model: id });
+					setSelectedModel(id);
+				}}
+				onCustomModel={() => {
+					logUi('ui.dialog_open', { name: 'custom_model' });
+					customModelOpen = true;
+				}}
 			/>
 		</div>
 	</header>
 
 	{#snippet rulesPanelSnippet()}
-		<RulesPanel onSubmit={(trigger) => void submit(trigger)} />
+		<RulesPanel onSubmit={(trigger) => void submit(trigger, { trigger: 'panel' })} />
 	{/snippet}
 
 	{#snippet referencesPanelSnippet()}
 		<ReferencesPanel
 			activeTabId={currentActiveTabId}
-			onSubmit={(trigger) => void submit(trigger)}
+			onSubmit={(trigger) => void submit(trigger, { trigger: 'panel' })}
 		/>
 	{/snippet}
 
@@ -3011,7 +3071,7 @@
 	{/snippet}
 
 	{#snippet skillsPanelSnippet()}
-		<SkillsPanel onSubmit={(trigger) => void submit(trigger)} />
+		<SkillsPanel onSubmit={(trigger) => void submit(trigger, { trigger: 'panel' })} />
 	{/snippet}
 
 	{#snippet apiKeysPanelSnippet()}
@@ -3019,7 +3079,7 @@
 	{/snippet}
 
 	<div class="toolbar">
-		<RulesPillBar onSubmit={(trigger) => void submit(trigger)} />
+		<RulesPillBar onSubmit={(trigger) => void submit(trigger, { trigger: 'panel' })} />
 	</div>
 
 	<div class="body">
@@ -3089,7 +3149,7 @@
 							<TiptapEditor
 								tabId={activeTabFilePath}
 								bind:this={editorRef}
-								onSubmit={(trigger) => submit(trigger)}
+								onSubmit={(trigger, opts) => submit(trigger, opts)}
 								initialScrollTop={pendingScrollRestore}
 								onAcceptInlineEdit={(roundId) => {
 									const rounds = currentRounds();
@@ -3139,23 +3199,27 @@
 {#if docLoaded}
 	<AgentDockShell
 		onNewSession={newSession}
-		onWakeUp={docLoaded && activeTabFilePath && !activeTabIsPdf ? () => submit() : undefined}
+		onWakeUp={docLoaded && activeTabFilePath && !activeTabIsPdf
+			? () => submit(undefined, { trigger: 'wake_button' })
+			: undefined}
 		onCancel={cancelRender}
 		onToggleMuted={toggleMuted}
 		onTogglePaused={togglePaused}
 	>
 		{#snippet dock()}
-			<AgentDock onSendMessage={(msg, opts) => void submit(msg, opts)} />
+			<AgentDock onSendMessage={(msg, opts) => void submit(msg, { ...opts, trigger: 'chat' })} />
 		{/snippet}
 	</AgentDockShell>
 {/if}
 
 <ToastStack
 	onAccept={(t) => {
+		logUi('toast.accept', { kind: t.kind });
 		if (t.kind === 'rule') acceptProposedRule(t.refId);
 		else if (t.kind === 'hook') acceptProposedHook(t.refId);
 	}}
 	onDismiss={(t) => {
+		logUi('toast.dismiss', { kind: t.kind });
 		if (t.kind === 'rule') rejectProposedRule(t.refId);
 		else if (t.kind === 'hook') rejectProposedHook(t.refId);
 		else dismissToast(t.id);

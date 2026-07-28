@@ -29,7 +29,8 @@
 		"docs": "cd docs && npx -y mintlify dev --port 3333",
 		"docs:screenshots": "node docs/capture-screenshots.mjs",
 		"test:e2e": "node e2e/provider-smoke.mjs",
-		"test:e2e:provider": "node e2e/run-provider.mjs"
+		"test:e2e:provider": "node e2e/run-provider.mjs",
+		"study:export": "node bin/docwriter-export.js"
 	},
 	"devDependencies": {
 		"@sveltejs/adapter-node": "^5.5.4",
