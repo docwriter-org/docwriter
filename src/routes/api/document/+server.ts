@@ -174,44 +174,48 @@ export const POST: RequestHandler = async ({ request, url }) => {
 				}
 				throw e;
 			}
+			// Log from acceptedRounds (the rounds actually applied); `rounds`
+			// in the result is the REMAINING set for the client UI. Strip
+			// acceptedRounds from the response — it's log-only.
+			const { acceptedRounds, ...acceptResult } = result;
 			logInteraction(
 				'review.accept',
 				{
 					scope: roundIds ? 'thread' : roundId ? 'single' : 'all',
 					count: result.acceptedCount,
-					roundIds: roundIds ?? (roundId ? [roundId] : []),
-					opTypes: result.rounds.map((r) => r.operation?.type ?? 'unknown'),
+					roundIds: acceptedRounds.map((r) => r.id),
+					opTypes: acceptedRounds.map((r) => r.operation?.type ?? 'unknown'),
 					reviewerIds: [
-						...new Set(result.rounds.map((r) => r.reviewerId).filter(Boolean))
+						...new Set(acceptedRounds.map((r) => r.reviewerId).filter(Boolean))
 					]
 				},
 				{ tabId }
 			);
 			try {
 				flushTabMarkdownNow(tabId);
-				return json({ ok: true, diskFlushed: true, ...result });
+				return json({ ok: true, diskFlushed: true, ...acceptResult });
 			} catch (e) {
 				console.error(`[docwriter] accept flush failed for tab "${tabId}":`, e);
 				return json({
 					ok: true,
 					diskFlushed: false,
 					diskFlushError: String(e),
-					...result
+					...acceptResult
 				});
 			}
 		}
 		if (body?.action === 'reject_rounds') {
-			const result = await rejectTabRounds(tabId, roundId);
+			const { rejectedRounds, ...rejectResult } = await rejectTabRounds(tabId, roundId);
 			logInteraction(
 				'review.reject',
 				{
 					scope: roundId ? 'single' : 'all',
-					count: result.rejectedCount,
-					roundIds: roundId ? [roundId] : []
+					count: rejectResult.rejectedCount,
+					roundIds: rejectedRounds.map((r) => r.id)
 				},
 				{ tabId }
 			);
-			return json({ ok: true, ...result });
+			return json({ ok: true, ...rejectResult });
 		}
 		if (body?.action === 'set_thread_resolution') {
 			const threadId = typeof body.threadId === 'string' ? body.threadId : '';

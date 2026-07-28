@@ -3,8 +3,14 @@
  * docwriter-export — bundle a workspace's study data for collection.
  *
  * Usage:
- *   node bin/docwriter-export.js [workspace-dir] [--out <dir>]
+ *   node bin/docwriter-export.js [workspace-dir] [--out <dir>] [--participant <id>]
  *   npm run study:export [-- <workspace-dir>]
+ *
+ * The participant ID is optional everywhere: pass --participant at launch
+ * (docwriter --participant P07) to tag the DB from the start, pass it here
+ * at export time to tag retroactively, or skip it entirely and identify
+ * bundles at collection time — the folder name and manifest carry whatever
+ * is known.
  *
  * Produces a self-contained folder the participant can zip and send:
  *
@@ -45,12 +51,15 @@ const require = createRequire(import.meta.url);
 const argv = process.argv.slice(2);
 let rootArg = null;
 let outArg = null;
+let participantArg = null;
 for (let i = 0; i < argv.length; i++) {
 	const a = argv[i];
 	if (a === '--out') outArg = argv[++i];
 	else if (a.startsWith('--out=')) outArg = a.slice(6);
+	else if (a === '--participant') participantArg = argv[++i];
+	else if (a.startsWith('--participant=')) participantArg = a.slice(14);
 	else if (a === '-h' || a === '--help') {
-		console.log('Usage: docwriter-export [workspace-dir] [--out <dir>]');
+		console.log('Usage: docwriter-export [workspace-dir] [--out <dir>] [--participant <id>]');
 		process.exit(0);
 	} else if (!a.startsWith('-')) rootArg = a;
 }
@@ -88,7 +97,8 @@ function tableCount(table) {
 	}
 }
 
-const participant = kvGet('participantId');
+// Export-time --participant wins over (and backfills) the launch-time flag.
+const participant = participantArg ?? kvGet('participantId');
 const schemaVersion = db.pragma('user_version', { simple: true });
 const stamp = new Date()
 	.toISOString()
@@ -105,6 +115,13 @@ mkdirSync(outDir, { recursive: true });
 // --------------------------------------------------------------------------
 const snapshotPath = join(outDir, 'docwriter.db');
 db.prepare('VACUUM INTO ?').run(snapshotPath);
+if (participantArg) {
+	// Stamp the export-time ID into the SNAPSHOT's kv (never the live DB),
+	// so the bundle stays self-describing even without the manifest.
+	const snap = new BetterSqlite3(snapshotPath);
+	snap.prepare('INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)').run('participantId', participantArg);
+	snap.close();
+}
 console.log(`  db        ${snapshotPath}`);
 
 // --------------------------------------------------------------------------

@@ -184,7 +184,14 @@ function resolveEmptyEditThreads(ydoc: Y.Doc, threadIds: Set<string>): void {
 export async function acceptTabRounds(
 	tabId: string,
 	roundId?: string | string[]
-): Promise<{ acceptedCount: number; rounds: PendingReviewRound[]; yjsUpdate: string | null }> {
+): Promise<{
+	acceptedCount: number;
+	/** The rounds that were applied — for the interaction log. `rounds` is
+	 * the REMAINING set (what the client renders after the accept). */
+	acceptedRounds: PendingReviewRound[];
+	rounds: PendingReviewRound[];
+	yjsUpdate: string | null;
+}> {
 	return withLiveDoc(tabId, (ydoc) => {
 		const reviewArr = getReviewArray(ydoc);
 		const current = reviewArr.toArray();
@@ -200,17 +207,20 @@ export async function acceptTabRounds(
 		let accepted: PendingReviewRound[];
 		let remaining: PendingReviewRound[];
 		if (!roundId) {
-			if (current.length === 0) return { acceptedCount: 0, rounds: [], yjsUpdate: null };
+			if (current.length === 0)
+				return { acceptedCount: 0, acceptedRounds: [], rounds: [], yjsUpdate: null };
 			accepted = current;
 			remaining = [];
 		} else if (Array.isArray(roundId)) {
 			const idSet = new Set(roundId);
 			accepted = current.filter((r) => idSet.has(r.id));
 			remaining = current.filter((r) => !idSet.has(r.id));
-			if (accepted.length === 0) return { acceptedCount: 0, rounds: current, yjsUpdate: null };
+			if (accepted.length === 0)
+				return { acceptedCount: 0, acceptedRounds: [], rounds: current, yjsUpdate: null };
 		} else {
 			const idx = current.findIndex((r) => r.id === roundId);
-			if (idx < 0) return { acceptedCount: 0, rounds: current, yjsUpdate: null };
+			if (idx < 0)
+				return { acceptedCount: 0, acceptedRounds: [], rounds: current, yjsUpdate: null };
 			accepted = [current[idx]];
 			remaining = current.slice(0, idx).concat(current.slice(idx + 1));
 		}
@@ -319,18 +329,26 @@ export async function acceptTabRounds(
 
 		touchLastSeen(tabId, ydoc);
 
-		return { acceptedCount: accepted.length, rounds: remaining, yjsUpdate };
+		return { acceptedCount: accepted.length, acceptedRounds: accepted, rounds: remaining, yjsUpdate };
 	});
 }
 
 export async function rejectTabRounds(
 	tabId: string,
 	roundId?: string
-): Promise<{ rejectedCount: number; rounds: PendingReviewRound[]; yjsUpdate: string | null }> {
+): Promise<{
+	rejectedCount: number;
+	/** The rounds that were dropped — for the interaction log. `rounds` is
+	 * the REMAINING set (what the client renders after the reject). */
+	rejectedRounds: PendingReviewRound[];
+	rounds: PendingReviewRound[];
+	yjsUpdate: string | null;
+}> {
 	return withLiveDoc(tabId, (ydoc) => {
 		const reviewArr = getReviewArray(ydoc);
 		const current = reviewArr.toArray();
-		if (current.length === 0) return { rejectedCount: 0, rounds: [], yjsUpdate: null };
+		if (current.length === 0)
+			return { rejectedCount: 0, rejectedRounds: [], rounds: [], yjsUpdate: null };
 		// No roundId = reject everything. With a roundId, drop only that
 		// round; later rounds stay and will surface stale if they no longer
 		// apply (the materializer marks them).
@@ -349,10 +367,11 @@ export async function rejectTabRounds(
 			const deltaBytes = Y.encodeStateAsUpdate(ydoc, beforeStateVector);
 			const yjsUpdate = Buffer.from(deltaBytes).toString('base64');
 			touchLastSeen(tabId, ydoc);
-			return { rejectedCount: current.length, rounds: [], yjsUpdate };
+			return { rejectedCount: current.length, rejectedRounds: current, rounds: [], yjsUpdate };
 		}
 		const idx = current.findIndex((r) => r.id === roundId);
-		if (idx < 0) return { rejectedCount: 0, rounds: current, yjsUpdate: null };
+		if (idx < 0)
+			return { rejectedCount: 0, rejectedRounds: [], rounds: current, yjsUpdate: null };
 		ydoc.transact(() => {
 			reviewArr.delete(idx, 1);
 			resolveEmptyEditThreads(ydoc, threadIdsOf([current[idx]]));
@@ -361,7 +380,7 @@ export async function rejectTabRounds(
 		const deltaBytes = Y.encodeStateAsUpdate(ydoc, beforeStateVector);
 		const yjsUpdate = Buffer.from(deltaBytes).toString('base64');
 		touchLastSeen(tabId, ydoc);
-		return { rejectedCount: 1, rounds: remaining, yjsUpdate };
+		return { rejectedCount: 1, rejectedRounds: [current[idx]], rounds: remaining, yjsUpdate };
 	});
 }
 
