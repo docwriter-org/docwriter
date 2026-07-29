@@ -44,7 +44,7 @@ export type RenderTrigger =
 
 export type InteractionEventName =
 	// -- app lifecycle ------------------------------------------------------
-	| 'app.boot' //          server: {version, participant, newSession}
+	| 'app.boot' //          server: {version, newSession}
 	| 'app.focus' //         client: {focused, visible}
 	// -- tabs (server, /api/tabs) ------------------------------------------
 	| 'tab.open' //          {created} — POST; created=true when file was made

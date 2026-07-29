@@ -1037,6 +1037,10 @@
 					text: 'Latest local edits are still syncing to the server. Try again in a moment.',
 					priority: 'high'
 				});
+				// Without this reset, one failed flush leaves submitInFlight
+				// stuck true and every later submit queues forever — the agent
+				// looks dead until a page reload.
+				submitInFlight = false;
 				return;
 			}
 		} catch (e) {

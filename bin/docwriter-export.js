@@ -3,29 +3,29 @@
  * docwriter-export — bundle a workspace's study data for collection.
  *
  * Usage:
- *   node bin/docwriter-export.js [workspace-dir] [--out <dir>] [--participant <id>]
+ *   node bin/docwriter-export.js [workspace-dir] [--out <dir>]
  *   npm run study:export [-- <workspace-dir>]
  *
- * The participant ID is optional everywhere: pass --participant at launch
- * (docwriter --participant P07) to tag the DB from the start, pass it here
- * at export time to tag retroactively, or skip it entirely and identify
- * bundles at collection time — the folder name and manifest carry whatever
- * is known.
+ * Produces a self-contained folder the participant can zip and send.
+ * Bundles carry no participant identity — the researcher labels them at
+ * collection time (rename the folder/zip per participant).
  *
- * Produces a self-contained folder the participant can zip and send:
- *
- *   study-export-<participant>-<timestamp>/
+ *   study-export-<timestamp>/
  *     docwriter.db     WAL-safe snapshot (VACUUM INTO) of the full DB:
  *                      yjs_updates (every keystroke + agent edit, origin-
  *                      tagged), conversation_events + provider_session_entries
  *                      (the AI transcript), interaction_events (UI log), tabs,
  *                      rules, reviewers, kv.
  *     events.jsonl     Flattened merged timeline (interaction_events ∪
- *                      conversation_events ∪ yjs_updates metadata) sorted by
- *                      server timestamp — pandas-ready without SQLite.
+ *                      conversation_events ∪ provider_session_entries
+ *                      markers ∪ yjs_updates metadata) sorted by server
+ *                      timestamp — pandas-ready without SQLite. Claude
+ *                      renders persist their transcript as provider-native
+ *                      entries (full JSON in the DB; the timeline carries
+ *                      type + size markers); other providers use
+ *                      conversation_events.
  *     files/…          Current contents of every open tab + document.md.
- *     manifest.json    Participant ID, app/schema versions, row counts,
- *                      time range.
+ *     manifest.json    App/schema versions, row counts, time range.
  *
  * The live app can keep running during export — VACUUM INTO takes a
  * consistent snapshot of a WAL-mode database.
@@ -51,15 +51,12 @@ const require = createRequire(import.meta.url);
 const argv = process.argv.slice(2);
 let rootArg = null;
 let outArg = null;
-let participantArg = null;
 for (let i = 0; i < argv.length; i++) {
 	const a = argv[i];
 	if (a === '--out') outArg = argv[++i];
 	else if (a.startsWith('--out=')) outArg = a.slice(6);
-	else if (a === '--participant') participantArg = argv[++i];
-	else if (a.startsWith('--participant=')) participantArg = a.slice(14);
 	else if (a === '-h' || a === '--help') {
-		console.log('Usage: docwriter-export [workspace-dir] [--out <dir>] [--participant <id>]');
+		console.log('Usage: docwriter-export [workspace-dir] [--out <dir>]');
 		process.exit(0);
 	} else if (!a.startsWith('-')) rootArg = a;
 }
@@ -81,14 +78,6 @@ const db = new BetterSqlite3(dbPath);
 // --------------------------------------------------------------------------
 // Metadata
 // --------------------------------------------------------------------------
-function kvGet(key) {
-	try {
-		const row = db.prepare('SELECT value FROM kv WHERE key = ?').get(key);
-		return row?.value ?? null;
-	} catch {
-		return null;
-	}
-}
 function tableCount(table) {
 	try {
 		return db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n;
@@ -97,17 +86,13 @@ function tableCount(table) {
 	}
 }
 
-// Export-time --participant wins over (and backfills) the launch-time flag.
-const participant = participantArg ?? kvGet('participantId');
 const schemaVersion = db.pragma('user_version', { simple: true });
 const stamp = new Date()
 	.toISOString()
 	.replace(/[-:]/g, '')
 	.replace(/T/, '-')
 	.slice(0, 15);
-const outDir = resolve(
-	outArg ?? join(workspaceRoot, `study-export-${participant ?? 'anon'}-${stamp}`)
-);
+const outDir = resolve(outArg ?? join(workspaceRoot, `study-export-${stamp}`));
 mkdirSync(outDir, { recursive: true });
 
 // --------------------------------------------------------------------------
@@ -115,13 +100,6 @@ mkdirSync(outDir, { recursive: true });
 // --------------------------------------------------------------------------
 const snapshotPath = join(outDir, 'docwriter.db');
 db.prepare('VACUUM INTO ?').run(snapshotPath);
-if (participantArg) {
-	// Stamp the export-time ID into the SNAPSHOT's kv (never the live DB),
-	// so the bundle stays self-describing even without the manifest.
-	const snap = new BetterSqlite3(snapshotPath);
-	snap.prepare('INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)').run('participantId', participantArg);
-	snap.close();
-}
 console.log(`  db        ${snapshotPath}`);
 
 // --------------------------------------------------------------------------
@@ -192,6 +170,27 @@ for (const r of db
 	});
 }
 for (const r of db
+	.prepare(
+		"SELECT provider, session_id, entry_json, created FROM provider_session_entries WHERE subpath = '' ORDER BY id"
+	)
+	.all()) {
+	let entryType = null;
+	try {
+		entryType = JSON.parse(r.entry_json)?.type ?? null;
+	} catch {
+		// Marker row still useful without a parsed type.
+	}
+	rows.push({
+		t: r.created,
+		kind: 'provider_entry',
+		src: 'agent',
+		provider: r.provider,
+		session: r.session_id,
+		entryType,
+		chars: r.entry_json.length
+	});
+}
+for (const r of db
 	.prepare('SELECT tab_id, origin, LENGTH(payload) AS bytes, created FROM yjs_updates ORDER BY seq')
 	.all()) {
 	rows.push({
@@ -219,7 +218,6 @@ const timeRange = rows.length
 	? { from: new Date(rows[0].t).toISOString(), to: new Date(rows[rows.length - 1].t).toISOString() }
 	: null;
 const manifest = {
-	participant,
 	appVersion: pkg.version,
 	schemaVersion,
 	exportedAt: new Date().toISOString(),
@@ -240,7 +238,4 @@ writeFileSync(join(outDir, 'manifest.json'), JSON.stringify(manifest, null, 2) +
 db.close();
 
 console.log(`\n  Export complete: ${outDir}`);
-if (!participant) {
-	console.log('  (No participant ID — start docwriter with --participant <id> to tag future sessions.)');
-}
 console.log('  Zip this folder and send it to the study team.\n');

@@ -14,8 +14,7 @@ import { syncRulesToClaudeMemory } from '$lib/server/claude-memory';
 import { installBundledSkills } from '$lib/server/skills-install';
 import { createWsServer } from '$lib/server/ws-server';
 import { loadGlobalKeys, loadRepoEnv } from '$lib/server/api-keys';
-import { kvGet, kvSet } from '$lib/server/db-writes';
-import { logInteraction, PARTICIPANT_KV_KEY } from '$lib/server/interaction-log';
+import { logInteraction } from '$lib/server/interaction-log';
 
 // Load repo .env, then ~/.docwriter/keys.env into process.env so provider API
 // keys are available before any render path reads process.env.<KEY>. The
@@ -69,14 +68,11 @@ try {
 	/* fresh workspace or DB not yet initialized — ignore */
 }
 
-// Study instrumentation: stamp the participant ID (from the --participant
-// CLI flag via DOCWRITER_PARTICIPANT) into kv, and log one app.boot per
-// server process. Guarded by the same freshness check that protects the
-// instance ID, so Vite HMR re-executions of this module can't double-log.
+// Interaction log: one app.boot per server process. Guarded by the same
+// freshness check that protects the instance ID, so Vite HMR re-executions
+// of this module can't double-log.
 if (freshBoot) {
 	try {
-		const participant = process.env.DOCWRITER_PARTICIPANT?.trim() || null;
-		if (participant) kvSet(PARTICIPANT_KV_KEY, participant);
 		let version: string | null = null;
 		try {
 			// cwd is the package root both in dev (repo root) and under
@@ -90,7 +86,6 @@ if (freshBoot) {
 		}
 		logInteraction('app.boot', {
 			version,
-			participant: participant ?? kvGet(PARTICIPANT_KV_KEY),
 			newSession: process.env.DOCWRITER_NEW_SESSION === '1'
 		});
 	} catch {

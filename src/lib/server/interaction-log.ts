@@ -46,9 +46,3 @@ export function logInteraction(
 		console.error(`[docwriter] interaction-log failed (${event}):`, err);
 	}
 }
-
-/** The study participant ID, stamped into `kv` at boot from the
- * `DOCWRITER_PARTICIPANT` env var (set by the `--participant` CLI flag).
- * One workspace DB = one participant, so events don't carry it per-row;
- * the export manifest reads it back from here. */
-export const PARTICIPANT_KV_KEY = 'participantId';

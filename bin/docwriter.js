@@ -16,8 +16,6 @@
  *       --api-key <key>   Anthropic API key (overrides ANTHROPIC_API_KEY env var)
  *       --model <name>    Default model: opus | sonnet | haiku (overrides UI setting)
  *       --new-session     Clear the persisted AI session — start a fresh conversation
- *       --participant <id> Tag this workspace's interaction log with a study
- *                          participant ID (stored in the DB; see bin/docwriter-export.js)
  *   -h, --help            Show this help
  *
  * Auth:
@@ -51,7 +49,6 @@ let rootArg = null;
 let apiKey = null;
 let modelArg = null;
 let newSession = false;
-let participantArg = null;
 let showHelp = false;
 let showVersion = false;
 
@@ -71,10 +68,6 @@ for (let i = 0; i < argv.length; i++) {
 		modelArg = a.slice(8);
 	} else if (a === '--new-session') {
 		newSession = true;
-	} else if (a === '--participant') {
-		participantArg = argv[++i];
-	} else if (a.startsWith('--participant=')) {
-		participantArg = a.slice(14);
 	} else if (a === '-p' || a === '--port') {
 		portArg = parseInt(argv[++i] ?? '', 10);
 	} else if (a.startsWith('--port=')) {
@@ -134,7 +127,6 @@ Options:
       --api-key <key>   Anthropic API key (overrides ANTHROPIC_API_KEY)
       --model <name>    Default model: opus | sonnet | haiku
       --new-session     Start a fresh AI conversation (clear persisted session)
-      --participant <id> Tag the interaction log with a study participant ID
   -h, --help            Show this help
 
 Auth:
@@ -211,7 +203,6 @@ if (modelArg) console.log(`  model      ${modelArg}`);
 if (watchFlag) console.log('  watch      on (file changes → browser reload)');
 if (restartFlag) console.log('  restart    on crash');
 if (newSession) console.log('  session    new (cleared persisted context)');
-if (participantArg) console.log(`  study      participant ${participantArg}`);
 console.log('');
 
 // ---------------------------------------------------------------------------
@@ -236,10 +227,7 @@ function spawnServer() {
 			// CLI model default; render endpoint reads this as fallback.
 			...(modelArg ? { DOCWRITER_DEFAULT_MODEL: modelArg } : {}),
 			// Signals hooks.server.ts to clear the persisted session on startup.
-			...(newSession ? { DOCWRITER_NEW_SESSION: '1' } : {}),
-			// Study participant ID; hooks.server.ts stamps it into the DB's kv
-			// table and tags the app.boot interaction event with it.
-			...(participantArg ? { DOCWRITER_PARTICIPANT: participantArg } : {})
+			...(newSession ? { DOCWRITER_NEW_SESSION: '1' } : {})
 		},
 		stdio: 'inherit'
 	});
