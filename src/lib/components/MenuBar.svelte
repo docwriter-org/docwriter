@@ -47,6 +47,7 @@
 
 <script lang="ts">
 	import { Check, ChevronRight } from 'lucide-svelte';
+	import { logUi } from '$lib/interaction-log-client';
 
 	interface Props {
 		menus: MenuSpec[];
@@ -60,6 +61,9 @@
 	let menuBarEl: HTMLDivElement | null = $state(null);
 
 	function toggleMenu(i: number) {
+		if (openMenu !== i) {
+			logUi('ui.menu_open', { menu: menus[i]?.label?.toLowerCase() ?? 'menu' });
+		}
 		openMenu = openMenu === i ? null : i;
 		openSubmenu = null;
 	}

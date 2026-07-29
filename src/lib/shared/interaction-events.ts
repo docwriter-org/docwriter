@@ -46,6 +46,10 @@ export type InteractionEventName =
 	// -- app lifecycle ------------------------------------------------------
 	| 'app.boot' //          server: {version, newSession}
 	| 'app.focus' //         client: {focused, visible}
+	| 'app.client_state' //  client, once per page load: raw localStorage view
+	//                       prefs (provenance, dockExpanded, model, …) so
+	//                       analysis knows each session's STARTING view state,
+	//                       not just transitions
 	// -- tabs (server, /api/tabs) ------------------------------------------
 	| 'tab.open' //          {created} — POST; created=true when file was made
 	| 'tab.switch' //        PATCH {active:true}

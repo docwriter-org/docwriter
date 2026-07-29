@@ -117,6 +117,22 @@ if (browser) {
 	// Page-load marker: initial focus state, tagged with this window's ID.
 	logUi('app.focus', { ...last, initial: true });
 
+	// Snapshot the client-only view prefs once per page load. These live in
+	// localStorage and never reach the server on their own, so without this
+	// event an analysis only sees TRANSITIONS (ui.provenance, ui.dock, …)
+	// and cannot know the state a session STARTED in. Values are passed raw
+	// (string | null); null = key unset = the app default.
+	const ls = (k: string) => window.localStorage.getItem(k);
+	logUi('app.client_state', {
+		provenance: ls('docwriter.showAiProvenance'),
+		dockExpanded: ls('docwriter.dockExpanded'),
+		model: ls('docwriter.selectedModel'),
+		provider: ls('docwriter.selectedProvider'),
+		historyVerbosity: ls('docwriter.historyVerbosity'),
+		filesPane: ls('docwriter.showFilesPane'),
+		sidebar: ls('docwriter.showSidebar')
+	});
+
 	const track = () => {
 		const now = { focused: document.hasFocus(), visible: !document.hidden };
 		// blur + visibilitychange often double-fire; only log state changes.
