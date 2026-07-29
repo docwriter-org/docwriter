@@ -765,8 +765,14 @@
 	async function refreshSplitPreviewForTab(tabPath: string) {
 		const nextPath = await resolvePreviewOutputForTab(tabPath);
 		if (activeTabFilePath !== tabPath) return;
+		if (!nextPath) {
+			// Route through closeSplitPreview so the interaction log records
+			// the implicit close (switching to a tab with no preview match).
+			closeSplitPreview();
+			return;
+		}
 		splitPreviewPath = nextPath;
-		splitPreviewSourcePath = nextPath ? tabPath : null;
+		splitPreviewSourcePath = tabPath;
 	}
 
 	$effect(() => {
