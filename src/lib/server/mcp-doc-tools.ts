@@ -209,6 +209,28 @@ export async function runTabWrite(
 				result = { beforeMd, afterMd: beforeMd, discarded: true };
 				return;
 			}
+			// The prompt's "Announce edits on a thread" contract, enforced: if
+			// the thread's latest message is the user's, the agent hasn't said
+			// anything about this proposal yet, and letting it land would show
+			// the user a bare diff with no explanation. Bounce the write with
+			// instructions; the agent replies on the thread and retries. The
+			// error string is the whole contract because every provider path
+			// (MCP tools and tool-handlers.ts) surfaces it verbatim.
+			if (targetThreadId) {
+				const thread = getCommentsMap(doc).get(targetThreadId);
+				const lastMessage = thread?.messages[thread.messages.length - 1];
+				if (lastMessage?.author === 'user') {
+					result = {
+						error:
+							`the user's latest message on thread "${targetThreadId}" has no reply yet, ` +
+							`so this proposal would land as a bare diff with no explanation. First call ` +
+							`reply_to_comment(file_path: "${tabId}", thread_id: "${targetThreadId}") with one ` +
+							`or two first-person sentences — what you make of the user's feedback and what ` +
+							`you are changing — then retry this exact call.`
+					};
+					return;
+				}
+			}
 			doc.transact(() => {
 				const reviewArr = getReviewArray(doc);
 				const threadIdExplicit = activeFeedbackThreadId ?? undefined;
