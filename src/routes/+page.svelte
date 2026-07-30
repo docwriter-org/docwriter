@@ -29,7 +29,10 @@
 	import { themes, applyTheme } from '$lib/themes';
 	import { unifiedLineDiff } from '$lib/diff';
 	import { materializePendingReviewRounds } from '$lib/review-rounds';
-	import { serializeFragment as plainTextFromFragment } from '$lib/shared/ydoc-codec';
+	import {
+		serializeFragment as plainTextFromFragment,
+		matchCommentAnchor
+	} from '$lib/shared/ydoc-codec';
 
 	/** Turn a submit trigger into a compact description for the history
 	 * pane. Full text of long prompts (including feedback-on-passage quotes)
@@ -253,15 +256,18 @@
 		return plainTextFromFragment(getYDocForTab(tabId).getXmlFragment('default'));
 	}
 
-	/** Whether a thread anchor still maps to text in the doc — mirrors the
-	 * comment overlay's resolver (full quote, else its first non-empty line,
-	 * so multi-line anchors aren't falsely treated as detached). Used to keep
-	 * detached threads out of the tab count without mutating them. */
-	function anchorPresentInText(quote: string, text: string): boolean {
-		if (!quote) return false;
-		if (text.includes(quote)) return true;
-		const firstLine = quote.split('\n').find((l) => l.trim());
-		return !!firstLine && text.includes(firstLine);
+	/** Whether a thread anchor still maps to text in the doc — delegates to
+	 * `matchCommentAnchor`, the SAME quote-matching ladder the comment
+	 * overlay's fallback resolver uses, including the anchor-context check.
+	 * A naive `includes(quote)` here once let a thread whose passage was
+	 * deleted keep the tab dot pulsing forever just because the same string
+	 * recurred elsewhere (constant in LaTeX boilerplate) while the gutter —
+	 * which context-checks — rendered nothing. Detached threads stay out of
+	 * the tab count without being mutated: if the text comes back (Ctrl+Z),
+	 * the thread re-attaches and counts/renders again. */
+	function anchorPresentInText(anchor: CommentThread['anchor'] | undefined, text: string): boolean {
+		if (!anchor?.quote) return false;
+		return matchCommentAnchor(text, anchor) !== null;
 	}
 
 	function materializedRoundsForTab(
@@ -431,7 +437,7 @@
 			getCommentsMapForTab(id).forEach((t) => {
 				if (t.resolved) return;
 				if (!t.messages.some((m) => m.author === 'agent')) return;
-				if (!anchorPresentInText(t.anchor?.quote ?? '', tabText)) return;
+				if (!anchorPresentInText(t.anchor, tabText)) return;
 				threads.push(t);
 			});
 			if (threads.length > 0) {

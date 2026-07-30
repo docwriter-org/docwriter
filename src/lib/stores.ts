@@ -30,8 +30,11 @@ export const reviewBaseline = writable<string | null>(null);
 export const pendingReviewRounds = writable<MaterializedPendingReviewRound[]>([]);
 
 /** Agent comment threads for EVERY open tab. Each entry contains a tabId
- * and the unresolved threads that have at least one agent message.
- * Used by OutlinePane's cross-tab comment section. */
+ * and the unresolved, still-anchored threads that have at least one agent
+ * message — the same attachment test the comment gutter renders by
+ * (`matchCommentAnchor`), so a tab never advertises threads that wouldn't
+ * show. Drives the per-tab dot badges on the TabBar (via
+ * `mergedPendingTabs` in +page.svelte). */
 export const allTabCommentThreads = writable<Array<{ tabId: string; threads: CommentThread[] }>>([]);
 
 /** Set of comment thread IDs the user has already seen (opened or clicked).

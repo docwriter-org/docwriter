@@ -30,7 +30,8 @@ import {
 	getCommentsMap,
 	AGENT_ORIGIN,
 	normalizeTypography,
-	captureAnchorContext
+	captureAnchorContext,
+	nthIndexOf
 } from '$lib/shared/ydoc-codec';
 import { isScratchPath, resolveTabFromPath, isOpenTab } from './path-router';
 import { classifyRoundKind } from '$lib/review-diff';
@@ -358,7 +359,7 @@ function createAgentEditThread(
 ): string {
 	const threadId = 'thread_' + cryptoRandomId();
 	const now = Date.now();
-	const anchorIdx = nthOccurrenceIndex(docText, oldString, occurrenceIndex);
+	const anchorIdx = nthIndexOf(docText, oldString, occurrenceIndex);
 	const thread: CommentThread = {
 		id: threadId,
 		anchor: {
@@ -383,20 +384,6 @@ function createAgentEditThread(
 	};
 	getCommentsMap(doc).set(threadId, thread);
 	return threadId;
-}
-
-/** Character index of the `occurrenceIndex`-th occurrence of `needle` in
- * `haystack`, or -1 when there are fewer occurrences. */
-function nthOccurrenceIndex(haystack: string, needle: string, occurrenceIndex: number): number {
-	if (!needle) return -1;
-	let idx = 0;
-	let found = 0;
-	while ((idx = haystack.indexOf(needle, idx)) !== -1) {
-		if (found === occurrenceIndex) return idx;
-		found += 1;
-		idx += needle.length;
-	}
-	return -1;
 }
 
 // ---- Auto-open-as-tab -----------------------------------------------------
@@ -824,7 +811,7 @@ function createAgentCommentThread(
 	const threadId = 'thread_' + cryptoRandomId();
 	const now = Date.now();
 	const liveText = serializeYDoc(doc);
-	const anchorIdx = nthOccurrenceIndex(liveText, anchorText, occurrenceIndex);
+	const anchorIdx = nthIndexOf(liveText, anchorText, occurrenceIndex);
 	const thread: CommentThread = {
 		id: threadId,
 		anchor: {
