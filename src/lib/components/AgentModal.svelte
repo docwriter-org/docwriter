@@ -302,7 +302,7 @@
 							rows="3"
 						></textarea>
 						<div class="reject-actions">
-							<span class="hint"><kbd>{modEnterLabel}</kbd> to send · <kbd>Esc</kbd> to cancel</span>
+							<span class="hint">{modEnterLabel} to send · Esc to cancel</span>
 							<button class="btn-secondary" onclick={closeRejectFeedback}>Cancel</button>
 							<button
 								class="btn-primary"
@@ -541,20 +541,7 @@
 		margin-right: auto;
 		font-size: 11px;
 		color: var(--text-faint);
-		display: inline-flex;
-		align-items: center;
-		gap: 4px;
 		white-space: nowrap;
-	}
-	.reject-actions .hint kbd {
-		font-family: inherit;
-		font-size: 10px;
-		line-height: 1;
-		padding: 2px 5px;
-		border: 1px solid var(--border-light);
-		border-radius: 4px;
-		background: var(--bg-surface);
-		color: var(--text-secondary);
 	}
 	.question-header {
 		font-size: 11px;

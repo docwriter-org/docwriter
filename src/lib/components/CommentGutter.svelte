@@ -761,9 +761,7 @@
 						{thread.resolved ? 'Reopen' : 'Resolve'}
 					</button>
 					<div class="card-actions-right">
-						<kbd class="send-kbd" title="Pressing {modEnterLabel} in the reply box also sends"
-							>{modEnterLabel}</kbd
-						>
+						<span class="send-hint">{modEnterLabel} to send</span>
 						<button
 							class="send-btn"
 							title="Send reply ({modEnterLabel})"
@@ -1187,19 +1185,13 @@
 		opacity: 0.5;
 		cursor: default;
 	}
-	/* Keycap hint beside Send — ⌘↵ / Ctrl+↵ in the reply box also
-	 * submits, and nothing else on the card says so. */
-	.send-kbd {
-		font-family: inherit;
-		font-size: 10px;
-		line-height: 1;
-		padding: 2px 5px;
-		border: 1px solid var(--border-light);
-		border-radius: 4px;
-		background: var(--bg-surface);
+	/* Shortcut hint beside Send — ⌘↵ / Ctrl+↵ in the reply box also
+	 * submits, and nothing else on the card says so. Plain muted text,
+	 * not a keycap box: a box next to a real button reads as clickable. */
+	.send-hint {
+		font-size: 11px;
 		color: var(--text-faint);
 		white-space: nowrap;
-		cursor: default;
 	}
 	.send-btn {
 		display: inline-flex;
