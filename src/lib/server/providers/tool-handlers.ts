@@ -28,7 +28,9 @@ import {
 	serializeYDoc,
 	getCommentsMap,
 	AGENT_ORIGIN,
-	normalizeTypography
+	normalizeTypography,
+	captureAnchorContext,
+	nthIndexOf
 } from '$lib/shared/ydoc-codec';
 import type {
 	CommentMessage,
@@ -440,9 +442,20 @@ export function buildToolDefinitions(): ToolDefinition[] {
 					const commentsMap = getCommentsMap(doc);
 					const now = Date.now();
 					threadId = 'thread_' + cryptoRandomId();
+					// Snapshot the anchor's surroundings (same as the Claude-path
+					// comment tools) so the client's quote fallback can tell "this
+					// text came back" (undo) apart from "the same string appears
+					// somewhere else" once the passage is deleted.
+					const anchorIdx = nthIndexOf(liveText, anchorText, occurrence);
 					const thread: CommentThread = {
 						id: threadId,
-						anchor: { quote: anchorText, occurrenceIndex: occurrence },
+						anchor: {
+							quote: anchorText,
+							occurrenceIndex: occurrence,
+							...(anchorIdx >= 0
+								? captureAnchorContext(liveText, anchorIdx, anchorText.length)
+								: {})
+						},
 						messages: [{
 							id: 'msg_' + cryptoRandomId(),
 							author: 'agent',
