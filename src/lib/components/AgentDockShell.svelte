@@ -152,7 +152,7 @@
 					ondblclick={handlePillDblClick}
 					use:tooltip={paused
 						? 'Agent paused — double-click to resume. Single-click does nothing while paused.'
-						: 'Open the agent dock. Double-click to pause the agent (no auto-wake / Wake up / Send).'}
+						: 'Open the agent dock. Double-click to pause the agent (no auto-wake / Wake up / chat).'}
 				>
 					<span
 						class="mascot-face"

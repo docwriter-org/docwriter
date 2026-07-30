@@ -847,7 +847,7 @@
 	}
 
 	/** Fully pause / unpause the agent. Pause cancels any in-flight render,
-	 * clears the idle countdown, and blocks Wake up / Send / auto-submit
+	 * clears the idle countdown, and blocks Wake up / chat / auto-submit
 	 * until the user double-clicks the Agent pill again. */
 	function togglePaused() {
 		let next: AgentSettings | null = null;

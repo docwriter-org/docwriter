@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Send } from 'lucide-svelte';
+	import { MessageCircle } from 'lucide-svelte';
 	import ChatPanel from './ChatPanel.svelte';
 	import { isRendering, queuedSubmissionCount } from '$lib/stores';
 	import { tooltip } from '$lib/actions/tooltip';
@@ -34,7 +34,7 @@
 		if (!chatOpen) return;
 		function onDown(e: MouseEvent) {
 			// Check against the whole dock (button + popover), not just the
-			// popover: a mousedown on the Send button would close here and the
+			// popover: a mousedown on the Chat button would close here and the
 			// button's click would immediately toggle it back open, making the
 			// button unable to ever close the popover.
 			const target = e.target as Node | null;
@@ -59,14 +59,14 @@
 		type="button"
 		aria-pressed={chatOpen}
 		use:tooltip={queuedCount > 0
-			? `Send another message to the agent. ${queuedCount} message${queuedCount === 1 ? '' : 's'} already queued. This one will run after them.`
+			? `Chat with the agent. ${queuedCount} message${queuedCount === 1 ? '' : 's'} already queued — a new message will run after them.`
 			: rendering
-				? 'Send a follow-up message. Will be queued and run after the current render finishes.'
-				: 'Send a message to the agent. Type a request and Claude will run a render with your message as the prompt.'}
+				? 'Chat with the agent. Messages sent while it works are queued and run after the current render finishes.'
+				: 'Chat with the agent. Type a request and Claude will run a render with your message as the prompt.'}
 		onclick={toggleChat}
 	>
-		<Send size={12} />
-		<span>Send</span>
+		<MessageCircle size={12} />
+		<span>Chat</span>
 		{#if queuedCount > 0}
 			<span class="queue-badge">{queuedCount}</span>
 		{/if}

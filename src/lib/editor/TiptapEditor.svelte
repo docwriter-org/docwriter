@@ -349,7 +349,7 @@
 		if (!editor || !editor.isFocused) return;
 		// No feedback while the agent is paused: a paused agent won't act on
 		// edits or comments, so the selection popup would be a dead end. Same
-		// gate as Wake up / Send / auto-wake.
+		// gate as Wake up / chat / auto-wake.
 		if ($agentSettings.paused) {
 			dismissedFeedbackSelectionRange = null;
 			feedbackPopup = null;
@@ -1365,7 +1365,7 @@
 					if (handleSourceCommentShortcut(event)) return true;
 					// Cmd/Ctrl+Enter wakes the agent immediately, skipping the
 					// idle countdown. Plain Enter still inserts a new line.
-					// No-op while paused — same gate as Wake up / Send.
+					// No-op while paused — same gate as Wake up / chat.
 					if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
 						event.preventDefault();
 						if ($agentSettings.paused) return true;
