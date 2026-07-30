@@ -465,6 +465,26 @@
 			)
 	);
 
+	// Keep the newest message visible: when a message lands on the open
+	// thread — the user's own reply syncing back, or the agent's response —
+	// scroll the card's message list to the bottom. Counts are tracked per
+	// thread so the first open of a card doesn't jump; only growth after
+	// that (including messages that arrived while the card was closed)
+	// scrolls.
+	const seenMsgCounts = new Map<string, number>();
+	$effect(() => {
+		const id = openThreadId;
+		if (!id) return;
+		const count = threads.find((t) => t.id === id)?.messages.length ?? 0;
+		const prev = seenMsgCounts.get(id);
+		seenMsgCounts.set(id, count);
+		if (prev === undefined || count <= prev) return;
+		requestAnimationFrame(() => {
+			const list = gutterEl?.querySelector('.gutter-card.expanded .card-messages');
+			if (list) list.scrollTo({ top: list.scrollHeight, behavior: 'smooth' });
+		});
+	});
+
 	async function sendReply(thread: CommentThread) {
 		const text = (replyDrafts[thread.id] ?? '').trim();
 		if (!text || replying[thread.id]) return;
@@ -694,9 +714,10 @@
 									>
 										<Copy size={11} />
 									</button>
-									<button class="mini-btn reject" title="Reject this edit" onclick={() => onRejectRound(ed.id)}>
-										<X size={12} />
-									</button>
+									<!-- No per-edit reject on thread cards: the natural "no" is a
+									     follow-up reply asking for a revision (or Resolve, which
+									     drops the thread's pending edits). Loose edit cards keep
+									     their X — they have no reply box. -->
 									<button
 										class="mini-btn accept"
 										title={ed.stale ? 'Stale — can no longer apply' : 'Accept this edit'}
