@@ -85,6 +85,145 @@ export function captureAnchorContext(
 	};
 }
 
+/** Locate the Nth occurrence of `needle` in `haystack`. Returns -1 when
+ * fewer than N+1 matches exist. */
+export function nthIndexOf(haystack: string, needle: string, occurrenceIndex: number): number {
+	if (!needle) return -1;
+	let idx = 0;
+	let found = 0;
+	while ((idx = haystack.indexOf(needle, idx)) !== -1) {
+		if (found === occurrenceIndex) return idx;
+		found += 1;
+		idx += needle.length;
+	}
+	return -1;
+}
+
+/** How many characters of stored anchor context must still match for a
+ * quote fallback to re-attach a thread whose rel-position anchor died. */
+const ANCHOR_CONTEXT_MIN_MATCH = 8;
+
+/** Anchor contexts are compared newline-free: the editor's char index
+ * concatenates paragraphs with no separator while server-captured contexts
+ * come from the newline-joined serialization — strip newlines so both text
+ * spaces agree. */
+function normalizeAnchorContext(s: string): string {
+	return s.replace(/\n/g, '');
+}
+
+function commonSuffixLen(a: string, b: string): number {
+	let n = 0;
+	while (n < a.length && n < b.length && a[a.length - 1 - n] === b[b.length - 1 - n]) n += 1;
+	return n;
+}
+
+function commonPrefixLen(a: string, b: string): number {
+	let n = 0;
+	while (n < a.length && n < b.length && a[n] === b[n]) n += 1;
+	return n;
+}
+
+/** Among all occurrences of `quote`, pick the one whose surroundings best
+ * match the anchor's stored context; -1 when none matches well enough.
+ * `preferredIdx` breaks score ties (the plain occurrenceIndex match). */
+function findContextMatch(
+	plainText: string,
+	quote: string,
+	contextBefore: string,
+	contextAfter: string,
+	preferredIdx: number
+): number {
+	const storedBefore = normalizeAnchorContext(contextBefore);
+	const storedAfter = normalizeAnchorContext(contextAfter);
+	// The bar adapts to how much context exists: a quote at the very start
+	// of a short document may have less than ANCHOR_CONTEXT_MIN_MATCH chars
+	// of context in total, and that's fine.
+	const required = Math.min(ANCHOR_CONTEXT_MIN_MATCH, storedBefore.length + storedAfter.length);
+	let bestIdx = -1;
+	let bestScore = -1;
+	let scan = 0;
+	while ((scan = plainText.indexOf(quote, scan)) !== -1) {
+		const actualBefore = normalizeAnchorContext(
+			plainText.slice(Math.max(0, scan - ANCHOR_CONTEXT_RADIUS), scan)
+		);
+		const actualAfter = normalizeAnchorContext(
+			plainText.slice(scan + quote.length, scan + quote.length + ANCHOR_CONTEXT_RADIUS)
+		);
+		const score =
+			commonSuffixLen(storedBefore, actualBefore) + commonPrefixLen(storedAfter, actualAfter);
+		if (score >= required && (score > bestScore || (score === bestScore && scan === preferredIdx))) {
+			bestScore = score;
+			bestIdx = scan;
+		}
+		scan += quote.length;
+	}
+	return bestIdx;
+}
+
+/** A resolved quote match: `idx` into the plain text that was searched, and
+ * the `quote` that actually matched there (the anchor's full quote, or its
+ * first non-empty line when the multi-line fallback kicked in). */
+export interface AnchorQuoteMatch {
+	idx: number;
+	quote: string;
+}
+
+/**
+ * Locate a comment-thread anchor's quote in `plainText` — the single
+ * matching policy shared by the comment overlay's fallback resolver (which
+ * maps the match to ProseMirror positions) and the per-tab thread counting
+ * that drives the TabBar dots. Keeping one implementation is what keeps
+ * "the dot pulses" and "a card renders" in agreement; they drifted once
+ * (the overlay gained the context check, the dot count didn't) and the
+ * dots nagged about threads that no longer rendered anywhere.
+ *
+ * The ladder, in order:
+ *   1. Full quote at `occurrenceIndex` (falling back to the first
+ *      occurrence when that index no longer exists).
+ *   2. Multi-line quotes whose full text no longer matches fall back to
+ *      their first non-empty line — enough to position/count the thread.
+ *   3. When the anchor stores surrounding context (`contextBefore` /
+ *      `contextAfter`) and the full quote matched, the occurrence must
+ *      ALSO match that context (`findContextMatch`), so a thread whose
+ *      passage was deleted doesn't re-attach to an unrelated occurrence
+ *      of the same string elsewhere. The first-line fallback skips the
+ *      context check — the stored context surrounds the full quote, not
+ *      its first line.
+ *
+ * Returns null when nothing matches — the thread is detached.
+ */
+export function matchCommentAnchor(
+	plainText: string,
+	anchor: CommentThread['anchor']
+): AnchorQuoteMatch | null {
+	let quote = anchor.quote;
+	if (!quote) return null;
+	let idx = nthIndexOf(plainText, quote, anchor.occurrenceIndex);
+	if (idx < 0) idx = nthIndexOf(plainText, quote, 0);
+	let usedFirstLineFallback = false;
+	if (idx < 0 && quote.includes('\n')) {
+		const firstLine = quote.split('\n').find((l) => l.trim()) ?? '';
+		if (firstLine) {
+			quote = firstLine;
+			idx = nthIndexOf(plainText, quote, 0);
+			usedFirstLineFallback = true;
+		}
+	}
+	if (idx < 0) return null;
+	const hasContext = !!(anchor.contextBefore || anchor.contextAfter);
+	if (hasContext && !usedFirstLineFallback) {
+		idx = findContextMatch(
+			plainText,
+			quote,
+			anchor.contextBefore ?? '',
+			anchor.contextAfter ?? '',
+			idx
+		);
+		if (idx < 0) return null;
+	}
+	return { idx, quote };
+}
+
 export function getFragment(ydoc: Y.Doc): Y.XmlFragment {
 	return ydoc.getXmlFragment(FRAGMENT_NAME);
 }

@@ -15,8 +15,9 @@ import {
 import {
 	getCommentsMap,
 	SYSTEM_ORIGIN,
-	ANCHOR_CONTEXT_RADIUS,
-	captureAnchorContext
+	captureAnchorContext,
+	matchCommentAnchor,
+	nthIndexOf
 } from '$lib/shared/ydoc-codec';
 import { buildCharIndex as cachedBuildCharIndex } from './char-index';
 import type { CommentThread } from '$lib/types';
@@ -64,20 +65,6 @@ export function setCommentOverlayState(editor: Editor, state: CommentOverlayStat
 // buildCharIndex moved to ./char-index for cross-overlay caching.
 // Aliased here so the rest of this file reads cleanly.
 const buildCharIndex = cachedBuildCharIndex;
-
-/** Locate the Nth occurrence of `needle` in `haystack`. Returns -1 when
- * fewer than N+1 matches exist. */
-function nthIndexOf(haystack: string, needle: string, occurrenceIndex: number): number {
-	if (!needle) return -1;
-	let idx = 0;
-	let found = 0;
-	while ((idx = haystack.indexOf(needle, idx)) !== -1) {
-		if (found === occurrenceIndex) return idx;
-		found += 1;
-		idx += needle.length;
-	}
-	return -1;
-}
 
 /** Base64 encode/decode for storing Y.RelativePosition (a Uint8Array) in
  * a JSON-friendly Y.Map value. We pass through atob/btoa because (a) it
@@ -153,68 +140,6 @@ function getYBinding(state: EditorState): {
 	return { doc: binding.doc, type: binding.type, mapping: binding.mapping };
 }
 
-/** How many characters of stored anchor context must still match for a
- * quote fallback to re-attach a thread whose rel-position anchor died.
- * (The context itself is captured via `captureAnchorContext`, radius
- * `ANCHOR_CONTEXT_RADIUS`, shared with the server in ydoc-codec.) */
-const ANCHOR_CONTEXT_MIN_MATCH = 8;
-
-/** Contexts are compared in the editor's paragraph-concatenated plain-text
- * space (no separators), while server-captured contexts come from the
- * newline-joined serialization — strip newlines so both agree. */
-function normalizeAnchorContext(s: string): string {
-	return s.replace(/\n/g, '');
-}
-
-function commonSuffixLen(a: string, b: string): number {
-	let n = 0;
-	while (n < a.length && n < b.length && a[a.length - 1 - n] === b[b.length - 1 - n]) n += 1;
-	return n;
-}
-
-function commonPrefixLen(a: string, b: string): number {
-	let n = 0;
-	while (n < a.length && n < b.length && a[n] === b[n]) n += 1;
-	return n;
-}
-
-/** Among all occurrences of `quote`, pick the one whose surroundings best
- * match the anchor's stored context; -1 when none matches well enough.
- * `preferredIdx` breaks score ties (the plain occurrenceIndex match). */
-function findContextMatch(
-	plainText: string,
-	quote: string,
-	contextBefore: string,
-	contextAfter: string,
-	preferredIdx: number
-): number {
-	const storedBefore = normalizeAnchorContext(contextBefore);
-	const storedAfter = normalizeAnchorContext(contextAfter);
-	// The bar adapts to how much context exists: a quote at the very start
-	// of a short document may have less than ANCHOR_CONTEXT_MIN_MATCH chars
-	// of context in total, and that's fine.
-	const required = Math.min(ANCHOR_CONTEXT_MIN_MATCH, storedBefore.length + storedAfter.length);
-	let bestIdx = -1;
-	let bestScore = -1;
-	let scan = 0;
-	while ((scan = plainText.indexOf(quote, scan)) !== -1) {
-		const actualBefore = normalizeAnchorContext(
-			plainText.slice(Math.max(0, scan - ANCHOR_CONTEXT_RADIUS), scan)
-		);
-		const actualAfter = normalizeAnchorContext(
-			plainText.slice(scan + quote.length, scan + quote.length + ANCHOR_CONTEXT_RADIUS)
-		);
-		const score =
-			commonSuffixLen(storedBefore, actualBefore) + commonPrefixLen(storedAfter, actualAfter);
-		if (score >= required && (score > bestScore || (score === bestScore && scan === preferredIdx))) {
-			bestScore = score;
-			bestIdx = scan;
-		}
-		scan += quote.length;
-	}
-	return bestIdx;
-}
-
 /** Resolve a thread's anchor to PM positions. Tries rel positions first
  * (live, CRDT-tracked); falls back to indexOf when rel positions are
  * missing or no longer resolvable. Returns null when neither finds a
@@ -259,41 +184,17 @@ function resolveAnchorPMRange(
 		}
 	}
 
-	// Tier 2: indexOf fallback, context-checked when context is stored.
+	// Tier 2: quote-lookup fallback — the exact ladder (occurrenceIndex →
+	// first occurrence → first-non-empty-line for multi-line quotes, plus
+	// the context check) lives in `matchCommentAnchor`, shared with the
+	// per-tab thread counting behind the TabBar dots so the two can't
+	// disagree about which threads are attached.
 	const { charPositions, plainText } = buildCharIndex(state.doc);
-	let quote = anchor.quote;
-	let idx = nthIndexOf(plainText, quote, anchor.occurrenceIndex);
-	if (idx < 0) idx = nthIndexOf(plainText, quote, 0);
-	// Multi-line anchors (e.g. an edit thread auto-anchored to a multi-line
-	// `old_string`) often don't match verbatim — the stored quote is markdown
-	// form (with `\n`/escapes) while `plainText` is the editor's plain text.
-	// Fall back to the first non-empty line, which matches reliably and is
-	// enough to position the card. Without this, a multi-line edit's thread
-	// card silently disappears even though its diff renders.
-	let usedFirstLineFallback = false;
-	if (idx < 0 && quote.includes('\n')) {
-		const firstLine = quote.split('\n').find((l) => l.trim()) ?? '';
-		if (firstLine) {
-			quote = firstLine;
-			idx = nthIndexOf(plainText, quote, 0);
-			usedFirstLineFallback = true;
-		}
-	}
-	if (idx < 0) return null;
-	const hasContext = !!(anchor.contextBefore || anchor.contextAfter);
-	if (hasContext && !usedFirstLineFallback) {
-		idx = findContextMatch(
-			plainText,
-			quote,
-			anchor.contextBefore ?? '',
-			anchor.contextAfter ?? '',
-			idx
-		);
-		if (idx < 0) return null;
-	}
-	const endOffset = idx + quote.length - 1;
+	const match = matchCommentAnchor(plainText, anchor);
+	if (!match) return null;
+	const endOffset = match.idx + match.quote.length - 1;
 	if (endOffset >= charPositions.length) return null;
-	const from = charPositions[idx];
+	const from = charPositions[match.idx];
 	const to = charPositions[endOffset] + 1;
 	if (from === undefined || to === undefined || to <= from) return null;
 	return { from, to };
