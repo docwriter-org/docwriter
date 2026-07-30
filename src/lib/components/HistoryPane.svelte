@@ -12,6 +12,7 @@
 	import ReviewerMascot from './ReviewerMascot.svelte';
 	import ShineBorder from './ShineBorder.svelte';
 	import { tooltip } from '$lib/actions/tooltip';
+	import { modEnterLabel } from '$lib/keyboard';
 
 	let transcriptOpen = $state(false);
 
@@ -415,7 +416,7 @@
 						{:else if rendering}
 							<span class="bounce-dots"><span>.</span><span>.</span><span>.</span></span>
 						{:else if countdown > 0}
-							<span class="countdown" title="Auto-wake in {countdown}s — click Wake up to skip">{countdown}s</span>
+							<span class="countdown" title="Auto-wake in {countdown}s — click Wake up or press {modEnterLabel} in the editor to skip">{countdown}s</span>
 						{:else}
 							<span class="sleep-dots"><span>z</span><span>z</span><span>z</span></span>
 						{/if}

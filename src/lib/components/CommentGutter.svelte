@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Editor } from '@tiptap/core';
 	import { Send, Sparkles, Cat, Check, Copy, X, User } from 'lucide-svelte';
+	import { modEnterLabel } from '$lib/keyboard';
 
 	/** Minimal inline markdown → HTML. Matches the renderer used in
 	 * HistoryPane so assistant_text and comments look the same. Escapes
@@ -739,8 +740,12 @@
 						{thread.resolved ? 'Reopen' : 'Resolve'}
 					</button>
 					<div class="card-actions-right">
+						<kbd class="send-kbd" title="Pressing {modEnterLabel} in the reply box also sends"
+							>{modEnterLabel}</kbd
+						>
 						<button
 							class="send-btn"
+							title="Send reply ({modEnterLabel})"
 							onclick={() => sendReply(thread)}
 							disabled={replying[thread.id] || !(replyDrafts[thread.id] ?? '').trim()}
 						>
@@ -1159,6 +1164,20 @@
 	}
 	.resolve-link:disabled {
 		opacity: 0.5;
+		cursor: default;
+	}
+	/* Keycap hint beside Send — ⌘↵ / Ctrl+↵ in the reply box also
+	 * submits, and nothing else on the card says so. */
+	.send-kbd {
+		font-family: inherit;
+		font-size: 10px;
+		line-height: 1;
+		padding: 2px 5px;
+		border: 1px solid var(--border-light);
+		border-radius: 4px;
+		background: var(--bg-surface);
+		color: var(--text-faint);
+		white-space: nowrap;
 		cursor: default;
 	}
 	.send-btn {

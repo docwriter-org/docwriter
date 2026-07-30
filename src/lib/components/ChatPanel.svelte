@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { Send, X, Image } from 'lucide-svelte';
+	import { modEnterLabel } from '$lib/keyboard';
 	import {
 		ALLOWED_IMAGE_TYPES,
 		type AllowedImageMediaType,
@@ -170,7 +171,7 @@
 			<span>Plan first</span>
 		</label>
 		<div class="footer-right">
-			<span class="hint">⌘↵ to send</span>
+			<span class="hint"><kbd>{modEnterLabel}</kbd> to send</span>
 			<button class="send-btn" onclick={send} disabled={!message.trim() && attachedImages.length === 0}>
 				<Send size={12} />
 				{#if rendering}
@@ -351,6 +352,20 @@
 	.hint {
 		font-size: 11px;
 		color: var(--text-faint);
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		white-space: nowrap;
+	}
+	.hint kbd {
+		font-family: inherit;
+		font-size: 10px;
+		line-height: 1;
+		padding: 2px 5px;
+		border: 1px solid var(--border-light);
+		border-radius: 4px;
+		background: var(--bg-surface);
+		color: var(--text-secondary);
 	}
 	.send-btn {
 		display: inline-flex;
