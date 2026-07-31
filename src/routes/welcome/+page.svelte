@@ -286,6 +286,14 @@
 			DocWriter works with most frontier LLMs and SDKs: Claude Code, Codex, Pi, and others. It
 			uses your existing subscriptions, so if you already have one you do not pay extra.
 		</p>
+		<p>
+			DocWriter is an open source research project from
+			<a href="https://cs.cmu.edu" target="_blank" rel="noopener">CMU CSD</a>
+			and
+			<a href="https://eecs.berkeley.edu" target="_blank" rel="noopener"
+				>UC Berkeley EECS</a
+			>.
+		</p>
 	</section>
 
 	<section class="research">
@@ -365,8 +373,9 @@
 			would love to hear from you.
 		</p>
 		<p>
-			Reach out at <a href="mailto:shreyashankar@berkeley.edu"
-				>shreyashankar@berkeley.edu</a
+			Open an issue in the
+			<a href="https://github.com/docwriter-org/docwriter/issues" target="_blank" rel="noopener"
+				>DocWriter repository</a
 			>.
 		</p>
 	</section>
@@ -374,7 +383,7 @@
 	<footer class="footer">
 		<span class="footer-name">DocWriter</span>
 		<span class="sep">&middot;</span>
-		<span>EPIC Data Lab, UC Berkeley</span>
+		<span>CMU CSD and UC Berkeley EECS</span>
 	</footer>
 </div>
 
@@ -959,6 +968,7 @@
 		font-style: italic;
 		margin-left: 6px;
 	}
+	.about a,
 	.involved a {
 		color: #003262;
 		text-decoration: none;

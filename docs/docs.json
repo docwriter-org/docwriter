@@ -133,10 +133,10 @@
 				]
 			},
 			{
-				"header": "Authors",
+				"header": "Institutions",
 				"items": [
-					{ "label": "Shreya Shankar", "href": "https://sh-reya.com" },
-					{ "label": "EPIC Data Lab", "href": "https://epic.berkeley.edu" }
+					{ "label": "CMU CSD", "href": "https://cs.cmu.edu" },
+					{ "label": "UC Berkeley EECS", "href": "https://eecs.berkeley.edu" }
 				]
 			}
 		]
