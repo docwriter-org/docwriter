@@ -89,17 +89,19 @@
 
 <svelte:head>
 	<title>DocWriter</title>
-	<meta name="description" content="A harness and user interface for AI-assisted writing. A research project from UC Berkeley." />
+	<meta name="description" content="A shared writing workspace where you and an AI agent work alongside each other in the same live draft." />
 </svelte:head>
 
 <div class="page" class:mounted>
 	<nav class="nav">
 		<span class="logo"><LogoMark size={30} title="DocWriter" />DocWriter</span>
+		<a class="nav-link" href="https://docs.docwriter.org">Documentation</a>
 	</nav>
 
 	<header class="hero">
 		<h1>DocWriter</h1>
-		<p class="subtitle">A <span class="hl">harness and user interface</span> for AI-assisted writing,<br/>from HCI researchers at UC Berkeley.</p>
+		<p class="subtitle">A <span class="hl">shared writing workspace</span> where you and an AI agent work alongside each other in the same live draft.</p>
+		<p class="hero-detail">Keep writing while the agent researches, comments, or proposes changes. You can respond to its work, and it can respond to yours.</p>
 	</header>
 
 	<!-- Animated demo -->
@@ -228,13 +230,12 @@
 	<section class="about">
 		<h2>What is DocWriter?</h2>
 		<p>
-			DocWriter is an ongoing research project at UC Berkeley. It is a local editor with a built-in writing agent.
-			You can write any files you want&mdash;markdown, plain text, LaTeX&mdash;and the agent collaborates with you, reading your text and comments asynchronously in real time.
+			DocWriter is a local editor where you and an AI agent share one live draft.
+			You can work in Markdown, plain text, or LaTeX while the agent reads the same workspace and responds as the draft changes.
 		</p>
 		<p>
-			One of our key UI ideas is to get you <span class="hl">out of the chat</span> when communicating with your agent.
-			You communicate inline in the text, e.g., <code>[[ add a citation to ... ]]</code>, or highlight text and leave comments or suggestions for the agent to address.
-			Every edit the agent makes appears in place, and you review it inline before it takes effect.
+			You can communicate in the document by writing <code>[[ add a citation to ... ]]</code>, selecting text, or replying to a comment.
+			Agent edits appear beside the text for review. Chat remains available for requests that do not belong at one place in the draft.
 		</p>
 		<p>
 			DocWriter works with most frontier LLMs and SDKs: Claude Code, Codex, Pi, and others. It uses your existing subscriptions, so if you already have one you do not pay extra.
@@ -264,6 +265,9 @@
 		<h2>Try it</h2>
 		<div class="try-buttons">
 			<div class="try-row">
+				<a href="https://docs.docwriter.org" class="install-block">
+					<span class="install-label">Read the documentation</span>
+				</a>
 				<div class="install-block disabled"><code>npx docwriter</code> <span class="install-note">(coming soon!)</span></div>
 				<a href="https://github.com/docwriter-org/plain-writing-skill" class="install-block" target="_blank" rel="noopener">
 					<span class="install-label">Plain writing skill</span>
@@ -311,6 +315,8 @@
 	.nav { display: flex; align-items: center; justify-content: space-between; max-width: 920px; margin: 0 auto; padding: 20px 24px; }
 	.logo { display: inline-flex; align-items: center; gap: 10px; font-family: 'Lora', Georgia, serif; font-size: 20px; font-weight: 600; color: #1a1a1a; }
 	.logo :global(.dw-logo) { width: 30px; height: 30px; }
+	.nav-link { color: #003262; font-size: 14px; font-weight: 600; text-decoration: none; }
+	.nav-link:hover { text-decoration: underline; }
 
 	.hero { max-width: 640px; margin: 52px auto 0; padding: 0 24px; text-align: center; }
 	.hl { background: rgba(5,150,105,0.1); padding: 1px 4px; border-radius: 3px; }
@@ -319,6 +325,7 @@
 	.subtitle { margin: 0; font-size: 18px; line-height: 1.5; color: #333; font-style: italic; }
 	.subtitle a { color: #003262; text-decoration: none; font-weight: 500; font-style: normal; }
 	.subtitle a:hover { text-decoration: underline; }
+	.hero-detail { max-width: 590px; margin: 14px auto 0; color: #555; font-size: 15px; line-height: 1.65; }
 
 	.demo-wrap { max-width: 940px; margin: 56px auto 0; padding: 0 24px; }
 	.demo-window { border: 1px solid #d4d1ca; border-radius: 10px; overflow: hidden; background: #fff; box-shadow: 0 6px 32px rgba(0,0,0,0.06); }
