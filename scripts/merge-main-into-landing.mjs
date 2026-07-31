@@ -9,6 +9,7 @@ import { execSync } from 'node:child_process';
 import { unlinkSync, writeFileSync } from 'node:fs';
 
 const MERGE_MSG = 'chore: merge main into landing';
+const MAIN_REF = process.env.DOCWRITER_MAIN_REF || 'origin/main';
 
 /** Files maintained on main; landing should not fork these. */
 const MAIN_OWNED = new Set([
@@ -73,7 +74,7 @@ function resolveMainOwned(conflicts) {
 execSync('git fetch origin main landing', { stdio: 'inherit' });
 
 try {
-	run(`git merge origin/main -m "${MERGE_MSG}"`, { inherit: true });
+	run(`git merge ${MAIN_REF} -m "${MERGE_MSG}"`, { inherit: true });
 } catch {
 	const conflicts = unmergedFiles();
 	if (!isAutoResolvable(conflicts)) {
