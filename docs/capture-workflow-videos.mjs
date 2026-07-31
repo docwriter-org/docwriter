@@ -47,9 +47,7 @@ async function seedWorkspace() {
 		[
 			'# Writing with AI',
 			'',
-			'DocWriter is a shared writing workspace where a writer and an AI agent work alongside each other.',
-			'',
-			'<< replace the opening with "Write alongside an AI agent." >>',
+			'Blue light scatters more strongly in the atmosphere.',
 			'',
 			'## Notes',
 			''
@@ -212,8 +210,9 @@ async function seedIntroRound(httpPort, wsPort) {
 				operation: {
 					type: 'edit',
 					oldString:
-						'DocWriter is a shared writing workspace where a writer and an AI agent work alongside each other.\n\n<< replace the opening with "Write alongside an AI agent." >>',
-					newString: 'Write alongside an AI agent.'
+						'Blue light scatters more strongly in the atmosphere. [[ cite this ]]',
+					newString:
+						'Blue light scatters more strongly in the atmosphere (Rayleigh, 1871).'
 				},
 				trigger: 'intro video seed',
 				timestamp: Date.now(),
@@ -327,6 +326,11 @@ async function captureIntro(browser, httpPort, wsPort) {
 	const page = await context.newPage();
 	await openWorkspaceFile(page, httpPort, 'intro.md');
 	const clipStart = Math.max(0, (Date.now() - startedAt) / 1000 - 0.3);
+	const claim = page.locator('.tiptap-content p').filter({ hasText: /Blue light/ }).first();
+	await claim.click();
+	await page.keyboard.press('End');
+	await page.keyboard.type(' [[ cite this ]]', { delay: 55 });
+	await sleep(600);
 	await seedIntroRound(httpPort, wsPort);
 	const accept = page.locator('.gutter-card .mini-btn.accept').first();
 	await accept.waitFor({ state: 'visible', timeout: 10_000 });
