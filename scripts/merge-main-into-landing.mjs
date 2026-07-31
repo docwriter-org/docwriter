@@ -14,6 +14,8 @@ const MERGE_MSG = 'chore: merge main into landing';
 const MAIN_OWNED = new Set([
 	'scripts/merge-main-into-landing.mjs',
 	'.github/workflows/sync-landing.yml',
+	'docs/docs.json',
+	'docs/reference/how-it-works.mdx',
 	'src/lib/components/LogoMark.svelte',
 	'src/routes/welcome/+page.server.ts',
 	'src/routes/welcome/+page.svelte',
@@ -58,8 +60,13 @@ function isAutoResolvable(conflicts) {
 function resolveMainOwned(conflicts) {
 	for (const file of conflicts) {
 		if (!MAIN_OWNED.has(file)) continue;
-		run(`git checkout --theirs -- ${file}`);
-		run(`git add ${file}`);
+		try {
+			run(`git cat-file -e ":3:${file}"`);
+			run(`git checkout --theirs -- ${file}`);
+			run(`git add ${file}`);
+		} catch {
+			run(`git rm -- ${file}`);
+		}
 	}
 }
 
