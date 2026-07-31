@@ -256,7 +256,6 @@ if (features.some((feature) => !feature.targetPage)) {
 }
 
 const output = {
-	generatedAt: new Date().toISOString(),
 	featureCount: features.length,
 	unassignedCount: features.filter((feature) => !feature.targetPage).length,
 	features

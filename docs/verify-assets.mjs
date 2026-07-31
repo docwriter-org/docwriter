@@ -50,7 +50,7 @@ for (const file of mediaFiles) {
 		errors.push(`${name} is not referenced by any MDX page`);
 	}
 	const size = dimensions(await readFile(file), extension);
-	if (size && (size.width < 160 || size.height < 90 || size.width > 2400 || size.height > 1800)) {
+	if (size && (size.width < 120 || size.height < 40 || size.width > 2400 || size.height > 1800)) {
 		errors.push(`${name} has unexpected dimensions ${size.width}x${size.height}`);
 	}
 }

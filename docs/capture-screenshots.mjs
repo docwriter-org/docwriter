@@ -400,6 +400,22 @@ async function captureStructural(page) {
 		waitUntil: 'domcontentloaded'
 	});
 	await sleep(2500);
+	await page.evaluate(async () => {
+		await fetch('/api/document', {
+			method: 'PUT',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				meta: {
+					rules: [
+						{ id: 'docs-rule-1', text: 'Use active verbs' },
+						{ id: 'docs-rule-2', text: 'Keep paragraphs under four sentences' }
+					]
+				}
+			})
+		});
+	});
+	await page.reload({ waitUntil: 'domcontentloaded' });
+	await sleep(1800);
 
 	await openFile(page, 'essay.md');
 	await shot(page, 'quickstart-essay-open.png');
@@ -472,12 +488,26 @@ async function captureStructural(page) {
 	await shot(page, 'hooks-panel.png');
 	await closeMenu(page);
 
-	await hoverSettingsItem(page, 'Writing rules');
+	await page.locator('.rules-pill-bar .add-rule-btn').first().click();
+	await sleep(400);
 	await shot(page, 'writing-rules-panel.png');
-	await closeMenu(page);
+	await page.keyboard.press('Escape');
+	await sleep(200);
 
 	await hoverSettingsItem(page, 'Writing references');
 	await shot(page, 'writing-references-panel.png');
+	await closeMenu(page);
+
+	await hoverSettingsItem(page, 'Agent behavior');
+	await shot(page, 'agent-behavior-panel.png');
+	await closeMenu(page);
+
+	await hoverSettingsItem(page, 'Critique pass');
+	await shot(page, 'critique-pass-menu.png');
+	await closeMenu(page);
+
+	await hoverSettingsItem(page, 'Skills');
+	await shot(page, 'skills-panel.png');
 	await closeMenu(page);
 
 	const sendBtn = page.locator('.dock-message-btn').first();
@@ -489,25 +519,6 @@ async function captureStructural(page) {
 	await shot(page, 'chat-popover.png');
 	await page.keyboard.press('Escape');
 	await sleep(300);
-}
-
-async function selectModel(page, modelLabel) {
-	await openSettingsMenu(page);
-	const modelItem = page.locator('.menu-item', { hasText: 'Model' }).first();
-	if (!(await modelItem.count())) {
-		await closeMenu(page);
-		return false;
-	}
-	await modelItem.hover();
-	await sleep(300);
-	const choice = page.locator('.submenu-panel .menu-item', { hasText: modelLabel }).first();
-	if (!(await choice.count())) {
-		await closeMenu(page);
-		return false;
-	}
-	await choice.click();
-	await sleep(300);
-	return true;
 }
 
 async function captureIntroGif(browser, httpPort, ffmpegPath) {
@@ -527,8 +538,6 @@ async function captureIntroGif(browser, httpPort, ffmpegPath) {
 	try {
 		await page.goto(`http://127.0.0.1:${httpPort}`, { waitUntil: 'domcontentloaded' });
 		await sleep(2200);
-
-		await selectModel(page, 'Haiku');
 
 		await openFile(page, 'intro.md');
 		await sleep(700);

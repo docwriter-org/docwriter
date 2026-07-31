@@ -24,13 +24,16 @@ The standard viewport is 1400 by 900 pixels. The introduction recording uses 120
 | `agent-wakeup-button.png` | Ask and steer | Close crop of the agent pill | None |
 | `agent-paused.png` | Ask and steer | Expanded dock while paused | None |
 | `agent-paused-pill.png` | Ask and steer | Collapsed paused pill | None |
+| `agent-behavior-panel.png` | Ask and steer | Low, Medium, and High autonomy | None |
 | `reviewing-edits-pending.png` | Review edits | One expanded proposal | Provider credential |
 | `agent-accept-reject-all.png` | Review edits | Batch review actions | None |
 | `comment-thread.png` | Comments and critique | Anchored discussion | None |
+| `critique-pass-menu.png` | Comments and critique | Built in reviewer menu | None |
 | `transcript-overview.png` | Sessions and history | Transcript event list | None |
 | `transcript-detail.png` | Sessions and history | Search and tool filter | None |
 | `writing-rules-panel.png` | Customize the agent | Rules toolbar popover | None |
 | `writing-references-panel.png` | Customize the agent | References settings | None |
+| `skills-panel.png` | Customize the agent | Skills settings | None |
 | `hooks-panel.png` | Hooks | Hook settings | None |
 | `blog-post-open.png` | Example projects | Research draft before the run | Provider credential |
 | `blog-pending-edit.png` | Example projects | Research results in the gutter | Provider credential with web search |
