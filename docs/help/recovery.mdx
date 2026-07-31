@@ -1,0 +1,30 @@
+---
+title: "Recovery"
+description: "Recover from blank editors, restarts, stale proposals, and deleted state."
+---
+
+## Blank editor
+
+A text tab paints after the first WebSocket sync. Check that the DocWriter server is still running and that the Hocuspocus port is available. Reload the browser after the server is healthy.
+
+## Server restart
+
+Each server process has a new instance identifier. The browser discards old in-memory Yjs clients before attaching to the new server, which prevents stale browser operations from overwriting newer files.
+
+Use `docwriter --restart` when the command should start a replacement process after a crash.
+
+## Stale proposal
+
+A proposal becomes stale when the source text changes. Reject the stale proposal or let DocWriter ask the agent to regenerate the proposal against the current file.
+
+## Deleted file
+
+The tabs API removes tabs for files that no longer exist. Deleting a file inside DocWriter also deletes the saved Yjs update log so the content cannot reappear on reopen.
+
+## Removed runtime state
+
+Removing `.docwriter/docwriter.db` discards sessions, comments, pending reviews, rules, and saved interface state. The plain workspace files remain and create fresh Yjs documents when reopened.
+
+## Scratch cleanup
+
+Choose **New session** to clear `.docwriter/agent/scratch/`. Delete abandoned scratch files manually only when no agent run is using them.

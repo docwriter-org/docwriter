@@ -31,6 +31,9 @@ import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { chromium } from 'playwright';
+import * as Y from 'yjs';
+import { HocuspocusProvider } from '@hocuspocus/provider';
+import WebSocket from 'ws';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, '..');
@@ -121,6 +124,16 @@ async function seedFixture() {
 	await writeFile(join(dir, 'intro.md'), INTRO_CONTENT, 'utf8');
 	await writeFile(join(dir, 'blog-post.md'), BLOG_CONTENT, 'utf8');
 	await writeFile(
+		join(dir, 'draft.md'),
+		[
+			'# A draft',
+			'',
+			'I want to explain the idea that shared drafts can make it easier for a person to work together with an AI agent because both can stay in the same document while the writing changes.',
+			''
+		].join('\n'),
+		'utf8'
+	);
+	await writeFile(
 		join(dir, 'outline.md'),
 		['# Outline', '', '- introduction', '- argument', '- conclusion', ''].join('\n'),
 		'utf8'
@@ -194,6 +207,52 @@ async function configurePdflatexHook(httpPort, texEntry, pdfOutput) {
 		body: JSON.stringify({ hooks: [hook] })
 	});
 	if (!res.ok) throw new Error(`failed to configure hook: HTTP ${res.status}`);
+}
+
+async function seedQuickstartRound(httpPort, wsPort) {
+	const session = await fetch(`http://127.0.0.1:${httpPort}/api/session`).then((response) =>
+		response.json()
+	);
+	const document = new Y.Doc();
+	const provider = new HocuspocusProvider({
+		url: `ws://127.0.0.1:${wsPort}`,
+		name: 'draft.md',
+		document,
+		token: session.serverInstanceId,
+		WebSocketPolyfill: WebSocket
+	});
+	await new Promise((resolveSync, reject) => {
+		const timer = setTimeout(() => reject(new Error('WebSocket sync timed out')), 15_000);
+		const done = () => {
+			clearTimeout(timer);
+			resolveSync();
+		};
+		if (provider.synced) done();
+		else provider.on('synced', done);
+	});
+	const rounds = document.getArray('rounds');
+	document.transact(() => {
+		while (rounds.length > 0) rounds.delete(0);
+		rounds.push([
+			{
+				id: 'quickstart-video-round',
+				operation: {
+					type: 'edit',
+					oldString:
+						'I want to explain the idea that shared drafts can make it easier for a person to work together with an AI agent because both can stay in the same document while the writing changes.',
+					newString:
+						'Shared drafts help a writer and an AI agent work together as the document changes.'
+				},
+				trigger: 'quickstart capture seed',
+				timestamp: Date.now(),
+				kind: 'big',
+				stepCount: 1
+			}
+		]);
+	});
+	await sleep(700);
+	await provider.destroy();
+	document.destroy();
 }
 
 /** Inject a `[[ ... ]]` directive into the .tex file so the agent, on
@@ -400,15 +459,37 @@ async function captureStructural(page) {
 		waitUntil: 'domcontentloaded'
 	});
 	await sleep(2500);
+	await page.evaluate(async () => {
+		await fetch('/api/document', {
+			method: 'PUT',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				meta: {
+					rules: [
+						{ id: 'docs-rule-1', text: 'Use active verbs' },
+						{ id: 'docs-rule-2', text: 'Keep paragraphs under four sentences' }
+					]
+				}
+			})
+		});
+	});
+	await page.reload({ waitUntil: 'domcontentloaded' });
+	await sleep(1800);
+
+	await openFile(page, 'draft.md');
+	await shot(page, 'quickstart-essay-open.png');
+	await page
+		.locator('.tab', { hasText: 'draft.md' })
+		.locator('.tab-close')
+		.click();
+	await sleep(300);
 
 	await openFile(page, 'essay.md');
-	await shot(page, 'quickstart-essay-open.png');
 	await shot(page, 'inline-directives-in-doc.png');
+	await shot(page, 'tour-interface-clean.png');
 
-	// Annotated interface overview: with essay.md open (so the Send
-	// button and other affordances are visible), overlay labeled
-	// bounding boxes on the major regions. The tour page reads them
-	// off this image.
+	// Expand the dock only for the annotated interface overview and wake control.
+	await setDockExpanded(page, true);
 	await annotateInterface(page);
 	await shot(page, 'tour-interface-overview.png');
 	await clearAnnotations(page);
@@ -437,6 +518,7 @@ async function captureStructural(page) {
 		console.log('  wrote agent-wakeup-button.png');
 		await clearAnnotations(page);
 	}
+	await setDockExpanded(page, false);
 
 	// Editor with find bar open. Click the editor first to focus it.
 	await page.locator('.tiptap-content').first().click();
@@ -471,14 +553,29 @@ async function captureStructural(page) {
 	await shot(page, 'hooks-panel.png');
 	await closeMenu(page);
 
-	await hoverSettingsItem(page, 'Writing rules');
+	await page.locator('.rules-pill-bar .add-rule-btn').first().click();
+	await sleep(400);
 	await shot(page, 'writing-rules-panel.png');
-	await closeMenu(page);
+	await page.keyboard.press('Escape');
+	await sleep(200);
 
 	await hoverSettingsItem(page, 'Writing references');
 	await shot(page, 'writing-references-panel.png');
 	await closeMenu(page);
 
+	await hoverSettingsItem(page, 'Agent behavior');
+	await shot(page, 'agent-behavior-panel.png');
+	await closeMenu(page);
+
+	await hoverSettingsItem(page, 'Critique pass');
+	await shot(page, 'critique-pass-menu.png');
+	await closeMenu(page);
+
+	await hoverSettingsItem(page, 'Skills');
+	await shot(page, 'skills-panel.png');
+	await closeMenu(page);
+
+	await setDockExpanded(page, true);
 	const sendBtn = page.locator('.dock-message-btn').first();
 	await sendBtn.click();
 	await sleep(400);
@@ -488,25 +585,7 @@ async function captureStructural(page) {
 	await shot(page, 'chat-popover.png');
 	await page.keyboard.press('Escape');
 	await sleep(300);
-}
-
-async function selectModel(page, modelLabel) {
-	await openSettingsMenu(page);
-	const modelItem = page.locator('.menu-item', { hasText: 'Model' }).first();
-	if (!(await modelItem.count())) {
-		await closeMenu(page);
-		return false;
-	}
-	await modelItem.hover();
-	await sleep(300);
-	const choice = page.locator('.submenu-panel .menu-item', { hasText: modelLabel }).first();
-	if (!(await choice.count())) {
-		await closeMenu(page);
-		return false;
-	}
-	await choice.click();
-	await sleep(300);
-	return true;
+	await setDockExpanded(page, false);
 }
 
 async function captureIntroGif(browser, httpPort, ffmpegPath) {
@@ -516,18 +595,15 @@ async function captureIntroGif(browser, httpPort, ffmpegPath) {
 		viewport: { width: 1200, height: 780 },
 		recordVideo: { dir: videoDir, size: { width: 1200, height: 780 } }
 	});
-	// Expand the dock here too so the agent pill exposes .header-agent-btn
-	// (with its .awake toggle) and the live history log streams in-frame.
+	// Keep the dock collapsed so the document and review gutter remain visible.
 	await gifContext.addInitScript(() => {
-		localStorage.setItem('docwriter.dockExpanded', 'true');
+		localStorage.setItem('docwriter.dockExpanded', 'false');
 		localStorage.setItem('docwriter.showFilesPane', 'true');
 	});
 	const page = await gifContext.newPage();
 	try {
 		await page.goto(`http://127.0.0.1:${httpPort}`, { waitUntil: 'domcontentloaded' });
 		await sleep(2200);
-
-		await selectModel(page, 'Haiku');
 
 		await openFile(page, 'intro.md');
 		await sleep(700);
@@ -541,13 +617,16 @@ async function captureIntroGif(browser, httpPort, ffmpegPath) {
 		// Phase 1: type an opening sentence with a bracketed directive
 		// at the end. Then stop. Auto-wake fires three seconds after the
 		// last keystroke; the agent reads the doc and starts working.
-		await page.keyboard.type('DocWriter feels different from a chat-based AI tool.', {
-			delay: 35
-		});
+		await page.keyboard.type(
+			'DocWriter is a shared writing workspace where a writer and an AI agent work alongside each other.',
+			{
+				delay: 35
+			}
+		);
 		await page.keyboard.press('Enter');
 		await page.keyboard.press('Enter');
-		await page.keyboard.type('<< rewrite the previous sentence with a punchier hook >>', {
-			delay: 30
+		await page.keyboard.type('<< replace the opening with "Write alongside an AI agent." >>', {
+			delay: 22
 		});
 
 		// Wait for the auto-wake to actually fire (the agent pill picks
@@ -556,7 +635,7 @@ async function captureIntroGif(browser, httpPort, ffmpegPath) {
 		// awake state if it finishes very fast).
 		try {
 			await page.waitForFunction(
-				() => !!document.querySelector('.header-agent-btn.awake'),
+				() => !!document.querySelector('.header-agent-btn.awake, .dock-agent-btn.awake'),
 				{ timeout: 10000 }
 			);
 		} catch {
@@ -571,38 +650,23 @@ async function captureIntroGif(browser, httpPort, ffmpegPath) {
 		await page.keyboard.press('Enter');
 		await page.keyboard.press('Enter');
 		const concurrentText = [
-			'This is the core tension in every AI writing tool I\'ve tried.',
-			' The model wants to take over; the writer wants to stay in control.',
-			' What if those two goals didn\'t have to conflict?',
-			' What if the AI edited alongside you, in the same document,',
-			' proposing changes you could accept or reject inline?'
+			'You and the agent can work in the same draft while you keep writing.'
 		];
 		for (const chunk of concurrentText) {
-			await page.keyboard.type(chunk, { delay: 38 });
+			await page.keyboard.type(chunk, { delay: 22 });
 		}
 
-		const pending = page.locator('.gutter-card').first();
+		const acceptBtn = page.locator('.gutter-card .mini-btn.accept').first();
 		try {
-			await pending.waitFor({ state: 'visible', timeout: AGENT_TIMEOUT_MS });
+			await acceptBtn.waitFor({ state: 'visible', timeout: AGENT_TIMEOUT_MS });
 		} catch {
-			console.log('  pending review never appeared in GIF window');
+			console.log('  proposed edit never appeared in GIF window');
 			return;
 		}
-		// Let the viewer see the agent working in the dock for a beat, then
-		// collapse it (so it doesn't cover the gutter) and expand the card to
-		// reveal the proposed edit before accepting.
-		await sleep(1200);
-		await setDockExpanded(page, false);
-		await pending.click().catch(() => undefined);
-		await sleep(1500);
-
-		// Click Accept on the proposed edit so the GIF ends with the
-		// suggestion landing in the document.
-		const acceptBtn = page.locator('.gutter-card.expanded .mini-btn.accept').first();
-		if (await acceptBtn.count()) {
-			await acceptBtn.click();
-			await sleep(1800);
-		}
+		// Hold on the proposed edit, then accept it.
+		await sleep(700);
+		await acceptBtn.click();
+		await sleep(1400);
 	} finally {
 		await gifContext.close();
 	}
@@ -618,16 +682,69 @@ async function captureIntroGif(browser, httpPort, ffmpegPath) {
 		return;
 	}
 	const gifOut = join(IMAGES_DIR, 'intro-flow.gif');
+	const webmOut = join(IMAGES_DIR, 'intro-flow.webm');
+	const mp4Out = join(IMAGES_DIR, 'intro-flow.mp4');
+	const probe = spawnSync(
+		'ffprobe',
+		['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', webm],
+		{ encoding: 'utf8' }
+	);
+	const rawDuration = Number.parseFloat(probe.stdout?.trim() ?? '18');
+	const clipDuration = 20;
+	const clipStart = Math.max(0, rawDuration - clipDuration);
+	const seek = clipStart > 0 ? ['-ss', clipStart.toFixed(2)] : [];
+	const webmResult = spawnSync(
+		ffmpegPath,
+		[
+			'-y',
+			...seek,
+			'-t',
+			String(clipDuration),
+			'-i',
+			webm,
+			'-vf',
+			'scale=960:-2:flags=lanczos',
+			'-an',
+			'-c:v',
+			'libvpx-vp9',
+			'-crf',
+			'34',
+			'-b:v',
+			'0',
+			webmOut
+		],
+		{ encoding: 'utf8' }
+	);
+	if (webmResult.status === 0) console.log('  wrote intro-flow.webm');
+	else console.log(`  webm conversion failed: ${webmResult.stderr?.slice(-800) ?? ''}`);
+	const mp4 = spawnSync(
+		ffmpegPath,
+		[
+			'-y',
+			...seek,
+			'-t',
+			String(clipDuration),
+			'-i',
+			webm,
+			'-movflags',
+			'+faststart',
+			'-pix_fmt',
+			'yuv420p',
+			mp4Out
+		],
+		{ encoding: 'utf8' }
+	);
+	if (mp4.status === 0) console.log('  wrote intro-flow.mp4');
+	else console.log(`  mp4 conversion failed: ${mp4.stderr?.slice(-800) ?? ''}`);
 	console.log('  converting webm to gif with ffmpeg...');
-	// Cap duration at 40s: typing + directive, pause, auto-wake,
-	// substantial concurrent typing while the agent works, review
-	// card appearing, and Accept. 9fps + 800px + 64 colors.
+	// Keep the GIF short enough to scan while preserving the edit and Accept.
 	const ff = spawnSync(
 		ffmpegPath,
 		[
 			'-y',
+			...seek,
 			'-t',
-			'40',
+			String(clipDuration),
 			'-i',
 			webm,
 			'-vf',
@@ -951,40 +1068,23 @@ async function captureLatex(page, context, fixtureDir, httpPort) {
 	await popup.close().catch(() => undefined);
 }
 
-async function captureAgentDriven(page) {
-	console.log('capturing agent-driven screenshots...');
-	console.log('  (waking the agent; this may take 30-90 seconds)');
-
-	// essay.md should still be open from the structural pass. The seed
-	// contains a [[ ... ]] directive; we just need to wake the agent so
-	// it picks the directive up. Expand the dock first (the comment
-	// scenario above left it collapsed) so the wake-up button is mounted.
-	await setDockExpanded(page, true);
-	// A prior scenario may still be finishing; waking the agent while it's
-	// busy is a no-op (the implicit wake-up is dropped), so wait for idle.
-	await waitForAgentIdle(page);
-	const agentPill = page.locator('.header-agent-btn').first();
-	if (!(await agentPill.count())) {
-		console.log('  agent pill not found, skipping');
-		return;
-	}
-	await agentPill.click();
-	await sleep(500);
+async function captureAgentDriven(page, httpPort, wsPort) {
+	console.log('capturing seeded quickstart review screenshots...');
+	await openFile(page, 'draft.md');
+	await seedQuickstartRound(httpPort, wsPort);
 
 	// Wait for the agent's edit to land as a card in the margin gutter
 	// (the in-situ review surface; the old right-pane review list is gone).
-	const pendingCard = page.locator('.gutter-card').first();
+	const acceptButton = page.locator('.gutter-card .mini-btn.accept').first();
 	try {
-		await pendingCard.waitFor({ state: 'visible', timeout: AGENT_TIMEOUT_MS });
+		await acceptButton.waitFor({ state: 'visible', timeout: AGENT_TIMEOUT_MS });
 	} catch {
 		console.log('  no pending review appeared in time; skipping agent shots');
 		console.log('  (check that Claude credentials are available)');
 		return;
 	}
-	// Collapse the dock so it doesn't cover the gutter card, then expand the
-	// card so the proposed-edit rows and Accept/Reject are visible.
+	// Collapse the dock so it does not cover the expanded edit card.
 	await setDockExpanded(page, false);
-	await page.locator('.gutter-card').first().click().catch(() => undefined);
 	await sleep(1000);
 	await shot(page, 'quickstart-pending-edit.png');
 	await shot(page, 'reviewing-edits-pending.png');
@@ -1021,12 +1121,9 @@ async function main() {
 		console.log('launching chromium...');
 		browser = await chromium.launch();
 		const context = await browser.newContext({ viewport: VIEWPORT });
-		// The agent dock defaults to a collapsed pill; expand it before any
-		// page loads so the wake-up button (.header-agent-btn), the chat
-		// trigger (.dock-message-btn) and the history pane (.history-pane)
-		// are all mounted for the captures and annotations.
+		// Keep the dock collapsed unless a capture is specifically about the dock.
 		await context.addInitScript(() => {
-			localStorage.setItem('docwriter.dockExpanded', 'true');
+			localStorage.setItem('docwriter.dockExpanded', 'false');
 			localStorage.setItem('docwriter.showFilesPane', 'true');
 		});
 		context.__httpPort = httpPort;
@@ -1040,7 +1137,7 @@ async function main() {
 				// resolves its own thread at the end so the edit scenario
 				// below also starts clean (one gutter card, unambiguous).
 				await captureCommentThread(page);
-				await captureAgentDriven(page);
+				await captureAgentDriven(page, httpPort, wsPort);
 				// Transcript viewer (needs prior agent activity to be
 				// interesting, so it runs after the agent has done work).
 				await captureTranscript(page);

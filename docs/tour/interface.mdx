@@ -1,106 +1,44 @@
 ---
 title: "Interface tour"
-description: "What every part of the DocWriter window does."
+description: "Learn where files, writing, reviews, and agent activity appear."
 ---
 
-The DocWriter window has three panes plus a menu bar across the top.
-
 <Frame>
-  ![Annotated DocWriter interface](/images/tour-interface-overview.png)
+  ![The current DocWriter workspace with a draft open](/images/tour-interface-clean.png)
 </Frame>
 
-## Menu bar (top)
+The annotated view names the regions used throughout the documentation.
 
-The menu bar runs along the top of the window. It groups commands by
-category (File, Edit, View, Settings), and exposes a few rich panels
-under the Settings menu:
+<Frame>
+  ![The DocWriter interface with the main regions labeled](/images/tour-interface-overview.png)
+</Frame>
 
-- **Writing rules.** Persistent style preferences the agent follows. See
-  [Writing rules](/customize/rules).
-- **Writing references.** Samples to match in voice. See [Writing
-  references](/customize/references).
-- **Hooks.** Shell commands that fire on agent events. See
-  [Hooks](/automation/hooks).
+## Header
 
-Agent behavior (autonomy level, track changes) lives in its own panel
-under the Settings menu. Model selection (Opus / Sonnet / Haiku) is a
-submenu of Settings.
+The header contains the provider and model pills. Use them to change the service or model for the next agent request. **Settings** contains API keys, agent behavior, critique passes, sessions, hooks, skills, appearance, and history detail.
 
-## Left pane
+## Rules toolbar
 
-The left pane has two stacked sections.
+Writing rules appear above the workspace. Add, edit, remove, and apply rules from the toolbar. Agent proposals for new rules or hooks appear as toasts.
 
-### Outline / TOC (top)
+## Sidebar
 
-Headings from the active tab, generated on the fly. Click a heading to
-jump to it in the editor.
+The left sidebar contains the heading outline and the file tree. The outline is a table of contents for the active Markdown file. The file tree contains workspace files and folders, including `.docwriter`.
 
-### File tree (bottom)
+Drag the sidebar edge to resize it. Use **Settings** to hide the sidebar or file tree.
 
-Every file in your workspace folder. Click any file to open it as a tab
-in the editor. There is no special "supported file types" list. Any text
-file opens. Files that look binary (images, PDFs) open in the preview
-window instead.
+## Tabs and editor
 
-You can create files and folders inline (right-click or use the `+`
-buttons), rename, and delete. Folders are collapsible.
+Tabs appear above the center editor. A tab badge means that the file has pending agent work or an unresolved agent comment.
 
-## Center pane
+The editor stores plain text. Markdown styling, tables, images, SVG, and D3 previews appear as visual layers without replacing the source.
 
-The editor. This is a [Tiptap](https://tiptap.dev/) instance over plain
-text. What you see is the file contents with light formatting (headings,
-lists, links).
+## Comment gutter
 
-A few floating controls sit on top of the editor:
+Pending edits and comment threads appear beside the text in the comment gutter. The gutter contains individual review controls and the **Accept all** and **Reject all** actions.
 
-- **Agent dock (top-right).** A **Send** button. Click it to open a chat
-  popover and type a prompt for the agent. (You don't have to click for
-  the agent to run. It auto-wakes three seconds after you stop typing.
-  Send is for explicit prompts that don't anchor to a spot in the doc.)
-  See [Steering the agent](/agent/steering-the-agent).
-- **Preview button (top-right, when a hook produces an output).** Opens
-  the rendered artifact (PDF, HTML, image) in a popup window. The button
-  is hidden when no hook with an `output` field matches the active tab.
-  See [Live preview](/automation/preview).
-- **Find bar (top-right when open).** `Cmd/Ctrl+F` opens a search bar
-  scoped to the active tab.
+## Agent dock
 
-## Right pane
+The floating dock contains **Chat**, the current activity log, queue status, mute, transcript, and new session controls. Collapse the dock to a small agent pill when you want more room.
 
-The history pane. Toggle with the button on the right side of the menu
-bar.
-
-The pane has two sections.
-
-**Top — activity log.** At the top is the **agent pill**, a small mascot
-icon. The mascot animates while the agent is running. Clicking the pill
-wakes the agent on demand. Below the pill, every interaction the agent
-has with your workspace is logged as a card:
-
-- Tool calls (`read_doc`, `edit_doc`, `write_doc`, shell commands).
-- Hook runs (the shell command, exit code, stdout, stderr, duration).
-- Plain assistant text (when the agent says something instead of editing).
-- Comments the agent posts.
-- Errors.
-
-Cards stream in as the agent works, so you can follow along live.
-
-**Bottom — pending agent edits.** When the agent proposes one or more
-changes, a "Pending agent edits" section appears at the bottom of the
-right pane. Each pending change shows as a diff card with an Accept,
-Reject, and Retry-with-feedback button. Accepting is FIFO — you must
-accept (or reject) the oldest pending change before the next one becomes
-actionable. See [Reviewing edits](/agent/reviewing-edits).
-
-## Tabs
-
-Above the editor, open files appear as tabs. Click to switch; middle-click
-or the `×` to close. Each tab keeps its own editing state, including
-undo/redo history, scroll position, and pending agent edits.
-
-## What's next
-
-- [Editor](/tour/editor). The editing surface itself in detail.
-- [Tabs](/tour/tabs). How DocWriter handles multiple open files.
-- [Steering the agent](/agent/steering-the-agent). How to drive the
-  agent dock.
+Double click the agent pill to pause or resume all agent activity. Click an active pill once to cancel the current run and clear queued messages.

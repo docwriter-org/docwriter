@@ -1,0 +1,32 @@
+---
+title: "Contributor setup"
+description: "Install dependencies and run DocWriter from source."
+---
+
+Clone the repository and use the pinned Node version:
+
+```sh
+git clone https://github.com/docwriter-org/docwriter.git
+cd docwriter
+nvm use
+npm install
+```
+
+Run the application:
+
+```sh
+npm run dev
+```
+
+Vite listens on port 5173. The same process starts Hocuspocus on port 3001.
+
+Run the checks before opening a change:
+
+```sh
+npm run check
+npm run build
+```
+
+No unit test framework is configured. Provider smoke tests live under `e2e/` and require the matching credentials.
+
+Use `npm run dev:workspace -- --no-open /path/to/folder` when the test workspace should not be the repository root.

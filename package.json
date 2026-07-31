@@ -1,7 +1,7 @@
 {
 	"name": "docwriter",
 	"version": "0.0.1",
-	"description": "AI-assisted markdown writing editor — run from any repo directory",
+	"description": "A shared writing workspace for you and an AI agent",
 	"type": "module",
 	"engines": {
 		"node": "^20.19 || ^22.12 || >=24"
@@ -27,7 +27,15 @@
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"docs": "cd docs && npx -y mintlify dev --port 3333",
-		"docs:screenshots": "node docs/capture-screenshots.mjs",
+		"docs:catalog": "node scripts/generate-feature-catalog.mjs",
+		"docs:validate": "node scripts/validate-docs-launch.mjs",
+		"docs:smoke": "node scripts/smoke-docs.mjs",
+		"docs:assets": "SKIP_GIF=1 node docs/capture-screenshots.mjs && node docs/capture-workflow-videos.mjs",
+		"docs:assets:structural": "SKIP_AGENT=1 SKIP_LATEX=1 SKIP_GIF=1 node docs/capture-screenshots.mjs",
+		"docs:assets:agent": "SKIP_BLOG=1 SKIP_LATEX=1 SKIP_GIF=1 node docs/capture-screenshots.mjs",
+		"docs:assets:videos": "node docs/capture-workflow-videos.mjs",
+		"docs:assets:verify": "node docs/verify-assets.mjs",
+		"docs:screenshots": "npm run docs:assets",
 		"test:e2e": "node e2e/provider-smoke.mjs",
 		"test:e2e:provider": "node e2e/run-provider.mjs"
 	},

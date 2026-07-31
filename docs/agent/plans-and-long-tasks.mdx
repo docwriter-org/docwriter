@@ -1,0 +1,41 @@
+---
+title: "Plans and long tasks"
+description: "Review a plan and follow work that uses tools or subagents."
+---
+
+## Ask for a plan
+
+Enable **Plan first** in Chat or choose **Plan first** for selected text. The agent reads the relevant files without changing them, then opens **Plan from agent**.
+
+Use **Run it** to approve the plan. **Dismiss** closes it. **Reject with feedback** sends your response and asks for a revised plan.
+
+<Frame caption="Review a proposed plan and approve it with Run it.">
+  <video
+    autoPlay
+    muted
+    loop
+    playsInline
+    poster="/images/chat-popover.png"
+    className="w-full rounded-xl"
+  >
+    <source src="/images/plan-workflow.mp4" type="video/mp4" />
+    <source src="/images/plan-workflow.webm" type="video/webm" />
+    Your browser does not support embedded video.
+  </video>
+</Frame>
+
+## Follow long work
+
+The agent can use file, shell, web research, code, and subagent tools. Tool calls and progress appear in the live agent dock. Subagent work appears under the relevant task description.
+
+You can keep editing while the work runs. Open the full transcript when the short activity log does not contain enough detail.
+
+## Use scratch space
+
+The agent can place temporary work under `.docwriter/agent/scratch/`. Scratch files do not appear until a tool creates them. Starting a new session clears the scratch folder.
+
+## Stop a task
+
+Click the active agent pill to cancel the run and clear queued messages. Double clicking pauses all agent work until you resume.
+
+Provider tool support differs. Read [Providers and tools](/contribute/providers-and-tools) for implementation details and [Provider errors](/help/provider-errors) for user facing failures.

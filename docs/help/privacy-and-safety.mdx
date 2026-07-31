@@ -1,0 +1,30 @@
+---
+title: "Privacy and safety"
+description: "Understand what leaves the machine and what commands can run."
+---
+
+## Local data
+
+Workspace files, SQLite state, comments, and transcripts are stored on the machine running DocWriter. Saved API keys live in `~/.docwriter/keys.env`.
+
+## Provider requests
+
+Agent requests send selected context to the chosen provider. The initial prompt contains open tab paths and changes since the previous turn. The agent can read full files when it calls a document tool.
+
+Provider data handling follows the account and service selected in the header.
+
+## Network requests
+
+OpenGraph link previews request metadata from the destination site. D3 previews load D3 from the public D3 CDN. Web research tools contact the services and pages needed for the request.
+
+## Shell access
+
+Agent shell tools and hooks can execute commands with your user permissions inside the workspace process. A hook uses `shell: true` and receives the process environment. Review commands before enabling them.
+
+## Workspace boundary
+
+File, preview, and SyncTeX routes reject paths that escape the workspace, including symbolic link escapes. Shell commands are more powerful and can access anything allowed by the operating system account.
+
+## Network exposure
+
+DocWriter binds to `127.0.0.1` by default. Using `--host 0.0.0.0` exposes it to the local network. Use a firewall and trusted network when changing the host.
