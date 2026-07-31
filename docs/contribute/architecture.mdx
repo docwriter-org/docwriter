@@ -1,0 +1,30 @@
+---
+title: "Architecture"
+description: "Understand the server owned document and agent edit flow."
+---
+
+## Server owned documents
+
+Each open text tab has a Yjs document owned by the Hocuspocus server. Browsers are synchronized clients. Server tools that change an open tab use a Hocuspocus direct connection to the same document.
+
+## Persistence
+
+Every Yjs update is appended to SQLite with its original origin. The server also flushes the serialized plain text to the workspace file.
+
+SQLite holds tabs, comments, reviews, rules, reviewers, sessions, recent actions, and interface settings. There is no JSON state mirror.
+
+## Agent flow
+
+The render route streams one provider query over server sent events. The prompt names open tabs and includes changes since each tab was last seen. The agent calls `read_doc` when it needs full content.
+
+`edit_doc` changes the live Yjs document and adds a pending review round in one transaction. Hocuspocus sends that update to every connected browser.
+
+## Review flow
+
+Accept and reject requests run on the live server document. Accept applies a bounded paragraph edit and removes the review round. Reject removes the round without replaying a client side merge.
+
+The client undo manager tracks user typing and user origin review actions. Agent origin transactions are excluded.
+
+## Shared origins
+
+`AGENT_ORIGIN`, `USER_ORIGIN`, and `SYSTEM_ORIGIN` are shared constants. Do not redefine them in client or server modules.

@@ -1,0 +1,30 @@
+---
+title: "Provider errors"
+description: "Fix authentication, model, quota, and saved session failures."
+---
+
+## Missing credentials
+
+Open **Settings**, then **API keys**. Check whether the selected provider shows **Key set**, **Using login**, **Missing**, or **Optional**.
+
+Environment variables and project `.env` files take precedence over `~/.docwriter/keys.env`. Restart DocWriter after changing a shell environment variable.
+
+## Expired login
+
+Run the provider login command again, then start a new DocWriter session. Claude and Codex can use existing command line logins.
+
+## Model unavailable
+
+Open the model pill and choose a model listed for the current provider. A custom identifier is accepted by the interface but can still be rejected by the provider.
+
+Model availability can depend on the account, subscription, region, and API endpoint.
+
+## Quota or rate limit
+
+Wait for the provider limit to reset or use another available provider. Queued messages remain local until the current run completes or is canceled.
+
+## Saved session cannot resume
+
+Open **Settings**, then **Sessions**, and start a new session for the provider. Switching providers also clears the saved provider session identifier.
+
+Authentication failures appear as a sticky **Agent auth failed** toast. Other failures appear as **Agent run failed** and remain visible in the activity log.

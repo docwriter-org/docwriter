@@ -1,0 +1,33 @@
+---
+title: "Storage and backups"
+description: "Understand the live document, SQLite state, and files on disk."
+---
+
+## The live document
+
+The server owns one Yjs document for each open text tab. Browsers connect through Hocuspocus WebSocket sync, and agent tools connect to the same live document.
+
+Each Yjs update is appended to `.docwriter/docwriter.db`. SQLite is the runtime source of truth for document updates, review rounds, comments, tabs, rules, reviewers, sessions, and interface settings.
+
+## Files on disk
+
+The server writes the live document back to its workspace file on a short flush cycle. The plain file is useful for Git, other editors, and recovery. It is not a second live editor state.
+
+`.docwriter/hooks.json` is the portable hook configuration. Agent scratch files live under `.docwriter/agent/scratch/`.
+
+There is no `.docwriter/state.json`.
+
+## Back up a workspace
+
+Stop DocWriter, then copy:
+
+* The writing project files
+* `.docwriter/docwriter.db`
+* `.docwriter/hooks.json`
+* Project skills and rules files that you keep outside SQLite
+
+Git is suitable for plain project files. Do not commit API keys. Decide whether session and comment history in `.docwriter` belongs in the repository before adding it.
+
+## Restore
+
+Restore the project files and matching `.docwriter` folder before starting DocWriter. Restoring only the plain files creates fresh runtime state as each file is opened.

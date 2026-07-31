@@ -1,0 +1,28 @@
+---
+title: "External edits"
+description: "Use another editor without losing changes."
+---
+
+## Start watch mode
+
+```sh
+docwriter --watch ~/writing/my-project
+```
+
+Watch mode reports changes to Markdown, text, JSON, YAML, and YML files. It ignores implementation and runtime folders such as `.git` and `.docwriter`.
+
+## How reload works
+
+The command line watcher sends a reload event to the browser. DocWriter refreshes the file tree and remounts the active tab from the server.
+
+The server ignores file events that repeat its own recent flush, which prevents a reload loop while you type in DocWriter.
+
+## Which copy wins
+
+When a tab is hydrated, DocWriter compares the file modification time with the latest saved Yjs update. A newer disk file with different content replaces the stale update log after a small clock skew allowance.
+
+Watch mode is a reload system, not a text merge system. Avoid editing the same passage in two editors at the same moment.
+
+## Git changes
+
+DocWriter does not pull a repository automatically. Pull before the writing session, resolve conflicts in Git, then let DocWriter reload the resulting files.

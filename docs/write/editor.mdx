@@ -1,0 +1,28 @@
+---
+title: "Editor"
+description: "Edit plain source with Markdown and code previews."
+---
+
+DocWriter is a plain source editor. The document text stays visible and is saved without Markdown escaping.
+
+## Markdown layers
+
+Headings, lists, quotes, horizontal rules, bold, italic, code, links, and strikethrough receive visual styling while their source markers remain in the document.
+
+Pipe tables receive a rendered table preview. You can show the table source when you need to edit it. Fenced code blocks receive code styling and a language label.
+
+Markdown layers are disabled for LaTeX and related source files, including `.tex`, `.sty`, `.cls`, and `.bib`.
+
+## Source comments
+
+Press **Command or Control and /** to comment or uncomment the current line or selection. DocWriter chooses the comment syntax from the file extension.
+
+## Saving and undo
+
+The browser synchronizes edits to the server owned Yjs document. The server writes plain text back to the file on a short flush cycle.
+
+**Command or Control and Z** undoes local typing and user actions such as accepting or rejecting a proposal. Raw agent transactions are not added to the local undo stack.
+
+## Agent changes
+
+Proposed text appears as a green addition or red removal in the editor and as a card in the comment gutter. Muting hides these proposal layers without pausing the agent.

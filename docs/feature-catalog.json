@@ -1,0 +1,1537 @@
+{
+  "generatedAt": "2026-07-31T07:32:40.112Z",
+  "featureCount": 153,
+  "unassignedCount": 0,
+  "features": [
+    {
+      "id": "introduction-01",
+      "area": "Workspace",
+      "feature": "Open any local folder",
+      "currentCoverage": "Covered",
+      "currentDocs": "Install, Quickstart, and Tabs",
+      "targetPage": "introduction",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "introduction-02",
+      "area": "Agent",
+      "feature": "Work across several open files",
+      "currentCoverage": "Covered",
+      "currentDocs": "Steering and Delegating",
+      "targetPage": "introduction",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "introduction-03",
+      "area": "Agent",
+      "feature": "Use shell commands, web research, and code execution",
+      "currentCoverage": "Covered",
+      "currentDocs": "Introduction and Delegating",
+      "targetPage": "introduction",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "connect-provider-01",
+      "area": "Models",
+      "feature": "Choose Claude, OpenAI, Codex, Cursor, or Pi",
+      "currentCoverage": "Missing",
+      "currentDocs": "The docs describe Claude only",
+      "targetPage": "connect-provider",
+      "action": "document",
+      "priority": "P0"
+    },
+    {
+      "id": "connect-provider-02",
+      "area": "Models",
+      "feature": "Choose provider and model from header pills",
+      "currentCoverage": "Missing",
+      "currentDocs": "The interface docs put model selection under Settings",
+      "targetPage": "connect-provider",
+      "action": "document",
+      "priority": "P0"
+    },
+    {
+      "id": "connect-provider-03",
+      "area": "Models",
+      "feature": "Store and manage API keys in Settings",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "connect-provider",
+      "action": "document",
+      "priority": "P0"
+    },
+    {
+      "id": "connect-provider-04",
+      "area": "Models",
+      "feature": "Use Claude or Codex login instead of an API key",
+      "currentCoverage": "Missing",
+      "currentDocs": "No provider guide",
+      "targetPage": "connect-provider",
+      "action": "document",
+      "priority": "P0"
+    },
+    {
+      "id": "connect-provider-05",
+      "area": "Models",
+      "feature": "Use Pi with Together, Gemini, OpenAI, or Anthropic keys",
+      "currentCoverage": "Missing",
+      "currentDocs": "No provider guide",
+      "targetPage": "connect-provider",
+      "action": "document",
+      "priority": "P0"
+    },
+    {
+      "id": "connect-provider-06",
+      "area": "Models",
+      "feature": "Understand credential precedence and global key storage",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "connect-provider",
+      "action": "document",
+      "priority": "P0"
+    },
+    {
+      "id": "connect-provider-07",
+      "area": "Models",
+      "feature": "Search models and add a custom model",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "connect-provider",
+      "action": "document",
+      "priority": "P0"
+    },
+    {
+      "id": "connect-provider-08",
+      "area": "Models",
+      "feature": "Start a fresh session when switching providers",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "connect-provider",
+      "action": "document",
+      "priority": "P0"
+    },
+    {
+      "id": "connect-provider-09",
+      "area": "Models",
+      "feature": "Restore provider and model when resuming a session",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "connect-provider",
+      "action": "document",
+      "priority": "P0"
+    },
+    {
+      "id": "connect-provider-10",
+      "area": "Models",
+      "feature": "Understand provider-specific tools and skill support",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "connect-provider",
+      "action": "document",
+      "priority": "P0"
+    },
+    {
+      "id": "connect-provider-11",
+      "area": "Models",
+      "feature": "See whether each provider uses a key or an existing login",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "connect-provider",
+      "action": "document",
+      "priority": "P0"
+    },
+    {
+      "id": "write-files-and-tabs-01",
+      "area": "Workspace",
+      "feature": "Create, rename, delete, and move files or folders",
+      "currentCoverage": "Thin",
+      "currentDocs": "Interface and Tabs omit drag move behavior",
+      "targetPage": "write/files-and-tabs",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "write-files-and-tabs-02",
+      "area": "Workspace",
+      "feature": "Drag files from the desktop into the workspace",
+      "currentCoverage": "Thin",
+      "currentDocs": "Release notes only",
+      "targetPage": "write/files-and-tabs",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "write-files-and-tabs-03",
+      "area": "Workspace",
+      "feature": "Import binary files without corrupting them",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "write/files-and-tabs",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "write-files-and-tabs-04",
+      "area": "Workspace",
+      "feature": "Open and restore tabs",
+      "currentCoverage": "Covered",
+      "currentDocs": "Tabs",
+      "targetPage": "write/files-and-tabs",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "write-files-and-tabs-05",
+      "area": "Workspace",
+      "feature": "Rename a tab, copy its path, or delete its file",
+      "currentCoverage": "Thin",
+      "currentDocs": "Tabs omits context menu actions",
+      "targetPage": "write/files-and-tabs",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "write-files-and-tabs-06",
+      "area": "Workspace",
+      "feature": "Close a tab without deleting its file",
+      "currentCoverage": "Covered",
+      "currentDocs": "Tabs",
+      "targetPage": "write/files-and-tabs",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "write-files-and-tabs-07",
+      "area": "Workspace",
+      "feature": "See a combined pending work badge on tabs",
+      "currentCoverage": "Thin",
+      "currentDocs": "Tabs covers pending edits but not unresolved comments",
+      "targetPage": "write/files-and-tabs",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "write-files-and-tabs-08",
+      "area": "Workspace",
+      "feature": "Edit Markdown and other text files",
+      "currentCoverage": "Covered",
+      "currentDocs": "Editor and Tabs",
+      "targetPage": "write/files-and-tabs",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "write-files-and-tabs-09",
+      "area": "Workspace",
+      "feature": "Middle click a tab to close it",
+      "currentCoverage": "Stale",
+      "currentDocs": "The docs claim a gesture with no current handler",
+      "targetPage": "write/files-and-tabs",
+      "action": "rewrite",
+      "priority": "P0"
+    },
+    {
+      "id": "write-files-and-tabs-10",
+      "area": "Workspace",
+      "feature": "Keep .docwriter visible in the file tree",
+      "currentCoverage": "Thin",
+      "currentDocs": "Tabs mentions obsolete state.json examples",
+      "targetPage": "write/files-and-tabs",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "write-editor-01",
+      "area": "Editor",
+      "feature": "Edit plain source while visual overlays render above it",
+      "currentCoverage": "Stale",
+      "currentDocs": "Editor describes a WYSIWYG Markdown editor",
+      "targetPage": "write/editor",
+      "action": "rewrite",
+      "priority": "P0"
+    },
+    {
+      "id": "write-editor-02",
+      "area": "Editor",
+      "feature": "Style headings, lists, quotes, rules, and inline Markdown",
+      "currentCoverage": "Thin",
+      "currentDocs": "Editor is inaccurate about source markers",
+      "targetPage": "write/editor",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "write-editor-03",
+      "area": "Editor",
+      "feature": "Preview Markdown tables and show or hide table source",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "write/editor",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "write-editor-04",
+      "area": "Editor",
+      "feature": "Style fenced code blocks and language labels",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "write/editor",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "write-editor-05",
+      "area": "Editor",
+      "feature": "Comment source with syntax chosen by file extension",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "write/editor",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "write-editor-06",
+      "area": "Review",
+      "feature": "Undo and redo user changes and accepted agent changes",
+      "currentCoverage": "Stale",
+      "currentDocs": "Behavior claims conflict across pages",
+      "targetPage": "write/editor",
+      "action": "rewrite",
+      "priority": "P0"
+    },
+    {
+      "id": "write-images-and-diagrams-01",
+      "area": "Workspace",
+      "feature": "Paste or drop images into a document",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "write/images-and-diagrams",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "write-images-and-diagrams-02",
+      "area": "Workspace",
+      "feature": "Save pasted images under assets and insert Markdown",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "write/images-and-diagrams",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "write-images-and-diagrams-03",
+      "area": "Editor",
+      "feature": "Preview Markdown images and bare image URLs",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "write/images-and-diagrams",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "write-images-and-diagrams-04",
+      "area": "Editor",
+      "feature": "Turn a pasted URL into an image or selected text link",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "write/images-and-diagrams",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "write-images-and-diagrams-05",
+      "area": "Editor",
+      "feature": "Preview links from OpenGraph data on hover",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "write/images-and-diagrams",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "write-images-and-diagrams-06",
+      "area": "Editor",
+      "feature": "Preview raw SVG and show or hide its source",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "write/images-and-diagrams",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "write-images-and-diagrams-07",
+      "area": "Editor",
+      "feature": "Render interactive D3 blocks in a sandboxed frame",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "write/images-and-diagrams",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "write-images-and-diagrams-08",
+      "area": "Agent",
+      "feature": "Attach images to a prompt",
+      "currentCoverage": "Thin",
+      "currentDocs": "Release notes only",
+      "targetPage": "write/images-and-diagrams",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "write-images-and-diagrams-09",
+      "area": "Agent",
+      "feature": "Read image files from the workspace",
+      "currentCoverage": "Thin",
+      "currentDocs": "Release notes only",
+      "targetPage": "write/images-and-diagrams",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "write-find-and-appearance-01",
+      "area": "Editor",
+      "feature": "Find text and move between matches",
+      "currentCoverage": "Covered",
+      "currentDocs": "Editor and Shortcuts",
+      "targetPage": "write/find-and-appearance",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "write-find-and-appearance-02",
+      "area": "Editor",
+      "feature": "Toggle case sensitive find",
+      "currentCoverage": "Thin",
+      "currentDocs": "Release notes only",
+      "targetPage": "write/find-and-appearance",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "write-find-and-appearance-03",
+      "area": "Editor",
+      "feature": "Generate an outline from Markdown headings",
+      "currentCoverage": "Covered",
+      "currentDocs": "Editor and Interface",
+      "targetPage": "write/find-and-appearance",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "write-find-and-appearance-04",
+      "area": "Editor",
+      "feature": "Wrap lines, show line numbers, and choose a font size",
+      "currentCoverage": "Covered",
+      "currentDocs": "Editor",
+      "targetPage": "write/find-and-appearance",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "write-find-and-appearance-05",
+      "area": "Editor",
+      "feature": "Choose Light, Dark, Solarized, or Monokai themes",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "write/find-and-appearance",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "write-find-and-appearance-06",
+      "area": "Editor",
+      "feature": "Resize or hide the sidebar and file tree",
+      "currentCoverage": "Thin",
+      "currentDocs": "Interface covers visibility but not drag resizing",
+      "targetPage": "write/find-and-appearance",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "write-find-and-appearance-07",
+      "area": "Editor",
+      "feature": "Use responsive paper, gutter, preview, and dock layouts",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "write/find-and-appearance",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "write-pdfs-and-other-files-01",
+      "area": "Workspace",
+      "feature": "Open PDF files as in-app viewer tabs",
+      "currentCoverage": "Stale",
+      "currentDocs": "Tabs says PDFs open in a separate preview window",
+      "targetPage": "write/pdfs-and-other-files",
+      "action": "rewrite",
+      "priority": "P0"
+    },
+    {
+      "id": "write-pdfs-and-other-files-02",
+      "area": "Workspace",
+      "feature": "Preview other binary files without opening them as text",
+      "currentCoverage": "Thin",
+      "currentDocs": "Tabs and release notes",
+      "targetPage": "write/pdfs-and-other-files",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "write-pdfs-and-other-files-03",
+      "area": "Workspace",
+      "feature": "Use split preview for generated output",
+      "currentCoverage": "Stale",
+      "currentDocs": "Preview describes only a popup",
+      "targetPage": "write/pdfs-and-other-files",
+      "action": "rewrite",
+      "priority": "P0"
+    },
+    {
+      "id": "write-pdfs-and-other-files-04",
+      "area": "Automation",
+      "feature": "Open output in a popup or resizable side pane",
+      "currentCoverage": "Stale",
+      "currentDocs": "Preview covers only popup behavior",
+      "targetPage": "write/pdfs-and-other-files",
+      "action": "rewrite",
+      "priority": "P0"
+    },
+    {
+      "id": "write-pdfs-and-other-files-05",
+      "area": "Automation",
+      "feature": "Open raw preview output in a new browser window",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "write/pdfs-and-other-files",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "agent-ask-and-steer-01",
+      "area": "Agent",
+      "feature": "Wake automatically or with a shortcut",
+      "currentCoverage": "Covered",
+      "currentDocs": "Steering",
+      "targetPage": "agent/ask-and-steer",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "agent-ask-and-steer-02",
+      "area": "Agent",
+      "feature": "See the three second idle countdown",
+      "currentCoverage": "Thin",
+      "currentDocs": "Steering omits the current dock",
+      "targetPage": "agent/ask-and-steer",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "agent-ask-and-steer-03",
+      "area": "Agent",
+      "feature": "Send a typed prompt",
+      "currentCoverage": "Covered",
+      "currentDocs": "Quickstart and Steering",
+      "targetPage": "agent/ask-and-steer",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "agent-ask-and-steer-04",
+      "area": "Agent",
+      "feature": "Run a prompt with no open tab and create files",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "agent/ask-and-steer",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "agent-ask-and-steer-05",
+      "area": "Agent",
+      "feature": "Queue prompts during a run",
+      "currentCoverage": "Covered",
+      "currentDocs": "Steering",
+      "targetPage": "agent/ask-and-steer",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "agent-ask-and-steer-06",
+      "area": "Agent",
+      "feature": "Pause all agent activity by double clicking the pill",
+      "currentCoverage": "Thin",
+      "currentDocs": "Steering uses old layout terms",
+      "targetPage": "agent/ask-and-steer",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "agent-ask-and-steer-07",
+      "area": "Agent",
+      "feature": "Mute diffs while the agent continues to work",
+      "currentCoverage": "Thin",
+      "currentDocs": "Steering omits the full behavior",
+      "targetPage": "agent/ask-and-steer",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "agent-ask-and-steer-08",
+      "area": "Agent",
+      "feature": "Cancel the current run by clicking the active pill",
+      "currentCoverage": "Thin",
+      "currentDocs": "Steering uses old history pane language",
+      "targetPage": "agent/ask-and-steer",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "agent-ask-and-steer-09",
+      "area": "Agent",
+      "feature": "Expand or collapse the floating agent dock",
+      "currentCoverage": "Missing",
+      "currentDocs": "No current interface page",
+      "targetPage": "agent/ask-and-steer",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "agent-ask-and-steer-10",
+      "area": "Agent",
+      "feature": "See queued message badges and a wake up nudge",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "agent/ask-and-steer",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "agent-ask-and-steer-11",
+      "area": "Agent",
+      "feature": "See the current in progress turn pinned above history",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "agent/ask-and-steer",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "agent-ask-and-steer-12",
+      "area": "Agent",
+      "feature": "See failed run toasts with authentication recovery hints",
+      "currentCoverage": "Thin",
+      "currentDocs": "Observability covers Claude only",
+      "targetPage": "agent/ask-and-steer",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "agent-ask-and-steer-13",
+      "area": "Customize",
+      "feature": "Set Low, Medium, or High autonomy",
+      "currentCoverage": "Stale",
+      "currentDocs": "The docs use old names and behavior",
+      "targetPage": "agent/ask-and-steer",
+      "action": "rewrite",
+      "priority": "P0"
+    },
+    {
+      "id": "agent-ask-and-steer-14",
+      "area": "Customize",
+      "feature": "Turn track changes off",
+      "currentCoverage": "Stale",
+      "currentDocs": "The docs describe a removed setting",
+      "targetPage": "agent/ask-and-steer",
+      "action": "rewrite",
+      "priority": "P0"
+    },
+    {
+      "id": "agent-selected-text-and-directives-01",
+      "area": "Agent",
+      "feature": "Give feedback on selected text",
+      "currentCoverage": "Covered",
+      "currentDocs": "Feedback popup",
+      "targetPage": "agent/selected-text-and-directives",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "agent-selected-text-and-directives-02",
+      "area": "Agent",
+      "feature": "Use selection feedback entirely from the keyboard",
+      "currentCoverage": "Covered",
+      "currentDocs": "Feedback popup and Shortcuts",
+      "targetPage": "agent/selected-text-and-directives",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "agent-selected-text-and-directives-03",
+      "area": "Agent",
+      "feature": "Choose direct edit or plan first for selected text",
+      "currentCoverage": "Covered",
+      "currentDocs": "Feedback popup",
+      "targetPage": "agent/selected-text-and-directives",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "agent-selected-text-and-directives-04",
+      "area": "Agent",
+      "feature": "Use AI smell feedback as a plan first quick action",
+      "currentCoverage": "Thin",
+      "currentDocs": "Feedback popup omits the behavior",
+      "targetPage": "agent/selected-text-and-directives",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "agent-selected-text-and-directives-05",
+      "area": "Agent",
+      "feature": "Use quick feedback actions and recent actions",
+      "currentCoverage": "Covered",
+      "currentDocs": "Feedback popup",
+      "targetPage": "agent/selected-text-and-directives",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "agent-selected-text-and-directives-06",
+      "area": "Agent",
+      "feature": "Leave inline directives while writing",
+      "currentCoverage": "Covered",
+      "currentDocs": "Inline directives",
+      "targetPage": "agent/selected-text-and-directives",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "agent-selected-text-and-directives-07",
+      "area": "Agent",
+      "feature": "Retry automatically when an inline directive is ignored",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "agent/selected-text-and-directives",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "agent-selected-text-and-directives-08",
+      "area": "Review",
+      "feature": "Freeze text that the agent cannot change",
+      "currentCoverage": "Covered",
+      "currentDocs": "Rules and Feedback popup",
+      "targetPage": "agent/selected-text-and-directives",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "agent-plans-and-long-tasks-01",
+      "area": "Agent",
+      "feature": "Ask for a plan before a chat request",
+      "currentCoverage": "Thin",
+      "currentDocs": "Steering mentions the toggle only",
+      "targetPage": "agent/plans-and-long-tasks",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "agent-plans-and-long-tasks-02",
+      "area": "Agent",
+      "feature": "Approve, dismiss, or reject a plan with feedback",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "agent/plans-and-long-tasks",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "agent-plans-and-long-tasks-03",
+      "area": "Agent",
+      "feature": "Answer single or multiple agent questions",
+      "currentCoverage": "Covered",
+      "currentDocs": "Steering",
+      "targetPage": "agent/plans-and-long-tasks",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "agent-plans-and-long-tasks-04",
+      "area": "Agent",
+      "feature": "Continue after an unanswered question times out",
+      "currentCoverage": "Thin",
+      "currentDocs": "Steering gives the timeout only",
+      "targetPage": "agent/plans-and-long-tasks",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "agent-plans-and-long-tasks-05",
+      "area": "Agent",
+      "feature": "Delegate long work to subagents",
+      "currentCoverage": "Covered",
+      "currentDocs": "Delegating tasks",
+      "targetPage": "agent/plans-and-long-tasks",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "agent-plans-and-long-tasks-06",
+      "area": "Agent",
+      "feature": "Use Plan first in the chat popover",
+      "currentCoverage": "Thin",
+      "currentDocs": "No complete procedure",
+      "targetPage": "agent/plans-and-long-tasks",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "agent-review-edits-01",
+      "area": "Review",
+      "feature": "See proposed text inline",
+      "currentCoverage": "Stale",
+      "currentDocs": "Several pages name removed panes",
+      "targetPage": "agent/review-edits",
+      "action": "rewrite",
+      "priority": "P0"
+    },
+    {
+      "id": "agent-review-edits-02",
+      "area": "Review",
+      "feature": "Accept or reject one or all edits",
+      "currentCoverage": "Covered",
+      "currentDocs": "Reviewing edits",
+      "targetPage": "agent/review-edits",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "agent-review-edits-03",
+      "area": "Review",
+      "feature": "Retry an edit with a visible feedback button",
+      "currentCoverage": "Stale",
+      "currentDocs": "The docs claim a control that is not wired",
+      "targetPage": "agent/review-edits",
+      "action": "rewrite",
+      "priority": "P0"
+    },
+    {
+      "id": "agent-review-edits-04",
+      "area": "Review",
+      "feature": "Copy part of a proposal",
+      "currentCoverage": "Covered",
+      "currentDocs": "Reviewing edits",
+      "targetPage": "agent/review-edits",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "agent-review-edits-05",
+      "area": "Review",
+      "feature": "Group proposed edits under their feedback thread",
+      "currentCoverage": "Missing",
+      "currentDocs": "No current gutter tour",
+      "targetPage": "agent/review-edits",
+      "action": "document",
+      "priority": "P0"
+    },
+    {
+      "id": "agent-review-edits-06",
+      "area": "Review",
+      "feature": "Pin diffs so they remain visible after a card closes",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "agent/review-edits",
+      "action": "document",
+      "priority": "P0"
+    },
+    {
+      "id": "agent-review-edits-07",
+      "area": "Review",
+      "feature": "Hover an edit row to flash its matching text",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "agent/review-edits",
+      "action": "document",
+      "priority": "P0"
+    },
+    {
+      "id": "agent-review-edits-08",
+      "area": "Review",
+      "feature": "Treat loose edits differently from thread edits",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "agent/review-edits",
+      "action": "document",
+      "priority": "P0"
+    },
+    {
+      "id": "agent-review-edits-09",
+      "area": "Review",
+      "feature": "Disable stale edits and regenerate them against current text",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "agent/review-edits",
+      "action": "document",
+      "priority": "P0"
+    },
+    {
+      "id": "agent-review-edits-10",
+      "area": "Review",
+      "feature": "Show tiny edits more subtly than large edits",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "agent/review-edits",
+      "action": "document",
+      "priority": "P0"
+    },
+    {
+      "id": "agent-review-edits-11",
+      "area": "Review",
+      "feature": "Flash accepted text after an edit lands",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "agent/review-edits",
+      "action": "document",
+      "priority": "P0"
+    },
+    {
+      "id": "agent-review-edits-12",
+      "area": "Review",
+      "feature": "Show accepted AI-written text",
+      "currentCoverage": "Covered",
+      "currentDocs": "Reviewing edits",
+      "targetPage": "agent/review-edits",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "agent-review-edits-13",
+      "area": "Review",
+      "feature": "Toggle AI-written text highlights on or off",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "agent/review-edits",
+      "action": "document",
+      "priority": "P0"
+    },
+    {
+      "id": "agent-review-edits-14",
+      "area": "Review",
+      "feature": "Remove AI provenance when the user rewrites marked text",
+      "currentCoverage": "Covered",
+      "currentDocs": "Reviewing edits",
+      "targetPage": "agent/review-edits",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "agent-comments-and-critique-01",
+      "area": "Review",
+      "feature": "Discuss changes in comment threads",
+      "currentCoverage": "Covered",
+      "currentDocs": "Comments",
+      "targetPage": "agent/comments-and-critique",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "agent-comments-and-critique-02",
+      "area": "Review",
+      "feature": "Open inline comment pills and recover detached threads",
+      "currentCoverage": "Thin",
+      "currentDocs": "Comments omits current states",
+      "targetPage": "agent/comments-and-critique",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "agent-comments-and-critique-03",
+      "area": "Review",
+      "feature": "Resolve or reopen a thread",
+      "currentCoverage": "Covered",
+      "currentDocs": "Comments",
+      "targetPage": "agent/comments-and-critique",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "agent-comments-and-critique-04",
+      "area": "Review",
+      "feature": "Approve an agent explanation before it proposes an edit",
+      "currentCoverage": "Thin",
+      "currentDocs": "Comments covers the action briefly",
+      "targetPage": "agent/comments-and-critique",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "agent-comments-and-critique-05",
+      "area": "Review",
+      "feature": "Run built in or custom critique passes",
+      "currentCoverage": "Covered",
+      "currentDocs": "Steering",
+      "targetPage": "agent/comments-and-critique",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "agent-comments-and-critique-06",
+      "area": "Customize",
+      "feature": "Create a reviewer with a name, mascot, color, and prompt",
+      "currentCoverage": "Covered",
+      "currentDocs": "Steering",
+      "targetPage": "agent/comments-and-critique",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "agent-customize-01",
+      "area": "Customize",
+      "feature": "Manage rules from the toolbar pill bar",
+      "currentCoverage": "Stale",
+      "currentDocs": "Rules points to Settings",
+      "targetPage": "agent/customize",
+      "action": "rewrite",
+      "priority": "P0"
+    },
+    {
+      "id": "agent-customize-02",
+      "area": "Customize",
+      "feature": "Create rules, examples, and agent proposed rules",
+      "currentCoverage": "Covered",
+      "currentDocs": "Rules",
+      "targetPage": "agent/customize",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "agent-customize-03",
+      "area": "Customize",
+      "feature": "Apply all rules and confirm which tabs to check",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "agent/customize",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "agent-customize-04",
+      "area": "Customize",
+      "feature": "Accept proposed rules and hooks from toasts",
+      "currentCoverage": "Missing",
+      "currentDocs": "The docs point to removed panes",
+      "targetPage": "agent/customize",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "agent-customize-05",
+      "area": "Customize",
+      "feature": "Add writing references",
+      "currentCoverage": "Covered",
+      "currentDocs": "References",
+      "targetPage": "agent/customize",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "agent-customize-06",
+      "area": "Customize",
+      "feature": "Add the current file, pasted prose, or a URL as a reference",
+      "currentCoverage": "Covered",
+      "currentDocs": "References",
+      "targetPage": "agent/customize",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "agent-customize-07",
+      "area": "Customize",
+      "feature": "Wake the agent after adding a rule or reference",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "agent/customize",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "agent-customize-08",
+      "area": "Customize",
+      "feature": "Install, enable, run, and remove skills in the UI",
+      "currentCoverage": "Missing",
+      "currentDocs": "Skills covers files only",
+      "targetPage": "agent/customize",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "agent-customize-09",
+      "area": "Customize",
+      "feature": "Add a skill from GitHub shorthand or a local path",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "agent/customize",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "agent-customize-10",
+      "area": "Customize",
+      "feature": "Ask the agent to find or create a vaguely named skill",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "agent/customize",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "agent-customize-11",
+      "area": "Customize",
+      "feature": "Run an enabled skill as a slash command",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "agent/customize",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "agent-customize-12",
+      "area": "Customize",
+      "feature": "Use bundled plain-writing and hooks-creator skills",
+      "currentCoverage": "Stale",
+      "currentDocs": "Skills lists only one bundled skill",
+      "targetPage": "agent/customize",
+      "action": "rewrite",
+      "priority": "P0"
+    },
+    {
+      "id": "agent-sessions-and-history-01",
+      "area": "Sessions",
+      "feature": "Browse, search, and switch sessions",
+      "currentCoverage": "Missing",
+      "currentDocs": "Sessions covers reset only",
+      "targetPage": "agent/sessions-and-history",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "agent-sessions-and-history-02",
+      "area": "Sessions",
+      "feature": "Inspect current activity and full transcripts",
+      "currentCoverage": "Stale",
+      "currentDocs": "The docs assume a fixed right pane",
+      "targetPage": "agent/sessions-and-history",
+      "action": "rewrite",
+      "priority": "P0"
+    },
+    {
+      "id": "agent-sessions-and-history-03",
+      "area": "Sessions",
+      "feature": "Filter transcripts by role, tool, or search text",
+      "currentCoverage": "Thin",
+      "currentDocs": "Observability covers some filters",
+      "targetPage": "agent/sessions-and-history",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "agent-sessions-and-history-04",
+      "area": "Sessions",
+      "feature": "Expand tool calls, messages, thinking, and the system prompt",
+      "currentCoverage": "Thin",
+      "currentDocs": "Observability is incomplete",
+      "targetPage": "agent/sessions-and-history",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "agent-sessions-and-history-05",
+      "area": "Sessions",
+      "feature": "Inspect context window use by content type",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "agent/sessions-and-history",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "agent-sessions-and-history-06",
+      "area": "Sessions",
+      "feature": "Export a transcript as JSON",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "agent/sessions-and-history",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "agent-sessions-and-history-07",
+      "area": "Sessions",
+      "feature": "See token use and session cost",
+      "currentCoverage": "Thin",
+      "currentDocs": "Observability omits current locations",
+      "targetPage": "agent/sessions-and-history",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "agent-sessions-and-history-08",
+      "area": "Sessions",
+      "feature": "Choose verbose or minimal history detail",
+      "currentCoverage": "Thin",
+      "currentDocs": "Observability omits the Settings control",
+      "targetPage": "agent/sessions-and-history",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "agent-sessions-and-history-09",
+      "area": "Sessions",
+      "feature": "Expand long agent messages and follow subagent progress",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "agent/sessions-and-history",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "agent-sessions-and-history-10",
+      "area": "Sessions",
+      "feature": "Start a new session without changing workspace settings",
+      "currentCoverage": "Stale",
+      "currentDocs": "Sessions names an old menu location",
+      "targetPage": "agent/sessions-and-history",
+      "action": "rewrite",
+      "priority": "P0"
+    },
+    {
+      "id": "agent-sessions-and-history-11",
+      "area": "Sessions",
+      "feature": "Clear queued work, pending edits, cost, and scratch on reset",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "agent/sessions-and-history",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "agent-sessions-and-history-12",
+      "area": "Sessions",
+      "feature": "Recover stale Cursor or Pi sessions automatically",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "agent/sessions-and-history",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "agent-sessions-and-history-13",
+      "area": "Sessions",
+      "feature": "Open the full transcript from the agent dock",
+      "currentCoverage": "Thin",
+      "currentDocs": "No complete procedure",
+      "targetPage": "agent/sessions-and-history",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "automation-hooks-01",
+      "area": "Customize",
+      "feature": "Create and review shell hooks",
+      "currentCoverage": "Covered",
+      "currentDocs": "Hooks and Events",
+      "targetPage": "automation/hooks",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "automation-hooks-02",
+      "area": "Automation",
+      "feature": "Run hooks on agent events",
+      "currentCoverage": "Covered",
+      "currentDocs": "Hooks and Events",
+      "targetPage": "automation/hooks",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "automation-hooks-03",
+      "area": "Automation",
+      "feature": "Start from pdflatex, Pandoc HTML or PDF, Mermaid, or Git templates",
+      "currentCoverage": "Thin",
+      "currentDocs": "Hooks omits part of the template set",
+      "targetPage": "automation/hooks",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "automation-hooks-04",
+      "area": "Automation",
+      "feature": "Edit, enable, disable, remove, or run a hook manually",
+      "currentCoverage": "Covered",
+      "currentDocs": "Hooks",
+      "targetPage": "automation/hooks",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "automation-hooks-05",
+      "area": "Automation",
+      "feature": "Review a hook proposed by the agent",
+      "currentCoverage": "Thin",
+      "currentDocs": "The docs point to an old review location",
+      "targetPage": "automation/hooks",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "automation-hooks-06",
+      "area": "Automation",
+      "feature": "Run hooks with full shell access in the workspace",
+      "currentCoverage": "Thin",
+      "currentDocs": "The docs omit the safety boundary",
+      "targetPage": "automation/hooks",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "automation-events-01",
+      "area": "Automation",
+      "feature": "Use file, stem, and tool placeholders in hook commands",
+      "currentCoverage": "Covered",
+      "currentDocs": "Hooks",
+      "targetPage": "automation/events",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "automation-preview-01",
+      "area": "Automation",
+      "feature": "Preview PDF, HTML, SVG, and Mermaid output",
+      "currentCoverage": "Covered",
+      "currentDocs": "Preview and Guides",
+      "targetPage": "automation/preview",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "automation-preview-02",
+      "area": "Automation",
+      "feature": "Reload preview output while preserving scroll and zoom",
+      "currentCoverage": "Thin",
+      "currentDocs": "Preview covers reload but not preserved state",
+      "targetPage": "automation/preview",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "automation-latex-and-synctex-01",
+      "area": "Workspace",
+      "feature": "Use forward and reverse SyncTeX between source and PDF",
+      "currentCoverage": "Thin",
+      "currentDocs": "Preview covers part of the flow",
+      "targetPage": "automation/latex-and-synctex",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "automation-latex-and-synctex-02",
+      "area": "Automation",
+      "feature": "Find a same name PDF automatically for a TeX file",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "automation/latex-and-synctex",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "automation-example-projects-01",
+      "area": "Automation",
+      "feature": "Publish Markdown as HTML or PDF with Pandoc",
+      "currentCoverage": "Thin",
+      "currentDocs": "The current guide is a stub",
+      "targetPage": "automation/example-projects",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "automation-example-projects-02",
+      "area": "Automation",
+      "feature": "Generate Mermaid diagrams as SVG files",
+      "currentCoverage": "Thin",
+      "currentDocs": "The current guide is a stub",
+      "targetPage": "automation/example-projects",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "automation-example-projects-03",
+      "area": "Automation",
+      "feature": "Use Git hooks for writing project commits and pushes",
+      "currentCoverage": "Thin",
+      "currentDocs": "The current guide is a stub",
+      "targetPage": "automation/example-projects",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "help-provider-errors-01",
+      "area": "Reference",
+      "feature": "Understand what providers receive from open tabs",
+      "currentCoverage": "Thin",
+      "currentDocs": "Steering covers paths and diffs only",
+      "targetPage": "help/provider-errors",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "help-storage-and-backups-01",
+      "area": "Reference",
+      "feature": "Understand storage and synchronization",
+      "currentCoverage": "Stale",
+      "currentDocs": "The docs mention removed state.json and the wrong source of truth",
+      "targetPage": "help/storage-and-backups",
+      "action": "rewrite",
+      "priority": "P0"
+    },
+    {
+      "id": "help-storage-and-backups-02",
+      "area": "Reference",
+      "feature": "Understand Markdown backup timing and CRDT recovery",
+      "currentCoverage": "Missing",
+      "currentDocs": "No accurate reference",
+      "targetPage": "help/storage-and-backups",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "help-external-edits-01",
+      "area": "Workspace",
+      "feature": "Reload after files change outside DocWriter",
+      "currentCoverage": "Thin",
+      "currentDocs": "CLI covers watch mode but not in-app reload",
+      "targetPage": "help/external-edits",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "help-external-edits-02",
+      "area": "Workspace",
+      "feature": "Let an external file edit replace stale CRDT state",
+      "currentCoverage": "Missing",
+      "currentDocs": "No recovery documentation",
+      "targetPage": "help/external-edits",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "help-external-edits-03",
+      "area": "Reference",
+      "feature": "Watch external files and reload the browser",
+      "currentCoverage": "Covered",
+      "currentDocs": "CLI",
+      "targetPage": "help/external-edits",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "help-recovery-01",
+      "area": "Reference",
+      "feature": "Restart automatically after a server crash",
+      "currentCoverage": "Covered",
+      "currentDocs": "CLI",
+      "targetPage": "help/recovery",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "help-recovery-02",
+      "area": "Reference",
+      "feature": "Recover from a server restart or WebSocket mismatch",
+      "currentCoverage": "Missing",
+      "currentDocs": "No troubleshooting page",
+      "targetPage": "help/recovery",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "help-recovery-03",
+      "area": "Reference",
+      "feature": "Use the agent scratch workspace until a new session",
+      "currentCoverage": "Missing",
+      "currentDocs": "No page",
+      "targetPage": "help/recovery",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "help-privacy-and-safety-01",
+      "area": "Workspace",
+      "feature": "Block paths and symlinks outside the workspace",
+      "currentCoverage": "Thin",
+      "currentDocs": "Tabs mentions the boundary without a safety page",
+      "targetPage": "help/privacy-and-safety",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "help-privacy-and-safety-02",
+      "area": "Reference",
+      "feature": "Understand key storage, shell hooks, and path safety",
+      "currentCoverage": "Missing",
+      "currentDocs": "No privacy or safety page",
+      "targetPage": "help/privacy-and-safety",
+      "action": "document",
+      "priority": "P1"
+    },
+    {
+      "id": "help-privacy-and-safety-03",
+      "area": "Reference",
+      "feature": "Bind to a custom host or expose DocWriter on a LAN",
+      "currentCoverage": "Covered",
+      "currentDocs": "CLI",
+      "targetPage": "help/privacy-and-safety",
+      "action": "keep-and-move",
+      "priority": "P2"
+    },
+    {
+      "id": "help-shortcuts-01",
+      "area": "Reference",
+      "feature": "Use current editor, feedback, review, PDF, and dialog shortcuts",
+      "currentCoverage": "Stale",
+      "currentDocs": "The shortcut page includes removed controls",
+      "targetPage": "help/shortcuts",
+      "action": "rewrite",
+      "priority": "P0"
+    },
+    {
+      "id": "help-command-line-01",
+      "area": "Reference",
+      "feature": "Use the command line",
+      "currentCoverage": "Stale",
+      "currentDocs": "The page has Claude-only flags and auth",
+      "targetPage": "help/command-line",
+      "action": "rewrite",
+      "priority": "P0"
+    },
+    {
+      "id": "contribute-architecture-01",
+      "area": "Reference",
+      "feature": "Follow the full system architecture",
+      "currentCoverage": "Stale",
+      "currentDocs": "The published docs link to a missing ARCHITECTURE.md",
+      "targetPage": "contribute/architecture",
+      "action": "rewrite",
+      "priority": "P0"
+    }
+  ]
+}

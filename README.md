@@ -1,8 +1,10 @@
 # DocWriter
 
-AI-assisted writing editor you run against any local folder.
+DocWriter is a shared writing workspace where you and an AI agent work alongside each other in the same live draft.
 
-**[Documentation](https://ucberkeley-8d9be701.mintlify.app)**
+Keep writing while the agent researches, comments, or proposes changes. You can respond to its work, and it can respond to yours.
+
+**[Documentation](https://docs.docwriter.org)**
 
 ## Development
 

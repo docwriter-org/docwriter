@@ -1,0 +1,42 @@
+---
+title: "Customize the agent"
+description: "Use rules, references, skills, and saved reviewer behavior."
+---
+
+## Writing rules
+
+Rules appear in the toolbar above the workspace. Add a rule, edit it, remove it, or add an example violation. Use **Apply rules to document** to ask the agent to check the current file or selected tabs.
+
+The agent can propose a new rule. A **Proposed rule** toast lets you accept or dismiss it.
+
+Freezing a passage creates a rule for the exact text. Read [Selected text and directives](/agent/selected-text-and-directives) for the lock controls.
+
+<Frame>
+  ![The writing rules popover above the workspace](/images/writing-rules-panel.png)
+</Frame>
+
+<Frame>
+  ![A frozen passage with its lock marker](/images/freeze-passage.png)
+</Frame>
+
+<Frame>
+  ![The unlock action for a frozen passage](/images/freeze-unlock-menu.png)
+</Frame>
+
+## Writing references
+
+Open **Settings**, then **Writing references**. You can use the current file, paste a writing sample, or save a URL.
+
+References are examples for the agent to consult when a request needs them. Enable, disable, or remove a reference without changing the source file.
+
+<Frame>
+  ![Writing references in Settings](/images/writing-references-panel.png)
+</Frame>
+
+## Skills
+
+Open **Settings**, then **Skills**. Install a skill from GitHub shorthand or a local path, enable or disable it, run it as a slash command, or remove it.
+
+DocWriter includes the plain writing and hooks creator skills. Project skills can also live under `.claude/skills/`.
+
+When a skill name is vague, ask the agent to find or create the right skill. Provider support differs because some providers receive skill instructions through their prompt rather than a native skill system.

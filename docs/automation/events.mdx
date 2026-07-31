@@ -1,89 +1,31 @@
 ---
-title: "Hook events"
-description: "DocWriter wraps the Claude Agent SDK, so it inherits the SDK's hook events."
+title: "Events and variables"
+description: "Choose when a hook runs and which tool calls it matches."
 ---
 
-DocWriter is a wrapper around the Claude Agent SDK. Hooks fire on the
-SDK's standard events, configured through the [hooks
-panel](/automation/hooks).
+## Events
 
-The events most useful for writing workflows:
+* **PreToolUse** runs before a tool. A failing command can block the tool.
+* **PostToolUse** runs after a successful tool.
+* **PostToolUseFailure** runs after a failed tool.
+* **UserPromptSubmit** runs when the user submits a request.
+* **Stop** runs when the main agent turn ends.
+* **SubagentStop** runs when a subagent ends.
+* **SessionStart** and **SessionEnd** run at session boundaries.
+* **Notification** runs for agent notifications.
 
-| Event                 | When it fires                                       | Typical use                              |
-| --------------------- | --------------------------------------------------- | ---------------------------------------- |
-| `PostToolUse`         | After a tool finishes successfully                  | Build, lint, format, log                 |
-| `PreToolUse`          | Before a tool runs                                  | Validate input, short-circuit a tool     |
-| `PostToolUseFailure`  | After a tool errors                                 | Notify, retry                            |
-| `UserPromptSubmit`    | When you send a prompt                              | Start a timer, log the prompt            |
-| `Stop`                | When the agent finishes its response                | Compile, open preview, commit            |
-| `SessionStart`        | When a new agent session begins                     | Initialize state, print a banner         |
-| `SessionEnd`          | When a session ends                                 | Flush logs, tear down                    |
+## Matchers
 
-`PostToolUse` is the default for most "do something after the agent
-edits a file" hooks. Pair it with a matcher like `Edit|Write` to filter
-to file mutations.
+The matcher is a case insensitive regular expression tested against the tool name. Leave it empty to match every tool for that event.
 
-For the full event list, JSON schemas, return-value semantics, and
-advanced configuration, see the [Claude Agent SDK hooks
-reference](https://docs.claude.com/en/docs/claude-code/hooks). Anything
-the SDK supports works in DocWriter.
+Tool names can differ across providers. Check the live activity log before writing a narrow matcher.
 
-## Matching on tool name
+## Variables
 
-`PreToolUse`, `PostToolUse`, and `PostToolUseFailure` are scoped to a
-particular tool. Use the matcher field (a regex, case-insensitive) to
-narrow which tools the hook applies to:
+Use these values inside a command or output path:
 
-| Matcher           | What it matches                                                  |
-| ----------------- | ---------------------------------------------------------------- |
-| (empty)           | Every tool                                                       |
-| `Edit\|Write`     | File mutations (both built-in `Edit`/`Write` and `edit_doc`/`write_doc`) |
-| `Edit`            | Edits only (not writes)                                          |
-| `Bash`            | Shell commands the agent runs                                    |
-| `Read`            | The agent reading a file                                         |
-| `mcp__.*`         | Any MCP-server tool (custom tools you have added)                |
+* `{{file}}` is the workspace relative file used by the tool.
+* `{{stem}}` is the file path without its final extension.
+* `{{tool}}` is the tool name.
 
-For non-tool events (`Stop`, `UserPromptSubmit`, `Session*`,
-`Notification`), the matcher is ignored.
-
-## Common patterns
-
-### Rebuild on every edit
-
-```
-Event:   PostToolUse
-Matcher: Edit|Write
-Command: pdflatex -interaction=nonstopmode -synctex=1 main.tex
-Output:  main.pdf
-```
-
-### Commit at the end of a turn
-
-```
-Event:   Stop
-Command: git add -A && (git diff --cached --quiet || git commit -m "docwriter: auto-commit" && git push)
-```
-
-### Lint before the agent writes
-
-```
-Event:   PreToolUse
-Matcher: Write
-Command: ruff check {{file}} || (echo "ruff failed; not writing" && exit 1)
-```
-
-When a `PreToolUse` hook exits non-zero, the SDK blocks the tool call.
-The agent sees the failure and can adapt.
-
-### Notify on failure
-
-```
-Event:   PostToolUseFailure
-Command: terminal-notifier -title "DocWriter" -message "Tool failed: {{tool}}"
-```
-
-## Where to go next
-
-- [Hooks](/automation/hooks). The hooks panel and how to add them.
-- [Preview](/automation/preview). Connect a hook's `output` to a live
-  preview window.
+File values are empty for events that do not belong to a file tool.

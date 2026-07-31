@@ -1,0 +1,40 @@
+---
+title: "Review edits"
+description: "Accept, reject, inspect, and undo proposed changes."
+---
+
+## Read a proposal
+
+Proposed text appears in the editor and in a card in the comment gutter. Green text is an addition and red struck text is a removal.
+
+Hover an edit row to flash its matching text. Pin a diff when you want it to remain visible after closing a card. Small edits use a quieter presentation than large edits.
+
+<Frame>
+  ![Pending edits in the comment gutter beside the draft](/images/reviewing-edits-pending.png)
+</Frame>
+
+## Accept or reject
+
+Use the check button to accept an edit or the x button to reject a loose edit. **Accept all** and **Reject all** act on the current tab.
+
+<Frame>
+  ![The Accept all and Reject all controls above pending suggestions](/images/agent-accept-reject-all.png)
+</Frame>
+
+Thread edits stay grouped under the comment that led to them. You can accept each grouped edit or accept the group.
+
+An edit becomes stale when its source text no longer matches. DocWriter disables the stale action and can ask the agent to regenerate the edit against the current text.
+
+## Copy proposed text
+
+Use **Copy proposed text** on an edit row. You can also select visible added text in the editor and copy it normally.
+
+## AI provenance
+
+Accepted agent text receives an AI provenance mark. Use **Highlight AI-written text** to show or hide the marks. Typing your own replacement inside a marked span removes the mark from the text you add.
+
+## Undo
+
+Accept and reject actions use the same user undo manager as local typing. Press **Command or Control and Z** to undo the latest user action.
+
+Agent edits do not have a Track changes off setting. Muting hides proposal layers, but it does not accept changes or remove review state.

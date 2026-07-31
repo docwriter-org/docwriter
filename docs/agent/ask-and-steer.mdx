@@ -1,0 +1,54 @@
+---
+title: "Ask and steer"
+description: "Send requests and control when the agent works."
+---
+
+## Send a request
+
+Click **Chat** in the floating agent dock. **Command or Control and Enter** sends the message. Enter alone adds a new line.
+
+You can send a request with no open tab, attach an image, or ask the agent to work across several files. Messages sent during a run join the queue.
+
+<Frame>
+  ![The Chat panel with a draft request](/images/chat-popover.png)
+</Frame>
+
+## Automatic wake
+
+After you stop typing for three seconds, DocWriter can wake the agent to inspect the change. The agent pill shows the countdown. Press **Command or Control and Enter** in the editor to skip the countdown.
+
+Automatic wake does not run when the agent is paused or when the text ends the typing burst unchanged.
+
+<Frame>
+  ![The agent wake control in the expanded dock](/images/agent-wakeup-button.png)
+</Frame>
+
+## Autonomy
+
+Open **Settings**, then **Agent behavior**.
+
+* **Low** acts only on a clear request or a clearly broken state.
+* **Medium** can open one focused comment during a turn, but it does not make an unsolicited edit.
+* **High** can open a focused comment or propose a focused edit.
+
+Autonomy changes when the agent may initiate work. It does not remove review for edits to an existing document.
+
+## Pause, mute, and cancel
+
+Double click the agent pill to pause or resume. Pausing cancels the current run, clears queued messages, and blocks new automatic or manual requests.
+
+Use the bell control to mute proposal layers while the agent continues working. Review data remains in the document.
+
+Click the active agent pill once to cancel the current run and clear its queue.
+
+<Frame>
+  ![The expanded agent dock in the paused state](/images/agent-paused.png)
+</Frame>
+
+<Frame>
+  ![The collapsed agent pill in the paused state](/images/agent-paused-pill.png)
+</Frame>
+
+## Questions from the agent
+
+The agent can open a question card with one or more questions. A single choice submits immediately. A multi-question card shows how many answers remain. Unanswered questions expire after 15 minutes so the run can continue.

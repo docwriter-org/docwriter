@@ -24,7 +24,7 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
@@ -404,6 +404,7 @@ async function captureStructural(page) {
 	await openFile(page, 'essay.md');
 	await shot(page, 'quickstart-essay-open.png');
 	await shot(page, 'inline-directives-in-doc.png');
+	await shot(page, 'tour-interface-clean.png');
 
 	// Annotated interface overview: with essay.md open (so the Send
 	// button and other affordances are visible), overlay labeled
@@ -541,7 +542,7 @@ async function captureIntroGif(browser, httpPort, ffmpegPath) {
 		// Phase 1: type an opening sentence with a bracketed directive
 		// at the end. Then stop. Auto-wake fires three seconds after the
 		// last keystroke; the agent reads the doc and starts working.
-		await page.keyboard.type('DocWriter feels different from a chat-based AI tool.', {
+		await page.keyboard.type('DocWriter is a shared writing workspace.', {
 			delay: 35
 		});
 		await page.keyboard.press('Enter');
@@ -571,11 +572,9 @@ async function captureIntroGif(browser, httpPort, ffmpegPath) {
 		await page.keyboard.press('Enter');
 		await page.keyboard.press('Enter');
 		const concurrentText = [
-			'This is the core tension in every AI writing tool I\'ve tried.',
-			' The model wants to take over; the writer wants to stay in control.',
-			' What if those two goals didn\'t have to conflict?',
-			' What if the AI edited alongside you, in the same document,',
-			' proposing changes you could accept or reject inline?'
+			'You and an AI agent work alongside each other in the same live draft.',
+			' Keep writing while the agent researches, comments, or proposes changes.',
+			' You can respond to its work, and it can respond to yours.'
 		];
 		for (const chunk of concurrentText) {
 			await page.keyboard.type(chunk, { delay: 38 });
@@ -618,6 +617,28 @@ async function captureIntroGif(browser, httpPort, ffmpegPath) {
 		return;
 	}
 	const gifOut = join(IMAGES_DIR, 'intro-flow.gif');
+	const webmOut = join(IMAGES_DIR, 'intro-flow.webm');
+	const mp4Out = join(IMAGES_DIR, 'intro-flow.mp4');
+	await copyFile(webm, webmOut);
+	console.log('  wrote intro-flow.webm');
+	const mp4 = spawnSync(
+		ffmpegPath,
+		[
+			'-y',
+			'-t',
+			'40',
+			'-i',
+			webm,
+			'-movflags',
+			'+faststart',
+			'-pix_fmt',
+			'yuv420p',
+			mp4Out
+		],
+		{ encoding: 'utf8' }
+	);
+	if (mp4.status === 0) console.log('  wrote intro-flow.mp4');
+	else console.log(`  mp4 conversion failed: ${mp4.stderr?.slice(-800) ?? ''}`);
 	console.log('  converting webm to gif with ffmpeg...');
 	// Cap duration at 40s: typing + directive, pause, auto-wake,
 	// substantial concurrent typing while the agent works, review

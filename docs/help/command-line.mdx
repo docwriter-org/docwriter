@@ -1,0 +1,36 @@
+---
+title: "Command line"
+description: "Launch DocWriter and control its local server."
+---
+
+```text
+docwriter [options] [directory]
+```
+
+| Option | Meaning |
+| --- | --- |
+| `-p, --port <n>` | HTTP port. The default is 7723 or the next free port. |
+| `--host [address]` | Bind address. A bare flag uses 0.0.0.0. |
+| `--no-open` | Do not open a browser. |
+| `-w, --watch` | Reload supported files after an external change. |
+| `--restart` | Start a replacement server after a crash. |
+| `--root <dir>` | Workspace root. The positional directory does the same job. |
+| `--new-session` | Clear the saved provider session at startup. |
+| `--api-key <key>` | Set the Anthropic key for this process. |
+| `--model <name>` | Set the legacy Claude default model alias. |
+| `--version` | Print the installed version. |
+
+## Common examples
+
+```sh
+docwriter ~/writing/book
+docwriter --watch ~/writing/paper
+docwriter --no-open --port 9000 ~/writing/notes
+docwriter --host 0.0.0.0 ~/writing/shared
+```
+
+The provider and model header controls are the normal way to select among Claude, OpenAI, Codex, Cursor, and Pi. The `--api-key` and `--model` flags remain Claude specific.
+
+## Environment
+
+Useful environment values include `DOCWRITER_ROOT`, `DOCWRITER_DEFAULT_MODEL`, `DOCWRITER_NEW_SESSION`, `ANTHROPIC_API_KEY`, and provider keys described in [Connect a provider](/connect-provider).
