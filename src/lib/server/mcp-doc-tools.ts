@@ -164,6 +164,13 @@ export function setActiveFeedbackThreadId(id: string | null) {
 	activeFeedbackThreadId = id;
 }
 
+/** The enforcement promise interpolated into the system prompt's "Announce
+ * edits on a thread" section. Defined here, beside the runTabWrite gate
+ * that enforces it, so the prompt and the enforcement can't drift apart —
+ * change the gate's behavior and this sentence in the same place. */
+export const REPLY_BEFORE_EDIT_PROMPT_NOTE =
+	"This is enforced: while a thread's latest message is the user's, edit_doc and write_doc targeting it fail until you have replied.";
+
 /** Reviewer running the current critique pass, if any. Set by /api/render
  * for the duration of a critique render (same lifecycle as
  * `activeFeedbackThreadId`) and stamped onto every review round and
@@ -200,14 +207,37 @@ export async function runTabWrite(
 				result = { beforeMd, afterMd };
 				return;
 			}
-			// If this edit targets a feedback thread the user already RESOLVED
-			// (e.g. they resolved while the agent was still thinking), the user
-			// is done with it — toss the edit instead of reviving a resolved
-			// thread with a new proposal.
+			// Edits targeting a feedback thread pass two gates. (1) The user
+			// already RESOLVED it (e.g. while the agent was still thinking):
+			// they are done with it — toss the edit instead of reviving the
+			// thread with a new proposal. (2) The prompt's "Announce edits on
+			// a thread" contract: if the thread's latest message is the
+			// user's, the agent hasn't said anything about this proposal yet,
+			// and letting it land would show a bare diff with no explanation.
+			// Bounce the write with instructions; the agent replies on the
+			// thread and retries. The error string is the whole contract
+			// because every provider path (MCP tools and tool-handlers.ts)
+			// surfaces it verbatim — which is also why it names no parameter
+			// syntax: the surfaces' reply_to_comment schemas differ.
 			const targetThreadId = activeFeedbackThreadId ?? undefined;
-			if (targetThreadId && getCommentsMap(doc).get(targetThreadId)?.resolved) {
-				result = { beforeMd, afterMd: beforeMd, discarded: true };
-				return;
+			if (targetThreadId) {
+				const thread = getCommentsMap(doc).get(targetThreadId);
+				if (thread?.resolved) {
+					result = { beforeMd, afterMd: beforeMd, discarded: true };
+					return;
+				}
+				const lastMessage = thread?.messages[thread.messages.length - 1];
+				if (lastMessage?.author === 'user') {
+					result = {
+						error:
+							`the user's latest message on thread "${targetThreadId}" has no reply yet, ` +
+							`so this proposal would land as a bare diff with no explanation. First reply ` +
+							`on that thread with reply_to_comment — one or two first-person sentences on ` +
+							`what you make of the user's feedback and what you are changing — then retry ` +
+							`this exact call.`
+					};
+					return;
+				}
 			}
 			doc.transact(() => {
 				const reviewArr = getReviewArray(doc);

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { X, Plus, Play, BookOpen } from 'lucide-svelte';
 	import { rules, pushHistory } from '$lib/stores';
+	import { isModEnter } from '$lib/keyboard';
 	import type { Rule } from '$lib/types';
 
 	interface Props {
@@ -169,7 +170,7 @@
 	}
 
 	function handleEditKeydown(e: KeyboardEvent, id: string) {
-		if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+		if (isModEnter(e)) {
 			e.preventDefault();
 			saveEditedRule(id);
 		}

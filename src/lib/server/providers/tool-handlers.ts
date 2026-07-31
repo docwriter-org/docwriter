@@ -53,14 +53,14 @@ function toToolResult(r: any): ToolResult {
 }
 
 export async function executeReviewAction(input: unknown): Promise<ToolResult> {
-	const { path, action, round_id, thread_id } = input as {
-		path?: string;
+	const { file_path: path, action, round_id, thread_id } = input as {
+		file_path?: string;
 		action?: string;
 		round_id?: string;
 		thread_id?: string;
 	};
 	if (!path) {
-		return { isError: true, content: [{ type: 'text' as const, text: 'review_action requires `path`.' }] };
+		return { isError: true, content: [{ type: 'text' as const, text: 'review_action requires `file_path`.' }] };
 	}
 	const opened = ensureWorkspaceTabOpen(path, { createIfMissing: false });
 	if (!opened.ok) return toToolResult(opened.error);
@@ -134,19 +134,22 @@ export function buildToolDefinitions(): ToolDefinition[] {
 			inputSchema: {
 				type: 'object',
 				properties: {
-					path: { type: 'string', description: 'Workspace-relative tab id, absolute path, or scratch path.' },
+					file_path: { type: 'string', description: 'Workspace-relative tab id, absolute path, or scratch path.' },
 					old_string: { type: 'string', description: 'Exact substring to replace.' },
 					new_string: { type: 'string', description: 'The replacement string.' },
 					replace_all: { type: 'boolean', description: 'Replace all occurrences.' },
 					thread_id: { type: 'string', description: 'Attach this edit to an existing comment thread.' }
 				},
-				required: ['path', 'old_string', 'new_string']
+				required: ['file_path', 'old_string', 'new_string']
 			},
 			execute: async (input) => {
-				const { path, old_string, new_string, replace_all, thread_id } = input as {
-					path: string; old_string: string; new_string: string;
+				const { file_path: path, old_string, new_string, replace_all, thread_id } = input as {
+					file_path: string; old_string: string; new_string: string;
 					replace_all?: boolean; thread_id?: string;
 				};
+				if (!path) {
+					return { isError: true, content: [{ type: 'text' as const, text: 'edit_doc requires `file_path`.' }] };
+				}
 				const replaceAll = replace_all === true;
 				const normOld = normalizeTypography(old_string);
 				const normNew = normalizeTypography(new_string);
@@ -206,12 +209,15 @@ export function buildToolDefinitions(): ToolDefinition[] {
 			inputSchema: {
 				type: 'object',
 				properties: {
-					path: { type: 'string', description: 'Tab id, absolute path, or scratch path.' }
+					file_path: { type: 'string', description: 'Tab id, absolute path, or scratch path.' }
 				},
-				required: ['path']
+				required: ['file_path']
 			},
 			execute: async (input) => {
-				const { path } = input as { path: string };
+				const { file_path: path } = input as { file_path: string };
+				if (!path) {
+					return { isError: true, content: [{ type: 'text' as const, text: 'read_doc requires `file_path`.' }] };
+				}
 				if (isScratchPath(path)) return toToolResult(readScratch(path));
 				const tabId = resolveTabFromPath(path);
 				if (tabId && isOpenTab(tabId)) {
@@ -254,13 +260,16 @@ export function buildToolDefinitions(): ToolDefinition[] {
 			inputSchema: {
 				type: 'object',
 				properties: {
-					path: { type: 'string', description: 'Workspace-relative path or scratch path.' },
+					file_path: { type: 'string', description: 'Workspace-relative path or scratch path.' },
 					content: { type: 'string', description: 'The new full content.' }
 				},
-				required: ['path', 'content']
+				required: ['file_path', 'content']
 			},
 			execute: async (input) => {
-				const { path, content } = input as { path: string; content: string };
+				const { file_path: path, content } = input as { file_path: string; content: string };
+				if (!path) {
+					return { isError: true, content: [{ type: 'text' as const, text: 'write_doc requires `file_path`.' }] };
+				}
 				if (isScratchPath(path)) return toToolResult(writeScratch(path, content));
 				const normalized = normalizeTypography(content);
 				const opened = ensureWorkspaceTabOpen(path, { createIfMissing: true });
@@ -343,7 +352,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
 			inputSchema: {
 				type: 'object',
 				properties: {
-					path: { type: 'string', description: 'Workspace-relative path or absolute path inside the workspace.' },
+					file_path: { type: 'string', description: 'Workspace-relative path or absolute path inside the workspace.' },
 					action: {
 						type: 'string',
 						enum: ['accept_round', 'accept_all', 'reject_round', 'reject_all', 'resolve_thread', 'reopen_thread'],
@@ -352,7 +361,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
 					round_id: { type: 'string', description: 'Required for accept_round or reject_round.' },
 					thread_id: { type: 'string', description: 'Required for resolve_thread or reopen_thread.' }
 				},
-				required: ['path', 'action']
+				required: ['file_path', 'action']
 			},
 			execute: executeReviewAction
 		},
@@ -396,7 +405,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
 			inputSchema: {
 				type: 'object',
 				properties: {
-					path: { type: 'string', description: 'Workspace-relative tab id or absolute path.' },
+					file_path: { type: 'string', description: 'Workspace-relative tab id or absolute path.' },
 					anchor_text: { type: 'string', description: 'Exact current document text to anchor the comment to.' },
 					message: { type: 'string', description: 'The comment text.' },
 					occurrence_index: { type: 'number', description: 'Zero-based occurrence when anchor_text appears more than once.' },
@@ -408,16 +417,19 @@ export function buildToolDefinitions(): ToolDefinition[] {
 						required: ['old_string', 'new_string']
 					}
 				},
-				required: ['path', 'anchor_text', 'message']
+				required: ['file_path', 'anchor_text', 'message']
 			},
 			execute: async (input) => {
-				const { path, anchor_text, message: msg, occurrence_index, proposed_edit } = input as {
-					path: string;
+				const { file_path: path, anchor_text, message: msg, occurrence_index, proposed_edit } = input as {
+					file_path: string;
 					anchor_text: string;
 					message: string;
 					occurrence_index?: number;
 					proposed_edit?: { old_string: string; new_string: string };
 				};
+				if (!path) {
+					return { isError: true, content: [{ type: 'text' as const, text: 'comment_doc requires `file_path`.' }] };
+				}
 				if (isScratchPath(path)) return { isError: true, content: [{ type: 'text' as const, text: 'comment_doc cannot be used on scratch paths.' }] };
 				const opened = ensureWorkspaceTabOpen(path, { createIfMissing: false });
 				if (!opened.ok) return toToolResult(opened.error);
@@ -487,7 +499,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
 			inputSchema: {
 				type: 'object',
 				properties: {
-					path: { type: 'string' },
+					file_path: { type: 'string' },
 					thread_id: { type: 'string' },
 					message: { type: 'string' },
 					proposed_edit: {
@@ -496,13 +508,16 @@ export function buildToolDefinitions(): ToolDefinition[] {
 						required: ['old_string', 'new_string']
 					}
 				},
-				required: ['path', 'thread_id', 'message']
+				required: ['file_path', 'thread_id', 'message']
 			},
 			execute: async (input) => {
-				const { path, thread_id, message: msg, proposed_edit } = input as {
-					path: string; thread_id: string; message: string;
+				const { file_path: path, thread_id, message: msg, proposed_edit } = input as {
+					file_path: string; thread_id: string; message: string;
 					proposed_edit?: { old_string: string; new_string: string };
 				};
+				if (!path) {
+					return { isError: true, content: [{ type: 'text' as const, text: 'reply_to_comment requires `file_path`.' }] };
+				}
 				if (isScratchPath(path)) return { isError: true, content: [{ type: 'text' as const, text: 'reply_to_comment cannot be used on scratch paths.' }] };
 				const opened = ensureWorkspaceTabOpen(path, { createIfMissing: false });
 				if (!opened.ok) return toToolResult(opened.error);
@@ -533,11 +548,14 @@ export function buildToolDefinitions(): ToolDefinition[] {
 			description: 'Return all open (unresolved) comment threads for a workspace tab.',
 			inputSchema: {
 				type: 'object',
-				properties: { path: { type: 'string' } },
-				required: ['path']
+				properties: { file_path: { type: 'string' } },
+				required: ['file_path']
 			},
 			execute: async (input) => {
-				const { path } = input as { path: string };
+				const { file_path: path } = input as { file_path: string };
+				if (!path) {
+					return { isError: true, content: [{ type: 'text' as const, text: 'list_threads requires `file_path`.' }] };
+				}
 				if (isScratchPath(path)) return { isError: true, content: [{ type: 'text' as const, text: 'list_threads cannot be used on scratch paths.' }] };
 				const tabId = resolveTabFromPath(path);
 				if (!tabId || !isOpenTab(tabId)) {
