@@ -11,7 +11,7 @@ Environment variables and project `.env` files take precedence over `~/.docwrite
 
 ## Context sent to a provider
 
-The first request contains the open tab paths and the changes since each tab was last seen. It does not include every full file body. The agent calls `read_doc` when it needs the full content of an open tab, and its workspace tools can inspect other files when the request requires them.
+The first request contains the open tab paths and the changes since each tab was last seen. Full file bodies are loaded only when needed. The agent calls `read_doc` for the full content of an open tab, and workspace tools can inspect other files when the request requires them.
 
 Read [Privacy and safety](/help/privacy-and-safety) for the other network requests and local boundaries.
 

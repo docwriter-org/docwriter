@@ -11,7 +11,7 @@ Each Yjs update is appended to `.docwriter/docwriter.db`. SQLite is the runtime 
 
 ## Files on disk
 
-The server checks for changed documents every 500 milliseconds and writes the live document back to its workspace file. The plain file is useful for Git, other editors, and recovery. It is not a second live editor state.
+The server checks for changed documents every 500 milliseconds and writes the live document back to the workspace file. The plain file is useful for Git, other editors, and recovery. The file is not a second live editor state.
 
 `.docwriter/hooks.json` is the portable hook configuration. Agent scratch files live under `.docwriter/agent/scratch/`.
 

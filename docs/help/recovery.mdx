@@ -5,7 +5,7 @@ description: "Recover from blank editors, restarts, stale proposals, and deleted
 
 ## Blank editor
 
-A text tab paints after the first WebSocket sync. Check that the DocWriter server is still running and that its Hocuspocus port is available. Reload the browser after the server is healthy.
+A text tab paints after the first WebSocket sync. Check that the DocWriter server is still running and that the Hocuspocus port is available. Reload the browser after the server is healthy.
 
 ## Server restart
 
@@ -15,11 +15,11 @@ Use `docwriter --restart` when the command should start a replacement process af
 
 ## Stale proposal
 
-A proposal becomes stale when its source text changes. Reject the stale proposal or let DocWriter ask the agent to regenerate it against the current file.
+A proposal becomes stale when the source text changes. Reject the stale proposal or let DocWriter ask the agent to regenerate the proposal against the current file.
 
 ## Deleted file
 
-The tabs API removes tabs for files that no longer exist. Deleting a file inside DocWriter also deletes its saved Yjs update log so the content cannot reappear on reopen.
+The tabs API removes tabs for files that no longer exist. Deleting a file inside DocWriter also deletes the saved Yjs update log so the content cannot reappear on reopen.
 
 ## Removed runtime state
 

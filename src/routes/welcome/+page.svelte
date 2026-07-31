@@ -106,7 +106,7 @@
 		</p>
 		<p class="hero-detail">
 			Keep writing while the agent researches, comments, or proposes changes. You can respond to
-			its work, and it can respond to yours.
+			agent work, and the agent can respond to yours.
 		</p>
 	</header>
 
@@ -322,7 +322,7 @@
 				<h3>Characterizing slopwords and good practices</h3>
 				<p>
 					We want open source methods that help researchers and writers identify repeated AI
-					writing patterns and track how those patterns change across models.
+					writing patterns and track how the patterns change across models.
 				</p>
 			</div>
 		</div>

@@ -20,7 +20,7 @@
   <img src="docs/images/intro-flow.gif" width="900" alt="A writer keeps working while reviewing an agent edit in DocWriter" />
 </p>
 
-DocWriter is a local writing workspace where you and an AI agent work alongside each other in the same draft. Write while the agent researches, comments, or proposes changes. Review its work beside the text, then accept, reject, or respond.
+DocWriter is a local writing workspace where you and an AI agent work alongside each other in the same draft. Write while the agent researches, comments, or proposes changes. Review agent work beside the text, then accept, reject, or respond.
 
 - Work with Markdown, plain text, LaTeX, PDFs, and project files.
 - Direct the agent through selected text, inline instructions, comments, or Chat.

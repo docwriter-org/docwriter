@@ -7,7 +7,7 @@ description: "Accept, reject, inspect, and undo proposed changes."
 
 Proposed text appears in the editor and in a card in the comment gutter. Green text is an addition and red struck text is a removal.
 
-Hover an edit row to flash its matching text. Pin a diff when you want it to remain visible after closing a card. Small edits use a quieter presentation than large edits.
+Hover an edit row to flash the matching text. Pin a diff to keep the proposal visible after closing a card. Small edits use a quieter presentation than large edits.
 
 <Frame caption="Review one proposal, accept it, then reject another.">
   <video
@@ -38,7 +38,7 @@ Use the check button to accept an edit or the x button to reject a loose edit. *
 
 Thread edits stay grouped under the comment that led to them. You can accept each grouped edit or accept the group.
 
-An edit becomes stale when its source text no longer matches. DocWriter disables its Accept action. If the server detects the stale source during an Accept request, DocWriter rejects the old proposal and sends a follow up request for a new edit against the current text. There is no separate Regenerate button.
+An edit becomes stale when the source text no longer matches. DocWriter disables the Accept action. If the server detects stale source text during an Accept request, DocWriter rejects the old proposal and sends a follow up request for a new edit against the current text. There is no separate Regenerate button.
 
 ## Copy proposed text
 

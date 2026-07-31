@@ -15,7 +15,7 @@ Watch mode reports changes to Markdown, text, JSON, YAML, and YML files. It igno
 
 The command line watcher sends a reload event to the browser. DocWriter refreshes the file tree and remounts the active tab from the server.
 
-The server ignores file events that repeat its own recent flush, which prevents a reload loop while you type in DocWriter.
+The server ignores file events that repeat a recent DocWriter flush, which prevents a reload loop while you type.
 
 ## Which copy wins
 
