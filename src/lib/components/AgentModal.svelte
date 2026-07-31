@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Check, HelpCircle, Sparkles, X } from 'lucide-svelte';
-	import { modEnterToSend } from '$lib/keyboard';
+	import { isModEnter, modEnterToSend } from '$lib/keyboard';
 	import { fly, fade } from 'svelte/transition';
 	import { cubicOut } from 'svelte/easing';
 	import {
@@ -69,7 +69,7 @@
 			closeRejectFeedback();
 			return;
 		}
-		if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+		if (isModEnter(e)) {
 			e.preventDefault();
 			submitRejectFeedback(planId);
 		}

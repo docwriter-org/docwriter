@@ -60,6 +60,7 @@
 		showAiProvenance
 	} from '$lib/stores';
 	import type { Action, CommentThread, FeedbackMode } from '$lib/types';
+	import { isModEnter } from '$lib/keyboard';
 	import type { MaterializedPendingReviewRound } from '$lib/review-rounds';
 
 	const IDLE_MS = 3_000;
@@ -1366,7 +1367,7 @@
 					// Cmd/Ctrl+Enter wakes the agent immediately, skipping the
 					// idle countdown. Plain Enter still inserts a new line.
 					// No-op while paused — same gate as Wake up / chat.
-					if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+					if (isModEnter(event)) {
 						event.preventDefault();
 						if ($agentSettings.paused) return true;
 						if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }

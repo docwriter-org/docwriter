@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { Editor } from '@tiptap/core';
 	import { Send, Sparkles, Cat, Check, Copy, X, User } from 'lucide-svelte';
-	import { modEnterToSend } from '$lib/keyboard';
+	import { isModEnter, modEnterToSend } from '$lib/keyboard';
 
 	/** Minimal inline markdown → HTML. Matches the renderer used in
 	 * HistoryPane so assistant_text and comments look the same. Escapes
@@ -747,7 +747,7 @@
 						};
 					}}
 					onkeydown={(e) => {
-						if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+						if (isModEnter(e)) {
 							e.preventDefault();
 							void sendReply(thread);
 						}

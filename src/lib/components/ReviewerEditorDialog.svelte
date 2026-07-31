@@ -3,6 +3,7 @@
 	import { cubicOut } from 'svelte/easing';
 	import ReviewerMascot from './ReviewerMascot.svelte';
 	import { REVIEWER_ICONS, REVIEWER_COLORS, type Reviewer } from '$lib/shared/reviewers';
+	import { isModEnter } from '$lib/keyboard';
 
 	interface Props {
 		open: boolean;
@@ -63,7 +64,7 @@
 		if (e.key === 'Escape') {
 			e.preventDefault();
 			close();
-		} else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+		} else if (isModEnter(e)) {
 			e.preventDefault();
 			void save();
 		}

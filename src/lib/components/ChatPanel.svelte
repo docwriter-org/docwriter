@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { Send, X, Image } from 'lucide-svelte';
-	import { modEnterToSend } from '$lib/keyboard';
+	import { isModEnter, modEnterToSend } from '$lib/keyboard';
 	import {
 		ALLOWED_IMAGE_TYPES,
 		type AllowedImageMediaType,
@@ -43,7 +43,7 @@
 	}
 
 	function onKeyDown(e: KeyboardEvent) {
-		if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+		if (isModEnter(e)) {
 			e.preventDefault();
 			send();
 		}
