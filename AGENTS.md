@@ -32,8 +32,10 @@ AI agent (for end-to-end testing of the headline feature):
 - The editor loads and edits without any key, but the agent loop
   (Send → propose edit → review card) needs a provider credential. Prompt
   the agent via the **Send** button (top-right of the center pane); proposed
-  edits appear as tracked changes plus an **Accept/Reject/Retry** review card
-  in the right pane. Accept writes through to `document.md`.
+ edits appear as tracked changes plus an **Accept/Reject/Retry** review card
+ floating inline near the edit in the center editor (there is no separate
+ review pane). Accept writes through to the tab's file on disk (e.g.
+ `document.md`, or whichever tab is open).
 - **Claude** (default provider) needs `ANTHROPIC_API_KEY` (a secret). Two
   non-obvious gotchas when present:
   - The `@anthropic-ai/claude-agent-sdk` ships both a glibc and a musl native
