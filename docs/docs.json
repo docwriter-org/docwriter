@@ -2,15 +2,10 @@
 	"$schema": "https://mintlify.com/docs.json",
 	"theme": "palm",
 	"name": "DocWriter",
-	"description": "A writing IDE with an AI agent as a concurrent collaborator.",
+	"description": "A shared writing workspace for writers and AI agents.",
 	"logo": {
 		"light": "/logo/light.svg",
 		"dark": "/logo/dark.svg"
-	},
-	"seo": {
-		"metatags": {
-			"robots": "noindex, nofollow"
-		}
 	},
 	"colors": {
 		"primary": "#7c3aed",
@@ -28,70 +23,71 @@
 	"navigation": {
 		"groups": [
 			{
-				"group": "Get started",
+				"group": "Start",
 				"pages": [
 					"introduction",
 					"install",
-					"quickstart"
+					"connect-provider",
+					"quickstart",
+					"tour/interface"
 				]
 			},
 			{
-				"group": "Tour",
+				"group": "Write",
 				"pages": [
-					"tour/interface",
-					"tour/editor",
-					"tour/tabs"
+					"write/files-and-tabs",
+					"write/editor",
+					"write/images-and-diagrams",
+					"write/find-and-appearance",
+					"write/pdfs-and-other-files"
 				]
 			},
 			{
-				"group": "Working with the agent",
+				"group": "Use the agent",
 				"pages": [
-					"agent/steering-the-agent",
-					"agent/feedback-popup",
-					"agent/inline-directives",
-					"agent/reviewing-edits",
-					"agent/delegating-tasks",
-					"agent/comments",
-					"agent/observability",
-					"agent/sessions"
+					"agent/ask-and-steer",
+					"agent/selected-text-and-directives",
+					"agent/plans-and-long-tasks",
+					"agent/review-edits",
+					"agent/comments-and-critique",
+					"agent/customize",
+					"agent/sessions-and-history"
 				]
 			},
 			{
-				"group": "Customize",
-				"pages": [
-					"customize/rules",
-					"customize/references",
-					"customize/skills"
-				]
-			},
-			{
-				"group": "Automation",
+				"group": "Automate",
 				"pages": [
 					"automation/hooks",
 					"automation/events",
-					"automation/preview"
+					"automation/preview",
+					"automation/latex-and-synctex",
+					"automation/example-projects"
 				]
 			},
 			{
-				"group": "Guides",
+				"group": "Help",
 				"pages": [
-					"guides/blog-with-research",
-					"guides/overleaf",
-					"guides/pandoc-html",
-					"guides/mermaid",
-					"guides/git-workflow"
+					"help/provider-errors",
+					"help/storage-and-backups",
+					"help/external-edits",
+					"help/recovery",
+					"help/privacy-and-safety",
+					"help/shortcuts",
+					"help/command-line"
 				]
 			},
 			{
-				"group": "Reference",
+				"group": "Contribute",
 				"pages": [
-					"reference/cli",
-					"reference/shortcuts",
-					"reference/how-it-works"
+					"contribute/setup",
+					"contribute/architecture",
+					"contribute/providers-and-tools",
+					"contribute/editor-and-persistence",
+					"contribute/testing-and-docs"
 				]
 			},
 			{
-				"group": "Changelog",
+				"group": "Release notes",
 				"pages": [
 					"changelog/2026-07-22",
 					"changelog/2026-05-22",
@@ -100,23 +96,47 @@
 			}
 		]
 	},
+	"redirects": [
+		{ "source": "/tour/editor", "destination": "/write/editor" },
+		{ "source": "/tour/tabs", "destination": "/write/files-and-tabs" },
+		{ "source": "/customize/rules", "destination": "/agent/customize#writing-rules" },
+		{ "source": "/customize/references", "destination": "/agent/customize#writing-references" },
+		{ "source": "/customize/skills", "destination": "/agent/customize#skills" },
+		{ "source": "/agent/steering-the-agent", "destination": "/agent/ask-and-steer" },
+		{ "source": "/agent/feedback-popup", "destination": "/agent/selected-text-and-directives" },
+		{ "source": "/agent/inline-directives", "destination": "/agent/selected-text-and-directives#leave-an-inline-directive" },
+		{ "source": "/agent/reviewing-edits", "destination": "/agent/review-edits" },
+		{ "source": "/agent/delegating-tasks", "destination": "/agent/plans-and-long-tasks" },
+		{ "source": "/agent/comments", "destination": "/agent/comments-and-critique" },
+		{ "source": "/agent/observability", "destination": "/agent/sessions-and-history" },
+		{ "source": "/agent/sessions", "destination": "/agent/sessions-and-history#start-a-new-session" },
+		{ "source": "/guides/blog-with-research", "destination": "/automation/example-projects#research-with-web-sources" },
+		{ "source": "/guides/overleaf", "destination": "/automation/example-projects#latex-and-overleaf" },
+		{ "source": "/guides/pandoc-html", "destination": "/automation/example-projects#pandoc" },
+		{ "source": "/guides/mermaid", "destination": "/automation/example-projects#mermaid" },
+		{ "source": "/guides/git-workflow", "destination": "/automation/example-projects#git" },
+		{ "source": "/reference/cli", "destination": "/help/command-line" },
+		{ "source": "/reference/shortcuts", "destination": "/help/shortcuts" },
+		{ "source": "/reference/how-it-works", "destination": "/contribute/architecture" }
+	],
 	"footer": {
 		"socials": {
 			"github": "https://github.com/docwriter-org/docwriter",
-			"website": "https://sh-reya.com"
+			"website": "https://docwriter.org"
 		},
 		"links": [
 			{
 				"header": "Project",
 				"items": [
-					{ "label": "GitHub", "href": "https://github.com/docwriter-org/docwriter" }
+					{ "label": "GitHub", "href": "https://github.com/docwriter-org/docwriter" },
+					{ "label": "Website", "href": "https://docwriter.org" }
 				]
 			},
 			{
-				"header": "Authors",
+				"header": "Institutions",
 				"items": [
-					{ "label": "Shreya Shankar", "href": "https://sh-reya.com" },
-					{ "label": "EPIC Data Lab", "href": "https://epic.berkeley.edu" }
+					{ "label": "CMU CSD", "href": "https://cs.cmu.edu" },
+					{ "label": "UC Berkeley EECS", "href": "https://eecs.berkeley.edu" }
 				]
 			}
 		]

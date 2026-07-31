@@ -1,86 +1,37 @@
 ---
-title: "Live preview"
-description: "Open a popup window that re-renders whenever your hooks produce a new artifact."
+title: "Generated previews"
+description: "Open generated files and reload them when a hook completes."
 ---
 
-When a hook has an **output** field set (a path to the artifact it
-produces, e.g. `main.pdf`, `essay.html`, `diagram.svg`), DocWriter shows a
-floating **Preview** button in the top-right of the editor. Clicking it
-opens a popup window that displays the artifact and reloads automatically
-every time the hook produces a new version.
+## Match an output
 
-## How matching works
+DocWriter first looks for a same name PDF beside an active TeX file. If none exists, it resolves the output template from the first enabled matching hook.
 
-The preview button appears when the active tab matches a hook's output
-path. The matching is conservative. It triggers when:
+Set a hook output such as `{{stem}}.html`, `{{stem}}.pdf`, or `{{stem}}.svg`.
 
-- The active tab is the source file the hook consumes (e.g. you have
-  `main.tex` open and the hook's output is `main.pdf`), or
-- The active tab's stem matches the output's stem (you have `essay.md`
-  open and the hook's output is `{{stem}}.html`).
+## Open a preview
 
-If the button does not appear, the most likely cause is the hook's output
-field is empty or the active tab does not match any hook's scope. See
-[Hooks](/automation/hooks).
+**Preview window** opens a separate browser window. The split preview button opens the output beside the source and lets you resize both panes.
 
-## Opening the preview
-
-Click the **Preview** button. A popup window opens, sized 900×1200,
-showing the rendered artifact. DocWriter supports four kinds of output:
-
-| Extension                 | Renderer                                       |
-| ------------------------- | ---------------------------------------------- |
-| `.pdf`                    | Bundled PDF.js viewer with synctex support     |
-| `.html` / `.htm` / `.svg` | Same-origin iframe                             |
-| `.png` / `.jpg` / etc.    | `<img>` in a scrolling wrapper                 |
-| `.txt` / `.md`            | Plain text in an iframe                        |
+Supported output includes PDF, HTML, SVG, common image formats, Markdown, and plain text. Use **Raw** to open the generated file in a normal browser window.
 
 ## Live reload
 
-The preview window subscribes to a server-sent-events bus. Every time
-your hook finishes, the preview reloads the file:
+After a successful hook with an output, DocWriter sends a preview update. The preview reloads while preserving PDF page and scale, document scroll, or image scroll when possible.
 
-- **PDF.** Scroll position, page number, and zoom level are preserved
-  across reloads.
-- **HTML.** `scrollX` and `scrollY` are preserved.
-- **Image.** Wrapper scroll position is preserved.
+The preview shows the connection state and the time of the latest update.
 
-You do not need to refresh manually. The header shows the timestamp of
-the last reload and a connection-status indicator (connected /
-disconnected).
-
-## SyncTeX (LaTeX projects)
-
-For PDFs produced by `pdflatex -synctex=1` (the LaTeX template hook
-provides this flag), the preview supports two-way navigation between the
-PDF and the source:
-
-- **Backward sync.** Double-click any text in the PDF. DocWriter
-  resolves the click to the source `.tex` file and line, switches to that
-  file in the editor, and scrolls to the line.
-- **Forward sync.** In the editor, the menu has a **Show in PDF**
-  command. The preview window scrolls to the corresponding page and
-  position.
-
-Both directions shell out to the `synctex` binary (part of TeX Live and
-MacTeX). If `synctex` is not on your `PATH`, both directions silently
-no-op.
-
-## Themes
-
-The preview window picks up the editor's current theme (light, dark,
-solarized, etc.) and applies it to the PDF.js viewer chrome. The
-document itself is unchanged. Themes only restyle the viewer, not the
-rendered PDF or HTML.
-
-## When the preview button is not enough
-
-For workflows that produce non-file outputs (server logs, REPL output,
-test results), use the history pane to follow hook output instead. Every
-hook run's stdout and stderr is captured there.
-
-## Where to go next
-
-- [Hooks](/automation/hooks). Set up the hook that produces the output.
-- [Editing an Overleaf LaTeX project](/guides/overleaf). A complete
-  LaTeX preview workflow.
+<Frame caption="Open a split preview, resize it, and reload changed output.">
+  <video
+    autoPlay
+    muted
+    loop
+    playsInline
+    poster="/images/overleaf-pdf-preview.png"
+    className="w-full rounded-xl"
+  >
+    <source src="/images/split-preview.mp4" type="video/mp4" />
+    <source src="/images/split-preview.webm" type="video/webm" />
+    Your browser does not support embedded video.
+  </video>
+</Frame>

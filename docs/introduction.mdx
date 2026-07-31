@@ -1,86 +1,48 @@
 ---
-title: "Introduction"
-description: "A research project on writing with AI."
+title: "Overview"
+description: "Reimagining AI-assisted writing to let you:"
 ---
 
-DocWriter is a writing IDE with an AI agent as a concurrent collaborator.
-The goal of the project is to ask, how can we reap the productivity
-benefits of AI in writing, without losing our agency and fine-grained
-control of our personal voice?
+DocWriter is a shared writing workspace where you and an AI agent work alongside each other in the same live draft.
 
-<Frame>
-  ![DocWriter in action: typing a paragraph with an inline directive, the agent picking it up while you keep typing](/images/intro-flow.gif)
+- **Keep more of your voice and reduce AI slop.**
+- **Work alongside the agent in the same live draft, at the same time.**
+- **Dynamically reconfigure agency as the writing process changes.**
+
+<Frame caption="The writer keeps typing while the agent handles an inline request.">
+  <video
+    autoPlay
+    muted
+    loop
+    playsInline
+    poster="/images/quickstart-essay-open.png"
+    className="w-full rounded-xl"
+  >
+    <source src="/images/intro-flow.mp4" type="video/mp4" />
+    <source src="/images/intro-flow.webm" type="video/webm" />
+    <img src="/images/intro-flow.gif" alt="A writer keeps typing while the agent handles an inline request" />
+    Your browser does not support embedded video.
+  </video>
 </Frame>
 
-Think of it as the writing analog of an agentic coding tool like Claude
-Code or Codex — because it essentially **is** Claude Code, pointed at
-your writing workspace instead of a code repo. DocWriter is built on the
-[Claude Agent SDK](https://docs.claude.com/en/agent-sdk/overview), so
-the agent has the same built-in capabilities Claude Code has: file
-editing, shell / Bash, web search, and code execution. On top of those,
-DocWriter adds its own MCP tools for writing-specific operations
-(`edit_doc`, `read_doc`, `post_comment`, `propose_rule`, and so on).
-The interface is the part that's different, organized around two design
-philosophies:
+## Built for writing projects
 
-## Direct manipulation over delegation
-
-Most AI tools route every interaction through a chat window. DocWriter
-provides direct affordances for the writing-specific routines instead:
-
-- **Inline feedback.** Highlight a passage and a popup appears. Type
-  custom feedback or click a pill ("Too verbose", "AI smell", or your
-  recent feedbacks). Modes: Auto / Edit / Discuss.
-- **Rules.** Persistent style preferences ("avoid passive voice").
-- **References.** Voice samples the agent matches.
-- **Hooks.** Shell commands on agent events (pdflatex, pandoc,
-  mermaid, git auto-commit, and anything else you wire up).
-- **Autonomy.** One setting — conservative, balanced, or aggressive —
-  for how proactive the agent is by default.
-- **Comment threads.** Reply in the margin where the agent's comment
-  is, instead of re-anchoring the conversation in chat.
-
-For requests that don't fit a routine (research a topic, restructure
-across files, fix a build), the chat popover is still there.
-
-## Asynchronous, in-medium collaboration
-
-Most AI tools are turn-based: submit, wait, continue. DocWriter is
-structured so the agent runs continuously alongside you. Each time you
-pause typing, the agent reads the open documents, reacts to what you
-changed, picks up any inline directives, and proposes edits or
-comments. Your typing keeps going during all of this — the two
-streams of edits merge in the same buffer.
-
-- **Inline directives.** Type `[[ tighten this paragraph ]]` (or
-  `(( ))` or `<< >>`) and keep writing. The agent picks the note up
-  on its next pass and handles it, deleting the directive text from
-  the doc.
-- **Suggestions, not overwrites.** Agent edits arrive as track-changes.
-  The document is a CRDT (like Google Docs), so the agent's edits and
-  your concurrent typing merge cleanly even when you're editing the
-  same paragraph.
-- **Background work.** Long tasks (multi-file rewrites, build-fix
-  loops, web research) run without blocking the editor.
-- **Observability.** The history pane logs every tool call and hook
-  run as it happens; a separate transcript viewer browses earlier
-  turns. No black box.
+- **Add writing rules and references.** Save rules, examples, reference material, and protected passages so the agent follows your standards rather than a generic prompt.
+- **Work across files and the web.** The agent can read and edit workspace files, research on the internet, run shell commands, and handle longer tasks in the background.
+- **Review work beside the text.** Comments and proposed changes stay attached to the relevant passage. Accept, reject, or respond without leaving the document.
+- **Add skills, reviewers, and hooks.** Extend DocWriter with reusable instructions, focused review passes, and shell commands for building PDFs, checking style, or publishing accepted work.
 
 <CardGroup cols={2}>
   <Card title="Install" icon="download" href="/install">
-    Get DocWriter running locally.
+    Install DocWriter and open a local workspace.
   </Card>
-  <Card title="Quickstart" icon="play" href="/quickstart">
-    A five-minute walk-through.
+  <Card title="Connect a provider" icon="key" href="/connect-provider">
+    Choose a provider, sign in, and select a model.
+  </Card>
+  <Card title="Make your first edit" icon="play" href="/quickstart">
+    Complete one request and review one proposed edit.
   </Card>
   <Card title="Tour the interface" icon="window" href="/tour/interface">
-    What every part of the screen does.
-  </Card>
-  <Card title="Writing a research-backed blog post" icon="newspaper" href="/guides/blog-with-research">
-    The marquee end-to-end example.
+    Learn where files, reviews, and agent activity appear.
   </Card>
 </CardGroup>
-
----
-
-*DocWriter is a research project by [Shreya Shankar](https://sh-reya.com) and collaborators at the [EPIC Data Lab](https://epic.berkeley.edu).*

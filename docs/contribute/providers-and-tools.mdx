@@ -1,0 +1,22 @@
+---
+title: "Providers and tools"
+description: "Understand provider adapters, tools, sessions, and permissions."
+---
+
+The render route selects one provider adapter for Claude, OpenAI, Codex, Cursor, or Pi. Each adapter converts provider events into the common activity and transcript formats used by the interface.
+
+## Tools
+
+Open tab reads and writes use the `docwriter-doc` MCP server. Agent scratch paths use normal file tools. The system prompt routes open tab changes through `edit_doc` so the change and review round remain one Yjs transaction.
+
+Provider tool inventories differ. Claude uses the Agent SDK tool set and native subagents. Other providers use normalized local tool handlers and store conversation events in SQLite.
+
+## Sessions
+
+Claude can resume a native provider session. Other providers use their own session records or DocWriter conversation events. Switching providers clears the active provider session identifier.
+
+## Skills and reviewers
+
+Skills are loaded from bundled and project directories. Providers without a native skill mechanism receive the relevant skill instructions in their prompt.
+
+A critique pass resolves one reviewer and asks the main agent to run one review subagent. Reviewer identity is attached to comments and review rounds.

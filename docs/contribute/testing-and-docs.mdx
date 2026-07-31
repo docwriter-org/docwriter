@@ -1,0 +1,36 @@
+---
+title: "Testing and documentation"
+description: "Check code, preview docs, and maintain visual assets."
+---
+
+## Application checks
+
+```sh
+npm run check
+npm run build
+```
+
+Use the provider smoke harness only when the required provider credential is available.
+
+## Preview the docs
+
+```sh
+npm run docs
+```
+
+Mintlify runs on port 3333. Check navigation, redirects, internal links, code samples, and responsive layout.
+
+## Capture visual assets
+
+```sh
+npm run docs:assets:structural
+npm run docs:assets:verify
+```
+
+Credentialed scenarios use `npm run docs:assets:agent`. Video and GIF generation also require `ffmpeg`.
+
+The asset manifest in `docs/images/README.md` records the owning page, scenario, viewport, credentials, and filename.
+
+## Maintain the feature catalog
+
+Run `npm run docs:catalog` after changing the catalog source. Run `npm run docs:validate` to require one target page for every feature and to check that every target page exists.

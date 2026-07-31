@@ -1,0 +1,56 @@
+---
+title: "Connect a provider"
+description: "Choose a provider, authenticate it, and select a model."
+---
+
+DocWriter supports Claude, OpenAI, Codex, Cursor, and Pi. The provider and model controls are in the page header.
+
+## Choose a provider
+
+Click the provider pill in the header and choose one provider. Click the model pill beside it to search the available models or add a custom model identifier.
+
+Changing providers starts a fresh provider conversation. Your workspace files, rules, references, hooks, and comments remain in place.
+
+When you switch to an earlier session through **Settings**, then **Sessions**, DocWriter restores the saved provider and model when the provider session is still valid. Read [Sessions and history](/agent/sessions-and-history) when an old provider session cannot resume.
+
+## Add credentials
+
+Open **Settings**, then **API keys**. The panel shows whether each provider is using a saved key, an existing login, or no credential.
+
+Saved keys live in `~/.docwriter/keys.env`. A process environment variable or project `.env` value takes precedence over that file.
+
+### Claude
+
+Use an Anthropic key or an existing Claude login:
+
+```sh
+export ANTHROPIC_API_KEY=sk-ant-...
+# or
+claude login
+```
+
+### OpenAI and Codex
+
+OpenAI uses `OPENAI_API_KEY`. Codex can use an existing Codex login. Choose a model that is available to the account.
+
+### Cursor
+
+Cursor uses the signed in Cursor environment. Session recovery differs from provider to provider, so start a new session when a saved provider session can no longer resume.
+
+### Pi
+
+Pi can use provider keys such as `TOGETHER_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, or `ANTHROPIC_API_KEY`, depending on the selected model.
+
+## Tools and skills
+
+Claude uses the Agent SDK tool set. Other providers use DocWriter's normalized tool handlers. Skills can use a provider's native skill support or be included in the provider prompt. Read [Providers and tools](/contribute/providers-and-tools) for implementation details.
+
+## Test the connection
+
+Open a small text file, click **Chat** in the agent dock, and send:
+
+```text
+Read the open file and summarize the main point. Do not edit the file.
+```
+
+If the request fails, open [Provider errors](/help/provider-errors).

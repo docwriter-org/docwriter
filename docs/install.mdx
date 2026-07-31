@@ -1,56 +1,53 @@
 ---
 title: "Install"
-description: "Install DocWriter and authenticate it with Anthropic."
+description: "Install DocWriter and open a local writing workspace."
 ---
 
 ## Requirements
 
-- Node.js 22 or later (`node --version` to check; use `nvm use 22` if needed).
-- macOS or Linux (WSL works on Windows).
+DocWriter supports macOS and Linux. Windows users can run it through WSL.
 
-## Install
+The repository pins Node.js 22.22.2. Run `node --version` before installing, and use `nvm use` from the repository when another Node version is active.
+
+## Install from source
 
 ```sh
 git clone https://github.com/docwriter-org/docwriter.git
 cd docwriter
+nvm use
 npm install
 npm run build
 npm link
 ```
 
-Verify:
+Check the installed command:
 
 ```sh
 docwriter --version
 ```
 
-## Authenticate
+## Open a workspace
 
-DocWriter calls Anthropic through the Claude Agent SDK. Choose one:
-
-**Option A — Claude subscription** (no API key needed):
-
-```sh
-claude login
-```
-
-**Option B — API key:**
-
-```sh
-export ANTHROPIC_API_KEY=sk-ant-...
-```
-
-Or pass `--api-key sk-ant-...` on the command line.
-
-## First launch
+Pass the folder that contains your writing project:
 
 ```sh
 docwriter ~/writing/my-project
 ```
 
-Opens at `http://localhost:7723`. The folder appears in the file tree on the left.
+DocWriter opens a browser and binds to `127.0.0.1` by default. The folder becomes the workspace boundary for files, previews, hooks, and agent tools.
 
-## Next steps
+## Update an existing installation
 
-- [Quickstart](/quickstart) — open a file and run through the editing loop.
-- [CLI reference](/reference/cli) — every flag.
+```sh
+git pull origin main
+nvm use
+npm install
+npm run build
+npm link
+```
+
+Back up the project files and `.docwriter/docwriter.db` before an update when the workspace contains important session or review history.
+
+## Next step
+
+[Connect a provider](/connect-provider), then follow [Make your first edit](/quickstart).

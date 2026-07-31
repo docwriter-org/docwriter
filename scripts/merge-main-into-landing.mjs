@@ -9,11 +9,18 @@ import { execSync } from 'node:child_process';
 import { unlinkSync, writeFileSync } from 'node:fs';
 
 const MERGE_MSG = 'chore: merge main into landing';
+const MAIN_REF = process.env.DOCWRITER_MAIN_REF || 'origin/main';
 
 /** Files maintained on main; landing should not fork these. */
 const MAIN_OWNED = new Set([
 	'scripts/merge-main-into-landing.mjs',
-	'.github/workflows/sync-landing.yml'
+	'.github/workflows/sync-landing.yml',
+	'docs/docs.json',
+	'docs/reference/how-it-works.mdx',
+	'src/lib/components/LogoMark.svelte',
+	'src/routes/welcome/+page.server.ts',
+	'src/routes/welcome/+page.svelte',
+	'src/routes/welcome/+page.ts'
 ]);
 
 function run(cmd, { inherit = false } = {}) {
@@ -54,15 +61,20 @@ function isAutoResolvable(conflicts) {
 function resolveMainOwned(conflicts) {
 	for (const file of conflicts) {
 		if (!MAIN_OWNED.has(file)) continue;
-		run(`git checkout --theirs -- ${file}`);
-		run(`git add ${file}`);
+		try {
+			run(`git cat-file -e ":3:${file}"`);
+			run(`git checkout --theirs -- ${file}`);
+			run(`git add ${file}`);
+		} catch {
+			run(`git rm -- ${file}`);
+		}
 	}
 }
 
 execSync('git fetch origin main landing', { stdio: 'inherit' });
 
 try {
-	run(`git merge origin/main -m "${MERGE_MSG}"`, { inherit: true });
+	run(`git merge ${MAIN_REF} -m "${MERGE_MSG}"`, { inherit: true });
 } catch {
 	const conflicts = unmergedFiles();
 	if (!isAutoResolvable(conflicts)) {

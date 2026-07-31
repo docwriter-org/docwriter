@@ -1,6 +1,6 @@
-# DocWriter docs
+# DocWriter documentation
 
-Mintlify documentation for DocWriter.
+The public site is available at https://docs.docwriter.org.
 
 ## Preview locally
 
@@ -16,7 +16,17 @@ http://localhost:3333 in a browser; pages reload on save.
 If this is your first time, `npx` will download the Mintlify CLI on
 demand.
 
-## Regenerate screenshots
+## Validate the documentation
+
+Run the feature, navigation, redirect, link, and image checks:
+
+```sh
+npm run docs:catalog
+npm run docs:validate
+npm run docs:assets:verify
+```
+
+## Regenerate visual assets
 
 One-time setup:
 
@@ -24,29 +34,30 @@ One-time setup:
 npx playwright install chromium
 ```
 
-Then any time you want to regenerate:
+Generate deterministic screenshots without a provider credential:
 
 ```sh
-npm run docs:screenshots
+npm run docs:assets:structural
 ```
 
-This runs `docs/capture-screenshots.mjs`, which spawns a fresh
-`vite dev` against a seeded temp workspace, drives Chromium through a
-few structural UI states, and writes PNGs into `docs/images/`. It picks
-free HTTP and WebSocket ports automatically, so it works even when you
-have another DocWriter open.
+The capture script starts DocWriter against a seeded temporary workspace
+and writes files under `docs/images/`. Agent scenarios need a provider
+credential. The recording scenario also needs `ffmpeg`, and the LaTeX
+scenario needs `pdflatex`.
 
-Captures three states out of the box: the empty interface, an essay open
-in the editor, and the Hooks panel under the Settings menu. The other
-images referenced in the docs (pending-review cards, the Overleaf
-side-by-side) require agent output and are captured manually. See
-[`docs/images/README.md`](./images/README.md).
+See [`docs/images/README.md`](./images/README.md) for the asset inventory,
+requirements, and focused commands.
 
 ## Editing
 
-Pages are MDX. The navigation lives in [`docs.json`](./docs.json). To
-add a new page:
+Pages are MDX, and navigation lives in [`docs.json`](./docs.json). To add
+a new page:
 
 1. Create the `.mdx` file under the appropriate group folder.
 2. Add its slug to the `pages` array in `docs.json`.
 3. Run `npm run docs` to preview.
+
+Every shipped feature in [`feature-catalog.json`](./feature-catalog.json)
+must have one target page. Update
+[`scripts/generate-feature-catalog.mjs`](../scripts/generate-feature-catalog.mjs),
+run `npm run docs:catalog`, and then run `npm run docs:validate`.

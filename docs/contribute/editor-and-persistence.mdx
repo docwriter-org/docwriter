@@ -1,0 +1,26 @@
+---
+title: "Editor and persistence"
+description: "Understand the plain text schema, visual layers, and file reconciliation."
+---
+
+## Plain text schema
+
+The Tiptap schema contains Document, Paragraph, Text, and HardBreak. Markdown meaning comes from visual layers rather than structural editor nodes.
+
+Text extraction uses Yjs deltas because formatted AI provenance ranges cannot be read safely with `toString()`.
+
+## Visual layers
+
+Separate ProseMirror plugins render Markdown styling, tables, code blocks, media, D3, source comments, freezes, diffs, comments, find results, and accepted edit flashes.
+
+The stored document remains plain text. AI provenance is a Yjs text attribute and is removed from serialized files.
+
+## Persistence and reconciliation
+
+The server appends Yjs updates to the `payload` column in SQLite. A global flush tick writes changed text files and records their modification times.
+
+When the server hydrates a tab, a newer disk file can replace an older update log. Live external reload uses the command line watcher and server sent events.
+
+## WebSocket lifecycle
+
+The server instance is guarded across Vite hot reload. A fresh browser waits for the first synchronized WebSocket event before painting the editor.

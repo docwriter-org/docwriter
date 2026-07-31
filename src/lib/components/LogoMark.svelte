@@ -1,8 +1,4 @@
 <script lang="ts">
-	// Inline DocWriter mark with a Cursor/Modal-style hover microinteraction:
-	// the mark subtly grows, the pen stroke drops into the D, and the
-	// breather circle pops in after it lands. `interactive` is off for tiny,
-	// inert copies such as the demo-window titlebar logo.
 	let {
 		size = 42,
 		interactive = true,
@@ -24,14 +20,12 @@
 >
 	<g class="dw-mark">
 		<g class="dw-d">
-			<!-- Rounded D frame -->
 			<path
 				class="dw-frame"
 				fill-rule="evenodd"
 				clip-rule="evenodd"
 				d="M135.625 65.625C123.594 65.625 113.75 75.4688 113.75 87.5V472.5C113.75 484.531 123.594 494.375 135.625 494.375H290.938C422.188 494.375 505.312 405.781 505.312 280C505.312 154.219 422.188 65.625 290.938 65.625H135.625Z"
 			/>
-			<!-- Negative-space pen body -->
 			<path
 				class="dw-bowl"
 				fill-rule="evenodd"
@@ -39,10 +33,7 @@
 				d="M262.5 165.156C264.141 160.781 267.969 158.594 272.344 158.594H293.125C297.5 158.594 301.328 160.781 302.969 165.156L360.938 319.375C367.5 336.875 364.219 353.281 351.094 366.406C333.594 382.812 318.281 409.062 312.812 439.688C309.531 458.281 308.438 475.781 308.438 494.375H251.562C251.562 475.781 250.469 458.281 247.188 439.688C241.719 409.062 226.406 382.812 208.906 366.406C195.781 353.281 192.5 336.875 199.062 319.375L262.5 165.156Z"
 			/>
 		</g>
-		<path
-			class="dw-nib"
-			d="M270.156 319.375H289.844V494.375H270.156V319.375Z"
-		/>
+		<path class="dw-nib" d="M270.156 319.375H289.844V494.375H270.156V319.375Z" />
 		<circle class="dw-breather" cx="280" cy="299.688" r="28.438" />
 	</g>
 </svg>

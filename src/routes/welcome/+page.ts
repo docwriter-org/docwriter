@@ -1,2 +1,2 @@
-/** Static landing page — only built when LANDING_DEPLOY=1 (Vercel). */
+/** Static landing page that the landing deployment prerenders. */
 export const prerender = true;

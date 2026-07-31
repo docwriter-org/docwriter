@@ -1,0 +1,43 @@
+---
+title: "Images and diagrams"
+description: "Add images, links, SVG, and D3 previews to a document."
+---
+
+## Paste or drop an image
+
+Paste an image into the editor or drop it onto the document. DocWriter saves the file under `assets/` and inserts a Markdown image reference at the cursor.
+
+Supported image types include PNG, JPEG, GIF, WebP, SVG, BMP, and AVIF.
+
+## Paste a URL
+
+Pasting an image URL inserts a Markdown image. Pasting a URL over selected text creates a Markdown link. A normal web link stays as text and receives a preview card when OpenGraph data is available.
+
+Existing Markdown image references and bare image URLs on their own line also receive inline previews.
+
+Remote link previews cause the local DocWriter server to request metadata from the destination site.
+
+## Use images with the agent
+
+Paste or drag an image into **Chat** to attach it to the next request. The agent can also read image files already stored in the workspace, which is useful for captions, figure descriptions, and text extraction.
+
+## Preview SVG
+
+A raw SVG block receives an inline preview. You can reveal the source when you need to edit the SVG directly.
+
+## Run D3
+
+Use a fenced `d3` code block for an interactive D3 diagram:
+
+````md
+```d3
+const svg = d3.select(container).append("svg");
+svg.append("circle").attr("cx", 80).attr("cy", 80).attr("r", 30);
+```
+````
+
+DocWriter runs D3 in an iframe rather than the main editor page. The iframe loads D3 from the public D3 CDN, so the preview needs network access.
+
+## Mermaid
+
+DocWriter does not execute Mermaid inside the editor. Use the Mermaid hook template to turn a Mermaid file into SVG, then preview or embed the generated SVG.
