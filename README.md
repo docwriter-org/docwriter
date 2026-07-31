@@ -5,13 +5,13 @@
 <h1 align="center">DocWriter</h1>
 
 <p align="center">
-  <strong>Reimagining AI-assisted writing.</strong>
+  <strong>Reimagining AI-assisted writing to:</strong>
 </p>
 
 <p align="center">
-  More of your voice, less AI slop.<br />
-  Work in the same live draft, at the same time.<br />
-  Choose whether the agent waits, comments, proposes changes, or edits directly.
+  Let you keep more of your voice and reduce AI slop.<br />
+  Let you work alongside the agent in the same live draft, at the same time.<br />
+  Let you decide whether the agent waits, comments, proposes changes, or edits directly.
 </p>
 
 <p align="center">
