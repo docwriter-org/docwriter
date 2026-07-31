@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Check, HelpCircle, Sparkles, X } from 'lucide-svelte';
-	import { modEnterLabel } from '$lib/keyboard';
+	import { modEnterToSend } from '$lib/keyboard';
 	import { fly, fade } from 'svelte/transition';
 	import { cubicOut } from 'svelte/easing';
 	import {
@@ -302,7 +302,7 @@
 							rows="3"
 						></textarea>
 						<div class="reject-actions">
-							<span class="hint">{modEnterLabel} to send · Esc to cancel</span>
+							<span class="kbd-hint reject-hint">{modEnterToSend} · Esc to cancel</span>
 							<button class="btn-secondary" onclick={closeRejectFeedback}>Cancel</button>
 							<button
 								class="btn-primary"
@@ -537,11 +537,8 @@
 		justify-content: flex-end;
 		gap: 8px;
 	}
-	.reject-actions .hint {
+	.reject-actions .reject-hint {
 		margin-right: auto;
-		font-size: 11px;
-		color: var(--text-faint);
-		white-space: nowrap;
 	}
 	.question-header {
 		font-size: 11px;

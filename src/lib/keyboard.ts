@@ -13,3 +13,8 @@ const isApplePlatform =
 
 /** "⌘↵" on Apple platforms, "Ctrl+↵" elsewhere. */
 export const modEnterLabel = isApplePlatform ? '⌘↵' : 'Ctrl+↵';
+
+/** The standard send-surface hint ("⌘↵ to send"), composed once so every
+ * Send button shows identical wording. Style it with the shared
+ * `.kbd-hint` class (+layout.svelte). */
+export const modEnterToSend = `${modEnterLabel} to send`;

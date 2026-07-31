@@ -78,12 +78,23 @@
 		background: var(--bg);
 	}
 
+	/* Keyboard-shortcut hint rendered beside a Send button (comment reply
+	 * card, chat popover, plan-feedback footer). Plain muted text, not a
+	 * keycap box — a box next to a real button reads as clickable. Global
+	 * for the same reason as the button shells above: every send surface
+	 * stays identical without redefining the style. */
+	:global(.kbd-hint) {
+		font-size: 11px;
+		color: var(--text-faint);
+		white-space: nowrap;
+	}
+
 	/* Veil applied to right-pane content (history entries + pending
 	 * review cards) when the agent is muted. Heavy fade + blur + no
 	 * pointer events, so the user really cannot follow what the agent
 	 * is doing until they unmute. The agent dock at the top of the
 	 * pane stays unaffected so the user always has access to the
-	 * Bell / Send / Restart controls. */
+	 * Bell / Chat / New session controls. */
 	:global(.muted-veil) {
 		opacity: 0.18;
 		filter: blur(3px);

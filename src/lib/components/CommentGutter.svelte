@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { Editor } from '@tiptap/core';
 	import { Send, Sparkles, Cat, Check, Copy, X, User } from 'lucide-svelte';
-	import { modEnterLabel } from '$lib/keyboard';
+	import { modEnterToSend } from '$lib/keyboard';
 
 	/** Minimal inline markdown → HTML. Matches the renderer used in
 	 * HistoryPane so assistant_text and comments look the same. Escapes
@@ -465,25 +465,26 @@
 			)
 	);
 
-	// Keep the newest message visible: when a message lands on the open
-	// thread — the user's own reply syncing back, or the agent's response —
-	// scroll the card's message list to the bottom. Counts are tracked per
-	// thread so the first open of a card doesn't jump; only growth after
-	// that (including messages that arrived while the card was closed)
-	// scrolls.
+	// Keep the newest message visible: attached to the open card's message
+	// list (use:followNewMessages), scroll to the bottom when a message
+	// lands — the user's own reply syncing back, or the agent's response.
+	// Counts are remembered per thread across open/close so the first open
+	// of a card doesn't jump; only growth after that (including messages
+	// that arrived while the card was closed) scrolls.
 	const seenMsgCounts = new Map<string, number>();
-	$effect(() => {
-		const id = openThreadId;
-		if (!id) return;
-		const count = threads.find((t) => t.id === id)?.messages.length ?? 0;
-		const prev = seenMsgCounts.get(id);
-		seenMsgCounts.set(id, count);
-		if (prev === undefined || count <= prev) return;
-		requestAnimationFrame(() => {
-			const list = gutterEl?.querySelector('.gutter-card.expanded .card-messages');
-			if (list) list.scrollTo({ top: list.scrollHeight, behavior: 'smooth' });
-		});
-	});
+	function followNewMessages(node: HTMLElement, params: { id: string; count: number }) {
+		const track = ({ id, count }: { id: string; count: number }) => {
+			const prev = seenMsgCounts.get(id);
+			seenMsgCounts.set(id, count);
+			if (prev !== undefined && count > prev) {
+				requestAnimationFrame(() =>
+					node.scrollTo({ top: node.scrollHeight, behavior: 'smooth' })
+				);
+			}
+		};
+		track(params);
+		return { update: track };
+	}
 
 	async function sendReply(thread: CommentThread) {
 		const text = (replyDrafts[thread.id] ?? '').trim();
@@ -618,7 +619,10 @@
 						/>
 					</span>
 				{/if}
-				<div class="card-messages">
+				<div
+					class="card-messages"
+					use:followNewMessages={{ id: thread.id, count: thread.messages.length }}
+				>
 					{#each thread.messages as message (message.id)}
 						{@const rv = message.author === 'agent' ? messageReviewer(message) : null}
 						<div class="message" class:from-agent={message.author === 'agent'} class:from-user={message.author === 'user'}>
@@ -761,10 +765,9 @@
 						{thread.resolved ? 'Reopen' : 'Resolve'}
 					</button>
 					<div class="card-actions-right">
-						<span class="send-hint">{modEnterLabel} to send</span>
+						<span class="kbd-hint">{modEnterToSend}</span>
 						<button
 							class="send-btn"
-							title="Send reply ({modEnterLabel})"
 							onclick={() => sendReply(thread)}
 							disabled={replying[thread.id] || !(replyDrafts[thread.id] ?? '').trim()}
 						>
@@ -1184,14 +1187,6 @@
 	.resolve-link:disabled {
 		opacity: 0.5;
 		cursor: default;
-	}
-	/* Shortcut hint beside Send — ⌘↵ / Ctrl+↵ in the reply box also
-	 * submits, and nothing else on the card says so. Plain muted text,
-	 * not a keycap box: a box next to a real button reads as clickable. */
-	.send-hint {
-		font-size: 11px;
-		color: var(--text-faint);
-		white-space: nowrap;
 	}
 	.send-btn {
 		display: inline-flex;

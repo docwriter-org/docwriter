@@ -35,7 +35,8 @@ import {
 	COMMENT_DOC_TOOL_NAME,
 	REPLY_TO_COMMENT_TOOL_NAME,
 	setActiveFeedbackThreadId,
-	setActiveReviewerId
+	setActiveReviewerId,
+	REPLY_BEFORE_EDIT_PROMPT_NOTE
 } from '$lib/server/mcp-doc-tools';
 import { getReviewerById, buildCritiqueMessage } from '$lib/server/reviewers';
 import type { Reviewer } from '$lib/shared/reviewers';
@@ -317,7 +318,7 @@ Every file is raw text, including .md. The editor renders markdown source litera
 
 Every edit proposal needs a comment thread that says what is about to happen, so the user sees your reasoning next to the pending edit instead of a bare diff.
 
-- If the work already has a thread — user feedback arrives with a thread_id, or you are revising a thread's pending edit — use it. If you have not yet explained this edit there, reply first with reply_to_comment, then call edit_doc with that thread_id. This is enforced: while a thread's latest message is the user's, edit_doc and write_doc targeting it fail until you have replied.
+- If the work already has a thread — user feedback arrives with a thread_id, or you are revising a thread's pending edit — use it. If you have not yet explained this edit there, reply first with reply_to_comment, then call edit_doc with that thread_id. ${REPLY_BEFORE_EDIT_PROMPT_NOTE}
 - Otherwise, before the edit, call comment_doc anchored to the exact text you are about to change, with one or two first-person sentences: what prompted the edit (the user's words, an inline directive, a rule), what you think is wrong, and what you will do. Then call edit_doc with the thread_id that comment_doc returns.
 - Inline directives such as [[ ... ]] follow the same contract: anchor the thread on the directive text, say how you read the directive and what you will write, then propose the edit on that thread.
 - For write_doc on an existing file, anchor the thread to the first sentence of the text you are replacing.
