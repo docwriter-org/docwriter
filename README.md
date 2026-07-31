@@ -11,7 +11,7 @@
 <p align="center">
   Keep more of your voice and reduce AI slop.<br />
   Work alongside the agent in the same live draft, at the same time.<br />
-  Decide whether the agent waits, comments, proposes changes, or edits directly.
+  Dynamically reconfigure agency.
 </p>
 
 <p align="center">
