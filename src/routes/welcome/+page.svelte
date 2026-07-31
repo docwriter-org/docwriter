@@ -323,8 +323,6 @@
 
 	h1 { margin: 0 0 10px; font-family: 'Lora', Georgia, serif; font-size: 40px; font-weight: 700; letter-spacing: -0.02em; }
 	.subtitle { margin: 0; font-size: 18px; line-height: 1.5; color: #333; font-style: italic; }
-	.subtitle a { color: #003262; text-decoration: none; font-weight: 500; font-style: normal; }
-	.subtitle a:hover { text-decoration: underline; }
 	.hero-detail { max-width: 590px; margin: 14px auto 0; color: #555; font-size: 15px; line-height: 1.65; }
 
 	.demo-wrap { max-width: 940px; margin: 56px auto 0; padding: 0 24px; }
