@@ -11,7 +11,7 @@ Each Yjs update is appended to `.docwriter/docwriter.db`. SQLite is the runtime 
 
 ## Files on disk
 
-The server writes the live document back to its workspace file on a short flush cycle. The plain file is useful for Git, other editors, and recovery. It is not a second live editor state.
+The server checks for changed documents every 500 milliseconds and writes the live document back to its workspace file. The plain file is useful for Git, other editors, and recovery. It is not a second live editor state.
 
 `.docwriter/hooks.json` is the portable hook configuration. Agent scratch files live under `.docwriter/agent/scratch/`.
 
@@ -30,4 +30,4 @@ Git is suitable for plain project files. Do not commit API keys. Decide whether 
 
 ## Restore
 
-Restore the project files and matching `.docwriter` folder before starting DocWriter. Restoring only the plain files creates fresh runtime state as each file is opened.
+Restore the project files and matching `.docwriter` folder before starting DocWriter. When the database matches the workspace, DocWriter replays each tab from the `yjs_updates` table. Restoring only the plain files creates fresh Yjs state as each file is opened.

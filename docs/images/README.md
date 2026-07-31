@@ -12,6 +12,9 @@ The standard viewport is 1400 by 900 pixels. The introduction recording uses 120
 | `intro-flow.mp4` and `intro-flow.webm` | Overview | Video formats for the same concurrent writing sequence | Provider credential and `ffmpeg` |
 | `review-workflow.mp4` and `review-workflow.webm` | Review edits | Hover, accept, and reject seeded proposals | None |
 | `agent-controls.mp4` and `agent-controls.webm` | Ask and steer | Pause, resume, Chat, and Plan first | None |
+| `mute-proposals.mp4` and `mute-proposals.webm` | Ask and steer | Hide and restore proposal layers | None |
+| `plan-workflow.mp4` and `plan-workflow.webm` | Plans and long tasks | Review a plan and choose Run it | Provider credential |
+| `split-preview.mp4` and `split-preview.webm` | Generated previews | Open, resize, and reload a split HTML preview | None |
 | `tour-interface-overview.png` | Interface tour | Major regions with generated labels | None |
 | `tour-interface-clean.png` | Interface tour | Same state without labels | None |
 | `quickstart-essay-open.png` | Make your first edit | Seed essay open in the editor | None |

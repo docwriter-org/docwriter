@@ -39,7 +39,6 @@ const pageFeatures = {
 		['Workspace', 'Close a tab without deleting its file', C, 'Tabs'],
 		['Workspace', 'See a combined pending work badge on tabs', T, 'Tabs covers pending edits but not unresolved comments'],
 		['Workspace', 'Edit Markdown and other text files', C, 'Editor and Tabs'],
-		['Workspace', 'Middle click a tab to close it', S, 'The docs claim a gesture with no current handler'],
 		['Workspace', 'Keep .docwriter visible in the file tree', T, 'Tabs mentions obsolete state.json examples']
 	],
 	'write/editor': [
@@ -114,7 +113,6 @@ const pageFeatures = {
 	'agent/review-edits': [
 		['Review', 'See proposed text inline', S, 'Several pages name removed panes'],
 		['Review', 'Accept or reject one or all edits', C, 'Reviewing edits'],
-		['Review', 'Retry an edit with a visible feedback button', S, 'The docs claim a control that is not wired'],
 		['Review', 'Copy part of a proposal', C, 'Reviewing edits'],
 		['Review', 'Group proposed edits under their feedback thread', M, 'No current gutter tour'],
 		['Review', 'Pin diffs so they remain visible after a card closes', M, 'No page'],

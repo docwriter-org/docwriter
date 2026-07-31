@@ -11,6 +11,8 @@ Click the provider pill in the header and choose one provider. Click the model p
 
 Changing providers starts a fresh provider conversation. Your workspace files, rules, references, hooks, and comments remain in place.
 
+When you switch to an earlier session through **Settings**, then **Sessions**, DocWriter restores its saved provider and model when the provider session is still valid. Read [Sessions and history](/agent/sessions-and-history) when an old provider session cannot resume.
+
 ## Add credentials
 
 Open **Settings**, then **API keys**. The panel shows whether each provider is using a saved key, an existing login, or no credential.
@@ -38,6 +40,10 @@ Cursor uses the signed in Cursor environment. Session recovery differs from prov
 ### Pi
 
 Pi can use provider keys such as `TOGETHER_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, or `ANTHROPIC_API_KEY`, depending on the selected model.
+
+## Tools and skills
+
+Claude uses the Agent SDK tool set. Other providers use DocWriter's normalized tool handlers. Skills can use a provider's native skill support or be included in the provider prompt. Read [Providers and tools](/contribute/providers-and-tools) for implementation details.
 
 ## Test the connection
 

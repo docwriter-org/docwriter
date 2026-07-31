@@ -34,6 +34,8 @@ After you stop typing for three seconds, DocWriter can wake the agent to inspect
 
 Automatic wake does not run when the agent is paused or when the text ends the typing burst unchanged.
 
+The collapsed agent pill briefly animates when a new render starts after about a minute of agent inactivity. A numeric badge on the pill and Chat control shows queued messages. The expanded dock pins the active user turn above the activity log while the agent responds.
+
 <Frame>
   ![The agent wake control in the expanded dock](/images/agent-wakeup-button.png)
 </Frame>
@@ -60,6 +62,25 @@ Use the bell control to mute proposal layers while the agent continues working. 
 
 Click the active agent pill once to cancel the current run and clear its queue.
 
+Click the collapsed agent pill once to expand the dock. Use the chevron in the expanded header to collapse it again.
+
+There is no Track changes off setting. Muting changes what you see, but it does not accept proposals or remove review state.
+
+<Frame caption="Mute proposal layers, then restore them without pausing the agent.">
+  <video
+    autoPlay
+    muted
+    loop
+    playsInline
+    poster="/images/agent-behavior-panel.png"
+    className="w-full rounded-xl"
+  >
+    <source src="/images/mute-proposals.mp4" type="video/mp4" />
+    <source src="/images/mute-proposals.webm" type="video/webm" />
+    Your browser does not support embedded video.
+  </video>
+</Frame>
+
 <Frame>
   ![The expanded agent dock in the paused state](/images/agent-paused.png)
 </Frame>
@@ -71,3 +92,5 @@ Click the active agent pill once to cancel the current run and clear its queue.
 ## Questions from the agent
 
 The agent can open a question card with one or more questions. A single choice submits immediately. A multi-question card shows how many answers remain. Unanswered questions expire after 15 minutes so the run can continue.
+
+Authentication failures show a sticky **Agent auth failed** toast with sign in guidance. Other run failures show **Agent run failed** and remain in the activity log.

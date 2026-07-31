@@ -29,6 +29,8 @@ Use [LaTeX and SyncTeX](/automation/latex-and-synctex) for the build and preview
 
 ## Pandoc
 
+Install Pandoc before enabling either template. PDF output also needs a PDF engine supported by the local Pandoc installation.
+
 The Pandoc HTML template runs:
 
 ```sh
@@ -37,9 +39,11 @@ pandoc "draft.md" --standalone --output "draft.html"
 
 Set the hook output to `{{stem}}.html`. Use the Pandoc PDF template and `{{stem}}.pdf` when a PDF engine is installed.
 
+The templates run after matching Edit or Write tool calls, so generated output can refresh during an agent turn.
+
 ## Mermaid
 
-Install Mermaid CLI, then choose the Mermaid hook template:
+Install `@mermaid-js/mermaid-cli`, which provides `mmdc`, then choose the Mermaid hook template:
 
 ```sh
 mmdc -i "diagram.mmd" -o "diagram.svg"
@@ -47,8 +51,10 @@ mmdc -i "diagram.mmd" -o "diagram.svg"
 
 Set the output to `{{stem}}.svg`.
 
+The template matches Edit or Write tool calls for Mermaid source files.
+
 ## Git
 
 Choose one of the Git templates when accepted changes should be committed and pushed at the end of a turn. The private variant excludes `.docwriter/`, `.claude/`, and `CLAUDE.md`.
 
-Review the command and repository state before enabling an automatic push.
+The templates run at **Stop** and require a configured remote and upstream branch. Review the command and repository state before enabling an automatic push.

@@ -9,6 +9,12 @@ Open **Settings**, then **API keys**. Check whether the selected provider shows 
 
 Environment variables and project `.env` files take precedence over `~/.docwriter/keys.env`. Restart DocWriter after changing a shell environment variable.
 
+## Context sent to a provider
+
+The first request contains the open tab paths and the changes since each tab was last seen. It does not include every full file body. The agent calls `read_doc` when it needs the full content of an open tab, and its workspace tools can inspect other files when the request requires them.
+
+Read [Privacy and safety](/help/privacy-and-safety) for the other network requests and local boundaries.
+
 ## Expired login
 
 Run the provider login command again, then start a new DocWriter session. Claude and Codex can use existing command line logins.

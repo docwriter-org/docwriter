@@ -11,7 +11,11 @@ Each open text tab has a Yjs document owned by the Hocuspocus server. Browsers a
 
 Every Yjs update is appended to SQLite with its original origin. The server also flushes the serialized plain text to the workspace file.
 
-SQLite holds tabs, comments, reviews, rules, reviewers, sessions, recent actions, and interface settings. There is no JSON state mirror.
+The `yjs_updates` table stores each raw update in its `payload` column. The `tabs` table keeps tab order and the active tab. Other tables store rules, reviewers, recent actions, usage counts, provider session entries, and conversation events. The `kv` table stores values such as `sessionId`, `agentSettings`, and each tab's `last_seen` text.
+
+Comments and review rounds live inside the tab Yjs document, so they arrive in the same synchronized update stream as text. There is no JSON state mirror.
+
+The server flushes serialized text to the workspace file for Git and portability. Serialization removes AI provenance formatting and keeps the source text unchanged.
 
 ## Agent flow
 
@@ -19,11 +23,25 @@ The render route streams one provider query over server sent events. The prompt 
 
 `edit_doc` changes the live Yjs document and adds a pending review round in one transaction. Hocuspocus sends that update to every connected browser.
 
+The document tool server routes open tab paths through a Hocuspocus direct connection. Scratch paths use normal file operations under `.docwriter/agent/scratch/`. A server mutation must never use a replayed temporary Yjs document because the temporary document is not connected to live clients.
+
+The stream emits tool start, tool result, assistant text, and final result events. The browser uses those events for the agent dock, while document content continues through WebSocket synchronization.
+
 ## Review flow
 
 Accept and reject requests run on the live server document. Accept applies a bounded paragraph edit and removes the review round. Reject removes the round without replaying a client side merge.
 
 The client undo manager tracks user typing and user origin review actions. Agent origin transactions are excluded.
+
+Accept uses the edit operation saved with the review round. It deletes and reinserts only the affected paragraphs when possible. A full write operation can replace the whole document when no bounded edit exists.
+
+The browser sends Accept and Reject to `/api/document`, then waits for the Yjs update from the server. It does not disconnect or perform a separate three way merge.
+
+## External file reconciliation
+
+When a tab is opened, the server replays its saved Yjs updates. A newer disk file with different content can replace an older update log after the modification time check. Watch mode sends a reload event, and the browser remounts the active Yjs client from the server.
+
+Each server process has an instance identifier. After a restart, the browser discards clients created for the old process before opening new WebSocket connections.
 
 ## Shared origins
 

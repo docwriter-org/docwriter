@@ -38,7 +38,7 @@ Use the check button to accept an edit or the x button to reject a loose edit. *
 
 Thread edits stay grouped under the comment that led to them. You can accept each grouped edit or accept the group.
 
-An edit becomes stale when its source text no longer matches. DocWriter disables the stale action and can ask the agent to regenerate the edit against the current text.
+An edit becomes stale when its source text no longer matches. DocWriter disables its Accept action. If the server detects the stale source during an Accept request, DocWriter rejects the old proposal and sends a follow up request for a new edit against the current text. There is no separate Regenerate button.
 
 ## Copy proposed text
 
@@ -51,5 +51,7 @@ Accepted agent text receives an AI provenance mark. Use **Highlight AI-written t
 ## Undo
 
 Accept and reject actions use the same user undo manager as local typing. Press **Command or Control and Z** to undo the latest user action.
+
+After an accepted paragraph edit lands, DocWriter briefly flashes the changed range so you can find it in the draft.
 
 Agent edits do not have a Track changes off setting. Muting hides proposal layers, but it does not accept changes or remove review state.

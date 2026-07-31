@@ -13,6 +13,7 @@ import WebSocket from 'ws';
 const ROOT = resolve('.');
 const IMAGES_DIR = join(ROOT, 'docs', 'images');
 const VIEWPORT = { width: 1200, height: 780 };
+const ONLY_SCENARIO = process.env.VIDEO_SCENARIO ?? '';
 
 function freePort() {
 	return new Promise((resolvePort, reject) => {
@@ -38,6 +39,24 @@ async function seedWorkspace() {
 			'',
 			'This is the third paragraph, which closes things out.',
 			''
+		].join('\n'),
+		'utf8'
+	);
+	await writeFile(
+		join(workspace, 'preview.md'),
+		['# Preview demo', '', 'This source file produces an HTML preview.', ''].join('\n'),
+		'utf8'
+	);
+	await writeFile(
+		join(workspace, 'preview.html'),
+		[
+			'<!doctype html>',
+			'<html><body style="font: 18px system-ui; padding: 48px">',
+			'<h1>Generated preview</h1>',
+			'<p>The first generated version is ready.</p>',
+			'<div style="height: 480px"></div>',
+			'<p id="end">End of preview</p>',
+			'</body></html>'
 		].join('\n'),
 		'utf8'
 	);
@@ -111,6 +130,7 @@ async function seedReviewRounds(httpPort, wsPort) {
 	});
 	const rounds = document.getArray('rounds');
 	document.transact(() => {
+		while (rounds.length > 0) rounds.delete(0);
 		rounds.push([
 			{
 				id: 'video-round-1',
@@ -152,14 +172,43 @@ async function recordedWebm(context, directory) {
 	return join(directory, name);
 }
 
-function convertVideo(webm, basename) {
+function convertVideo(webm, basename, startSeconds = 0) {
 	const webmOutput = join(IMAGES_DIR, `${basename}.webm`);
 	const mp4Output = join(IMAGES_DIR, `${basename}.mp4`);
-	return copyFile(webm, webmOutput).then(() => {
+	const seek = startSeconds > 0 ? ['-ss', startSeconds.toFixed(2)] : [];
+	const writeWebm =
+		startSeconds > 0
+			? Promise.resolve(
+					spawnSync(
+						'ffmpeg',
+						[
+							'-y',
+							...seek,
+							'-i',
+							webm,
+							'-vf',
+							'scale=960:-2:flags=lanczos',
+							'-an',
+							'-c:v',
+							'libvpx-vp9',
+							'-crf',
+							'34',
+							'-b:v',
+							'0',
+							webmOutput
+						],
+						{ encoding: 'utf8' }
+					)
+				).then((result) => {
+					if (result.status !== 0) throw new Error(result.stderr);
+				})
+			: copyFile(webm, webmOutput);
+	return writeWebm.then(() => {
 		const result = spawnSync(
 			'ffmpeg',
 			[
 				'-y',
+				...seek,
 				'-i',
 				webm,
 				'-vf',
@@ -237,6 +286,137 @@ async function captureControls(browser, httpPort) {
 	await rm(directory, { recursive: true, force: true });
 }
 
+async function captureMute(browser, httpPort, wsPort) {
+	const directory = await mkdtemp(join(tmpdir(), 'docwriter-mute-video-'));
+	const context = await browser.newContext({
+		viewport: VIEWPORT,
+		recordVideo: { dir: directory, size: VIEWPORT }
+	});
+	await context.addInitScript(() => {
+		localStorage.setItem('docwriter.dockExpanded', 'true');
+	});
+	const page = await context.newPage();
+	await openEssay(page, httpPort);
+	await seedReviewRounds(httpPort, wsPort);
+	await page.locator('.gutter-card').first().waitFor({ state: 'visible', timeout: 10_000 });
+	await sleep(1400);
+	const mute = page.locator('.header-actions button.header-pill-btn[aria-pressed]').first();
+	await mute.click();
+	await page.waitForFunction(
+		() => document.querySelector('.header-actions button[aria-pressed="true"]') !== null,
+		{ timeout: 5000 }
+	);
+	await sleep(2200);
+	await mute.click();
+	await sleep(1800);
+	const webm = await recordedWebm(context, directory);
+	await convertVideo(webm, 'mute-proposals');
+	await rm(directory, { recursive: true, force: true });
+}
+
+async function capturePlan(browser, httpPort) {
+	const directory = await mkdtemp(join(tmpdir(), 'docwriter-plan-video-'));
+	const context = await browser.newContext({
+		viewport: VIEWPORT,
+		recordVideo: { dir: directory, size: VIEWPORT }
+	});
+	await context.addInitScript(() => {
+		localStorage.setItem('docwriter.dockExpanded', 'true');
+	});
+	const page = await context.newPage();
+	const startedAt = Date.now();
+	await openEssay(page, httpPort);
+	await page.locator('.dock-message-btn').first().click();
+	await page.locator('.dock-chat-popover textarea').fill(
+		'Plan one concise edit that would make the first paragraph clearer. Do not edit yet.'
+	);
+	await page.locator('.dock-chat-popover input[type="checkbox"]').check();
+	await page.locator('.dock-chat-popover .send-btn').click();
+	const modal = page.locator('.agent-modal--plan');
+	await modal.waitFor({ state: 'visible', timeout: 120_000 });
+	const clipStart = Math.max(0, (Date.now() - startedAt) / 1000 - 4);
+	await sleep(1800);
+	const run = modal.locator('button', { hasText: /Run it/ });
+	await run.hover();
+	await sleep(900);
+	await run.click();
+	await sleep(3500);
+	const webm = await recordedWebm(context, directory);
+	await convertVideo(webm, 'plan-workflow', clipStart);
+	await rm(directory, { recursive: true, force: true });
+}
+
+async function captureSplitPreview(browser, httpPort, workspace) {
+	const directory = await mkdtemp(join(tmpdir(), 'docwriter-preview-video-'));
+	const context = await browser.newContext({
+		viewport: VIEWPORT,
+		recordVideo: { dir: directory, size: VIEWPORT }
+	});
+	await context.addInitScript(() => {
+		localStorage.setItem('docwriter.dockExpanded', 'false');
+	});
+	const page = await context.newPage();
+	await page.goto(`http://127.0.0.1:${httpPort}/`, { waitUntil: 'domcontentloaded' });
+	await sleep(1800);
+	await page.evaluate(async () => {
+		await fetch('/api/hooks', {
+			method: 'PUT',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				hooks: [
+					{
+						id: 'video-preview-hook',
+						event: 'PostToolUse',
+						matcher: 'Edit|Write',
+						command: 'true',
+						enabled: true,
+						output: 'preview.html'
+					}
+				]
+			})
+		});
+	});
+	await page.locator('.tree-name', { hasText: /^preview\.md$/ }).first().click();
+	await sleep(1600);
+	await page.locator('[aria-label="Open side preview"]').click();
+	await page.locator('.split-preview-pane').waitFor({ state: 'visible', timeout: 10_000 });
+	await sleep(1700);
+	const resizer = page.locator('.source-preview-layout > .resizer').first();
+	const box = await resizer.boundingBox();
+	if (box) {
+		await page.mouse.move(box.x + box.width / 2, box.y + 120);
+		await page.mouse.down();
+		await page.mouse.move(box.x - 120, box.y + 120, { steps: 12 });
+		await page.mouse.up();
+	}
+	await sleep(1600);
+	await writeFile(
+		join(workspace, 'preview.html'),
+		[
+			'<!doctype html>',
+			'<html><body style="font: 18px system-ui; padding: 48px">',
+			'<h1>Generated preview</h1>',
+			'<p style="color:#6d28d9">The preview reloaded after the output changed.</p>',
+			'<div style="height: 480px"></div>',
+			'<p id="end">End of updated preview</p>',
+			'</body></html>'
+		].join('\n'),
+		'utf8'
+	);
+	await fetch(`http://127.0.0.1:${httpPort}/api/live`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({
+			event: 'preview_ready',
+			path: join(workspace, 'preview.html')
+		})
+	});
+	await sleep(2600);
+	const webm = await recordedWebm(context, directory);
+	await convertVideo(webm, 'split-preview');
+	await rm(directory, { recursive: true, force: true });
+}
+
 async function main() {
 	await mkdir(IMAGES_DIR, { recursive: true });
 	const workspace = await seedWorkspace();
@@ -245,8 +425,13 @@ async function main() {
 	const server = await startApp(workspace, httpPort, wsPort);
 	const browser = await chromium.launch({ headless: true });
 	try {
-		await captureReview(browser, httpPort, wsPort);
-		await captureControls(browser, httpPort);
+		if (!ONLY_SCENARIO || ONLY_SCENARIO === 'review') await captureReview(browser, httpPort, wsPort);
+		if (!ONLY_SCENARIO || ONLY_SCENARIO === 'controls') await captureControls(browser, httpPort);
+		if (!ONLY_SCENARIO || ONLY_SCENARIO === 'mute') await captureMute(browser, httpPort, wsPort);
+		if (!ONLY_SCENARIO || ONLY_SCENARIO === 'plan') await capturePlan(browser, httpPort);
+		if (!ONLY_SCENARIO || ONLY_SCENARIO === 'preview') {
+			await captureSplitPreview(browser, httpPort, workspace);
+		}
 	} finally {
 		await browser.close();
 		server.kill('SIGTERM');

@@ -1,5 +1,5 @@
 {
-  "featureCount": 153,
+  "featureCount": 151,
   "unassignedCount": 0,
   "features": [
     {
@@ -224,16 +224,6 @@
     },
     {
       "id": "write-files-and-tabs-09",
-      "area": "Workspace",
-      "feature": "Middle click a tab to close it",
-      "currentCoverage": "Stale",
-      "currentDocs": "The docs claim a gesture with no current handler",
-      "targetPage": "write/files-and-tabs",
-      "action": "rewrite",
-      "priority": "P0"
-    },
-    {
-      "id": "write-files-and-tabs-10",
       "area": "Workspace",
       "feature": "Keep .docwriter visible in the file tree",
       "currentCoverage": "Thin",
@@ -815,16 +805,6 @@
     {
       "id": "agent-review-edits-03",
       "area": "Review",
-      "feature": "Retry an edit with a visible feedback button",
-      "currentCoverage": "Stale",
-      "currentDocs": "The docs claim a control that is not wired",
-      "targetPage": "agent/review-edits",
-      "action": "rewrite",
-      "priority": "P0"
-    },
-    {
-      "id": "agent-review-edits-04",
-      "area": "Review",
       "feature": "Copy part of a proposal",
       "currentCoverage": "Covered",
       "currentDocs": "Reviewing edits",
@@ -833,7 +813,7 @@
       "priority": "P2"
     },
     {
-      "id": "agent-review-edits-05",
+      "id": "agent-review-edits-04",
       "area": "Review",
       "feature": "Group proposed edits under their feedback thread",
       "currentCoverage": "Missing",
@@ -843,7 +823,7 @@
       "priority": "P0"
     },
     {
-      "id": "agent-review-edits-06",
+      "id": "agent-review-edits-05",
       "area": "Review",
       "feature": "Pin diffs so they remain visible after a card closes",
       "currentCoverage": "Missing",
@@ -853,7 +833,7 @@
       "priority": "P0"
     },
     {
-      "id": "agent-review-edits-07",
+      "id": "agent-review-edits-06",
       "area": "Review",
       "feature": "Hover an edit row to flash its matching text",
       "currentCoverage": "Missing",
@@ -863,7 +843,7 @@
       "priority": "P0"
     },
     {
-      "id": "agent-review-edits-08",
+      "id": "agent-review-edits-07",
       "area": "Review",
       "feature": "Treat loose edits differently from thread edits",
       "currentCoverage": "Missing",
@@ -873,7 +853,7 @@
       "priority": "P0"
     },
     {
-      "id": "agent-review-edits-09",
+      "id": "agent-review-edits-08",
       "area": "Review",
       "feature": "Disable stale edits and regenerate them against current text",
       "currentCoverage": "Missing",
@@ -883,7 +863,7 @@
       "priority": "P0"
     },
     {
-      "id": "agent-review-edits-10",
+      "id": "agent-review-edits-09",
       "area": "Review",
       "feature": "Show tiny edits more subtly than large edits",
       "currentCoverage": "Missing",
@@ -893,7 +873,7 @@
       "priority": "P0"
     },
     {
-      "id": "agent-review-edits-11",
+      "id": "agent-review-edits-10",
       "area": "Review",
       "feature": "Flash accepted text after an edit lands",
       "currentCoverage": "Missing",
@@ -903,7 +883,7 @@
       "priority": "P0"
     },
     {
-      "id": "agent-review-edits-12",
+      "id": "agent-review-edits-11",
       "area": "Review",
       "feature": "Show accepted AI-written text",
       "currentCoverage": "Covered",
@@ -913,7 +893,7 @@
       "priority": "P2"
     },
     {
-      "id": "agent-review-edits-13",
+      "id": "agent-review-edits-12",
       "area": "Review",
       "feature": "Toggle AI-written text highlights on or off",
       "currentCoverage": "Missing",
@@ -923,7 +903,7 @@
       "priority": "P0"
     },
     {
-      "id": "agent-review-edits-14",
+      "id": "agent-review-edits-13",
       "area": "Review",
       "feature": "Remove AI provenance when the user rewrites marked text",
       "currentCoverage": "Covered",

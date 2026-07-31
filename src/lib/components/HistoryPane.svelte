@@ -434,7 +434,7 @@
 						aria-pressed={muted}
 						use:tooltip={muted
 							? 'Unmute the agent. Pending edits will show inline in the editor again.'
-							: 'Mute the agent. Pending edits still appear as cards in the outline, but the green/red diff overlay stays hidden until you click a card.'}
+							: 'Mute the agent. Pending edits remain in the comment gutter, but the green/red diff overlay stays hidden until you click a card.'}
 					>
 						{#if muted}
 							<BellOff size={12} />
