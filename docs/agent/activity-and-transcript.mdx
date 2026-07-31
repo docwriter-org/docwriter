@@ -1,0 +1,30 @@
+---
+title: "Activity and transcript"
+description: "See what the agent is doing and inspect an earlier step."
+---
+
+Use the activity log during a request. Use the transcript when you need to search the full conversation or inspect a tool call.
+
+## Follow the current request
+
+Expand the agent dock to see assistant messages, tool progress, subagent progress, errors, and the current session cost. The active request stays above older activity while the agent works.
+
+Open **Settings**, then **History detail** to choose how much the activity log shows. **Minimal** keeps the main steps. **Verbose** includes more assistant and thinking entries.
+
+## Open the full transcript
+
+Choose **Transcript** in the dock header. Search the conversation or filter it by user messages, assistant messages, tools, or thinking.
+
+Expand a tool call to inspect its input and result. Open the Context view to see an estimate of how the conversation uses the model context window.
+
+Use the export action to download the transcript as JSON.
+
+<Frame>
+  ![The full session transcript with event filters](/images/transcript-overview.png)
+</Frame>
+
+<Frame>
+  ![Transcript search with the tool filter active](/images/transcript-detail.png)
+</Frame>
+
+The transcript explains what happened inside one session. Read [Sessions](/agent/sessions) to switch conversations or start a new one.

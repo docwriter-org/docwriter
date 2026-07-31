@@ -11,8 +11,8 @@ The standard viewport is 1400 by 900 pixels. The introduction recording uses 120
 | `intro-flow.gif` | Overview | Writer keeps typing while a seeded proposal waits | `ffmpeg` |
 | `intro-flow.mp4` and `intro-flow.webm` | Overview | Video formats for the same concurrent writing sequence | `ffmpeg` |
 | `review-workflow.mp4` and `review-workflow.webm` | Review edits | Hover, accept, and reject seeded proposals | None |
-| `agent-controls.mp4` and `agent-controls.webm` | Ask and steer | Pause, resume, Chat, and Plan first | None |
-| `mute-proposals.mp4` and `mute-proposals.webm` | Ask and steer | Hide and restore proposal layers | None |
+| `agent-controls.mp4` and `agent-controls.webm` | Send and steer requests | Pause, resume, Chat, and Plan first | None |
+| `mute-proposals.mp4` and `mute-proposals.webm` | Control agent behavior | Hide and restore proposal layers | None |
 | `plan-workflow.mp4` and `plan-workflow.webm` | Plans and long tasks | Review a plan and choose Run it | Provider credential |
 | `split-preview.mp4` and `split-preview.webm` | Generated previews | Open, resize, and reload a split HTML preview | None |
 | `tour-interface-overview.png` | Interface tour | Major regions with generated labels | None |
@@ -24,21 +24,21 @@ The standard viewport is 1400 by 900 pixels. The introduction recording uses 120
 | `inline-directives-in-doc.png` | Selected text and directives | Directive in source | None |
 | `inline-feedback-popup.png` | Selected text and directives | Selected passage and feedback controls | None |
 | `freeze-selection-popup.png` | Selected text and directives | Freeze action in the feedback popup | None |
-| `freeze-passage.png` | Customize the agent | Frozen paragraph and lock | None |
-| `freeze-unlock-menu.png` | Customize the agent | Unlock menu | None |
-| `chat-popover.png` | Ask and steer | Chat panel with a draft request | None |
-| `agent-wakeup-button.png` | Ask and steer | Close crop of the agent pill | None |
-| `agent-paused.png` | Ask and steer | Expanded dock while paused | None |
-| `agent-paused-pill.png` | Ask and steer | Collapsed paused pill | None |
-| `agent-behavior-panel.png` | Ask and steer | Low, Medium, and High autonomy | None |
+| `freeze-passage.png` | Writing rules | Frozen paragraph and lock | None |
+| `freeze-unlock-menu.png` | Writing rules | Unlock menu | None |
+| `chat-popover.png` | Send and steer requests | Chat panel with a draft request | None |
+| `agent-wakeup-button.png` | Send and steer requests | Close crop of the agent pill | None |
+| `agent-paused.png` | Control agent behavior | Expanded dock while paused | None |
+| `agent-paused-pill.png` | Control agent behavior | Collapsed paused pill | None |
+| `agent-behavior-panel.png` | Control agent behavior | Low, Medium, and High autonomy | None |
 | `reviewing-edits-pending.png` | Review edits | One expanded proposal | Provider credential |
 | `agent-accept-reject-all.png` | Review edits | Batch review actions | None |
 | `comment-thread.png` | Comments and critique | Anchored discussion | None |
 | `critique-pass-menu.png` | Comments and critique | Built in reviewer menu | None |
-| `transcript-overview.png` | Sessions and history | Transcript event list | None |
-| `transcript-detail.png` | Sessions and history | Search and tool filter | None |
-| `writing-rules-panel.png` | Customize the agent | Rules toolbar popover | None |
-| `writing-references-panel.png` | Customize the agent | References settings | None |
+| `transcript-overview.png` | Activity and transcript | Transcript event list | None |
+| `transcript-detail.png` | Activity and transcript | Search and tool filter | None |
+| `writing-rules-panel.png` | Writing rules | Rules toolbar popover | None |
+| `writing-references-panel.png` | Writing references | References settings | None |
 | `skills-panel.png` | Customize the agent | Skills settings | None |
 | `hooks-panel.png` | Hooks | Hook settings | None |
 | `blog-post-open.png` | Example projects | Research draft before the run | Provider credential |

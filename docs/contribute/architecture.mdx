@@ -1,48 +1,67 @@
 ---
 title: "Architecture"
-description: "Understand the server owned document and agent edit flow."
+description: "See how text moves between the editor, server, agent, database, and workspace files."
 ---
 
-## Server owned documents
+Read this page before changing document sync, agent edits, review actions, or file storage. The main rule is simple: the server owns the current document, and every browser and agent edits that same document.
 
-Each open text tab has a Yjs document owned by the Hocuspocus server. Browsers are synchronized clients. Server tools that change an open tab use a Hocuspocus direct connection to the same document.
+```mermaid
+flowchart LR
+    Browser["Browser, Tiptap editor"] <-->|"WebSocket sync"| Server["Hocuspocus server, live Yjs document"]
+    Agent["AI provider"] --> Render["/api/render"]
+    Render --> Tools["docwriter-doc tools"]
+    Tools -->|"direct connection"| Server
+    Browser -->|"Accept or Reject"| Review["/api/document"]
+    Review --> Server
+    Server --> Updates["SQLite, Yjs updates and app state"]
+    Server --> Files["Workspace files, plain text backup"]
+```
 
-## Persistence
+## One live document for each open tab
 
-Every Yjs update is appended to SQLite with the original transaction origin. The server also flushes the serialized plain text to the workspace file.
+Each open text tab has one live Yjs document inside the Hocuspocus server. The browser connects as a synchronized client. Agent tools open a direct server connection to the same document.
 
-The `yjs_updates` table stores each raw update in the `payload` column. The `tabs` table keeps tab order and the active tab. Other tables store rules, reviewers, recent actions, usage counts, provider session entries, and conversation events. The `kv` table stores values such as `sessionId`, `agentSettings`, and each tab's `last_seen` text.
+Never change an open tab by loading its saved updates into a temporary Yjs document. A temporary document is not connected to the browser, so the live editor will not receive the change.
 
-Comments and review rounds live inside the tab Yjs document, so they arrive in the same synchronized update stream as text. There is no JSON state mirror.
+## What happens when text changes
 
-The server flushes serialized text to the workspace file for Git and portability. Serialization removes AI provenance formatting and keeps the source text unchanged.
+When the user types, the browser sends Yjs updates over the WebSocket. The server applies each update to the live document and saves it in SQLite.
 
-## Agent flow
+When the agent proposes an edit, `edit_doc` adds a pending review to the live document. The committed text does not change yet. The browser uses the saved edit to show the proposed text beside the original text.
 
-The render route streams one provider query over server sent events. The prompt names open tabs and includes changes since each tab was last seen. The agent calls `read_doc` when it needs full content.
+When the user accepts an edit, the server changes the affected paragraphs and removes the review in one transaction. When the user rejects an edit, the server removes the review without changing the text.
 
-`edit_doc` changes the live Yjs document and adds a pending review round in one transaction. Hocuspocus sends that update to every connected browser.
+The browser undo manager tracks user typing and review actions. It does not add agent changes to the user's undo history.
 
-The document tool server routes open tab paths through a Hocuspocus direct connection. Scratch paths use normal file operations under `.docwriter/agent/scratch/`. A server mutation must never use a replayed temporary Yjs document because the temporary document is not connected to live clients.
+## What gets saved
 
-The stream emits tool start, tool result, assistant text, and final result events. The browser uses the events for the agent dock, while document content continues through WebSocket synchronization.
+SQLite is the source of truth while DocWriter is running. The `yjs_updates` table stores document updates in its `payload` column. Other tables store tabs, rules, reviewers, sessions, and agent activity.
 
-## Review flow
+The server also writes plain text to the workspace file. The file makes the document easy to use with Git and other tools, but it is not a second live document. Saved files do not include the Yjs attribute that marks text written by AI.
 
-Accept and reject requests run on the live server document. Accept applies a bounded paragraph edit and removes the review round. Reject removes the round without replaying a client side merge.
+Comments and pending reviews live inside the Yjs document. The committed text, comments, and reviews therefore reach every connected browser through the same update stream.
 
-The client undo manager tracks user typing and user origin review actions. Agent origin transactions are excluded.
+## How agent requests reach the document
 
-Accept uses the edit operation saved with the review round. It deletes and reinserts only the affected paragraphs when possible. A full write operation can replace the whole document when no bounded edit exists.
+The browser sends an agent request to `/api/render`. The route starts one provider query and sends activity events back to the agent dock.
 
-The browser sends Accept and Reject to `/api/document`, then waits for the Yjs update from the server. It does not disconnect or perform a separate three way merge.
+The prompt lists the open tabs and describes what changed since the agent last saw them. The agent calls `read_doc` when it needs the full text. Reads and writes for open tabs go through the `docwriter-doc` tool server. Files under `.docwriter/agent/scratch/` use normal file operations.
 
-## External file reconciliation
+Agent activity and document changes travel on separate connections. Activity appears through server sent events. Document changes appear through Yjs WebSocket updates.
 
-When a tab is opened, the server replays the saved Yjs updates. A newer disk file with different content can replace an older update log after the modification time check. Watch mode sends a reload event, and the browser remounts the active Yjs client from the server.
+## What happens after an external file change
 
-Each server process has an instance identifier. After a restart, the browser discards clients created for the old process before opening new WebSocket connections.
+When DocWriter opens a tab, the server rebuilds its Yjs document from SQLite. If the workspace file is newer and its text changed, the server uses the file instead.
 
-## Shared origins
+Watch mode tells the browser to reload after an external file change. The browser then reconnects to the document held by the server.
 
-`AGENT_ORIGIN`, `USER_ORIGIN`, and `SYSTEM_ORIGIN` are shared constants. Do not redefine them in client or server modules.
+## Where to make a change
+
+- Document encoding, saved edit operations, and transaction origins are in `src/lib/shared/ydoc-codec.ts`.
+- The Hocuspocus server and review actions are in `src/lib/server/ws-server.ts`.
+- Agent document tools are in `src/lib/server/mcp-doc-tools.ts`.
+- The provider request starts in `src/routes/api/render/+server.ts`.
+- The editor and undo setup are in `src/lib/editor-extensions.ts`.
+- Runtime state and SQLite access are in `src/lib/server/runtime-state.ts`.
+
+Read [Editor and persistence](/contribute/editor-and-persistence) before changing the editor schema or file loading. Read [Providers and tools](/contribute/providers-and-tools) before changing an AI provider or tool.

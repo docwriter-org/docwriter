@@ -5,9 +5,9 @@ description: "Install DocWriter and open a local writing workspace."
 
 ## Requirements
 
-DocWriter supports macOS and Linux. Windows users can run it through WSL.
+DocWriter supports macOS and Linux. Windows users can run it through WSL. Install Git and [nvm](https://github.com/nvm-sh/nvm) before continuing.
 
-The repository pins Node.js 22.22.2. Run `node --version` before installing, and use `nvm use` from the repository when another Node version is active.
+The repository pins Node.js 22.22.2. Run `node --version` before installing. If `nvm use` says the version is missing, run `nvm install` once.
 
 ## Install from source
 
@@ -35,6 +35,16 @@ docwriter ~/writing/my-project
 ```
 
 DocWriter opens a browser and binds to `127.0.0.1` by default. The folder becomes the workspace boundary for files, previews, hooks, and agent tools.
+
+If the browser does not open, use the local address printed in the terminal. The first address is usually `http://127.0.0.1:7723`.
+
+## Confirm the editor works
+
+Create a text file in the file tree and type one sentence. Reload the browser and open the file again. The sentence should still be present.
+
+You can write and manage local files before connecting an AI provider. A provider is required only when you ask the agent to read, comment, or edit.
+
+If the editor stays blank, follow [The editor is blank](/help/recovery#the-editor-is-blank).
 
 ## Update an existing installation
 

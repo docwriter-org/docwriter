@@ -1,26 +1,57 @@
 ---
 title: "Editor and persistence"
-description: "Understand the plain text schema, visual layers, and file reconciliation."
+description: "Change the editor or storage without losing text, formatting state, or live updates."
 ---
 
-## Plain text schema
+Read this page before changing Tiptap extensions, Yjs encoding, undo, file loading, or SQLite updates. The editor looks like a Markdown editor, but it stores plain text in a small Tiptap schema and uses separate plugins for the visual formatting.
 
-The Tiptap schema contains Document, Paragraph, Text, and HardBreak. Markdown meaning comes from visual layers rather than structural editor nodes.
+## Keep the editor schema small
 
-Text extraction uses Yjs deltas because formatted AI provenance ranges cannot be read safely with `toString()`.
+The schema contains only Document, Paragraph, Text, and HardBreak. Markdown symbols remain in the text. ProseMirror plugins style headings, tables, code, media, comments, proposed edits, and search results without turning them into separate document nodes.
 
-## Visual layers
+Do not add StarterKit, Link, or Tiptap history. Undo uses the Yjs undo manager configured in `src/lib/editor-extensions.ts`.
 
-Separate ProseMirror plugins render Markdown styling, tables, code blocks, media, D3, source comments, freezes, diffs, comments, find results, and accepted edit flashes.
+Import `ySyncPluginKey` and the relative position helpers from `src/lib/editor-extensions.ts`. The collaboration extension uses the key from `@tiptap/y-tiptap`. Importing the key from `y-prosemirror` creates a different key and breaks transaction classification and comment anchors.
 
-The stored document remains plain text. AI provenance is a Yjs text attribute and is removed from serialized files.
+## Read formatted Yjs text safely
 
-## Persistence and reconciliation
+AI provenance is stored as a Yjs text attribute. Once a text range has an attribute, `Y.XmlText.toString()` can return XML tags instead of the text the user sees.
 
-The server appends Yjs updates to the `payload` column in SQLite. A global flush tick writes changed text files and records their modification times.
+Use the delta based helpers in `src/lib/shared/ydoc-codec.ts` whenever you read document text. When you insert text that should have no attributes, use a delta instead of a plain `insert`, because Yjs can inherit attributes from the previous character.
 
-When the server hydrates a tab, a newer disk file can replace an older update log. Live external reload uses the command line watcher and server sent events.
+## Save document updates
 
-## WebSocket lifecycle
+The server saves every Yjs update in the SQLite `yjs_updates.payload` column. A regular flush writes the current plain text to the workspace file and records its modification time.
 
-The server instance is guarded across Vite hot reload. A fresh browser waits for the first synchronized WebSocket event before painting the editor.
+When DocWriter opens a tab, the server first rebuilds the document from SQLite. A newer workspace file can replace the saved document when its text changed outside DocWriter.
+
+The workspace file is useful for Git and other programs. While DocWriter is running, the live server document remains the source of truth.
+
+Read an open tab from the live Hocuspocus document when it is available. Mutations must use `openDirectConnection`. A replayed document is suitable for recovery checks, but it is not connected to browsers.
+
+## Keep undo origins consistent
+
+The shared constants `AGENT_ORIGIN`, `USER_ORIGIN`, and `SYSTEM_ORIGIN` are defined in `src/lib/shared/ydoc-codec.ts`. Import them instead of defining new values.
+
+The browser undo manager tracks local typing and review actions made with `USER_ORIGIN`. It does not track agent proposals. A new origin can silently change what the user can undo, so update the undo configuration when you add one.
+
+## Handle WebSocket restarts
+
+Vite can reload server modules while you develop. The global server guard prevents a second Hocuspocus server from binding to the same port.
+
+A browser waits for its first WebSocket sync before it paints the editor. After a server restart, the browser must discard the old Yjs client and connect to the new server instance.
+
+## Check an editor change
+
+Test the following behavior by hand:
+
+- Open an existing Markdown file and edit it.
+- Reload the browser and confirm that the text remains.
+- Propose an agent edit, then accept and undo it.
+- Propose another edit, then reject it.
+- Accept an edit, turn on AI provenance highlighting, and replace part of the marked text.
+- Keep typing while an agent request is running.
+- Change the file outside DocWriter while watch mode is on.
+- Restart the server while the browser is open.
+
+Run `npm run check` and `npm run build` after the manual checks.

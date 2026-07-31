@@ -184,10 +184,17 @@ async function seedIntroRound(httpPort, wsPort) {
 	const session = await fetch(`http://127.0.0.1:${httpPort}/api/session`).then((response) =>
 		response.json()
 	);
+	const currentDocument = await fetch(
+		`http://127.0.0.1:${httpPort}/api/document?tab=${encodeURIComponent('intro.md')}`
+	).then((response) => response.json());
+	const claimLine = String(currentDocument.content)
+		.split('\n')
+		.find((line) => line.startsWith('Blue light'));
+	if (!claimLine) throw new Error('Could not find the intro claim after typing the directive');
 	const document = new Y.Doc();
 	const provider = new HocuspocusProvider({
 		url: `ws://127.0.0.1:${wsPort}`,
-		name: 'intro.md',
+		name: currentDocument.tabId,
 		document,
 		token: session.serverInstanceId,
 		WebSocketPolyfill: WebSocket
@@ -209,8 +216,7 @@ async function seedIntroRound(httpPort, wsPort) {
 				id: 'intro-video-round',
 				operation: {
 					type: 'edit',
-					oldString:
-						'Blue light scatters more strongly in the atmosphere. [[ cite this ]]',
+					oldString: claimLine,
 					newString:
 						'Blue light scatters more strongly in the atmosphere (Rayleigh, 1871).'
 				},
@@ -313,6 +319,50 @@ function convertGif(webm, basename, startSeconds = 0) {
 	console.log(`wrote ${basename}.gif`);
 }
 
+async function installDemoCursor(page) {
+	await page.evaluate(() => {
+		const cursor = document.createElement('div');
+		cursor.id = 'docs-demo-cursor';
+		cursor.setAttribute('aria-hidden', 'true');
+		cursor.innerHTML = `
+			<svg viewBox="0 0 28 36" width="28" height="36" xmlns="http://www.w3.org/2000/svg">
+				<path d="M3 2.5V27l6.8-6.2 5.1 11.1 5-2.3-5.1-10.8H24L3 2.5Z"
+					fill="#171717" stroke="white" stroke-width="2.2" stroke-linejoin="round"/>
+			</svg>
+		`;
+		Object.assign(cursor.style, {
+			position: 'fixed',
+			left: '0',
+			top: '0',
+			width: '28px',
+			height: '36px',
+			zIndex: '2147483647',
+			pointerEvents: 'none',
+			filter: 'drop-shadow(0 1px 2px rgb(0 0 0 / 45%))',
+			opacity: '0',
+			transform: 'translate(40px, 80px)',
+			transition:
+				'transform 500ms cubic-bezier(0.22, 1, 0.36, 1), opacity 120ms ease-out'
+		});
+		document.body.append(cursor);
+	});
+}
+
+async function moveDemoCursor(page, locator) {
+	const box = await locator.boundingBox();
+	if (!box) throw new Error('Could not place the demo cursor on a hidden element');
+	await page.evaluate(
+		({ x, y }) => {
+			const cursor = document.querySelector('#docs-demo-cursor');
+			if (!(cursor instanceof HTMLElement)) return;
+			cursor.style.opacity = '1';
+			cursor.style.transform = `translate(${x}px, ${y}px)`;
+		},
+		{ x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2) }
+	);
+	await sleep(650);
+}
+
 async function captureIntro(browser, httpPort, wsPort) {
 	const directory = await mkdtemp(join(tmpdir(), 'docwriter-intro-video-'));
 	const context = await browser.newContext({
@@ -326,7 +376,9 @@ async function captureIntro(browser, httpPort, wsPort) {
 	const page = await context.newPage();
 	await openWorkspaceFile(page, httpPort, 'intro.md');
 	const clipStart = Math.max(0, (Date.now() - startedAt) / 1000 - 0.3);
+	await installDemoCursor(page);
 	const claim = page.locator('.tiptap-content p').filter({ hasText: /Blue light/ }).first();
+	await moveDemoCursor(page, claim);
 	await claim.click();
 	await page.keyboard.press('End');
 	await page.keyboard.type(' [[ cite this ]]', { delay: 55 });
@@ -336,9 +388,11 @@ async function captureIntro(browser, httpPort, wsPort) {
 	await accept.waitFor({ state: 'visible', timeout: 10_000 });
 	await sleep(900);
 	const notes = page.locator('.tiptap-content p').last();
+	await moveDemoCursor(page, notes);
 	await notes.click();
 	await page.keyboard.type('The writer keeps working while the suggestion waits.', { delay: 28 });
 	await sleep(900);
+	await moveDemoCursor(page, accept);
 	await accept.click();
 	await sleep(1500);
 	const webm = await recordedWebm(context, directory);

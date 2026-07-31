@@ -3,34 +3,38 @@ title: "Provider errors"
 description: "Fix authentication, model, quota, and saved session failures."
 ---
 
-## Missing credentials
+Start with the message shown in the **Agent auth failed** or **Agent run failed** notice. The full error also remains in the agent activity log.
+
+## The provider says a credential is missing
 
 Open **Settings**, then **API keys**. Check whether the selected provider shows **Key set**, **Using login**, **Missing**, or **Optional**.
 
 Environment variables and project `.env` files take precedence over `~/.docwriter/keys.env`. Restart DocWriter after changing a shell environment variable.
 
-## Context sent to a provider
+## A command line login expired
 
-The first request contains the open tab paths and the changes since each tab was last seen. Full file bodies are loaded only when needed. The agent calls `read_doc` for the full content of an open tab, and workspace tools can inspect other files when the request requires them.
+Run the provider login command again, then choose **New session** in DocWriter. Claude and Codex can use existing command line logins.
 
-Read [Privacy and safety](/help/privacy-and-safety) for the other network requests and local boundaries.
+## The selected model does not exist
 
-## Expired login
+Open the model pill and choose another model listed for the current provider. A custom model identifier can be saved in the interface even when the provider does not allow the account to use it.
 
-Run the provider login command again, then start a new DocWriter session. Claude and Codex can use existing command line logins.
+If OpenAI reports that `codex-mini` does not exist, choose an available GPT model. If Claude reports that enabled thinking is not supported, choose another Claude model.
 
-## Model unavailable
+Model access can depend on the account, subscription, region, and API endpoint.
 
-Open the model pill and choose a model listed for the current provider. A custom identifier is accepted by the interface but can still be rejected by the provider.
+## The provider reached a quota or rate limit
 
-Model availability can depend on the account, subscription, region, and API endpoint.
+Wait for the limit to reset, or select another provider that has working credentials. Cancel the current run if queued messages should not run after the limit resets.
 
-## Quota or rate limit
+## A saved session cannot resume
 
-Wait for the provider limit to reset or use another available provider. Queued messages remain local until the current run completes or is canceled.
+Open **Settings**, then **Sessions**, and choose another session. Start a new session when the saved provider conversation no longer exists.
 
-## Saved session cannot resume
+Switching providers also starts a separate provider conversation. Your workspace files and saved writing settings remain.
 
-Open **Settings**, then **Sessions**, and start a new session for the provider. Switching providers also clears the saved provider session identifier.
+## The provider starts but a tool fails
 
-Authentication failures appear as a sticky **Agent auth failed** toast. Other failures appear as **Agent run failed** and remain visible in the activity log.
+Open the transcript and inspect the failed tool result. Confirm that the file is inside the workspace and that the selected provider supports the requested tool.
+
+Read [Privacy and safety](/help/privacy-and-safety) to understand what a provider can read and which commands can run.

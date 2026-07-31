@@ -1,0 +1,57 @@
+---
+title: "Research a claim while writing"
+description: "Leave a question in the draft, review the sources, and accept a supported edit."
+---
+
+Use this workflow when you know what you want to say but need evidence for one claim. Keep writing around the gap while the agent searches.
+
+## Prepare the draft
+
+Open a Markdown file and write the claim in your own words. Add an inline directive beside it:
+
+```md
+People abandon AI tools when a simple request takes too long.
+
+[[ Find a recent study that measures tolerance for AI response time.
+Add one sentence with a Markdown footnote citation. ]]
+```
+
+The directive is ordinary text, so you can edit it until the request says exactly what evidence you need.
+
+<Frame>
+  ![A research draft with inline requests before the agent runs](/images/blog-post-open.png)
+</Frame>
+
+## Add writing guidance
+
+Add a [writing reference](/customize/references) when the new sentence should match an existing article. Add a [writing rule](/customize/rules) when the citation must follow a format such as footnotes.
+
+Rules and references help the agent shape the edit. They do not prove that a source supports the claim.
+
+## Let the agent research
+
+Stop typing and wait for automatic wake, or click the agent pill. The agent reads the directive and can search the web before it proposes an edit.
+
+You can keep writing elsewhere in the draft while the search runs.
+
+<Frame>
+  ![Research results and proposed citations beside the draft](/images/blog-pending-edit.png)
+</Frame>
+
+## Check the source
+
+Open every cited source before accepting the proposal. Confirm:
+
+- The source makes the claim in the proposed sentence.
+- The date and population match what the sentence says.
+- The citation points to the original source when possible.
+
+Reject the proposal when the source does not support the wording. Send a new request that names the problem, such as "Use a peer reviewed source from 2023 or later."
+
+## Accept the edit
+
+Accept the proposal when the sentence and citation are supported. DocWriter replaces the directive with the accepted text and saves the plain Markdown to the workspace file.
+
+Repeat the workflow for another gap. Keep each directive focused on one claim so the source is easy to review.
+
+Read [Selected text and directives](/agent/selected-text-and-directives) for the other directive delimiters. Read [Generated previews](/automation/preview) if you want to build an HTML version with Pandoc.

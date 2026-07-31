@@ -3,6 +3,8 @@ title: "External edits"
 description: "Use another editor without losing changes."
 ---
 
+Use watch mode when another editor, script, or Git command will change workspace files while DocWriter is open.
+
 ## Start watch mode
 
 ```sh
@@ -11,18 +13,22 @@ docwriter --watch ~/writing/my-project
 
 Watch mode reports changes to Markdown, text, JSON, YAML, and YML files. It ignores implementation and runtime folders such as `.git` and `.docwriter`.
 
-## How reload works
+## A file changed outside DocWriter
 
-The command line watcher sends a reload event to the browser. DocWriter refreshes the file tree and remounts the active tab from the server.
+The command line watcher tells the browser to reload. DocWriter refreshes the file tree and opens the latest version held by the server.
 
-The server ignores file events that repeat a recent DocWriter flush, which prevents a reload loop while you type.
+If the change does not appear, reload the browser. Confirm that the changed file is inside the workspace and has a supported text extension.
 
-## Which copy wins
+## The same passage changed in two editors
 
-When a tab is hydrated, DocWriter compares the file modification time with the latest saved Yjs update. A newer disk file with different content replaces the stale update log after a small clock skew allowance.
+DocWriter does not merge two independent edits to the same passage. Stop typing in one editor before changing the passage in the other.
 
-Watch mode is a reload system, not a text merge system. Avoid editing the same passage in two editors at the same moment.
+When DocWriter opens a tab, a newer workspace file with different text can replace the older saved document state.
 
-## Git changes
+When the workspace file replaces the saved tab, DocWriter also loses pending reviews, comments, and AI provenance stored inside that tab. Accept, reject, or copy work you need before replacing the file.
+
+An external change can also make an open proposal stale. Review the affected tab after each reload.
+
+## A Git operation changed files
 
 DocWriter does not pull a repository automatically. Pull before the writing session, resolve conflicts in Git, then let DocWriter reload the resulting files.

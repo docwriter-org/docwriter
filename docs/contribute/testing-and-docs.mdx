@@ -1,16 +1,24 @@
 ---
 title: "Testing and documentation"
-description: "Check code, preview docs, and maintain visual assets."
+description: "Run the right checks and keep documentation examples up to date."
 ---
 
-## Application checks
+Use this page before you submit a code or documentation change. The repository has build checks, provider smoke tests, documentation checks, and scripts that record screenshots and videos.
+
+## Check application code
 
 ```sh
 npm run check
 npm run build
 ```
 
-Use the provider smoke harness only when the required provider credential is available.
+Run both commands for every code change. A page-only documentation change can use the documentation checks below instead. The project does not have a unit test suite.
+
+If you changed a provider, run its smoke test with the matching credential:
+
+```sh
+E2E_PROVIDER=claude npm run test:e2e:provider
+```
 
 ## Preview the docs
 
@@ -18,19 +26,47 @@ Use the provider smoke harness only when the required provider credential is ava
 npm run docs
 ```
 
-Mintlify runs on port 3333. Check navigation, redirects, internal links, code samples, and responsive layout.
+Open `http://localhost:3333`. Check the page on a wide and narrow window. Follow every link you changed and run every command you added.
 
-## Capture visual assets
+Run the automatic documentation checks:
 
 ```sh
-npm run docs:assets:structural
+npm run docs:catalog
+npm run docs:validate
 npm run docs:assets:verify
 ```
 
-Credentialed scenarios use `npm run docs:assets:agent`. Video and GIF generation also require `ffmpeg`.
+`docs:validate` checks navigation pages, feature assignments, redirects, internal links, and image paths. `docs:assets:verify` checks that referenced media exists and that shipped media is used by a page.
 
-The asset manifest in `docs/images/README.md` records the owning page, scenario, viewport, credentials, and filename.
+## Update screenshots and videos
 
-## Maintain the feature catalog
+Only record an asset when the page needs to show an interaction or a part of the interface that words cannot identify clearly. A screenshot or video should show the current interface and enough context for a reader to understand the action.
 
-Run `npm run docs:catalog` after changing the catalog source. Run `npm run docs:validate` to require one target page for every feature and to check that every target page exists.
+Record screenshots that do not need a provider:
+
+```sh
+npm run docs:assets:structural
+```
+
+Record agent screenshots with:
+
+```sh
+npm run docs:assets:agent
+```
+
+The agent scenarios need provider credentials. Video and GIF generation also needs `ffmpeg`. Run a provider smoke test when the change affects that provider, its tools, or its session behavior.
+
+After recording, run `npm run docs:assets:verify`. Update `docs/images/README.md` when you add, replace, or remove an asset.
+
+## Update the feature catalog
+
+The feature catalog makes sure each shipped feature has one documentation page. Its source is `scripts/generate-feature-catalog.mjs`, and the generated file is `docs/feature-catalog.json`.
+
+After you change the source, run:
+
+```sh
+npm run docs:catalog
+npm run docs:validate
+```
+
+Do not edit the generated JSON by hand.

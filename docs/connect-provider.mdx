@@ -3,6 +3,8 @@ title: "Connect a provider"
 description: "Choose a provider, authenticate it, and select a model."
 ---
 
+You can use the editor without an AI account. Connect a provider when you want the agent to read files, answer questions, or propose edits.
+
 DocWriter supports Claude, OpenAI, Codex, Cursor, and Pi. The provider and model controls are in the page header.
 
 ## Choose a provider
@@ -11,11 +13,13 @@ Click the provider pill in the header and choose one provider. Click the model p
 
 Changing providers starts a fresh provider conversation. Your workspace files, rules, references, hooks, and comments remain in place.
 
-When you switch to an earlier session through **Settings**, then **Sessions**, DocWriter restores the saved provider and model when the provider session is still valid. Read [Sessions and history](/agent/sessions-and-history) when an old provider session cannot resume.
+When you switch to an earlier session through **Settings**, then **Sessions**, DocWriter restores the saved provider and model when the provider session is still valid. Read [Sessions](/agent/sessions) when an old provider session cannot resume.
 
 ## Add credentials
 
 Open **Settings**, then **API keys**. The panel shows whether each provider is using a saved key, an existing login, or no credential.
+
+Paste a key in the matching field and choose **Save**. Use **Remove stored key** when DocWriter should stop using it.
 
 Saved keys live in `~/.docwriter/keys.env`. A process environment variable or project `.env` value takes precedence over that file.
 
@@ -41,9 +45,11 @@ Cursor uses the signed in Cursor environment. Session recovery differs from prov
 
 Pi can use provider keys such as `TOGETHER_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, or `ANTHROPIC_API_KEY`, depending on the selected model.
 
-## Tools and skills
+## Choose a model the account can use
 
-Claude uses the Agent SDK tool set. Other providers use DocWriter's normalized tool handlers. Skills can use a provider's native skill support or be included in the provider prompt. Read [Providers and tools](/contribute/providers-and-tools) for implementation details.
+The model list can include models that are not enabled for every account. If a request returns a model error, choose another model from the same provider and send the test request below again.
+
+Provider features differ. For example, some providers have their own sessions, skills, or subagents. DocWriter keeps the main writing and review workflow the same.
 
 ## Test the connection
 
@@ -54,3 +60,5 @@ Read the open file and summarize the main point. Do not edit the file.
 ```
 
 If the request fails, open [Provider errors](/help/provider-errors).
+
+When the summary appears in the agent dock, continue to [Make your first edit](/quickstart).

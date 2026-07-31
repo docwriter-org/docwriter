@@ -9,6 +9,8 @@ Proposed text appears in the editor and in a card in the comment gutter. Green t
 
 Hover an edit row to flash the matching text. Pin a diff to keep the proposal visible after closing a card. Small edits use a quieter presentation than large edits.
 
+When one comment leads to several edits, the open thread numbers the matching diffs in the document so you can connect each edit to its row.
+
 <Frame caption="Review one proposal, accept it, then reject another.">
   <video
     autoPlay
@@ -30,13 +32,17 @@ Hover an edit row to flash the matching text. Pin a diff to keep the proposal vi
 
 ## Accept or reject
 
-Use the check button to accept an edit or the x button to reject a loose edit. **Accept all** and **Reject all** act on the current tab.
+A loose edit is a proposal that is not attached to a comment thread. Use its check button to **Accept** it or its x button to **Reject** it.
+
+**Accept all** accepts every proposal in the current tab. **Reject all** removes every proposal in the current tab, including proposals attached to threads. Neither action affects another tab.
 
 <Frame>
   ![The Accept all and Reject all controls above pending suggestions](/images/agent-accept-reject-all.png)
 </Frame>
 
 Thread edits stay grouped under the comment that led to them. You can accept each grouped edit or accept the group.
+
+Thread edits do not have a separate Reject button. Reply to the thread when the agent should revise the proposal. Resolve the thread when you are done with the discussion. Resolving it removes any linked proposals that you did not accept.
 
 An edit becomes stale when the source text no longer matches. DocWriter disables the Accept action. If the server detects stale source text during an Accept request, DocWriter rejects the old proposal and sends a follow up request for a new edit against the current text. There is no separate Regenerate button.
 

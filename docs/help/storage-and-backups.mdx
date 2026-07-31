@@ -1,33 +1,33 @@
 ---
 title: "Storage and backups"
-description: "Understand the live document, SQLite state, and files on disk."
+description: "Back up the document text and the DocWriter state you want to keep."
 ---
 
-## The live document
+Your workspace files contain the document text. The `.docwriter` folder contains comments, pending reviews, sessions, rules, and other DocWriter state.
 
-The server owns one Yjs document for each open text tab. Browsers connect through Hocuspocus WebSocket sync, and agent tools connect to the same live document.
+## Choose what to back up
 
-Each Yjs update is appended to `.docwriter/docwriter.db`. SQLite is the runtime source of truth for document updates, review rounds, comments, tabs, rules, reviewers, sessions, and interface settings.
+Back up the writing project files when you only need the current text. Git is suitable for these plain files.
 
-## Files on disk
+Also back up `.docwriter/docwriter.db` when you need comments, pending reviews, tab state, rules, reviewers, sessions, and interface settings.
 
-The server checks for changed documents every 500 milliseconds and writes the live document back to the workspace file. The plain file is useful for Git, other editors, and recovery. The file is not a second live editor state.
+Back up `.docwriter/hooks.json` when the workspace uses hooks. Keep any project skills stored outside the database with the rest of the project.
 
-`.docwriter/hooks.json` is the portable hook configuration. Agent scratch files live under `.docwriter/agent/scratch/`.
+Do not commit API keys. Decide whether conversation and comment history belongs in the repository before adding `.docwriter`.
 
-There is no `.docwriter/state.json`.
+## Create a consistent backup
 
-## Back up a workspace
+Stop DocWriter before copying the database. Then copy:
 
-Stop DocWriter, then copy:
+- The writing project files.
+- `.docwriter/docwriter.db`.
+- `.docwriter/hooks.json`, when it exists.
+- Project skills and other saved files outside the database.
 
-* The writing project files
-* `.docwriter/docwriter.db`
-* `.docwriter/hooks.json`
-* Project skills and rules files that you keep outside SQLite
+Temporary agent files under `.docwriter/agent/scratch/` usually do not need a backup.
 
-Git is suitable for plain project files. Do not commit API keys. Decide whether session and comment history in `.docwriter` belongs in the repository before adding it.
+## Restore a backup
 
-## Restore
+Restore the project files and matching `.docwriter` folder before starting DocWriter. Restoring only the plain files keeps the text but creates new DocWriter state as each file opens.
 
-Restore the project files and matching `.docwriter` folder before starting DocWriter. When the database matches the workspace, DocWriter replays each tab from the `yjs_updates` table. Restoring only the plain files creates fresh Yjs state as each file is opened.
+Read [How DocWriter saves your work](/reference/how-it-works) for the relationship between the live document, database, and workspace file.

@@ -1,0 +1,57 @@
+---
+title: "Control agent behavior"
+description: "Choose when the agent may act, pause it, or hide proposals."
+---
+
+Use the agent behavior controls when you want to change when the agent wakes or what it may do without a direct request.
+
+## Choose an autonomy level
+
+Open **Settings**, then **Agent behavior**.
+
+- **Low** acts only after a clear request or when the document is clearly broken.
+- **Medium** may open one focused comment, but it does not make an unsolicited edit.
+- **High** may open a focused comment or propose a focused edit.
+
+Autonomy changes when the agent may start work. It does not remove review for edits to an existing document.
+
+<Frame>
+  ![Low, Medium, and High autonomy settings](/images/agent-behavior-panel.png)
+</Frame>
+
+## Pause or resume the agent
+
+Double click the agent pill to pause or resume. Pausing cancels the current run, clears queued messages, and prevents automatic and manual requests.
+
+<Frame>
+  ![The collapsed agent pill in the paused state](/images/agent-paused-pill.png)
+</Frame>
+
+<Frame>
+  ![The expanded agent dock in the paused state](/images/agent-paused.png)
+</Frame>
+
+## Cancel the current run
+
+Click the active agent pill once to cancel the current run and clear its queued messages. The document changes you already accepted remain.
+
+## Hide proposed changes
+
+Use the bell control to hide proposal layers while the agent continues working. The pending reviews remain in the document, and you can show them again later.
+
+Hiding proposals does not accept or reject them. DocWriter does not have a setting that turns review off for edits to an existing document.
+
+<Frame caption="Hide proposal layers, then show them again.">
+  <video
+    autoPlay
+    muted
+    loop
+    playsInline
+    poster="/images/agent-behavior-panel.png"
+    className="w-full rounded-xl"
+  >
+    <source src="/images/mute-proposals.mp4" type="video/mp4" />
+    <source src="/images/mute-proposals.webm" type="video/webm" />
+    Your browser does not support embedded video.
+  </video>
+</Frame>

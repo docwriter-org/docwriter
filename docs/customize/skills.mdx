@@ -1,0 +1,32 @@
+---
+title: "Skills"
+description: "Add reusable instructions for a specific kind of work."
+---
+
+Use a skill when the agent needs a reusable procedure for a task, such as checking plain writing, creating a hook, or following a project workflow.
+
+## Install a skill
+
+Open **Settings**, then **Skills**. Install a skill from a GitHub path or a local folder.
+
+Project skills can also live under `.claude/skills/`. Each skill has a `SKILL.md` file that tells the agent when and how to use it.
+
+<Frame>
+  ![Installed and available skills in Settings](/images/skills-panel.png)
+</Frame>
+
+## Enable or disable a skill
+
+Enable a skill when it should be available to the agent. Disable it when you want to keep it installed without using it.
+
+Choose **Run** beside a skill to send its command to the agent. You can also ask the agent to use a named skill in Chat.
+
+DocWriter includes skills for plain writing and creating hooks.
+
+## Provider support
+
+Providers handle skills in different ways. Some providers load skills through their own agent system. DocWriter adds the skill instructions to the prompt for providers that do not have a native skill system.
+
+If a skill does not run, confirm that it is enabled and that its description clearly matches the task you requested.
+
+Use a [writing rule](/customize/rules) for a short instruction that should always apply. Use a skill for a procedure with several steps or supporting material.

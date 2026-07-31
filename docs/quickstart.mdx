@@ -5,17 +5,17 @@ description: "Open a file, ask for one change, and review the result."
 
 The first walkthrough uses an explicit request. Automatic wake, inline directives, and autonomy can wait until the basic review loop works.
 
-## Open a blank workspace
+## Confirm the provider
 
-```sh
-docwriter --new-session ~/writing/docwriter-quickstart
-```
+Check that the provider and model you tested on [Connect a provider](/connect-provider) still appear in the header. If you have not sent a successful request yet, send the test request on that page before continuing.
 
-DocWriter creates the folder when it does not exist. The file tree starts empty.
+## Open a draft
+
+Return to the workspace you opened during installation. You can use an existing Markdown file or create a new one for this walkthrough.
 
 ## Write something
 
-Click **New file** and name it `draft.md`. Write a heading and a short paragraph about something you are already working on.
+Choose **New file** in the file tree and name it `draft.md`. Write a heading and a short paragraph about something you are already working on.
 
 You can type directly in the center editor, and DocWriter saves the live draft back to the file.
 
@@ -41,7 +41,7 @@ The changed text appears in the editor, and a review card appears in the comment
   ![A proposed edit in the comment gutter beside the changed text](/images/quickstart-pending-edit.png)
 </Frame>
 
-You can accept and reject suggestions independently. A suggestion becomes stale when the text it depends on has changed, and DocWriter asks the agent to regenerate it against the current draft.
+You can accept and reject suggestions independently. A suggestion becomes stale when the text it depends on has changed. Reject a stale suggestion. If an Accept request discovers the mismatch, DocWriter removes the old suggestion and asks the agent for a new one based on the current text.
 
 ## Check the file
 
@@ -49,4 +49,6 @@ Open `draft.md` from the workspace folder in any other editor. The accepted text
 
 ## Continue
 
-Read [Ask and steer](/agent/ask-and-steer) for automatic wake and autonomy. Read [Review edits](/agent/review-edits) for bulk review, provenance, and undo.
+Read [Send and steer requests](/agent/ask-and-steer) for automatic wake and queued requests. Read [Control agent behavior](/agent/agent-behavior) for autonomy and pause controls. Read [Review edits](/agent/review-edits) for bulk review, provenance, and undo.
+
+Add [writing rules](/customize/rules) when the agent should follow the same instruction on later requests. Open [Recovery](/help/recovery) if the editor, provider, or proposal does not behave as described.

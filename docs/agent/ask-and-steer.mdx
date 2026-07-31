@@ -1,11 +1,23 @@
 ---
-title: "Ask and steer"
-description: "Send requests and control when the agent works."
+title: "Send and steer requests"
+description: "Wake the agent, send a request, and add work to the queue."
 ---
 
-## Send a request
+Use the agent pill for an immediate check of the open draft. Use Chat when you want to give a specific instruction.
 
-Click **Chat** in the floating agent dock. **Command or Control and Enter** sends the message. Enter alone adds a new line.
+Steering means giving the agent another instruction while it works. Send another Chat message to place the instruction in the queue.
+
+## Wake the agent
+
+Click the idle agent pill to ask the agent to inspect the active text tab. The pill is unavailable when the active tab is a PDF or when no text tab is open.
+
+After you stop typing for three seconds, DocWriter can also wake the agent automatically. The pill shows the countdown. Press **Command or Control and Enter** in the editor to skip the remaining wait.
+
+Automatic wake does not run while the agent is paused or when the text has not changed.
+
+## Send a specific request
+
+Click **Chat** in the floating agent dock. Write the request, then press **Command or Control and Enter**. Enter alone adds a new line.
 
 You can send a request with no open tab, attach an image, or ask the agent to work across several files. Messages sent during a run join the queue.
 
@@ -28,65 +40,14 @@ You can send a request with no open tab, attach an image, or ask the agent to wo
   ![The Chat panel with a draft request](/images/chat-popover.png)
 </Frame>
 
-## Automatic wake
+## Add work while the agent is running
 
-After you stop typing for three seconds, DocWriter can wake the agent to inspect the change. The agent pill shows the countdown. Press **Command or Control and Enter** in the editor to skip the countdown.
+Send another Chat message during a run to add it to the queue. A number on the agent pill and Chat control shows how many messages are waiting.
 
-Automatic wake does not run when the agent is paused or when the text ends the typing burst unchanged.
-
-The collapsed agent pill briefly animates when a new render starts after about a minute of agent inactivity. A numeric badge on the pill and Chat control shows queued messages. The expanded dock pins the active user turn above the activity log while the agent responds.
+The expanded dock keeps the active request above the activity log while the agent responds.
 
 <Frame>
   ![The agent wake control in the expanded dock](/images/agent-wakeup-button.png)
-</Frame>
-
-## Autonomy
-
-Open **Settings**, then **Agent behavior**.
-
-* **Low** acts only on a clear request or a clearly broken state.
-* **Medium** can open one focused comment during a turn, but it does not make an unsolicited edit.
-* **High** can open a focused comment or propose a focused edit.
-
-Autonomy changes when the agent may initiate work. It does not remove review for edits to an existing document.
-
-<Frame>
-  ![Low, Medium, and High autonomy settings](/images/agent-behavior-panel.png)
-</Frame>
-
-## Pause, mute, and cancel
-
-Double click the agent pill to pause or resume. Pausing cancels the current run, clears queued messages, and blocks new automatic or manual requests.
-
-Use the bell control to mute proposal layers while the agent continues working. Review data remains in the document.
-
-Click the active agent pill once to cancel the current run and clear the queue.
-
-Click the collapsed agent pill once to expand the dock. Use the chevron in the expanded header to collapse it again.
-
-There is no Track changes off setting. Muting changes what you see, but it does not accept proposals or remove review state.
-
-<Frame caption="Mute proposal layers, then restore them without pausing the agent.">
-  <video
-    autoPlay
-    muted
-    loop
-    playsInline
-    poster="/images/agent-behavior-panel.png"
-    className="w-full rounded-xl"
-  >
-    <source src="/images/mute-proposals.mp4" type="video/mp4" />
-    <source src="/images/mute-proposals.webm" type="video/webm" />
-    Your browser does not support embedded video.
-  </video>
-</Frame>
-
-<Frame>
-  ![The expanded agent dock in the paused state](/images/agent-paused.png)
-</Frame>
-
-<Frame>
-  ![The collapsed agent pill in the paused state](/images/agent-paused-pill.png)
 </Frame>
 
 ## Questions from the agent
@@ -94,3 +55,5 @@ There is no Track changes off setting. Muting changes what you see, but it does 
 The agent can open a question card with one or more questions. A single choice submits immediately. A multi-question card shows how many answers remain. Unanswered questions expire after 15 minutes so the run can continue.
 
 Authentication failures show a sticky **Agent auth failed** toast with sign in guidance. Other run failures show **Agent run failed** and remain in the activity log.
+
+Read [Control agent behavior](/agent/agent-behavior) to change autonomy, pause the agent, cancel a run, or hide proposals.

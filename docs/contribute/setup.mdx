@@ -1,9 +1,13 @@
 ---
 title: "Contributor setup"
-description: "Install dependencies and run DocWriter from source."
+description: "Run DocWriter from source and check a change before you submit it."
 ---
 
-Clone the repository and use the pinned Node version:
+Use this page when you want to change DocWriter itself. If you only want to write in DocWriter, follow the [installation guide](/install) instead.
+
+## Install the project
+
+DocWriter pins Node 22.22.2 in `.nvmrc`. Clone the repository, switch to that version, and install the packages:
 
 ```sh
 git clone https://github.com/docwriter-org/docwriter.git
@@ -12,21 +16,40 @@ nvm use
 npm install
 ```
 
-Run the application:
+If `nvm use` cannot find the version, run `nvm install` once.
+
+## Start DocWriter
+
+Run the application from the repository root:
 
 ```sh
 npm run dev
 ```
 
-Vite listens on port 5173. The same process starts Hocuspocus on port 3001.
+Open `http://localhost:5173`. The same command starts the document server on port 3001.
 
-Run the checks before opening a change:
+By default, DocWriter treats the repository as the writing workspace. To test with another folder, run:
+
+```sh
+npm run dev:workspace -- --no-open /path/to/folder
+```
+
+## Check your change
+
+Run both checks before you open a pull request:
 
 ```sh
 npm run check
 npm run build
 ```
 
-No unit test framework is configured. Provider smoke tests live under `e2e/` and require the matching credentials.
+`npm run check` checks TypeScript and Svelte files. `npm run build` checks the production build.
 
-Use `npm run dev:workspace -- --no-open /path/to/folder` when the test workspace should not be the repository root.
+The project does not have a unit test suite. Provider smoke tests live in `e2e/` and need credentials for the provider you test.
+
+## Choose the next page
+
+- Read [Architecture](/contribute/architecture) before changing document sync, review actions, or storage.
+- Read [Providers and tools](/contribute/providers-and-tools) before adding an AI provider or agent tool.
+- Read [Editor and persistence](/contribute/editor-and-persistence) before changing Tiptap, Yjs, or file loading.
+- Read [Testing and documentation](/contribute/testing-and-docs) before changing public docs or visual assets.

@@ -3,11 +3,15 @@ title: "Week of May 11, 2026"
 description: "PDF viewer, find bar, image attachments in chat, drag-and-drop, and more."
 ---
 
+<Note>
+  This page describes the interface in May 2026. The current interface uses the comment gutter and keeps tabs in their original order.
+</Note>
+
 ## New features
 
 - **PDF and binary file preview.** Binary files now open in a built-in viewer
   instead of trying to render as text. PDFs get a full reader with paging,
-  zoom, and search. See [Tabs](/tour/tabs).
+  zoom, and search. See [PDFs and other files](/write/pdfs-and-other-files).
 - **Floating Preview button.** When the active tab matches a hook that
   produces an output artifact (PDF, HTML, SVG, …), a **Preview** button
   appears in the top-right of the editor. Click it to open a live-reloading
@@ -15,35 +19,37 @@ description: "PDF viewer, find bar, image attachments in chat, drag-and-drop, an
   [Live preview](/automation/preview).
 - **Find bar.** Press `Cmd/Ctrl+F` to open an in-editor find bar scoped to
   the active tab. Step through matches with `Enter` / `Shift+Enter`, and
-  toggle case sensitivity. See [Keyboard shortcuts](/reference/shortcuts).
+  toggle case sensitivity. See [Find and appearance](/write/find-and-appearance).
 - **Image attachments in chat.** Drop or paste PNG / JPEG / GIF / WebP
   images into the chat panel to send them to the agent alongside your
   message. Useful for sharing screenshots, figures, or reference images.
-  See [Steering the agent](/agent/steering-the-agent).
+  See [Send and steer requests](/agent/ask-and-steer).
 - **Drag files in from Finder.** Drag files from your filesystem onto the
   file tree (into any folder) or onto the tab bar to copy them into the
-  workspace and open them. See [Tabs](/tour/tabs).
+  workspace and open them. See [Files and tabs](/write/files-and-tabs).
 - **Session viewer.** A new viewer lets you replay an agent session
   end-to-end — tool calls, intermediate messages, and edits — to see
-  exactly what the agent did. See [Observability](/agent/observability).
+  exactly what the agent did. See [Activity and transcript](/agent/activity-and-transcript).
 
 ## Updates
 
 - **Outline pane lists pending edits and comments across all tabs.** The
   outline now surfaces every tab with a pending review round or unseen
   comment, and clicking an item jumps you straight to that tab and
-  location. See [Reviewing edits](/agent/reviewing-edits) and
-  [Comments](/agent/comments).
+  location. This layout was later replaced by the comment gutter and
+  tab badges. See [Review edits](/agent/review-edits) and
+  [Comments and critique](/agent/comments-and-critique).
 - **Pending tabs float next to the active tab.** Tabs with pending agent
   edits are pulled to sit immediately after the active tab so they stay
-  visible without scrolling the tab bar.
+  visible without scrolling the tab bar. The current tab bar keeps its
+  original order and shows pending work with badges.
 - **Accept feedback in the editor.** Accepting an agent edit now flashes
   a soft halo on the accepted text for a moment, so it's clear what just
   landed.
 - **Agent plan modal renders markdown.** Plans the agent proposes now
   render with bullets, numbered steps, headings, bold, and inline code
   instead of as a wall of plaintext. See
-  [Delegating tasks](/agent/delegating-tasks).
+  [Plans and long tasks](/agent/plans-and-long-tasks).
 - **Sign in with a Claude Code OAuth token.** DocWriter now also accepts
   `CLAUDE_CODE_OAUTH_TOKEN` as a credential source, alongside
   `ANTHROPIC_API_KEY`, `--api-key`, and `claude login`. See
