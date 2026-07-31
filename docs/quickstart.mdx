@@ -5,25 +5,22 @@ description: "Open a file, ask for one change, and review the result."
 
 The first walkthrough uses an explicit request. Automatic wake, inline directives, and autonomy can wait until the basic review loop works.
 
-## Create a small workspace
+## Open a blank workspace
 
 ```sh
-mkdir -p ~/writing/docwriter-quickstart
-cat > ~/writing/docwriter-quickstart/essay.md <<'EOF'
-# A short essay
-
-The first paragraph makes a useful point, but it takes too long to reach it.
-EOF
-
 docwriter --new-session ~/writing/docwriter-quickstart
 ```
 
-## Open the file
+DocWriter creates the folder when it does not exist. The file tree starts empty.
 
-Click `essay.md` in the file tree. You can type directly in the center editor, and the server saves the live document back to the file.
+## Write something
+
+Click **New file** and name it `draft.md`. Write a heading and a short paragraph about something you are already working on.
+
+You can type directly in the center editor, and DocWriter saves the live draft back to the file.
 
 <Frame>
-  ![A short essay open in the DocWriter source editor](/images/quickstart-essay-open.png)
+  ![A new draft open in the DocWriter source editor](/images/quickstart-essay-open.png)
 </Frame>
 
 ## Ask for one edit
@@ -31,7 +28,7 @@ Click `essay.md` in the file tree. You can type directly in the center editor, a
 Click **Chat** in the floating agent dock. Send:
 
 ```text
-Tighten the first paragraph without changing its point.
+Rewrite the opening in fewer words. Make a direct edit while keeping my point and voice.
 ```
 
 The agent can read the open file and propose a change. You can continue typing while it works.
@@ -48,13 +45,7 @@ You can accept and reject suggestions independently. A suggestion becomes stale 
 
 ## Check the file
 
-Open `essay.md` in another editor or run:
-
-```sh
-cat ~/writing/docwriter-quickstart/essay.md
-```
-
-The accepted text is plain Markdown on disk. Review state and comments remain in `.docwriter/docwriter.db`.
+Open `draft.md` from the workspace folder in any other editor. The accepted text is plain Markdown on disk. Review state and comments remain in `.docwriter/docwriter.db`.
 
 ## Continue
 

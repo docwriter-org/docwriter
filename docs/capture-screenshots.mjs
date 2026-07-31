@@ -31,6 +31,9 @@ import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { chromium } from 'playwright';
+import * as Y from 'yjs';
+import { HocuspocusProvider } from '@hocuspocus/provider';
+import WebSocket from 'ws';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, '..');
@@ -121,6 +124,16 @@ async function seedFixture() {
 	await writeFile(join(dir, 'intro.md'), INTRO_CONTENT, 'utf8');
 	await writeFile(join(dir, 'blog-post.md'), BLOG_CONTENT, 'utf8');
 	await writeFile(
+		join(dir, 'draft.md'),
+		[
+			'# A draft',
+			'',
+			'I want to explain the idea that shared drafts can make it easier for a person to work together with an AI agent because both can stay in the same document while the writing changes.',
+			''
+		].join('\n'),
+		'utf8'
+	);
+	await writeFile(
 		join(dir, 'outline.md'),
 		['# Outline', '', '- introduction', '- argument', '- conclusion', ''].join('\n'),
 		'utf8'
@@ -194,6 +207,52 @@ async function configurePdflatexHook(httpPort, texEntry, pdfOutput) {
 		body: JSON.stringify({ hooks: [hook] })
 	});
 	if (!res.ok) throw new Error(`failed to configure hook: HTTP ${res.status}`);
+}
+
+async function seedQuickstartRound(httpPort, wsPort) {
+	const session = await fetch(`http://127.0.0.1:${httpPort}/api/session`).then((response) =>
+		response.json()
+	);
+	const document = new Y.Doc();
+	const provider = new HocuspocusProvider({
+		url: `ws://127.0.0.1:${wsPort}`,
+		name: 'draft.md',
+		document,
+		token: session.serverInstanceId,
+		WebSocketPolyfill: WebSocket
+	});
+	await new Promise((resolveSync, reject) => {
+		const timer = setTimeout(() => reject(new Error('WebSocket sync timed out')), 15_000);
+		const done = () => {
+			clearTimeout(timer);
+			resolveSync();
+		};
+		if (provider.synced) done();
+		else provider.on('synced', done);
+	});
+	const rounds = document.getArray('rounds');
+	document.transact(() => {
+		while (rounds.length > 0) rounds.delete(0);
+		rounds.push([
+			{
+				id: 'quickstart-video-round',
+				operation: {
+					type: 'edit',
+					oldString:
+						'I want to explain the idea that shared drafts can make it easier for a person to work together with an AI agent because both can stay in the same document while the writing changes.',
+					newString:
+						'Shared drafts help a writer and an AI agent work together as the document changes.'
+				},
+				trigger: 'quickstart capture seed',
+				timestamp: Date.now(),
+				kind: 'big',
+				stepCount: 1
+			}
+		]);
+	});
+	await sleep(700);
+	await provider.destroy();
+	document.destroy();
 }
 
 /** Inject a `[[ ... ]]` directive into the .tex file so the agent, on
@@ -417,8 +476,15 @@ async function captureStructural(page) {
 	await page.reload({ waitUntil: 'domcontentloaded' });
 	await sleep(1800);
 
-	await openFile(page, 'essay.md');
+	await openFile(page, 'draft.md');
 	await shot(page, 'quickstart-essay-open.png');
+	await page
+		.locator('.tab', { hasText: 'draft.md' })
+		.locator('.tab-close')
+		.click();
+	await sleep(300);
+
+	await openFile(page, 'essay.md');
 	await shot(page, 'inline-directives-in-doc.png');
 	await shot(page, 'tour-interface-clean.png');
 
@@ -1001,40 +1067,23 @@ async function captureLatex(page, context, fixtureDir, httpPort) {
 	await popup.close().catch(() => undefined);
 }
 
-async function captureAgentDriven(page) {
-	console.log('capturing agent-driven screenshots...');
-	console.log('  (waking the agent; this may take 30-90 seconds)');
-
-	// essay.md should still be open from the structural pass. The seed
-	// contains a [[ ... ]] directive; we just need to wake the agent so
-	// it picks the directive up. Expand the dock first (the comment
-	// scenario above left it collapsed) so the wake-up button is mounted.
-	await setDockExpanded(page, true);
-	// A prior scenario may still be finishing; waking the agent while it's
-	// busy is a no-op (the implicit wake-up is dropped), so wait for idle.
-	await waitForAgentIdle(page);
-	const agentPill = page.locator('.header-agent-btn').first();
-	if (!(await agentPill.count())) {
-		console.log('  agent pill not found, skipping');
-		return;
-	}
-	await agentPill.click();
-	await sleep(500);
+async function captureAgentDriven(page, httpPort, wsPort) {
+	console.log('capturing seeded quickstart review screenshots...');
+	await openFile(page, 'draft.md');
+	await seedQuickstartRound(httpPort, wsPort);
 
 	// Wait for the agent's edit to land as a card in the margin gutter
 	// (the in-situ review surface; the old right-pane review list is gone).
-	const pendingCard = page.locator('.gutter-card').first();
+	const acceptButton = page.locator('.gutter-card .mini-btn.accept').first();
 	try {
-		await pendingCard.waitFor({ state: 'visible', timeout: AGENT_TIMEOUT_MS });
+		await acceptButton.waitFor({ state: 'visible', timeout: AGENT_TIMEOUT_MS });
 	} catch {
 		console.log('  no pending review appeared in time; skipping agent shots');
 		console.log('  (check that Claude credentials are available)');
 		return;
 	}
-	// Collapse the dock so it doesn't cover the gutter card, then expand the
-	// card so the proposed-edit rows and Accept/Reject are visible.
+	// Collapse the dock so it does not cover the expanded edit card.
 	await setDockExpanded(page, false);
-	await page.locator('.gutter-card').first().click().catch(() => undefined);
 	await sleep(1000);
 	await shot(page, 'quickstart-pending-edit.png');
 	await shot(page, 'reviewing-edits-pending.png');
@@ -1090,7 +1139,7 @@ async function main() {
 				// resolves its own thread at the end so the edit scenario
 				// below also starts clean (one gutter card, unambiguous).
 				await captureCommentThread(page);
-				await captureAgentDriven(page);
+				await captureAgentDriven(page, httpPort, wsPort);
 				// Transcript viewer (needs prior agent activity to be
 				// interesting, so it runs after the agent has done work).
 				await captureTranscript(page);
