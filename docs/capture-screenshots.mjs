@@ -24,7 +24,7 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
@@ -528,10 +528,9 @@ async function captureIntroGif(browser, httpPort, ffmpegPath) {
 		viewport: { width: 1200, height: 780 },
 		recordVideo: { dir: videoDir, size: { width: 1200, height: 780 } }
 	});
-	// Expand the dock here too so the agent pill exposes .header-agent-btn
-	// (with its .awake toggle) and the live history log streams in-frame.
+	// Keep the dock collapsed so the document and review gutter remain visible.
 	await gifContext.addInitScript(() => {
-		localStorage.setItem('docwriter.dockExpanded', 'true');
+		localStorage.setItem('docwriter.dockExpanded', 'false');
 		localStorage.setItem('docwriter.showFilesPane', 'true');
 	});
 	const page = await gifContext.newPage();
@@ -551,13 +550,16 @@ async function captureIntroGif(browser, httpPort, ffmpegPath) {
 		// Phase 1: type an opening sentence with a bracketed directive
 		// at the end. Then stop. Auto-wake fires three seconds after the
 		// last keystroke; the agent reads the doc and starts working.
-		await page.keyboard.type('DocWriter is a shared writing workspace.', {
-			delay: 35
-		});
+		await page.keyboard.type(
+			'DocWriter is a shared writing workspace where a writer and an AI agent work alongside each other.',
+			{
+				delay: 35
+			}
+		);
 		await page.keyboard.press('Enter');
 		await page.keyboard.press('Enter');
-		await page.keyboard.type('<< rewrite the previous sentence with a punchier hook >>', {
-			delay: 30
+		await page.keyboard.type('<< replace the opening with "Write alongside an AI agent." >>', {
+			delay: 22
 		});
 
 		// Wait for the auto-wake to actually fire (the agent pill picks
@@ -566,7 +568,7 @@ async function captureIntroGif(browser, httpPort, ffmpegPath) {
 		// awake state if it finishes very fast).
 		try {
 			await page.waitForFunction(
-				() => !!document.querySelector('.header-agent-btn.awake'),
+				() => !!document.querySelector('.header-agent-btn.awake, .dock-agent-btn.awake'),
 				{ timeout: 10000 }
 			);
 		} catch {
@@ -581,36 +583,23 @@ async function captureIntroGif(browser, httpPort, ffmpegPath) {
 		await page.keyboard.press('Enter');
 		await page.keyboard.press('Enter');
 		const concurrentText = [
-			'You and an AI agent work alongside each other in the same live draft.',
-			' Keep writing while the agent researches, comments, or proposes changes.',
-			' You can respond to its work, and it can respond to yours.'
+			'You and the agent can work in the same draft while you keep writing.'
 		];
 		for (const chunk of concurrentText) {
-			await page.keyboard.type(chunk, { delay: 38 });
+			await page.keyboard.type(chunk, { delay: 22 });
 		}
 
-		const pending = page.locator('.gutter-card').first();
+		const acceptBtn = page.locator('.gutter-card .mini-btn.accept').first();
 		try {
-			await pending.waitFor({ state: 'visible', timeout: AGENT_TIMEOUT_MS });
+			await acceptBtn.waitFor({ state: 'visible', timeout: AGENT_TIMEOUT_MS });
 		} catch {
-			console.log('  pending review never appeared in GIF window');
+			console.log('  proposed edit never appeared in GIF window');
 			return;
 		}
-		// Let the viewer see the agent working in the dock for a beat, then
-		// collapse it (so it doesn't cover the gutter) and expand the card to
-		// reveal the proposed edit before accepting.
-		await sleep(1200);
-		await setDockExpanded(page, false);
-		await pending.click().catch(() => undefined);
-		await sleep(1500);
-
-		// Click Accept on the proposed edit so the GIF ends with the
-		// suggestion landing in the document.
-		const acceptBtn = page.locator('.gutter-card.expanded .mini-btn.accept').first();
-		if (await acceptBtn.count()) {
-			await acceptBtn.click();
-			await sleep(1800);
-		}
+		// Hold on the proposed edit, then accept it.
+		await sleep(700);
+		await acceptBtn.click();
+		await sleep(1400);
 	} finally {
 		await gifContext.close();
 	}
@@ -628,14 +617,46 @@ async function captureIntroGif(browser, httpPort, ffmpegPath) {
 	const gifOut = join(IMAGES_DIR, 'intro-flow.gif');
 	const webmOut = join(IMAGES_DIR, 'intro-flow.webm');
 	const mp4Out = join(IMAGES_DIR, 'intro-flow.mp4');
-	await copyFile(webm, webmOut);
-	console.log('  wrote intro-flow.webm');
+	const probe = spawnSync(
+		'ffprobe',
+		['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', webm],
+		{ encoding: 'utf8' }
+	);
+	const rawDuration = Number.parseFloat(probe.stdout?.trim() ?? '18');
+	const clipDuration = 20;
+	const clipStart = Math.max(0, rawDuration - clipDuration);
+	const seek = clipStart > 0 ? ['-ss', clipStart.toFixed(2)] : [];
+	const webmResult = spawnSync(
+		ffmpegPath,
+		[
+			'-y',
+			...seek,
+			'-t',
+			String(clipDuration),
+			'-i',
+			webm,
+			'-vf',
+			'scale=960:-2:flags=lanczos',
+			'-an',
+			'-c:v',
+			'libvpx-vp9',
+			'-crf',
+			'34',
+			'-b:v',
+			'0',
+			webmOut
+		],
+		{ encoding: 'utf8' }
+	);
+	if (webmResult.status === 0) console.log('  wrote intro-flow.webm');
+	else console.log(`  webm conversion failed: ${webmResult.stderr?.slice(-800) ?? ''}`);
 	const mp4 = spawnSync(
 		ffmpegPath,
 		[
 			'-y',
+			...seek,
 			'-t',
-			'40',
+			String(clipDuration),
 			'-i',
 			webm,
 			'-movflags',
@@ -649,15 +670,14 @@ async function captureIntroGif(browser, httpPort, ffmpegPath) {
 	if (mp4.status === 0) console.log('  wrote intro-flow.mp4');
 	else console.log(`  mp4 conversion failed: ${mp4.stderr?.slice(-800) ?? ''}`);
 	console.log('  converting webm to gif with ffmpeg...');
-	// Cap duration at 40s: typing + directive, pause, auto-wake,
-	// substantial concurrent typing while the agent works, review
-	// card appearing, and Accept. 9fps + 800px + 64 colors.
+	// Keep the GIF short enough to scan while preserving the edit and Accept.
 	const ff = spawnSync(
 		ffmpegPath,
 		[
 			'-y',
+			...seek,
 			'-t',
-			'40',
+			String(clipDuration),
 			'-i',
 			webm,
 			'-vf',

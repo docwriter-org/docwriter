@@ -43,6 +43,20 @@ async function seedWorkspace() {
 		'utf8'
 	);
 	await writeFile(
+		join(workspace, 'intro.md'),
+		[
+			'# Writing with AI',
+			'',
+			'DocWriter is a shared writing workspace where a writer and an AI agent work alongside each other.',
+			'',
+			'<< replace the opening with "Write alongside an AI agent." >>',
+			'',
+			'## Notes',
+			''
+		].join('\n'),
+		'utf8'
+	);
+	await writeFile(
 		join(workspace, 'preview.md'),
 		['# Preview demo', '', 'This source file produces an HTML preview.', ''].join('\n'),
 		'utf8'
@@ -100,11 +114,15 @@ async function startApp(workspace, httpPort, wsPort) {
 	throw new Error('DocWriter did not start in 40 seconds');
 }
 
-async function openEssay(page, httpPort) {
+async function openWorkspaceFile(page, httpPort, filename) {
 	await page.goto(`http://127.0.0.1:${httpPort}/`, { waitUntil: 'domcontentloaded' });
 	await sleep(2200);
-	await page.locator('.tree-name', { hasText: /^essay\.md$/ }).first().click();
+	await page.locator('.tree-name', { hasText: new RegExp(`^${filename.replace('.', '\\.')}$`) }).first().click();
 	await sleep(1200);
+}
+
+async function openEssay(page, httpPort) {
+	await openWorkspaceFile(page, httpPort, 'essay.md');
 }
 
 async function seedReviewRounds(httpPort, wsPort) {
@@ -153,6 +171,51 @@ async function seedReviewRounds(httpPort, wsPort) {
 					newString: 'The second paragraph covers too many ideas without choosing one.'
 				},
 				trigger: 'video seed',
+				timestamp: Date.now(),
+				kind: 'big',
+				stepCount: 1
+			}
+		]);
+	});
+	await sleep(700);
+	await provider.destroy();
+	document.destroy();
+}
+
+async function seedIntroRound(httpPort, wsPort) {
+	const session = await fetch(`http://127.0.0.1:${httpPort}/api/session`).then((response) =>
+		response.json()
+	);
+	const document = new Y.Doc();
+	const provider = new HocuspocusProvider({
+		url: `ws://127.0.0.1:${wsPort}`,
+		name: 'intro.md',
+		document,
+		token: session.serverInstanceId,
+		WebSocketPolyfill: WebSocket
+	});
+	await new Promise((resolveSync, reject) => {
+		const timer = setTimeout(() => reject(new Error('WebSocket sync timed out')), 15_000);
+		const done = () => {
+			clearTimeout(timer);
+			resolveSync();
+		};
+		if (provider.synced) done();
+		else provider.on('synced', done);
+	});
+	const rounds = document.getArray('rounds');
+	document.transact(() => {
+		while (rounds.length > 0) rounds.delete(0);
+		rounds.push([
+			{
+				id: 'intro-video-round',
+				operation: {
+					type: 'edit',
+					oldString:
+						'DocWriter is a shared writing workspace where a writer and an AI agent work alongside each other.\n\n<< replace the opening with "Write alongside an AI agent." >>',
+					newString: 'Write alongside an AI agent.'
+				},
+				trigger: 'intro video seed',
 				timestamp: Date.now(),
 				kind: 'big',
 				stepCount: 1
@@ -227,6 +290,57 @@ function convertVideo(webm, basename, startSeconds = 0) {
 		if (result.status !== 0) throw new Error(result.stderr);
 		console.log(`wrote ${basename}.webm and ${basename}.mp4`);
 	});
+}
+
+function convertGif(webm, basename, startSeconds = 0) {
+	const output = join(IMAGES_DIR, `${basename}.gif`);
+	const seek = startSeconds > 0 ? ['-ss', startSeconds.toFixed(2)] : [];
+	const result = spawnSync(
+		'ffmpeg',
+		[
+			'-y',
+			...seek,
+			'-i',
+			webm,
+			'-vf',
+			'fps=9,scale=800:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=64[p];[s1][p]paletteuse=dither=bayer',
+			'-loop',
+			'0',
+			output
+		],
+		{ encoding: 'utf8' }
+	);
+	if (result.status !== 0) throw new Error(result.stderr);
+	console.log(`wrote ${basename}.gif`);
+}
+
+async function captureIntro(browser, httpPort, wsPort) {
+	const directory = await mkdtemp(join(tmpdir(), 'docwriter-intro-video-'));
+	const context = await browser.newContext({
+		viewport: VIEWPORT,
+		recordVideo: { dir: directory, size: VIEWPORT }
+	});
+	await context.addInitScript(() => {
+		localStorage.setItem('docwriter.dockExpanded', 'false');
+	});
+	const startedAt = Date.now();
+	const page = await context.newPage();
+	await openWorkspaceFile(page, httpPort, 'intro.md');
+	const clipStart = Math.max(0, (Date.now() - startedAt) / 1000 - 0.3);
+	await seedIntroRound(httpPort, wsPort);
+	const accept = page.locator('.gutter-card .mini-btn.accept').first();
+	await accept.waitFor({ state: 'visible', timeout: 10_000 });
+	await sleep(900);
+	const notes = page.locator('.tiptap-content p').last();
+	await notes.click();
+	await page.keyboard.type('The writer keeps working while the suggestion waits.', { delay: 28 });
+	await sleep(900);
+	await accept.click();
+	await sleep(1500);
+	const webm = await recordedWebm(context, directory);
+	await convertVideo(webm, 'intro-flow', clipStart);
+	convertGif(webm, 'intro-flow', clipStart);
+	await rm(directory, { recursive: true, force: true });
 }
 
 async function captureReview(browser, httpPort, wsPort) {
@@ -425,6 +539,7 @@ async function main() {
 	const server = await startApp(workspace, httpPort, wsPort);
 	const browser = await chromium.launch({ headless: true });
 	try {
+		if (!ONLY_SCENARIO || ONLY_SCENARIO === 'intro') await captureIntro(browser, httpPort, wsPort);
 		if (!ONLY_SCENARIO || ONLY_SCENARIO === 'review') await captureReview(browser, httpPort, wsPort);
 		if (!ONLY_SCENARIO || ONLY_SCENARIO === 'controls') await captureControls(browser, httpPort);
 		if (!ONLY_SCENARIO || ONLY_SCENARIO === 'mute') await captureMute(browser, httpPort, wsPort);

@@ -8,8 +8,8 @@ The standard viewport is 1400 by 900 pixels. The introduction recording uses 120
 
 | Asset | Owning page | Scenario | Requirements |
 | --- | --- | --- | --- |
-| `intro-flow.gif` | Overview | Writer types while the agent handles a directive | Provider credential and `ffmpeg` |
-| `intro-flow.mp4` and `intro-flow.webm` | Overview | Video formats for the same concurrent writing sequence | Provider credential and `ffmpeg` |
+| `intro-flow.gif` | Overview | Writer keeps typing while a seeded proposal waits | `ffmpeg` |
+| `intro-flow.mp4` and `intro-flow.webm` | Overview | Video formats for the same concurrent writing sequence | `ffmpeg` |
 | `review-workflow.mp4` and `review-workflow.webm` | Review edits | Hover, accept, and reject seeded proposals | None |
 | `agent-controls.mp4` and `agent-controls.webm` | Ask and steer | Pause, resume, Chat, and Plan first | None |
 | `mute-proposals.mp4` and `mute-proposals.webm` | Ask and steer | Hide and restore proposal layers | None |

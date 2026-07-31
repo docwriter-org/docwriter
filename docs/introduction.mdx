@@ -1,11 +1,11 @@
 ---
 title: "Overview"
-description: "A shared writing workspace for you and an AI agent."
+description: "Reimagining AI-assisted writing as shared work in one live draft."
 ---
 
 DocWriter is a shared writing workspace where you and an AI agent work alongside each other in the same live draft.
 
-Keep writing while the agent researches, comments, or proposes changes. You can respond to its work, and it can respond to yours.
+It reimagines AI-assisted writing as ongoing collaboration inside the draft. Keep writing while the agent researches, comments, or proposes changes. You can respond to its work, and it can respond to yours.
 
 <Frame caption="The writer keeps typing while the agent handles an inline request.">
   <video
@@ -23,25 +23,23 @@ Keep writing while the agent researches, comments, or proposes changes. You can 
   </video>
 </Frame>
 
-## Work in the document
+## Work where the writing happens
 
-DocWriter is built around the document rather than a chat transcript. You can type an instruction inside the draft, select a passage and give feedback, or reply to an agent comment beside the text. Chat remains available for requests that do not belong at one place in the document.
+You do not have to move every request into a separate conversation. Type an instruction inside the draft, select a passage and give feedback, or reply to an agent comment beside the text.
 
-Start DocWriter with `docwriter [directory]` to make any local folder the workspace root. The agent can read files in that workspace and use research, shell, and code tools.
-
-Each turn begins with the paths and recent changes for every open tab. The agent can read full files and change several open files during one run. Changes to an open document appear in the editor, where you can review a proposed edit in the comment gutter before accepting it.
+Chat remains available for research and requests that do not belong at one place. The agent can work across the open files in your writing project.
 
 ## Keep writing while the agent works
 
-The editor and agent share the same live document. The agent can work while you continue typing, and Yjs combines both streams of changes. Long research and revision tasks do not block the editor.
+The editor and agent share the same live draft. The agent can keep working while you continue typing, so research and revision tasks do not block your writing.
 
-DocWriter also keeps a live activity log in the floating agent dock. You can open the full transcript when you need more detail.
+Agent comments and proposed changes appear beside the relevant text. Accept what helps, reject what does not, or reply with more direction.
 
 ## Choose how the agent participates
 
-Autonomy is one setting among the other ways you direct the agent. Low autonomy waits for clear requests. Medium autonomy can open a focused comment when it notices a problem. High autonomy can also propose a focused edit.
+You decide how proactive the agent should be. It can wait for a direct request, point out a problem, or propose a focused edit.
 
-Agent edits to an existing file are reviewable. You can pause the agent, mute proposed changes, cancel a run, or start a new session without changing your files and saved writing rules.
+You can pause the agent, hide proposed changes, cancel a run, or start a new session without changing the draft or your saved writing preferences.
 
 <CardGroup cols={2}>
   <Card title="Install" icon="download" href="/install">
