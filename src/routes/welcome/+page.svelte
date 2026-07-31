@@ -88,7 +88,7 @@
 	<title>DocWriter</title>
 	<meta
 		name="description"
-		content="A shared writing workspace where you and an AI agent work alongside each other in the same live draft."
+		content="Reimagining AI-assisted writing."
 	/>
 </svelte:head>
 
@@ -101,12 +101,11 @@
 	<header class="hero">
 		<h1>DocWriter</h1>
 		<p class="subtitle">
-			A <span class="hl">shared writing workspace</span> where you and an AI agent work
-			alongside each other in the same live draft.
+			<span class="hl">Reimagining AI-assisted writing.</span>
 		</p>
 		<p class="hero-detail">
-			Keep writing while the agent researches, comments, or proposes changes. You can respond to
-			agent work, and the agent can respond to yours.
+			More of your voice, less AI slop. Work in the same live draft, at the same time. Choose
+			whether the agent waits, comments, proposes changes, or edits directly.
 		</p>
 	</header>
 
