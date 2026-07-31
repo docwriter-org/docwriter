@@ -5,7 +5,7 @@
 <h1 align="center">DocWriter</h1>
 
 <p align="center">
-  <strong>Reimagining AI-assisted writing with more of your voice and less slop.</strong>
+  <strong>Reimagining AI-assisted writing with more of your voice and less AI-generated slop.</strong>
 </p>
 
 <p align="center">
