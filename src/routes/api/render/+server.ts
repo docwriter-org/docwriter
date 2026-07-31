@@ -35,7 +35,8 @@ import {
 	COMMENT_DOC_TOOL_NAME,
 	REPLY_TO_COMMENT_TOOL_NAME,
 	setActiveFeedbackThreadId,
-	setActiveReviewerId
+	setActiveReviewerId,
+	REPLY_BEFORE_EDIT_PROMPT_NOTE
 } from '$lib/server/mcp-doc-tools';
 import { getReviewerById, buildCritiqueMessage } from '$lib/server/reviewers';
 import type { Reviewer } from '$lib/shared/reviewers';
@@ -317,7 +318,7 @@ Every file is raw text, including .md. The editor renders markdown source litera
 
 Every edit proposal needs a comment thread that says what is about to happen, so the user sees your reasoning next to the pending edit instead of a bare diff.
 
-- If the work already has a thread — user feedback arrives with a thread_id, or you are revising a thread's pending edit — use it. If you have not yet explained this edit there, reply first with reply_to_comment, then call edit_doc with that thread_id.
+- If the work already has a thread — user feedback arrives with a thread_id, or you are revising a thread's pending edit — use it. If you have not yet explained this edit there, reply first with reply_to_comment, then call edit_doc with that thread_id. ${REPLY_BEFORE_EDIT_PROMPT_NOTE}
 - Otherwise, before the edit, call comment_doc anchored to the exact text you are about to change, with one or two first-person sentences: what prompted the edit (the user's words, an inline directive, a rule), what you think is wrong, and what you will do. Then call edit_doc with the thread_id that comment_doc returns.
 - Inline directives such as [[ ... ]] follow the same contract: anchor the thread on the directive text, say how you read the directive and what you will write, then propose the edit on that thread.
 - For write_doc on an existing file, anchor the thread to the first sentence of the text you are replacing.
@@ -328,7 +329,7 @@ Every edit proposal needs a comment thread that says what is about to happen, so
 
 Each turn may contain these blocks, in this order.
 
-- <workspace_state>: the open tabs, a diff of what changed in each since your last turn, and open comment threads as one-line stubs. Unchanged tabs say "Unchanged". Tab content is never inlined. Call read_doc(path) when you need it. Calls are cheap because the server holds the document in memory, so read what you need, not every tab.
+- <workspace_state>: the open tabs, a diff of what changed in each since your last turn, and open comment threads as one-line stubs. Unchanged tabs say "Unchanged". Tab content is never inlined. Call read_doc(file_path) when you need it. Calls are cheap because the server holds the document in memory, so read what you need, not every tab.
 - <session_state>: rules, style references, and the agency level. Sent in full on the first turn, then only when something changed. If the block is absent, nothing changed.
 - <mode>: present only in special modes, such as plan-first.
 - <user_message>: the user's words, verbatim.
@@ -398,7 +399,7 @@ The agency level arrives in session_state when it changes.
  * Content-inlining policy: never inline full content. Every tab gets a
  * header (path + active marker if it's the focused tab) plus the diff
  * since the agent's `last_seen` baseline if there is one. The agent calls
- * `read_doc(path)` to fetch full content on demand — free in-process
+ * `read_doc(file_path)` to fetch full content on demand — free in-process
  * fetch against the live Y.Doc, no token cost on the prompt side.
  *
  * The previous design re-inlined the active tab's full content on every
@@ -872,13 +873,13 @@ export const POST: RequestHandler = async ({ request }) => {
 							if (toolName === 'Read') {
 								const matched = findReferencedOpenTabPath(toolInput?.file_path, openTabPaths);
 								if (matched) {
-									return { behavior: 'deny' as const, message: 'Open tab files must be read with `read_doc(path)`.' };
+									return { behavior: 'deny' as const, message: 'Open tab files must be read with `read_doc(file_path)`.' };
 								}
 							}
 							if (toolName === 'Glob' || toolName === 'Grep') {
 								const matched = findReferencedOpenTabPath(toolInput?.path, openTabPaths);
 								if (matched) {
-									return { behavior: 'deny' as const, message: 'Use `read_doc(path)` for open tab files.' };
+									return { behavior: 'deny' as const, message: 'Use `read_doc(file_path)` for open tab files.' };
 								}
 							}
 							if (toolName === 'Bash') {

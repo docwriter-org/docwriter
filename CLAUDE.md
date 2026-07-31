@@ -93,7 +93,7 @@ first `synced` event — on localhost this is sub-20ms.
 `/api/render` streams a single `query()` call over SSE:
 
 1. Build a multi-tab prompt:
-   - Every tab: header (path + active marker) + diff vs `kv['last_seen:<tabId>']` if it changed, else "unchanged" note. No tab content is ever inlined; the agent calls `read_doc(path)` on demand.
+   - Every tab: header (path + active marker) + diff vs `kv['last_seen:<tabId>']` if it changed, else "unchanged" note. No tab content is ever inlined; the agent calls `read_doc(file_path)` on demand.
    - First-render tab (no `last_seen`): path only — agent must `read_doc` to see content.
    Agency guidance (`conservative` / `balanced` / `aggressive`) rewires
    the "how to decide whether to edit" section.

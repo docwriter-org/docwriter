@@ -3,7 +3,7 @@
 	import { flip } from 'svelte/animate';
 	import { cubicOut } from 'svelte/easing';
 	import { marked } from 'marked';
-	import { FileEdit, User, Bot, Play, CheckCircle, XCircle, Eye, Terminal, Maximize2, X, RotateCcw, MessagesSquare, Cat, Sparkles, BellOff, Bell, ChevronDown, Pause } from 'lucide-svelte';
+	import { FileEdit, User, Bot, Play, CheckCircle, XCircle, Eye, Terminal, Maximize2, X, RotateCcw, ScrollText, Cat, Sparkles, BellOff, Bell, ChevronDown, Pause } from 'lucide-svelte';
 	import type { HistoryEntry } from '$lib/types';
 	import { agentHistory, isRendering, historyVerbosity, sessionCost, agentSettings, pendingReviewRounds, submitCountdown, activeReviewer, type SessionCost } from '$lib/stores';
 	import type { HistoryVerbosity } from '$lib/stores';
@@ -12,6 +12,7 @@
 	import ReviewerMascot from './ReviewerMascot.svelte';
 	import ShineBorder from './ShineBorder.svelte';
 	import { tooltip } from '$lib/actions/tooltip';
+	import { modEnterLabel } from '$lib/keyboard';
 
 	let transcriptOpen = $state(false);
 
@@ -140,7 +141,7 @@
 	let agentTooltip = $derived.by(() => {
 		const pauseHint = 'Double-click to pause or resume the agent.';
 		const action = paused
-			? `Agent paused — no auto-wake, Wake up, or Send until you resume. ${pauseHint}`
+			? `Agent paused — no auto-wake, Wake up, or chat messages until you resume. ${pauseHint}`
 			: rendering
 				? `Click to stop the agent and cancel any queued messages. ${pauseHint}`
 				: `Wake up the agent. It reviews the open files, reacts to any pending changes, and proposes edits or comments based on the current agency setting. ${pauseHint}`;
@@ -415,7 +416,7 @@
 						{:else if rendering}
 							<span class="bounce-dots"><span>.</span><span>.</span><span>.</span></span>
 						{:else if countdown > 0}
-							<span class="countdown" title="Auto-wake in {countdown}s — click Wake up to skip">{countdown}s</span>
+							<span class="countdown" title="Auto-wake in {countdown}s — click Wake up or press {modEnterLabel} in the editor to skip">{countdown}s</span>
 						{:else}
 							<span class="sleep-dots"><span>z</span><span>z</span><span>z</span></span>
 						{/if}
@@ -448,7 +449,7 @@
 					aria-label="Transcript"
 					use:tooltip={'Open the current session transcript. Shows user messages, agent responses, tool calls, and tool results.'}
 				>
-					<MessagesSquare size={12} />
+					<ScrollText size={12} />
 				</button>
 				{@render dock()}
 				<button
@@ -900,7 +901,7 @@
 		flex: 0 0 auto;
 	}
 	/* Shared pill-button chrome — applied to all 3 action buttons in
-	 * the trailing group (Wake from AgentDock, Send from AgentDock,
+	 * the trailing group (Wake from AgentDock, Chat from AgentDock,
 	 * New session from this component). Icon + text label, ghost until
 	 * hovered. :global() so the AgentDock's buttons inherit it. */
 	/* ShineBorder (BorderBeam) inline so it sits flush in the flex row. */

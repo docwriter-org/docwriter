@@ -3,6 +3,7 @@
 	import { cubicOut } from 'svelte/easing';
 	import { AlertTriangle } from 'lucide-svelte';
 	import { dialogQueue, resolveDialog, type DialogSpec } from '$lib/dialogs';
+	import { isModEnter } from '$lib/keyboard';
 
 	let queue = $state<DialogSpec[]>([]);
 	dialogQueue.subscribe((v) => (queue = v));
@@ -33,7 +34,7 @@
 			// Alert-style dialogs (no cancel) resolve true on Escape — the
 			// user is just dismissing the notice.
 			resolveDialog(active.id, !active.cancelLabel);
-		} else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey || !active.cancelLabel)) {
+		} else if (isModEnter(e) || (e.key === 'Enter' && !active.cancelLabel)) {
 			e.preventDefault();
 			resolveDialog(active.id, true);
 		}

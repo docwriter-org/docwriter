@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Editor } from '@tiptap/core';
 	import { Send, Sparkles, Cat, Check, Copy, X, User } from 'lucide-svelte';
+	import { isModEnter, modEnterToSend } from '$lib/keyboard';
 
 	/** Minimal inline markdown → HTML. Matches the renderer used in
 	 * HistoryPane so assistant_text and comments look the same. Escapes
@@ -464,6 +465,27 @@
 			)
 	);
 
+	// Keep the newest message visible: attached to the open card's message
+	// list (use:followNewMessages), scroll to the bottom when a message
+	// lands — the user's own reply syncing back, or the agent's response.
+	// Counts are remembered per thread across open/close so the first open
+	// of a card doesn't jump; only growth after that (including messages
+	// that arrived while the card was closed) scrolls.
+	const seenMsgCounts = new Map<string, number>();
+	function followNewMessages(node: HTMLElement, params: { id: string; count: number }) {
+		const track = ({ id, count }: { id: string; count: number }) => {
+			const prev = seenMsgCounts.get(id);
+			seenMsgCounts.set(id, count);
+			if (prev !== undefined && count > prev) {
+				requestAnimationFrame(() =>
+					node.scrollTo({ top: node.scrollHeight, behavior: 'smooth' })
+				);
+			}
+		};
+		track(params);
+		return { update: track };
+	}
+
 	async function sendReply(thread: CommentThread) {
 		const text = (replyDrafts[thread.id] ?? '').trim();
 		if (!text || replying[thread.id]) return;
@@ -597,7 +619,10 @@
 						/>
 					</span>
 				{/if}
-				<div class="card-messages">
+				<div
+					class="card-messages"
+					use:followNewMessages={{ id: thread.id, count: thread.messages.length }}
+				>
 					{#each thread.messages as message (message.id)}
 						{@const rv = message.author === 'agent' ? messageReviewer(message) : null}
 						<div class="message" class:from-agent={message.author === 'agent'} class:from-user={message.author === 'user'}>
@@ -693,9 +718,10 @@
 									>
 										<Copy size={11} />
 									</button>
-									<button class="mini-btn reject" title="Reject this edit" onclick={() => onRejectRound(ed.id)}>
-										<X size={12} />
-									</button>
+									<!-- No per-edit reject on thread cards: the natural "no" is a
+									     follow-up reply asking for a revision (or Resolve, which
+									     drops the thread's pending edits). Loose edit cards keep
+									     their X — they have no reply box. -->
 									<button
 										class="mini-btn accept"
 										title={ed.stale ? 'Stale — can no longer apply' : 'Accept this edit'}
@@ -721,7 +747,7 @@
 						};
 					}}
 					onkeydown={(e) => {
-						if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+						if (isModEnter(e)) {
 							e.preventDefault();
 							void sendReply(thread);
 						}
@@ -739,6 +765,7 @@
 						{thread.resolved ? 'Reopen' : 'Resolve'}
 					</button>
 					<div class="card-actions-right">
+						<span class="kbd-hint">{modEnterToSend}</span>
 						<button
 							class="send-btn"
 							onclick={() => sendReply(thread)}

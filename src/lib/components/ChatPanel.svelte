@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { Send, X, Image } from 'lucide-svelte';
+	import { isModEnter, modEnterToSend } from '$lib/keyboard';
 	import {
 		ALLOWED_IMAGE_TYPES,
 		type AllowedImageMediaType,
@@ -42,7 +43,7 @@
 	}
 
 	function onKeyDown(e: KeyboardEvent) {
-		if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+		if (isModEnter(e)) {
 			e.preventDefault();
 			send();
 		}
@@ -170,7 +171,7 @@
 			<span>Plan first</span>
 		</label>
 		<div class="footer-right">
-			<span class="hint">⌘↵ to send</span>
+			<span class="kbd-hint">{modEnterToSend}</span>
 			<button class="send-btn" onclick={send} disabled={!message.trim() && attachedImages.length === 0}>
 				<Send size={12} />
 				{#if rendering}
@@ -347,10 +348,6 @@
 	.plan-toggle input {
 		margin: 0;
 		cursor: pointer;
-	}
-	.hint {
-		font-size: 11px;
-		color: var(--text-faint);
 	}
 	.send-btn {
 		display: inline-flex;
