@@ -2,7 +2,7 @@
 	"$schema": "https://mintlify.com/docs.json",
 	"theme": "palm",
 	"name": "DocWriter",
-	"description": "Reimagining AI-assisted writing as shared work in one live draft.",
+	"description": "Reimagining AI-assisted writing with more of your voice and less slop.",
 	"logo": {
 		"light": "/logo/light.svg",
 		"dark": "/logo/dark.svg"
