@@ -13,7 +13,11 @@ const MERGE_MSG = 'chore: merge main into landing';
 /** Files maintained on main; landing should not fork these. */
 const MAIN_OWNED = new Set([
 	'scripts/merge-main-into-landing.mjs',
-	'.github/workflows/sync-landing.yml'
+	'.github/workflows/sync-landing.yml',
+	'src/lib/components/LogoMark.svelte',
+	'src/routes/welcome/+page.server.ts',
+	'src/routes/welcome/+page.svelte',
+	'src/routes/welcome/+page.ts'
 ]);
 
 function run(cmd, { inherit = false } = {}) {
