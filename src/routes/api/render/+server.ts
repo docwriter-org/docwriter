@@ -329,7 +329,7 @@ Every edit proposal needs a comment thread that says what is about to happen, so
 
 Each turn may contain these blocks, in this order.
 
-- <workspace_state>: the open tabs, a diff of what changed in each since your last turn, and open comment threads as one-line stubs. Unchanged tabs say "Unchanged". Tab content is never inlined. Call read_doc(path) when you need it. Calls are cheap because the server holds the document in memory, so read what you need, not every tab.
+- <workspace_state>: the open tabs, a diff of what changed in each since your last turn, and open comment threads as one-line stubs. Unchanged tabs say "Unchanged". Tab content is never inlined. Call read_doc(file_path) when you need it. Calls are cheap because the server holds the document in memory, so read what you need, not every tab.
 - <session_state>: rules, style references, and the agency level. Sent in full on the first turn, then only when something changed. If the block is absent, nothing changed.
 - <mode>: present only in special modes, such as plan-first.
 - <user_message>: the user's words, verbatim.
@@ -399,7 +399,7 @@ The agency level arrives in session_state when it changes.
  * Content-inlining policy: never inline full content. Every tab gets a
  * header (path + active marker if it's the focused tab) plus the diff
  * since the agent's `last_seen` baseline if there is one. The agent calls
- * `read_doc(path)` to fetch full content on demand — free in-process
+ * `read_doc(file_path)` to fetch full content on demand — free in-process
  * fetch against the live Y.Doc, no token cost on the prompt side.
  *
  * The previous design re-inlined the active tab's full content on every
@@ -873,13 +873,13 @@ export const POST: RequestHandler = async ({ request }) => {
 							if (toolName === 'Read') {
 								const matched = findReferencedOpenTabPath(toolInput?.file_path, openTabPaths);
 								if (matched) {
-									return { behavior: 'deny' as const, message: 'Open tab files must be read with `read_doc(path)`.' };
+									return { behavior: 'deny' as const, message: 'Open tab files must be read with `read_doc(file_path)`.' };
 								}
 							}
 							if (toolName === 'Glob' || toolName === 'Grep') {
 								const matched = findReferencedOpenTabPath(toolInput?.path, openTabPaths);
 								if (matched) {
-									return { behavior: 'deny' as const, message: 'Use `read_doc(path)` for open tab files.' };
+									return { behavior: 'deny' as const, message: 'Use `read_doc(file_path)` for open tab files.' };
 								}
 							}
 							if (toolName === 'Bash') {
