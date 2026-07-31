@@ -488,10 +488,8 @@ async function captureStructural(page) {
 	await shot(page, 'inline-directives-in-doc.png');
 	await shot(page, 'tour-interface-clean.png');
 
-	// Annotated interface overview: with essay.md open (so the Send
-	// button and other affordances are visible), overlay labeled
-	// bounding boxes on the major regions. The tour page reads them
-	// off this image.
+	// Expand the dock only for the annotated interface overview and wake control.
+	await setDockExpanded(page, true);
 	await annotateInterface(page);
 	await shot(page, 'tour-interface-overview.png');
 	await clearAnnotations(page);
@@ -520,6 +518,7 @@ async function captureStructural(page) {
 		console.log('  wrote agent-wakeup-button.png');
 		await clearAnnotations(page);
 	}
+	await setDockExpanded(page, false);
 
 	// Editor with find bar open. Click the editor first to focus it.
 	await page.locator('.tiptap-content').first().click();
@@ -576,6 +575,7 @@ async function captureStructural(page) {
 	await shot(page, 'skills-panel.png');
 	await closeMenu(page);
 
+	await setDockExpanded(page, true);
 	const sendBtn = page.locator('.dock-message-btn').first();
 	await sendBtn.click();
 	await sleep(400);
@@ -585,6 +585,7 @@ async function captureStructural(page) {
 	await shot(page, 'chat-popover.png');
 	await page.keyboard.press('Escape');
 	await sleep(300);
+	await setDockExpanded(page, false);
 }
 
 async function captureIntroGif(browser, httpPort, ffmpegPath) {
@@ -1120,12 +1121,9 @@ async function main() {
 		console.log('launching chromium...');
 		browser = await chromium.launch();
 		const context = await browser.newContext({ viewport: VIEWPORT });
-		// The agent dock defaults to a collapsed pill; expand it before any
-		// page loads so the wake-up button (.header-agent-btn), the chat
-		// trigger (.dock-message-btn) and the history pane (.history-pane)
-		// are all mounted for the captures and annotations.
+		// Keep the dock collapsed unless a capture is specifically about the dock.
 		await context.addInitScript(() => {
-			localStorage.setItem('docwriter.dockExpanded', 'true');
+			localStorage.setItem('docwriter.dockExpanded', 'false');
 			localStorage.setItem('docwriter.showFilesPane', 'true');
 		});
 		context.__httpPort = httpPort;
