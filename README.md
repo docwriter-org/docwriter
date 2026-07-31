@@ -11,7 +11,7 @@
 <p align="center">
   Keep more of your voice and reduce AI slop.<br />
   Work alongside the agent in the same live draft, at the same time.<br />
-  Dynamically reconfigure agency.
+  Dynamically reconfigure agency as the writing process changes.
 </p>
 
 <p align="center">
