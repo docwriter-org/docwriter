@@ -101,12 +101,12 @@
 	<header class="hero">
 		<h1>DocWriter</h1>
 		<p class="subtitle">
-			<span class="hl">Reimagining AI-assisted writing to:</span>
+			<span class="hl">Reimagining AI-assisted writing to let you:</span>
 		</p>
 		<p class="hero-detail">
-			Let you keep more of your voice and reduce AI slop.<br />
-			Let you work alongside the agent in the same live draft, at the same time.<br />
-			Let you decide whether the agent waits, comments, proposes changes, or edits directly.
+			Keep more of your voice and reduce AI slop.<br />
+			Work alongside the agent in the same live draft, at the same time.<br />
+			Decide whether the agent waits, comments, proposes changes, or edits directly.
 		</p>
 	</header>
 
