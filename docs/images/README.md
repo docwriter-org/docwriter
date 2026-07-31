@@ -9,6 +9,9 @@ The standard viewport is 1400 by 900 pixels. The introduction recording uses 120
 | Asset | Owning page | Scenario | Requirements |
 | --- | --- | --- | --- |
 | `intro-flow.gif` | Overview | Writer types while the agent handles a directive | Provider credential and `ffmpeg` |
+| `intro-flow.mp4` and `intro-flow.webm` | Overview | Video formats for the same concurrent writing sequence | Provider credential and `ffmpeg` |
+| `review-workflow.mp4` and `review-workflow.webm` | Review edits | Hover, accept, and reject seeded proposals | None |
+| `agent-controls.mp4` and `agent-controls.webm` | Ask and steer | Pause, resume, Chat, and Plan first | None |
 | `tour-interface-overview.png` | Interface tour | Major regions with generated labels | None |
 | `tour-interface-clean.png` | Interface tour | Same state without labels | None |
 | `quickstart-essay-open.png` | Make your first edit | Seed essay open in the editor | None |
@@ -41,7 +44,7 @@ The standard viewport is 1400 by 900 pixels. The introduction recording uses 120
 | `overleaf-pending-edit.png` | LaTeX and SyncTeX | Proposed TeX edit | Provider credential and `pdflatex` |
 | `overleaf-pdf-preview.png` | LaTeX and SyncTeX | Rebuilt PDF preview | Provider credential and `pdflatex` |
 
-The recording script also writes `intro-flow.webm` and `intro-flow.mp4` when `ffmpeg` is available. The GIF remains the small inline fallback.
+The overview keeps a GIF fallback for browsers that cannot play MP4 or WebM. The shorter workflow recordings use MP4 first and WebM second.
 
 ## Commands
 
@@ -68,6 +71,8 @@ Run the introduction recording:
 ```sh
 npm run docs:assets:videos
 ```
+
+The video command also records the review and agent control workflows from deterministic fixtures.
 
 Check references, file sizes, and dimensions:
 

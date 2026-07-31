@@ -33,7 +33,7 @@
 		"docs:assets": "node docs/capture-screenshots.mjs",
 		"docs:assets:structural": "SKIP_AGENT=1 SKIP_LATEX=1 SKIP_GIF=1 node docs/capture-screenshots.mjs",
 		"docs:assets:agent": "SKIP_BLOG=1 SKIP_LATEX=1 SKIP_GIF=1 node docs/capture-screenshots.mjs",
-		"docs:assets:videos": "SKIP_STRUCTURAL=1 SKIP_AGENT=1 SKIP_LATEX=1 node docs/capture-screenshots.mjs",
+		"docs:assets:videos": "SKIP_STRUCTURAL=1 SKIP_AGENT=1 SKIP_LATEX=1 node docs/capture-screenshots.mjs && node docs/capture-workflow-videos.mjs",
 		"docs:assets:verify": "node docs/verify-assets.mjs",
 		"docs:screenshots": "node docs/capture-screenshots.mjs",
 		"test:e2e": "node e2e/provider-smoke.mjs",
