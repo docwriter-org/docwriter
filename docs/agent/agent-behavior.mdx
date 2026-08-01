@@ -9,11 +9,11 @@ Use the agent behavior controls when you want to change when the agent wakes or 
 
 Open **Settings**, then **Agent behavior**.
 
-- **Low** acts only after a clear request or when the document is clearly broken.
-- **Medium** may open one focused comment, but it does not make an unsolicited edit.
-- **High** may open a focused comment or propose a focused edit.
+- **Low** waits for you to ask for a change. The agent may edit after an inline directive such as `[[ add a citation ]]`, feedback on selected text, a Chat request, or a reply in a comment thread. It may also fix an obvious problem such as a typo. Otherwise, it leaves the draft alone.
+- **Medium** includes everything in Low. The agent may also comment on something you wrote by opening one new comment thread during a turn. It can point out an unclear sentence or ask about a missing step, but it does not edit the text unless you ask.
+- **High** includes everything in Medium. The agent may also propose a focused edit when it can name a specific problem, such as a repeated point, unclear reference, or broken transition. It should tighten the affected passage rather than rewrite the draft.
 
-Autonomy changes when the agent may start work. It does not remove review for edits to an existing document.
+Autonomy controls what the agent may do when you have not given it a direct instruction. Every proposed edit still requires your review.
 
 <Frame>
   ![Low, Medium, and High autonomy settings](/images/agent-behavior-panel.png)
