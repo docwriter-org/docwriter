@@ -9,14 +9,16 @@ Use the agent behavior controls when you want to change when the agent wakes or 
 
 Open **Settings**, then **Agent behavior**.
 
+You can configure your agent's autonomy. Autonomy describes what the agent can do without your explicit permission and how much it can do on its own.
+
 - **Low** waits for you to ask for a change. The agent may edit after an inline directive such as `[[ add a citation ]]`, feedback on selected text, a Chat request, or a reply in a comment thread. It may also fix an obvious problem such as a typo. Otherwise, it leaves the draft alone.
 - **Medium** includes everything in Low. The agent may also comment on something you wrote by opening one new comment thread during a turn. It can point out an unclear sentence or ask about a missing step, but it does not edit the text unless you ask.
 - **High** includes everything in Medium. The agent may also propose a focused edit when it can name a specific problem, such as a repeated point, unclear reference, or broken transition. It should tighten the affected passage rather than rewrite the draft.
 
-Autonomy controls what the agent may do when you have not given it a direct instruction. Every proposed edit still requires your review.
+In all three levels, every edit appears as a diff that you can accept or reject.
 
 <Frame>
-  ![Low, Medium, and High autonomy settings](/images/agent-behavior-panel.png)
+  ![The Agent behavior panel with Low, Medium, and High autonomy settings](/images/agent-behavior-panel.png)
 </Frame>
 
 ## Pause or resume the agent
