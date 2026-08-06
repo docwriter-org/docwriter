@@ -15,6 +15,8 @@
 	import RulesPanel from '$lib/components/RulesPanel.svelte';
 	import RulesPillBar from '$lib/components/RulesPillBar.svelte';
 	import ReferencesPanel from '$lib/components/ReferencesPanel.svelte';
+	import StyleReferencesControl from '$lib/components/StyleReferencesControl.svelte';
+	import StyleModal from '$lib/components/StyleModal.svelte';
 	import PanelResizer from '$lib/components/PanelResizer.svelte';
 	import HorizontalPanelResizer from '$lib/components/HorizontalPanelResizer.svelte';
 	import AgentDock from '$lib/components/AgentDock.svelte';
@@ -2121,6 +2123,28 @@
 	/** Custom-model dialog (replaces the old window.prompt). */
 	let customModelOpen = $state(false);
 	let sessionsOpen = $state(false);
+	let styleModalOpen = $state(false);
+	let styleHasReferences = $state(false);
+	let styleHasSkill = $state(false);
+	let styleAnalyzing = $state(false);
+	let styleFailed = $state(false);
+	let styleStale = $state(false);
+	let styleUnresolved = $state(0);
+
+	async function refreshStyleHeader() {
+		try {
+			const res = await fetch('/api/style-profile');
+			if (!res.ok) return;
+			const data = await res.json();
+			styleHasReferences = !!data.hasReferences;
+			styleHasSkill = !!data.hasSkill;
+			styleStale = !!data.stale;
+			styleUnresolved = Number(data.unresolvedCalibration ?? 0);
+			styleFailed = false;
+		} catch {
+			/* ignore */
+		}
+	}
 
 	let themeName = $state('light');
 	selectedTheme.subscribe((v) => (themeName = v));
@@ -2251,7 +2275,13 @@
 					checked: lineNumbersOn,
 					onClick: () => editorLineNumbers.update((v) => !v)
 				},
-				{ kind: 'panel', label: 'Writing references', panelKey: 'references' },
+				{
+					kind: 'action',
+					label: 'Writing references',
+					onClick: () => {
+						styleModalOpen = true;
+					}
+				},
 				{ kind: 'panel', label: 'Intended audience', panelKey: 'audience' },
 				{ kind: 'panel', label: 'Skills', panelKey: 'skills' },
 				{ kind: 'panel', label: 'Hooks', panelKey: 'hooks' },
@@ -2447,6 +2477,7 @@
 		// mounts and before we attach the persist subscribers, otherwise
 		// defaults could overwrite the real values.
 		await restoreSessionState();
+		void refreshStyleHeader();
 
 		// Custom reviewers for the Settings → Critique pass menu. Fire and
 		// forget: until it lands, the menu shows the built-ins.
@@ -3034,8 +3065,26 @@
 				onSelectModel={(id) => setSelectedModel(id)}
 				onCustomModel={() => (customModelOpen = true)}
 			/>
+			<StyleReferencesControl
+				hasReferences={styleHasReferences}
+				hasSkill={styleHasSkill}
+				analyzing={styleAnalyzing}
+				failed={styleFailed}
+				stale={styleStale}
+				unresolved={styleUnresolved}
+				onclick={() => (styleModalOpen = true)}
+			/>
 		</div>
 	</header>
+
+	<StyleModal
+		open={styleModalOpen}
+		activeTabId={currentActiveTabId}
+		provider={currentProvider}
+		{model}
+		onClose={() => (styleModalOpen = false)}
+		onChanged={() => void refreshStyleHeader()}
+	/>
 
 	{#snippet rulesPanelSnippet()}
 		<RulesPanel onSubmit={(trigger) => void submit(trigger)} />

@@ -8,11 +8,21 @@ import { basename, extname, join } from 'path';
 import { DOCWRITER_DIR } from './document-files';
 import { resolveWorkspacePath } from './workspace-path';
 import { writeJsonAtomic, writeTextAtomic } from './file-utils';
+import { contentHash } from './style/materialize';
 
 export const REFERENCES_DIR = join(DOCWRITER_DIR, 'references');
 export const REFERENCES_INDEX_FILE = join(DOCWRITER_DIR, 'references.json');
 
 export type StyleReferenceType = 'workspace-file' | 'stored-sample' | 'url';
+export type StyleReferenceRole = 'authored' | 'inspiration';
+export type StyleReferenceFormat =
+	| 'markdown'
+	| 'mdx'
+	| 'text'
+	| 'latex'
+	| 'html'
+	| 'pdf'
+	| 'unknown';
 
 export interface StyleReference {
 	id: string;
@@ -20,6 +30,13 @@ export interface StyleReference {
 	type: StyleReferenceType;
 	target: string;
 	addedAt: number;
+	role?: StyleReferenceRole;
+	format?: StyleReferenceFormat;
+	contentHash?: string;
+	materializationStatus?: 'pending' | 'ready' | 'error';
+	cachePath?: string;
+	extractedAt?: number;
+	error?: string;
 }
 
 interface ReferencesIndex {
@@ -95,7 +112,20 @@ function uniqueStoredSampleFileName(desiredName: string): string {
 	return candidate;
 }
 
-function upsertReference(next: Omit<StyleReference, 'id' | 'addedAt'>): StyleReference {
+function inferFormat(target: string): StyleReferenceFormat {
+	const lower = target.toLowerCase();
+	if (lower.endsWith('.md') || lower.endsWith('.markdown')) return 'markdown';
+	if (lower.endsWith('.mdx')) return 'mdx';
+	if (lower.endsWith('.tex') || lower.endsWith('.latex')) return 'latex';
+	if (lower.endsWith('.html') || lower.endsWith('.htm')) return 'html';
+	if (lower.endsWith('.pdf')) return 'pdf';
+	if (lower.endsWith('.txt')) return 'text';
+	return 'unknown';
+}
+
+function upsertReference(
+	next: Omit<StyleReference, 'id' | 'addedAt'> & { id?: string }
+): StyleReference {
 	const index = readIndex();
 	const existing = index.references.find(
 		(ref) => ref.type === next.type && ref.target === next.target
@@ -103,6 +133,8 @@ function upsertReference(next: Omit<StyleReference, 'id' | 'addedAt'>): StyleRef
 	if (existing) {
 		const updated: StyleReference = {
 			...existing,
+			...next,
+			id: existing.id,
 			label: next.label,
 			addedAt: Date.now()
 		};
@@ -113,8 +145,11 @@ function upsertReference(next: Omit<StyleReference, 'id' | 'addedAt'>): StyleRef
 	}
 
 	const created: StyleReference = {
-		id: 'ref_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+		id: next.id ?? 'ref_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
 		addedAt: Date.now(),
+		role: next.role ?? 'authored',
+		format: next.format ?? inferFormat(next.target),
+		materializationStatus: next.materializationStatus ?? 'pending',
 		...next
 	};
 	writeIndex({ references: [created, ...index.references] });
@@ -125,7 +160,15 @@ export function listStyleReferences(): StyleReference[] {
 	return readIndex().references.sort((a, b) => b.addedAt - a.addedAt);
 }
 
-export function createStoredSampleReference(name: string, content: string): StyleReference {
+export function getStyleReference(id: string): StyleReference | undefined {
+	return readIndex().references.find((r) => r.id === id);
+}
+
+export function createStoredSampleReference(
+	name: string,
+	content: string,
+	role: StyleReferenceRole = 'authored'
+): StyleReference {
 	const normalizedContent = content.trim();
 	if (!normalizedContent) throw new Error('Reference content is required');
 	const fileName = uniqueStoredSampleFileName(name);
@@ -133,20 +176,35 @@ export function createStoredSampleReference(name: string, content: string): Styl
 	return upsertReference({
 		label: basename(fileName, extname(fileName)),
 		type: 'stored-sample',
-		target: `.docwriter/references/${fileName}`
+		target: `.docwriter/references/${fileName}`,
+		role,
+		format: 'markdown',
+		contentHash: contentHash(normalizedContent),
+		materializationStatus: 'ready',
+		extractedAt: Date.now()
 	});
 }
 
-export function addWorkspaceFileReference(tabId: string): StyleReference {
+export function addWorkspaceFileReference(
+	tabId: string,
+	role: StyleReferenceRole = 'authored'
+): StyleReference {
 	resolveWorkspacePath(tabId);
 	return upsertReference({
 		label: tabId,
 		type: 'workspace-file',
-		target: tabId
+		target: tabId,
+		role,
+		format: inferFormat(tabId),
+		materializationStatus: 'pending'
 	});
 }
 
-export function addUrlReference(url: string, label?: string): StyleReference {
+export function addUrlReference(
+	url: string,
+	label?: string,
+	role: StyleReferenceRole = 'authored'
+): StyleReference {
 	const normalized = url.trim();
 	if (!/^https?:\/\//i.test(normalized)) {
 		throw new Error('Style reference URL must start with http:// or https://');
@@ -154,8 +212,37 @@ export function addUrlReference(url: string, label?: string): StyleReference {
 	return upsertReference({
 		label: label?.trim() || normalized,
 		type: 'url',
-		target: normalized
+		target: normalized,
+		role,
+		format: inferFormat(normalized),
+		materializationStatus: 'pending'
 	});
+}
+
+export function updateStyleReference(
+	id: string,
+	patch: Partial<
+		Pick<
+			StyleReference,
+			| 'label'
+			| 'role'
+			| 'format'
+			| 'contentHash'
+			| 'materializationStatus'
+			| 'cachePath'
+			| 'extractedAt'
+			| 'error'
+		>
+	>
+): StyleReference {
+	const index = readIndex();
+	const existing = index.references.find((r) => r.id === id);
+	if (!existing) throw new Error('Reference not found');
+	const updated = { ...existing, ...patch };
+	writeIndex({
+		references: index.references.map((r) => (r.id === id ? updated : r))
+	});
+	return updated;
 }
 
 export function deleteStyleReference(id: string) {
@@ -171,7 +258,3 @@ export function deleteStyleReference(id: string) {
 		references: index.references.filter((ref) => ref.id !== id)
 	});
 }
-
-// NOTE: a `buildStyleReferencesPromptBlock` helper used to live here. It
-// duplicated the system prompt's Style references section and had no live
-// callers, so it was removed rather than left to drift.

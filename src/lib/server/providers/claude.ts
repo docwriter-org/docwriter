@@ -165,10 +165,18 @@ export class ClaudeProvider implements AgentProvider {
 				: undefined;
 		const effort = options.effort || 'low';
 
+		const mcpServers: Record<string, unknown> = options.omitDefaultMcpServers
+			? { ...(options.extraMcpServers ?? {}) }
+			: {
+					docwriter: docwriterMcp,
+					'docwriter-doc': docToolsMcp,
+					...(options.extraMcpServers ?? {})
+				};
+
 		const queryOptions: any = {
 			allowedTools: options.allowedTools,
-			mcpServers: { docwriter: docwriterMcp, 'docwriter-doc': docToolsMcp },
-			settingSources: ['user', 'project'],
+			mcpServers,
+			settingSources: options.omitDefaultMcpServers ? [] : ['user', 'project'],
 			permissionMode: options.planMode ? 'plan' : 'acceptEdits',
 			includePartialMessages: true,
 			agentProgressSummaries: true,

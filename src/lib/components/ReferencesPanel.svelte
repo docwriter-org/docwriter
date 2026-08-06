@@ -76,7 +76,7 @@
 				description: `Added style reference: ${activeTabId}`
 			});
 			await loadReferences();
-			onSubmit?.(`The user added "${activeTabId}" as a style reference. Revise the open files so their voice and cadence match it.`);
+			// Do not wake the writing agent — style analysis runs from the Style modal.
 		} catch (e) {
 			console.error('Failed to add current file reference:', e);
 		} finally {
@@ -109,7 +109,7 @@
 			sampleContent = '';
 			sampleExpanded = false;
 			await loadReferences();
-			onSubmit?.(`The user added a new style sample "${addedName}". Revise the open files so their voice and cadence match it.`);
+			void addedName;
 		} catch (e) {
 			console.error('Failed to add stored sample:', e);
 		} finally {
@@ -141,7 +141,8 @@
 			urlValue = '';
 			urlLabel = '';
 			await loadReferences();
-			onSubmit?.(`The user added a new style reference URL (${addedLabel || addedUrl}). Revise the open files so their voice and cadence match it.`);
+			void addedUrl;
+			void addedLabel;
 		} catch (e) {
 			console.error('Failed to add URL reference:', e);
 		} finally {

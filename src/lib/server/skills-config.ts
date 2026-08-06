@@ -315,6 +315,38 @@ export function removeCustomSkill(id: string): SkillConfig {
 	return config;
 }
 
+/** Register or refresh a DocWriter-managed skill without cloning/copying sources. */
+export function upsertManagedSkill(opts: {
+	id: string;
+	path: string;
+	source: string;
+	enabled?: boolean;
+}): SkillConfig {
+	const config = readSkillsConfig();
+	const existing = config.customSkills.find((s) => s.id === opts.id);
+	const foreign =
+		existing && existing.source && !existing.source.startsWith('docwriter:');
+	if (foreign) {
+		throw new Error(
+			`Skill id "${opts.id}" is already used by a user-installed skill; refusing to overwrite.`
+		);
+	}
+	const entry: CustomSkillConfig = {
+		id: opts.id,
+		source: opts.source,
+		path: opts.path,
+		enabled: opts.enabled !== false,
+		addedAt: existing?.addedAt ?? Date.now()
+	};
+	config.customSkills = [
+		...config.customSkills.filter((s) => s.id !== opts.id),
+		entry
+	];
+	writeSkillsConfig(config);
+	syncSkillInstallations(config);
+	return config;
+}
+
 function expandHome(path: string): string {
 	return path === '~' || path.startsWith('~/')
 		? join(homedir(), path.slice(2))

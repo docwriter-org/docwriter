@@ -83,6 +83,14 @@ export interface ProviderQueryOptions {
 	images?: Array<{ mediaType: string; data: string }>;
 	effort?: 'low' | 'medium' | 'high';
 	hooks?: Record<string, unknown>;
+	/**
+	 * Extra in-process MCP servers for Claude (and ignored by other providers).
+	 * Used by style specialists / synthesis to mount typed submission tools
+	 * without document-editing MCP servers.
+	 */
+	extraMcpServers?: Record<string, unknown>;
+	/** When true, Claude omits the default docwriter / docwriter-doc MCP servers. */
+	omitDefaultMcpServers?: boolean;
 }
 
 // ── Provider interface ──────────────────────────────────────────────────────

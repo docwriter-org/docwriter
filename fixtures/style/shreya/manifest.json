@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "role": "authored",
+  "sources": [
+    {
+      "id": "blog-ai-writing",
+      "url": "https://www.sh-reya.com/blog/ai-writing/",
+      "file": "blog-ai-writing.md"
+    },
+    {
+      "id": "blog-in-defense-ai-evals",
+      "url": "https://www.sh-reya.com/blog/in-defense-ai-evals/",
+      "file": "blog-in-defense-ai-evals.md"
+    },
+    {
+      "id": "blog-ai-engineering-flywheel",
+      "url": "https://www.sh-reya.com/blog/ai-engineering-flywheel/",
+      "file": "blog-ai-engineering-flywheel.md"
+    },
+    {
+      "id": "paper-evalgen",
+      "url": "https://arxiv.org/pdf/2404.12272",
+      "file": "paper-evalgen.md"
+    },
+    {
+      "id": "paper-docetl",
+      "url": "https://ar5iv.labs.arxiv.org/html/2410.12189",
+      "file": "paper-docetl.md"
+    }
+  ]
+}

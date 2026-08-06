@@ -36,8 +36,12 @@
 		"docs:assets:videos": "node docs/capture-workflow-videos.mjs",
 		"docs:assets:verify": "node docs/verify-assets.mjs",
 		"docs:screenshots": "npm run docs:assets",
+		"test:unit": "vitest run",
+		"test:unit:watch": "vitest",
+		"fixtures:style": "node scripts/fetch-style-fixtures.mjs",
 		"test:e2e": "node e2e/provider-smoke.mjs",
-		"test:e2e:provider": "node e2e/run-provider.mjs"
+		"test:e2e:provider": "node e2e/run-provider.mjs",
+		"test:e2e:style": "node e2e/style-modal-smoke.mjs"
 	},
 	"devDependencies": {
 		"@sveltejs/adapter-node": "^5.5.4",
@@ -52,7 +56,8 @@
 		"svelte": "^5.54.0",
 		"svelte-check": "^4.4.2",
 		"typescript": "^5.9.3",
-		"vite": "^7.3.1"
+		"vite": "^7.3.1",
+		"vitest": "^4.1.10"
 	},
 	"dependencies": {
 		"@anthropic-ai/claude-agent-sdk": "^0.3.196",

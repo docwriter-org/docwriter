@@ -26,6 +26,8 @@ import { replayUpdatesInto } from '$lib/server/ydoc-persistence';
 import { registerPendingAskUser } from '$lib/server/ask-user-state';
 import { unifiedLineDiff } from '$lib/diff';
 import { listStyleReferences } from '$lib/server/references';
+import { readStyleSkillState } from '$lib/server/style/skill-store';
+import { listActivePropositions } from '$lib/server/style/skill-store';
 import { buildSkillsPromptBlock } from '$lib/server/skills-config';
 import { lastSeenKey, readTabMarkdownForAgent } from '$lib/server/last-seen';
 import {
@@ -372,11 +374,13 @@ A flagged tell alone is not yet a rule: fix the flagged instance with edit_doc, 
 
 Write rules as short imperatives that are specific enough to check, e.g. "Never use em dashes". When a concrete passage shows what breaking the rule looks like — a sentence the user flagged, the passage a tell appeared in — quote it verbatim in the example_violation field so the rule carries a real example. When unsure, do not propose.
 
-## Style references
+## Style references and author-style skill
 
-The user may register style references: URLs, workspace files, and saved samples. The current list arrives in session_state when it changes. Read a reference only when it would help the current edit, and treat it as style guidance only. Do not import facts, examples, or claims from it.
+When an author-style skill is active (listed among enabled skills), follow that skill for voice, cadence, word choice, and punctuation. Do not open raw style references for drafting once the skill is active — the skill is the compiled guidance.
 
-When you fetch a URL reference, ask WebFetch for 3 to 6 verbatim passages, each a full paragraph or a few consecutive sentences, with a note on what each passage shows about sentence length, clause structure, register, and punctuation. Do not ask for a summary or a trait list. The passages themselves are the signal. Use them to judge the rhythm of your own edit, and never copy their phrasing into the draft.
+If no author-style skill is active, the user may still register style references: URLs, workspace files, and saved samples. The current list arrives in session_state when it changes. Read a reference only when it would help the current edit, and treat it as style guidance only. Do not import facts, examples, or claims from it.
+
+When you fetch a URL reference (and only when no author-style skill is active), ask WebFetch for 3 to 6 verbatim passages, each a full paragraph or a few consecutive sentences, with a note on what each passage shows about sentence length, clause structure, register, and punctuation. Do not ask for a summary or a trait list. The passages themselves are the signal. Use them to judge the rhythm of your own edit, and never copy their phrasing into the draft.
 
 ## Rules to obey
 
@@ -482,17 +486,31 @@ function buildRulesDelta(
 }
 
 /** Build the active style-reference list as a small bullet block. Returned
- * only when the list has changed since the prior render. */
+ * only when the list has changed since the prior render.
+ * When a compiled author-style skill is active, omit raw reference dumps —
+ * the skill is the guidance channel. */
 function buildRefsBlock(): string | null {
+	const state = readStyleSkillState();
+	const active = listActivePropositions(state);
+	if (active.length > 0) {
+		return [
+			'Author-style skill: active.',
+			`Follow the "${state?.skillId ?? 'author-style'}" skill for voice and diction.`,
+			'Do not import facts from raw style references.'
+		].join('\n');
+	}
 	const refs = listStyleReferences().slice(0, 6);
-	if (refs.length === 0) return null;
+	if (refs.length === 0) {
+		return 'Style references: none provided. You may remind the user once that adding writing references improves style matching.';
+	}
 	const lines = ['Style references:'];
 	for (const ref of refs) {
+		const role = ref.role ?? 'authored';
 		if (ref.type === 'url') {
-			lines.push(`- URL: ${ref.target}${ref.label !== ref.target ? ` (${ref.label})` : ''}`);
+			lines.push(`- URL (${role}): ${ref.target}${ref.label !== ref.target ? ` (${ref.label})` : ''}`);
 		} else {
 			const kind = ref.type === 'stored-sample' ? 'Saved sample' : 'Workspace path';
-			lines.push(`- ${kind}: ${ref.target}`);
+			lines.push(`- ${kind} (${role}): ${ref.target}`);
 		}
 	}
 	return lines.join('\n');
