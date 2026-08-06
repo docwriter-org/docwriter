@@ -186,10 +186,12 @@ function specialistPrompt(
 	const languageBrief =
 		name === 'language'
 			? `
-WORD CHOICE IS YOUR PRIMARY JOB.
-- Prioritize unusual or characteristic word/phrase choices from lexicon.signature_words and lexicon.signature_phrases.
-- Emit concrete "do not use" guidance from lexicon.ai_isms_absent.
-- Prefer instructions like "Say X, not Y" over vague "use varied vocabulary".
+WORD CHOICE IS YOUR PRIMARY JOB — but distinctive POSITIVE diction, not generic anti-AI lists.
+- Lead with lexicon.signature_words / lexicon.signature_phrases: what this author actually says.
+- Prefer "Say X, not Y" grounded in those signature terms and evidence spans.
+- lexicon.ai_isms_absent is a weak secondary signal at best. At most ONE short observation about it.
+  Do NOT turn the whole skill into "never say delve/tapestry/leverage/…" — that is generic boilerplate,
+  not this author's voice.
 - Every word-choice claim must cite metric IDs and evidence span quotes from the metric examples.
 `
 			: '';
@@ -204,6 +206,12 @@ Analyze ONLY these metrics / examples and submit typed propositions via the subm
 
 Allowed families: ${allowed.join(', ')}
 Allowed proposition types: ${PROPOSITION_TYPES.join(', ')}
+
+CRITICAL — DO NOT CLONE "PLAIN WRITING":
+- DocWriter already ships a separate plain-writing skill (no dashes, everyday words, anti-AI vocabulary).
+- Your job is THIS author's measured voice from the metrics/examples — not that generic style guide.
+- Prefer distinctive positives (recurring terms, rhythm, structure, stance) over absences shared by most sober prose.
+- Absence metrics (zero dashes, missing AI-isms) may support a minor note, never the bulk of your submission.
 
 ${languageBrief}
 ${extra}
@@ -498,9 +506,11 @@ export async function runSynthesisAgent(opts: {
 		metricsOverride: opts.measurements.metrics,
 		promptExtra: `
 You are the SYNTHESIS pass. Merge the specialist candidates below into a coherent, non-redundant set.
-- Prefer concrete imperative instructions.
-- Drop duplicates and weak / ungrounded claims.
-- Keep distinctive lexicon / AI-ism guidance when well supported.
+- Prefer concrete imperative instructions that capture THIS author's distinctive voice.
+- Drop duplicates, weak claims, and anything that just restates generic "plain writing" /
+  anti-AI boilerplate (no-dash lists, endless delve/tapestry/leverage bans) unless the
+  corpus evidence makes that truly author-specific — and even then keep it to at most one short rule.
+- Prefer signature lexicon, sentence rhythm, structure, and stance grounded in examples.
 - Cite only metric IDs and evidence spans that appear in the metrics or candidate evidence.
 
 CANDIDATE PROPOSITIONS:

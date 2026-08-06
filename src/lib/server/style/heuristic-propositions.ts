@@ -142,28 +142,28 @@ export function buildHeuristicPropositions(
 	}
 
 	const absent = measurements.lexicon.aiIsmsAbsent;
-	if (absent.length) {
+	// Generic AI-ism absences overlap the built-in plain-writing skill. Keep as a
+	// low-weight observation only — never the headline of author-style.
+	if (absent.length >= 8) {
 		const conf = computeFinalConfidence({
 			evidenceRefs: [],
 			counterevidence: [],
 			sourceCount,
-			matchingContextRepetition: 1,
-			agentInterpretation: 0.85,
+			matchingContextRepetition: 0.4,
+			agentInterpretation: 0.45,
 			extractorReliability: EXTRACTOR_RELIABILITY.vocabulary_register,
 			authoredAgree: true,
 			inspirationAgree: false,
 			roleConflict: false
 		});
-		// Absence has no span evidence — keep below the active threshold so
-		// calibration (or a later specialist) must confirm before activation.
-		const capped = Math.min(0.74, conf.final + (authored.length >= 2 ? 0.1 : 0));
+		const capped = Math.min(0.45, conf.final);
 		props.push({
 			id: `prop_ai_ism_${runId.slice(0, 6)}`,
 			schemaVersion: 1,
 			family: 'vocabulary_register',
 			type: 'ai_ism_avoidance',
-			instruction: `Do not use these AI-typical words the author avoids: ${absent.slice(0, 12).join(', ')}.`,
-			claim: `These overused AI words are absent from the authored references.`,
+			instruction: `Secondary note only: the authored samples also avoid common AI filler such as ${absent.slice(0, 6).join(', ')}. Prefer the author's own signature wording above.`,
+			claim: `Common AI-overuse words are absent — weak, non-distinctive signal.`,
 			scope: {},
 			metrics: [
 				{
@@ -177,12 +177,12 @@ export function buildHeuristicPropositions(
 			examples: [],
 			confidence: {
 				evidence: conf.evidence,
-				agentInterpretation: 0.85,
+				agentInterpretation: 0.45,
 				extractorReliability: EXTRACTOR_RELIABILITY.vocabulary_register,
 				final: capped
 			},
 			origin: 'authored',
-			status: statusFromConfidence(capped, true),
+			status: 'observation',
 			enabled: true,
 			createdAt: now,
 			updatedAt: now,
@@ -341,34 +341,33 @@ export function buildHeuristicPropositions(
 		});
 	}
 
-	// Punctuation: em-dash / double-hyphen avoidance if rare
+	// Zero-dash is also a plain-writing default — only note it as a weak observation.
 	let dashRate = 0;
 	for (const punct of Object.values(measurements.punctuationBySource)) {
 		dashRate += (punct.perThousand['—'] ?? 0) + (punct.perThousand['–'] ?? 0) + (punct.perThousand['--'] ?? 0);
 	}
 	dashRate /= Math.max(1, Object.keys(measurements.punctuationBySource).length);
-	if (dashRate < 1) {
+	if (dashRate < 0.25) {
 		const conf = computeFinalConfidence({
 			evidenceRefs: [],
 			counterevidence: [],
 			sourceCount,
-			matchingContextRepetition: 0.9,
-			agentInterpretation: 0.8,
+			matchingContextRepetition: 0.35,
+			agentInterpretation: 0.4,
 			extractorReliability: EXTRACTOR_RELIABILITY.punctuation,
 			authoredAgree: true,
 			inspirationAgree: false,
 			roleConflict: false
 		});
-		// No span evidence — keep in calibration until confirmed.
-		const final = Math.min(0.74, conf.final + (authored.length >= 2 ? 0.1 : 0.05));
+		const final = Math.min(0.4, conf.final);
 		props.push({
 			id: `prop_no_dash_${runId.slice(0, 6)}`,
 			schemaVersion: 1,
 			family: 'punctuation',
 			type: 'clause_boundary',
 			instruction:
-				'Avoid em dashes and en dashes. Join clauses with a period or with words like "and" or "because".',
-			claim: `Dash punctuation is rare in the references (≈ ${dashRate.toFixed(2)} / 1k words).`,
+				'Secondary note: em/en dashes are rare in these samples. Prefer the author's other punctuation habits first.',
+			claim: `Dash punctuation is rare (≈ ${dashRate.toFixed(2)} / 1k words) — weak signal.`,
 			scope: {},
 			metrics: [{ metricId: 'corpus.dash.rate', summary: 'Dash rate', value: dashRate }],
 			evidence: [],
@@ -376,12 +375,12 @@ export function buildHeuristicPropositions(
 			examples: [],
 			confidence: {
 				evidence: conf.evidence,
-				agentInterpretation: 0.8,
+				agentInterpretation: 0.4,
 				extractorReliability: EXTRACTOR_RELIABILITY.punctuation,
 				final
 			},
 			origin: 'authored',
-			status: statusFromConfidence(final, true),
+			status: 'observation',
 			enabled: true,
 			createdAt: now,
 			updatedAt: now,

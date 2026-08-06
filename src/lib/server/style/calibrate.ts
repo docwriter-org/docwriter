@@ -308,6 +308,7 @@ export async function generateCloseCallsWithAgent(opts: {
 	const prompt = `You write close-call calibration pairs for DocWriter's author-style skill.
 For each uncertain proposition below, invent TWO short prose variants (A and B) that differ mainly on that style dimension, with nearly identical meaning.
 Mark which label currently supports the proposition (supportsProposition).
+Write in a register that fits the proposition's claim — do not default every pair to generic "plain writing" / anti-AI style.
 Do not invent facts. Keep numbers/names stable unless the proposition is about sentence length.
 Call submit_close_calls exactly once covering as many propositions as you can (max ${candidates.length}).
 

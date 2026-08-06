@@ -199,7 +199,7 @@ describe('specialist validation', () => {
 		expect(emptyQuote.ok).toBe(false);
 	});
 
-	it('emits corpus.dash.rate and keeps zero-evidence props in calibration', () => {
+	it('emits corpus.dash.rate and demotes generic AI-ism/dash absences to observations', () => {
 		const docs = [
 			normalizeText('We evaluate assertions with clear criteria. Short clauses stay crisp.', {
 				sourceId: 'a',
@@ -214,8 +214,10 @@ describe('specialist validation', () => {
 		expect(measurements.metricIndex.has('corpus.dash.rate')).toBe(true);
 		const props = buildHeuristicPropositions(docs, measurements, 'run_cal');
 		const absence = props.find((p) => p.type === 'ai_ism_avoidance');
-		expect(absence?.status).toBe('calibration');
-		expect(absence?.confidence.final).toBeLessThan(0.75);
+		expect(absence?.status).toBe('observation');
+		expect(absence?.confidence.final).toBeLessThan(0.5);
+		const dash = props.find((p) => p.id.startsWith('prop_no_dash_'));
+		expect(dash?.status).toBe('observation');
 	});
 });
 
