@@ -756,6 +756,16 @@ async function captureStructural(page) {
 	);
 	await closeMenu(page);
 
+	await hoverSettingsItem(page, 'Intended audience');
+	await focusedShot(
+		page,
+		'intended-audience-panel.png',
+		['.menu-panel', '.submenu-panel'],
+		'Intended audience',
+		5
+	);
+	await closeMenu(page);
+
 	await hoverSettingsItem(page, 'Agent behavior');
 	await focusedShot(
 		page,
