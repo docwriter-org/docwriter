@@ -58,7 +58,7 @@ export interface Hook {
 	 * templating as `command`. When set, the preview window watches for
 	 * this hook's completion and reloads the rendered file (PDF, HTML,
 	 * image, etc.). Typical use: `command: "pdflatex {{file}}"` paired
-	 * with `output: "{{file}}.pdf"`. */
+	 * with `output: "{{stem}}.pdf"`. */
 	output?: string;
 }
 

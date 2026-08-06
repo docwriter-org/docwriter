@@ -33,7 +33,9 @@ Call the `propose_hook` tool exactly once per user request. Arguments:
   - omit / empty — match every tool
 - **command** (required): the shell command. Placeholders:
   - `{{file}}` — the edited file path (for tool-scoped events)
+  - `{{stem}}` — the file path without its final extension
   - `{{tool}}` — the tool name
+- **output** (optional): workspace-relative output path produced by the command. Set this for previewable output such as `main.pdf` or `{{stem}}.html`.
 - **reason** (required): one sentence explaining what the hook does. Shown to the user on the proposal card.
 
 ## Available events
@@ -58,7 +60,7 @@ Default to `PostToolUse` if the user's intent is unclear — it's the most commo
 
 See `examples/` next to this skill for reference shapes:
 
-- `pdflatex-on-edit.json` — PostToolUse + matcher, rebuild a PDF after edits
+- `pdflatex-on-edit.json` — Stop event + preview output, rebuild a PDF after a turn
 - `ruff-lint-edited-file.json` — PostToolUse + `{{file}}` placeholder
 - `typst-watch-stop.json` — Stop event (no matcher)
 

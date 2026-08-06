@@ -392,6 +392,11 @@ export function buildToolDefinitions(): ToolDefinition[] {
 					event: { type: 'string', description: 'Hook event type.' },
 					matcher: { type: 'string', description: 'Regex over tool name.' },
 					command: { type: 'string', description: 'Shell command.' },
+					output: {
+						type: 'string',
+						description:
+							'Optional workspace-relative output path for preview reloads. Supports {{file}} and {{stem}}.'
+					},
 					reason: { type: 'string', description: 'Explanation.' }
 				},
 				required: ['event', 'command']

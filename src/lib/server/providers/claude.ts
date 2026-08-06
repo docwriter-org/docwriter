@@ -72,6 +72,7 @@ function buildDocwriterMcp() {
 				event: z.enum(['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'UserPromptSubmit', 'Stop', 'SubagentStop', 'SessionStart', 'SessionEnd', 'Notification']).describe('When the hook fires.'),
 				matcher: z.string().optional().describe('Regex over the tool name.'),
 				command: z.string().describe('The shell command.'),
+				output: z.string().optional().describe('Workspace-relative output path for preview reloads. Supports {{file}} and {{stem}}.'),
 				reason: z.string().optional().describe('Explanation.')
 			},
 			async () => ({ content: [{ type: 'text', text: 'Hook proposal sent to the user for review.' }] })

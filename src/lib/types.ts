@@ -124,6 +124,7 @@ export interface ProposedHook {
 	event: ProposedHookEvent;
 	matcher?: string;
 	command: string;
+	output?: string;
 	reason?: string;
 	timestamp: number;
 }
