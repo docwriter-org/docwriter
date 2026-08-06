@@ -142,6 +142,10 @@ export class OpenAIAgentsProvider implements AgentProvider {
 		}
 
 		for await (const event of streamResult) {
+			if (options.abortSignal?.aborted) {
+				yield { type: 'error', error: 'Aborted' };
+				return;
+			}
 			// Flush any tool results produced since the last event.
 			while (resultQueue.length) yield normalizeQueuedEvent(resultQueue.shift()!);
 

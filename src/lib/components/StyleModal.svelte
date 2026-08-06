@@ -188,6 +188,7 @@
 		analyzing = true;
 		step = 2;
 		runLog = ['Starting analysis…'];
+		let succeeded = false;
 		try {
 			const res = await fetch('/api/style-profile/runs', {
 				method: 'POST',
@@ -202,19 +203,27 @@
 			});
 			const data = await res.json();
 			if (!res.ok) throw new Error(data.message || 'Failed to start run');
+			// Refresh header after the run exists so analyzing=true is visible.
+			onChanged?.();
 			const es = new EventSource(`/api/style-profile/runs/${data.runId}/events`);
-			await new Promise<void>((resolve) => {
+			await new Promise<void>((resolve, reject) => {
 				es.onmessage = (ev) => {
 					try {
 						const msg = JSON.parse(ev.data);
-						if (msg.type === 'status') runLog = [...runLog, msg.message];
+						if (msg.type === 'status') {
+							runLog = [...runLog, msg.message];
+							if (msg.phase === 'cancelled') {
+								es.close();
+								reject(new Error('Run cancelled'));
+							}
+						}
 						if (msg.type === 'progress') {
 							runLog = [...runLog, `${msg.phase}: ${msg.current}/${msg.total}`];
 						}
 						if (msg.type === 'error') {
 							runLog = [...runLog, `Error: ${msg.message}`];
 							es.close();
-							resolve();
+							reject(new Error(msg.message || 'Analysis failed'));
 						}
 						if (msg.type === 'done') {
 							runLog = [
@@ -222,24 +231,34 @@
 								`Done — ${msg.activeCount} active, ${msg.unresolved} to calibrate`
 							];
 							es.close();
+							succeeded = true;
 							resolve();
 						}
 					} catch {
-						/* ignore */
+						/* ignore parse errors */
 					}
 				};
+				// Transient connect blips are common; only fail when the stream is closed.
 				es.onerror = () => {
-					es.close();
-					resolve();
+					if (es.readyState === EventSource.CLOSED) {
+						es.close();
+						if (!succeeded) reject(new Error('Lost connection to analysis stream'));
+						else resolve();
+					}
 				};
 			});
 		} catch (e) {
 			runLog = [...runLog, (e as Error).message];
+			succeeded = false;
 		} finally {
 			analyzing = false;
 			await refresh();
-			if ((profile?.unresolvedCalibration ?? 0) > 0) step = 3;
-			else step = 4;
+			if (succeeded) {
+				if ((profile?.unresolvedCalibration ?? 0) > 0) step = 3;
+				else step = 4;
+			} else {
+				step = 2;
+			}
 		}
 	}
 

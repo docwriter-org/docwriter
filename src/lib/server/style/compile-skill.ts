@@ -5,11 +5,10 @@ import { existsSync, mkdirSync, cpSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import AdmZip from 'adm-zip';
-import { listSkills, upsertManagedSkill } from '../skills-config';
+import { upsertManagedSkill } from '../skills-config';
 import { writeJsonAtomic, writeTextAtomic } from '../file-utils';
 import type { FeatureMeasurement } from './measure';
 import {
-	AUTHOR_STYLE_FALLBACK_ID,
 	AUTHOR_STYLE_SKILL_ID,
 	type StyleProposition,
 	type StyleSkillState
@@ -17,6 +16,7 @@ import {
 import {
 	authorStyleSkillDir,
 	listActivePropositions,
+	pickAuthorStyleSkillId,
 	writeStyleSkillState
 } from './skill-store';
 
@@ -167,25 +167,12 @@ function copyAnalyzeScript(skillDir: string) {
 	}
 }
 
-function pickSkillId(): string {
-	const collision = listSkills().skills.find((s) => s.id === AUTHOR_STYLE_SKILL_ID);
-	if (
-		collision &&
-		collision.origin === 'custom' &&
-		collision.source &&
-		!collision.source.startsWith('docwriter:')
-	) {
-		return AUTHOR_STYLE_FALLBACK_ID;
-	}
-	return AUTHOR_STYLE_SKILL_ID;
-}
-
 export function compileAuthorStyleSkill(opts: {
 	state: StyleSkillState;
 	metrics: FeatureMeasurement[];
 	preferSkillId?: string;
 }): { skillId: string; dir: string; activeCount: number } {
-	const skillId = opts.preferSkillId ?? pickSkillId();
+	const skillId = opts.preferSkillId ?? opts.state.skillId ?? pickAuthorStyleSkillId();
 	const state: StyleSkillState = { ...opts.state, skillId, updatedAt: Date.now() };
 	writeStyleSkillState(state);
 

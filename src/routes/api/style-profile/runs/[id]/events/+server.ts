@@ -16,7 +16,9 @@ export const GET: RequestHandler = async ({ params }) => {
 			};
 			const unsub = subscribeStyleRun(runId, (e) => {
 				send(e);
-				if (e.type === 'done' || e.type === 'error') {
+				const cancelled =
+					e.type === 'status' && (e as { phase?: string }).phase === 'cancelled';
+				if (e.type === 'done' || e.type === 'error' || cancelled) {
 					unsub();
 					try {
 						controller.close();

@@ -445,11 +445,18 @@ function snapshotRules(rules: { text: string }[]): string {
 	return JSON.stringify(rules.map((r) => r.text).sort());
 }
 
-/** Snapshot of the active style references (URL list, workspace paths, saved
- * sample paths). Sorted so cosmetic re-ordering doesn't trip the change detector. */
+/** Snapshot of style refs + compiled skill activation. Includes skill identity
+ * so mid-session compile (refs unchanged) still re-emits session_state. */
 function snapshotRefs(): string {
-	const refs = listStyleReferences().map((r) => `${r.type}::${r.target}`);
-	return JSON.stringify(refs.sort());
+	const refs = listStyleReferences().map(
+		(r) => `${r.type}::${r.target}::${r.role ?? 'authored'}`
+	);
+	const state = readStyleSkillState();
+	const active = listActivePropositions(state);
+	const skillPart = active.length
+		? `skill:${state?.skillId ?? 'author-style'}:${active.length}:${state?.updatedAt ?? 0}`
+		: 'skill:none';
+	return JSON.stringify({ refs: refs.sort(), skill: skillPart });
 }
 
 /** Build the diff line block for rules vs. the prior snapshot. Returns null

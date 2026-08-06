@@ -11,8 +11,18 @@ import { computeFinalConfidence, statusFromConfidence } from './confidence';
 import { validateSubmission } from './specialists';
 import { generateCloseCall, applyCalibrationResponse, validateCloseCall } from './calibrate';
 import { renderSkillMarkdown } from './compile-skill';
-import { stripHtml, extractPdfText, contentHash } from './materialize';
+import {
+	stripHtml,
+	extractPdfText,
+	contentHash,
+	isPrivateUrl,
+	writeCachedExtraction,
+	materializeReference,
+	isStyleCachePath
+} from './materialize';
 import { AUTHOR_STYLE_SKILL_ID } from './schemas';
+import { dedupePropositions } from './specialists';
+import { countUnresolvedCalibration } from './skill-store';
 
 describe('normalize + punctuation', () => {
 	it('preserves sentence spans and counts terminals', () => {
@@ -135,6 +145,77 @@ describe('specialist validation', () => {
 		);
 		expect(bad.ok).toBe(false);
 	});
+
+	it('rejects unknown corpus/lexicon metric ids and empty evidence quotes', () => {
+		const doc = normalizeText('Plain sentence about evaluation criteria here.', {
+			sourceId: 'ref1',
+			role: 'authored'
+		});
+		const measurements = measureDocuments([doc]);
+		const unknownCorpus = validateSubmission(
+			{
+				propositions: [
+					{
+						family: 'punctuation',
+						type: 'clause_boundary',
+						instruction: 'Avoid dashes',
+						metricIds: ['corpus.not.a.real.metric'],
+						interpretationConfidence: 0.5,
+						evidence: []
+					}
+				]
+			},
+			[doc],
+			['punctuation'],
+			measurements.metricIndex
+		);
+		expect(unknownCorpus.ok).toBe(false);
+
+		const emptyQuote = validateSubmission(
+			{
+				propositions: [
+					{
+						family: 'vocabulary_register',
+						type: 'signature_lexicon',
+						instruction: 'Prefer evaluation language',
+						metricIds: ['lexicon.signature_words'],
+						interpretationConfidence: 0.5,
+						evidence: [
+							{
+								sourceId: 'ref1',
+								spanId: doc.sentences[0].id,
+								quote: '',
+								role: 'authored'
+							}
+						]
+					}
+				]
+			},
+			[doc],
+			['vocabulary_register'],
+			measurements.metricIndex
+		);
+		expect(emptyQuote.ok).toBe(false);
+	});
+
+	it('emits corpus.dash.rate and keeps zero-evidence props in calibration', () => {
+		const docs = [
+			normalizeText('We evaluate assertions with clear criteria. Short clauses stay crisp.', {
+				sourceId: 'a',
+				role: 'authored'
+			}),
+			normalizeText('Criteria drift appears when graders revise earlier judgments.', {
+				sourceId: 'b',
+				role: 'authored'
+			})
+		];
+		const measurements = measureDocuments(docs);
+		expect(measurements.metricIndex.has('corpus.dash.rate')).toBe(true);
+		const props = buildHeuristicPropositions(docs, measurements, 'run_cal');
+		const absence = props.find((p) => p.type === 'ai_ism_avoidance');
+		expect(absence?.status).toBe('calibration');
+		expect(absence?.confidence.final).toBeLessThan(0.75);
+	});
 });
 
 describe('calibration', () => {
@@ -209,6 +290,138 @@ describe('materialize helpers', () => {
 			'latin1'
 		);
 		expect(extractPdfText(pdf)).toContain('Hello World');
+	});
+
+	it('blocks private and link-local URL hosts', () => {
+		expect(isPrivateUrl(new URL('http://127.0.0.1/x'))).toBe(true);
+		expect(isPrivateUrl(new URL('http://127.1.2.3/x'))).toBe(true);
+		expect(isPrivateUrl(new URL('http://169.254.169.254/latest'))).toBe(true);
+		expect(isPrivateUrl(new URL('http://192.168.1.1/x'))).toBe(true);
+		expect(isPrivateUrl(new URL('http://example.com/x'))).toBe(false);
+	});
+
+	it('prefers cachePath text over re-fetching workspace files', async () => {
+		const corrected = 'User-corrected extraction about distinctive criteria.';
+		const cachePath = writeCachedExtraction(corrected);
+		expect(isStyleCachePath(cachePath)).toBe(true);
+		const materialized = await materializeReference(
+			{
+				id: 'r1',
+				label: 'sample',
+				type: 'workspace-file',
+				target: 'does-not-exist-should-not-be-read.md',
+				addedAt: Date.now(),
+				role: 'authored',
+				cachePath,
+				contentHash: contentHash(corrected),
+				materializationStatus: 'ready'
+			},
+			'authored'
+		);
+		expect(materialized.error).toBeUndefined();
+		expect(materialized.text).toBe(corrected);
+	});
+});
+
+describe('synthesis dedupe + calibration counts', () => {
+	it('dedupes by type keeping higher confidence', () => {
+		const base = {
+			schemaVersion: 1 as const,
+			family: 'sentence_rhythm' as const,
+			type: 'sentence_range' as const,
+			instruction: 'Keep sentences short.',
+			scope: {},
+			metrics: [],
+			evidence: [],
+			counterevidence: [],
+			examples: [],
+			origin: 'authored' as const,
+			status: 'active' as const,
+			enabled: true,
+			createdAt: 1,
+			updatedAt: 1,
+			sourceRunId: 'r'
+		};
+		const out = dedupePropositions([
+			{
+				...base,
+				id: 'a',
+				confidence: { evidence: 0.5, agentInterpretation: 0.5, extractorReliability: 0.9, final: 0.5 }
+			},
+			{
+				...base,
+				id: 'b',
+				instruction: 'Prefer 12–20 word sentences.',
+				confidence: { evidence: 0.8, agentInterpretation: 0.8, extractorReliability: 0.9, final: 0.8 }
+			}
+		]);
+		expect(out).toHaveLength(1);
+		expect(out[0].id).toBe('b');
+	});
+
+	it('counts unresolved calibration from pending trials only', () => {
+		expect(
+			countUnresolvedCalibration({
+				schemaVersion: 1,
+				skillId: 'author-style',
+				updatedAt: 1,
+				propositions: [
+					{
+						id: 'p1',
+						schemaVersion: 1,
+						family: 'vocabulary_register',
+						type: 'ai_ism_avoidance',
+						instruction: 'Avoid delve',
+						scope: {},
+						metrics: [],
+						evidence: [],
+						counterevidence: [],
+						examples: [],
+						confidence: {
+							evidence: 0.4,
+							agentInterpretation: 0.5,
+							extractorReliability: 0.8,
+							final: 0.5
+						},
+						origin: 'authored',
+						status: 'calibration',
+						enabled: true,
+						createdAt: 1,
+						updatedAt: 1,
+						sourceRunId: 'r'
+					}
+				],
+				calibrationTrials: [
+					{
+						id: 't1',
+						propositionId: 'p1',
+						schemaVersion: 1,
+						brief: 'Choose',
+						variantA: 'a',
+						variantB: 'b',
+						supportsProposition: 'a',
+						targetMetricId: 'lexicon.ai_isms_absent',
+						status: 'pending',
+						createdAt: 1,
+						updatedAt: 1
+					},
+					{
+						id: 't2',
+						propositionId: 'p1',
+						schemaVersion: 1,
+						brief: 'Choose',
+						variantA: 'a',
+						variantB: 'b',
+						supportsProposition: 'a',
+						targetMetricId: 'lexicon.ai_isms_absent',
+						status: 'resolved',
+						createdAt: 1,
+						updatedAt: 1
+					}
+				],
+				sourceManifest: []
+			})
+		).toBe(1);
 	});
 });
 

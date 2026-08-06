@@ -2,11 +2,19 @@
  * End-to-end style analysis run orchestration.
  */
 import type { ProviderId } from '../providers/types';
-import { listStyleReferences, type StyleReference } from '../references';
+import {
+	listStyleReferences,
+	updateStyleReference,
+	type StyleReference
+} from '../references';
 import { materializeReference, type MaterializedSource } from './materialize';
 import { normalizeText } from './normalize';
 import { measureDocuments, type FeatureMeasurement } from './measure';
-import { runSpecialists, synthesizePropositions } from './specialists';
+import {
+	dedupePropositions,
+	runSpecialists,
+	runSynthesisAgent
+} from './specialists';
 import {
 	generateCloseCall,
 	selectCalibrationCandidates,
@@ -15,7 +23,6 @@ import {
 } from './calibrate';
 import { compileAuthorStyleSkill } from './compile-skill';
 import {
-	AUTHOR_STYLE_SKILL_ID,
 	type CalibrationTrial,
 	type NormalizedDocument,
 	type StyleProposition,
@@ -27,6 +34,7 @@ import {
 	countUnresolvedCalibration,
 	ensureStyleRunDir,
 	isSkillStale,
+	pickAuthorStyleSkillId,
 	readStyleSkillState,
 	writeRunArtifact,
 	writeStyleSkillState
@@ -58,8 +66,20 @@ function emit(run: RunRecord, event: StyleRunEvent) {
 	for (const l of run.listeners) l(event);
 }
 
+function throwIfCancelled(run: RunRecord) {
+	if (run.abort.signal.aborted || run.status === 'cancelled') {
+		throw new Error('cancelled');
+	}
+}
+
 export function getStyleRun(runId: string): RunRecord | undefined {
 	return runs.get(runId);
+}
+
+export function listActiveStyleRuns(): Array<{ id: string; status: RunRecord['status'] }> {
+	return [...runs.values()]
+		.filter((r) => r.status === 'running')
+		.map((r) => ({ id: r.id, status: r.status }));
 }
 
 export function subscribeStyleRun(runId: string, fn: (e: StyleRunEvent) => void): () => void {
@@ -108,9 +128,33 @@ export async function startStyleAnalysisRun(opts: {
 
 			const materialized: MaterializedSource[] = [];
 			for (let i = 0; i < refs.length; i++) {
-				if (abort.signal.aborted) throw new Error('cancelled');
+				throwIfCancelled(run);
 				const m = await materializeReference(refs[i], (refs[i].role as any) || 'authored');
 				materialized.push(m);
+				// Persist hashes/cache so staleness compares live refs vs the skill manifest.
+				if (!m.error && m.contentHash) {
+					try {
+						updateStyleReference(m.sourceId, {
+							contentHash: m.contentHash,
+							cachePath: m.cachePath,
+							extractedAt: m.extractedAt,
+							format: m.format as any,
+							materializationStatus: 'ready',
+							error: undefined
+						});
+					} catch {
+						/* ref may have been deleted mid-run */
+					}
+				} else if (m.error) {
+					try {
+						updateStyleReference(m.sourceId, {
+							materializationStatus: 'error',
+							error: m.error
+						});
+					} catch {
+						/* ignore */
+					}
+				}
 				emit(run, {
 					type: 'progress',
 					phase: 'materialize',
@@ -129,6 +173,7 @@ export async function startStyleAnalysisRun(opts: {
 			const okSources = materialized.filter((m) => m.text.trim() && !m.error);
 			if (!okSources.length) throw new Error('No extractable reference text');
 
+			throwIfCancelled(run);
 			emit(run, { type: 'status', phase: 'normalize', message: 'Normalizing documents' });
 			const docs = okSources.map((m) =>
 				normalizeText(m.text, { sourceId: m.sourceId, role: m.role, label: m.label })
@@ -142,6 +187,7 @@ export async function startStyleAnalysisRun(opts: {
 				sentenceCount: d.sentences.length
 			})));
 
+			throwIfCancelled(run);
 			emit(run, { type: 'status', phase: 'measure', message: 'Computing deterministic metrics' });
 			const measurements = measureDocuments(docs);
 			run.measurements = measurements.metrics;
@@ -165,8 +211,10 @@ export async function startStyleAnalysisRun(opts: {
 				provider: opts.provider,
 				model: opts.model,
 				runId,
-				useHeuristicsOnly: opts.useHeuristicsOnly === true
+				useHeuristicsOnly: opts.useHeuristicsOnly === true,
+				abortSignal: abort.signal
 			});
+			throwIfCancelled(run);
 			writeRunArtifact(runId, 'specialists.json', results.map((r) => ({
 				name: r.name,
 				ok: r.ok,
@@ -175,7 +223,27 @@ export async function startStyleAnalysisRun(opts: {
 			})));
 
 			emit(run, { type: 'status', phase: 'synthesis', message: 'Synthesizing profile' });
-			const synthesized = synthesizePropositions(propositions);
+			let synthesized: StyleProposition[];
+			if (opts.useHeuristicsOnly || !opts.provider) {
+				synthesized = dedupePropositions(propositions);
+			} else {
+				const { result: synthResult, propositions: synthProps } = await runSynthesisAgent({
+					docs,
+					measurements,
+					provider: opts.provider,
+					model: opts.model,
+					runId,
+					candidates: propositions,
+					abortSignal: abort.signal
+				});
+				throwIfCancelled(run);
+				writeRunArtifact(runId, 'synthesis.json', {
+					ok: synthResult.ok,
+					error: synthResult.error,
+					count: synthProps.length
+				});
+				synthesized = synthProps;
+			}
 
 			const sourceManifest = okSources.map((m) => ({
 				sourceId: m.sourceId,
@@ -190,14 +258,17 @@ export async function startStyleAnalysisRun(opts: {
 			let trials: CalibrationTrial[] = [];
 			const calibProps = selectCalibrationCandidates(synthesized, 8);
 			for (const prop of calibProps) {
+				throwIfCancelled(run);
 				const trial = generateCloseCall({ proposition: prop, measurements });
 				if ('error' in trial) continue;
 				trials.push(trial);
 			}
 
+			throwIfCancelled(run);
+			const skillId = pickAuthorStyleSkillId();
 			const state: StyleSkillState = {
 				schemaVersion: 1,
-				skillId: AUTHOR_STYLE_SKILL_ID,
+				skillId,
 				updatedAt: Date.now(),
 				lastRunId: runId,
 				propositions: synthesized,
@@ -210,9 +281,12 @@ export async function startStyleAnalysisRun(opts: {
 			emit(run, { type: 'status', phase: 'compile', message: 'Compiling author-style skill' });
 			const compiled = compileAuthorStyleSkill({
 				state,
-				metrics: measurements.metrics
+				metrics: measurements.metrics,
+				preferSkillId: skillId
 			});
 
+			throwIfCancelled(run);
+			if (run.status !== 'running') return;
 			run.status = 'done';
 			emit(run, {
 				type: 'done',
@@ -223,6 +297,13 @@ export async function startStyleAnalysisRun(opts: {
 			// Keep checkpoints briefly; clear ephemeral dir later
 			setTimeout(() => clearStyleRun(runId), 60 * 60 * 1000);
 		} catch (err) {
+			if (run.status === 'cancelled' || (err as Error).message === 'cancelled') {
+				if (run.status !== 'cancelled') {
+					run.status = 'cancelled';
+					emit(run, { type: 'status', phase: 'cancelled', message: 'Run cancelled' });
+				}
+				return;
+			}
 			if (run.status === 'cancelled') return;
 			run.status = 'failed';
 			emit(run, { type: 'error', message: (err as Error).message });
@@ -232,20 +313,33 @@ export async function startStyleAnalysisRun(opts: {
 	return { runId };
 }
 
+function liveReferenceHashes(refs: StyleReference[]): Array<{ sourceId: string; contentHash: string }> {
+	return refs
+		.filter((r) => typeof r.contentHash === 'string' && r.contentHash.length > 0)
+		.map((r) => ({ sourceId: r.id, contentHash: r.contentHash as string }));
+}
+
 export function getStyleProfileSummary() {
 	const state = readStyleSkillState();
 	const refs = listStyleReferences();
-	// Staleness needs content hashes — use stored hashes vs presence of refs by id
-	const currentHashes = (state?.sourceManifest ?? []).map((s) => ({
-		sourceId: s.sourceId,
-		contentHash: s.contentHash
-	}));
-	// If reference ids changed, mark stale
+	const currentHashes = liveReferenceHashes(refs);
 	const refIds = new Set(refs.map((r) => r.id));
 	const manifestIds = new Set((state?.sourceManifest ?? []).map((s) => s.sourceId));
 	const idDrift =
 		[...refIds].some((id) => !manifestIds.has(id)) ||
 		[...manifestIds].some((id) => !refIds.has(id));
+
+	// Hash drift: compare live ref contentHashes to the skill manifest.
+	// Refs without a stored hash after edits are treated as potentially stale
+	// when a skill exists (user should re-analyze).
+	const hashStale =
+		!!state?.sourceManifest?.length &&
+		(currentHashes.length === 0
+			? refs.length > 0
+			: isSkillStale(state, currentHashes));
+
+	const analyzing = [...runs.values()].some((r) => r.status === 'running');
+	const latestRun = [...runs.values()].sort((a, b) => b.startedAt - a.startedAt)[0];
 
 	return {
 		hasReferences: refs.length > 0,
@@ -254,9 +348,11 @@ export function getStyleProfileSummary() {
 		hasSkill: !!state && state.propositions.some((p) => p.status === 'active' && p.enabled),
 		activeCount: state?.propositions.filter((p) => p.status === 'active' && p.enabled).length ?? 0,
 		unresolvedCalibration: countUnresolvedCalibration(state),
-		stale: idDrift || isSkillStale(state, currentHashes),
+		stale: idDrift || hashStale,
 		lastRunId: state?.lastRunId ?? null,
 		updatedAt: state?.updatedAt ?? null,
+		analyzing,
+		failed: !analyzing && latestRun?.status === 'failed',
 		propositions: state?.propositions ?? [],
 		calibrationTrials: (state?.calibrationTrials ?? []).filter((t) => t.status === 'pending'),
 		sourceManifest: state?.sourceManifest ?? []
@@ -296,7 +392,11 @@ export function resolveCalibration(opts: {
 		updatedAt: Date.now()
 	};
 	writeStyleSkillState(next);
-	compileAuthorStyleSkill({ state: next, metrics: loadSkillMetrics(next.skillId) });
+	compileAuthorStyleSkill({
+		state: next,
+		metrics: loadSkillMetrics(next.skillId),
+		preferSkillId: next.skillId
+	});
 	return next;
 }
 
@@ -323,10 +423,6 @@ export async function ensureCalibrationTrial(propositionId: string): Promise<Cal
 	const prop = state.propositions.find((p) => p.id === propositionId);
 	if (!prop) throw new Error('Unknown proposition');
 
-	// Rebuild minimal measurements from skill metrics file
-	const { readFileSync, existsSync } = await import('fs');
-	const { join } = await import('path');
-	const { authorStyleSkillDir } = await import('./skill-store');
 	let metrics: FeatureMeasurement[] = [];
 	const path = join(authorStyleSkillDir(state.skillId), 'references', 'metrics.json');
 	if (existsSync(path)) {

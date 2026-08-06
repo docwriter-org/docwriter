@@ -2140,7 +2140,8 @@
 			styleHasSkill = !!data.hasSkill;
 			styleStale = !!data.stale;
 			styleUnresolved = Number(data.unresolvedCalibration ?? 0);
-			styleFailed = false;
+			styleAnalyzing = !!data.analyzing;
+			styleFailed = !!data.failed;
 		} catch {
 			/* ignore */
 		}

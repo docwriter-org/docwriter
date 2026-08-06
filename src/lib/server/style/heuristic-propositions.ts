@@ -154,8 +154,9 @@ export function buildHeuristicPropositions(
 			inspirationAgree: false,
 			roleConflict: false
 		});
-		// Absence evidence is corpus-wide — boost by treating as multi-doc agreement
-		const boosted = Math.min(0.9, conf.final + (authored.length >= 2 ? 0.15 : 0));
+		// Absence has no span evidence — keep below the active threshold so
+		// calibration (or a later specialist) must confirm before activation.
+		const capped = Math.min(0.74, conf.final + (authored.length >= 2 ? 0.1 : 0));
 		props.push({
 			id: `prop_ai_ism_${runId.slice(0, 6)}`,
 			schemaVersion: 1,
@@ -178,10 +179,10 @@ export function buildHeuristicPropositions(
 				evidence: conf.evidence,
 				agentInterpretation: 0.85,
 				extractorReliability: EXTRACTOR_RELIABILITY.vocabulary_register,
-				final: boosted
+				final: capped
 			},
 			origin: 'authored',
-			status: statusFromConfidence(boosted, true),
+			status: statusFromConfidence(capped, true),
 			enabled: true,
 			createdAt: now,
 			updatedAt: now,
@@ -197,7 +198,10 @@ export function buildHeuristicPropositions(
 			evidenceRefs: evidence,
 			counterevidence: [],
 			sourceCount,
-			matchingContextRepetition: Math.min(1, sig[0]?.documentFrequency ?? 0 / 3),
+			matchingContextRepetition: Math.min(
+				1,
+				(sig[0]?.documentFrequency ?? 0) / Math.max(1, sourceCount)
+			),
 			agentInterpretation: 0.7,
 			extractorReliability: EXTRACTOR_RELIABILITY.vocabulary_register,
 			authoredAgree: true,
@@ -355,7 +359,8 @@ export function buildHeuristicPropositions(
 			inspirationAgree: false,
 			roleConflict: false
 		});
-		const final = Math.min(0.85, conf.final + (authored.length >= 2 ? 0.2 : 0.05));
+		// No span evidence — keep in calibration until confirmed.
+		const final = Math.min(0.74, conf.final + (authored.length >= 2 ? 0.1 : 0.05));
 		props.push({
 			id: `prop_no_dash_${runId.slice(0, 6)}`,
 			schemaVersion: 1,

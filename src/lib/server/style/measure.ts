@@ -193,6 +193,23 @@ export function measureDocuments(docs: NormalizedDocument[]): StyleMeasurements 
 		sourceIds
 	});
 
+	let dashRate = 0;
+	const punctSources = Object.keys(punctuationBySource);
+	for (const punct of Object.values(punctuationBySource)) {
+		dashRate +=
+			(punct.perThousand['—'] ?? 0) +
+			(punct.perThousand['–'] ?? 0) +
+			(punct.perThousand['--'] ?? 0);
+	}
+	dashRate /= Math.max(1, punctSources.length);
+	metrics.push({
+		metricId: 'corpus.dash.rate',
+		family: 'punctuation',
+		summary: 'Em/en dash and double-hyphen rate per 1k words',
+		value: dashRate,
+		sourceIds
+	});
+
 	// List/table/code density heuristics
 	for (const doc of docs) {
 		const listLines = doc.blocks.filter((b) => /^[-*+]\s|\d+\.\s/.test(b.text)).length;

@@ -11,6 +11,7 @@ import {
 import { join } from 'path';
 import { getEffectiveDocwriterDir } from '../document-files';
 import { writeJsonAtomic } from '../file-utils';
+import { listSkills } from '../skills-config';
 import {
 	AUTHOR_STYLE_FALLBACK_ID,
 	AUTHOR_STYLE_SKILL_ID,
@@ -27,12 +28,26 @@ export function styleRunsDir(): string {
 	return join(getEffectiveDocwriterDir(), 'style-runs');
 }
 
-export function resolveManagedSkillId(existingCustomIds: string[]): string {
-	if (existingCustomIds.includes(AUTHOR_STYLE_SKILL_ID)) {
-		// Collision with a user-installed skill — never overwrite.
+/**
+ * Pick a skill directory id that will not clobber a user-installed skill.
+ * Managed `docwriter:author-style` sources are ours and may be overwritten.
+ */
+export function pickAuthorStyleSkillId(): string {
+	const collision = listSkills().skills.find((s) => s.id === AUTHOR_STYLE_SKILL_ID);
+	if (
+		collision &&
+		collision.origin === 'custom' &&
+		collision.source &&
+		!collision.source.startsWith('docwriter:')
+	) {
 		return AUTHOR_STYLE_FALLBACK_ID;
 	}
 	return AUTHOR_STYLE_SKILL_ID;
+}
+
+/** @deprecated use pickAuthorStyleSkillId */
+export function resolveManagedSkillId(_existingCustomIds: string[]): string {
+	return pickAuthorStyleSkillId();
 }
 
 function emptyState(skillId: string): StyleSkillState {
@@ -46,7 +61,7 @@ function emptyState(skillId: string): StyleSkillState {
 	};
 }
 
-export function readStyleSkillState(skillId = AUTHOR_STYLE_SKILL_ID): StyleSkillState | null {
+function readOne(skillId: string): StyleSkillState | null {
 	const path = join(authorStyleSkillDir(skillId), 'references', 'propositions.json');
 	if (!existsSync(path)) return null;
 	try {
@@ -67,6 +82,12 @@ export function readStyleSkillState(skillId = AUTHOR_STYLE_SKILL_ID): StyleSkill
 	}
 }
 
+export function readStyleSkillState(skillId?: string): StyleSkillState | null {
+	if (skillId) return readOne(skillId);
+	// Prefer canonical id, then collision fallback.
+	return readOne(AUTHOR_STYLE_SKILL_ID) ?? readOne(AUTHOR_STYLE_FALLBACK_ID);
+}
+
 export function writeStyleSkillState(state: StyleSkillState) {
 	const dir = authorStyleSkillDir(state.skillId);
 	const refDir = join(dir, 'references');
@@ -76,9 +97,10 @@ export function writeStyleSkillState(state: StyleSkillState) {
 	return next;
 }
 
+/** Unresolved = pending calibration trials (not bare calibration props). */
 export function countUnresolvedCalibration(state: StyleSkillState | null): number {
 	if (!state) return 0;
-	return state.propositions.filter((p) => p.status === 'calibration' && p.enabled).length;
+	return state.calibrationTrials.filter((t) => t.status === 'pending').length;
 }
 
 export function listActivePropositions(state: StyleSkillState | null): StyleProposition[] {

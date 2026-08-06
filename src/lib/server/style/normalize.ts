@@ -210,5 +210,10 @@ export function quoteMatchesSpan(doc: NormalizedDocument, spanId: string, quote:
 	const s = lookupSpan(doc, spanId);
 	if (!s) return false;
 	const norm = (t: string) => t.replace(/\s+/g, ' ').trim();
-	return norm(s.text).includes(norm(quote)) || norm(quote).includes(norm(s.text));
+	const q = norm(quote);
+	// Empty / tiny quotes always "match" via String.includes('') — reject them.
+	if (q.length < 8) return false;
+	const span = norm(s.text);
+	if (!span) return false;
+	return span.includes(q) || (q.length <= span.length * 2 && q.includes(span));
 }
