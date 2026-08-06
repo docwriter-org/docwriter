@@ -193,10 +193,11 @@
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
+					// Specialist Agent SDK runs are the skill builder. Metrics are
+					// inputs to those runs, not a substitute for them.
 					provider: provider || undefined,
 					model: model || undefined,
-					// Prefer heuristics in UI unless provider is set; server also falls back.
-					useHeuristicsOnly: !provider
+					useHeuristicsOnly: false
 				})
 			});
 			const data = await res.json();
@@ -345,9 +346,19 @@
 				{/if}
 
 				<footer class="foot">
-					<button class="primary" disabled={!references.length} onclick={() => void startAnalysis()}>
+					<button
+						class="primary"
+						disabled={!references.length || !provider}
+						onclick={() => void startAnalysis()}
+						title={provider
+							? 'Run specialist agent passes with the selected model'
+							: 'Select a provider/model in the header first'}
+					>
 						Analyze references
 					</button>
+					{#if !provider}
+						<span class="muted">Needs a selected provider/model — analysis is three specialist agent runs.</span>
+					{/if}
 				</footer>
 			{:else if step === 2}
 				<div class="log">

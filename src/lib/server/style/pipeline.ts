@@ -147,12 +147,16 @@ export async function startStyleAnalysisRun(opts: {
 			run.measurements = measurements.metrics;
 			writeRunArtifact(runId, 'metrics.json', measurements.metrics);
 
+			if (!opts.useHeuristicsOnly && !opts.provider) {
+				throw new Error('Provider required for specialist agent passes');
+			}
+
 			emit(run, {
 				type: 'status',
 				phase: 'specialists',
-				message: opts.useHeuristicsOnly || !opts.provider
-					? 'Building propositions from measurements'
-					: 'Running specialist agents'
+				message: opts.useHeuristicsOnly
+					? 'Building propositions from measurements (dev heuristics only)'
+					: 'Running organization, language, and discourse specialist agents'
 			});
 
 			const { results, propositions } = await runSpecialists({
@@ -161,7 +165,7 @@ export async function startStyleAnalysisRun(opts: {
 				provider: opts.provider,
 				model: opts.model,
 				runId,
-				useHeuristicsOnly: opts.useHeuristicsOnly || !opts.provider
+				useHeuristicsOnly: opts.useHeuristicsOnly === true
 			});
 			writeRunArtifact(runId, 'specialists.json', results.map((r) => ({
 				name: r.name,

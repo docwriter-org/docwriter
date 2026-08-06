@@ -7,10 +7,15 @@ export const POST: RequestHandler = async ({ request }) => {
 	const body = await request.json().catch(() => ({}));
 	const provider = typeof body.provider === 'string' ? (body.provider as ProviderId) : undefined;
 	const model = typeof body.model === 'string' ? body.model : undefined;
-	const useHeuristicsOnly = body.useHeuristicsOnly === true || !provider;
+	// Explicit escape hatch for unit/dev only — never the default product path.
+	const useHeuristicsOnly = body.useHeuristicsOnly === true;
 	const referenceIds = Array.isArray(body.referenceIds)
 		? body.referenceIds.filter((x: unknown) => typeof x === 'string')
 		: undefined;
+
+	if (!useHeuristicsOnly && !provider) {
+		throw error(400, 'Select a provider/model to run style analysis (specialist agent passes).');
+	}
 
 	try {
 		const { runId } = await startStyleAnalysisRun({
