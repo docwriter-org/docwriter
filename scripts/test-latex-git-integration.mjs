@@ -8,6 +8,7 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { chromium } from 'playwright';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CLI_PATH = join(REPO_ROOT, 'bin', 'docwriter.js');
@@ -137,6 +138,56 @@ async function runHook(origin, id, file = 'main.tex') {
 	return body.entry;
 }
 
+async function openPdfInBrowser(origin) {
+	const browser = await chromium.launch({ headless: true });
+	const page = await browser.newPage({ viewport: { width: 1800, height: 1200 } });
+	const browserErrors = [];
+	page.on('console', (message) => {
+		if (message.type() === 'error') browserErrors.push(message.text());
+	});
+	page.on('pageerror', (error) => browserErrors.push(error.message));
+
+	try {
+		await page.goto(origin, { waitUntil: 'domcontentloaded' });
+		const fileRow = page.locator('.tree-row[title="main.tex"]');
+		await fileRow.waitFor({ state: 'visible', timeout: 20_000 });
+		await fileRow.click();
+
+		const splitButton = page.getByRole('button', { name: 'Open side preview' });
+		await splitButton.waitFor({ state: 'visible', timeout: 20_000 });
+		await splitButton.click();
+
+		const outerIframe = await page.waitForSelector(
+			'aside[aria-label="PDF preview"] iframe[title^="Preview:"]',
+			{ state: 'visible', timeout: 20_000 }
+		);
+		const previewFrame = await outerIframe.contentFrame();
+		assert(previewFrame, 'The embedded preview route did not load');
+		const innerIframe = await previewFrame.waitForSelector('main iframe', {
+			state: 'visible',
+			timeout: 20_000
+		});
+		const pdfJsFrame = await innerIframe.contentFrame();
+		assert(pdfJsFrame, 'The PDF.js iframe did not load');
+		await pdfJsFrame.waitForFunction(
+			() => globalThis.PDFViewerApplication?.pdfDocument?.numPages > 0,
+			undefined,
+			{ timeout: 30_000 }
+		);
+		const pageCount = await pdfJsFrame.evaluate(
+			() => globalThis.PDFViewerApplication.pdfDocument.numPages
+		);
+		assert.equal(pageCount, 1);
+		await pdfJsFrame.locator('.page[data-page-number="1"]').waitFor({
+			state: 'visible',
+			timeout: 20_000
+		});
+		assert.deepEqual(browserErrors, [], `Browser errors:\n${browserErrors.join('\n')}`);
+	} finally {
+		await browser.close();
+	}
+}
+
 const tempRoot = await mkdtemp(join(tmpdir(), 'docwriter-latex-git-'));
 const remote = join(tempRoot, 'remote.git');
 const workspace = join(tempRoot, 'paper');
@@ -263,6 +314,7 @@ try {
 	}).then((response) => response.json());
 	assert.equal(synctexResponse.ok, true, JSON.stringify(synctexResponse));
 	assert.equal(synctexResponse.page, 1);
+	await openPdfInBrowser(origin);
 
 	await writeFile(
 		join(upstream, 'main.tex'),
@@ -321,6 +373,7 @@ try {
 
 	console.log('PASS: pdflatex produced PDF and SyncTeX output');
 	console.log('PASS: DocWriter discovered and served the PDF preview');
+	console.log('PASS: browser opened the split PDF.js viewer and rendered page 1');
 	console.log('PASS: SyncTeX source-to-PDF lookup returned page 1');
 	console.log('PASS: multi-file Git pull emitted one .tex/.bib reload batch');
 	console.log('PASS: external PDF rebuild emitted preview_ready');
