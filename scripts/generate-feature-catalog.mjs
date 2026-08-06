@@ -172,30 +172,26 @@ const pageFeatures = {
 		['Sessions', 'Expand long agent messages and follow subagent progress', M, 'No page'],
 		['Sessions', 'Open the full transcript from the agent dock', T, 'No complete procedure']
 	],
-	'automation/hooks': [
+	'customize/hooks': [
 		['Customize', 'Create and review shell hooks', C, 'Hooks and Events'],
 		['Automation', 'Run hooks on agent events', C, 'Hooks and Events'],
 		['Automation', 'Start from pdflatex, Pandoc HTML or PDF, Mermaid, or Git templates', T, 'Hooks omits part of the template set'],
 		['Automation', 'Edit, enable, disable, remove, or run a hook manually', C, 'Hooks'],
 		['Automation', 'Review a hook proposed by the agent', T, 'The docs point to an old review location'],
-		['Automation', 'Run hooks with full shell access in the workspace', T, 'The docs omit the safety boundary']
-	],
-	'automation/events': [
+		['Automation', 'Run hooks with full shell access in the workspace', T, 'The docs omit the safety boundary'],
 		['Automation', 'Use file, stem, and tool placeholders in hook commands', C, 'Hooks']
 	],
-	'automation/preview': [
+	'customize/generated-previews': [
 		['Automation', 'Preview PDF, HTML, SVG, and Mermaid output', C, 'Preview and Guides'],
 		['Automation', 'Reload preview output while preserving scroll and zoom', T, 'Preview covers reload but not preserved state']
-	],
-	'automation/latex-and-synctex': [
-		['Workspace', 'Use forward and reverse SyncTeX between source and PDF', T, 'Preview covers part of the flow'],
-		['Automation', 'Find a same name PDF automatically for a TeX file', M, 'No page']
 	],
 	'guides/blog-with-research': [
 		['Agent', 'Research a claim and propose a supported citation', C, 'Research guide']
 	],
 	'guides/overleaf': [
-		['Automation', 'Edit, build, preview, and sync an Overleaf project', C, 'Overleaf guide']
+		['Automation', 'Edit, build, preview, and sync an Overleaf project', C, 'Overleaf guide'],
+		['Workspace', 'Use forward and reverse SyncTeX between source and PDF', T, 'Preview covers part of the flow'],
+		['Automation', 'Find a same name PDF automatically for a TeX file', M, 'No page']
 	],
 	'automation/example-projects': [
 		['Automation', 'Publish Markdown as HTML or PDF with Pandoc', T, 'The current guide is a stub'],

@@ -62,16 +62,14 @@
 					"agent/customize",
 					"customize/rules",
 					"customize/references",
-					"customize/skills"
+					"customize/skills",
+					"customize/hooks",
+					"customize/generated-previews"
 				]
 			},
 			{
-				"group": "Automate",
+				"group": "Examples",
 				"pages": [
-					"automation/hooks",
-					"automation/events",
-					"automation/preview",
-					"automation/latex-and-synctex",
 					"guides/blog-with-research",
 					"guides/overleaf",
 					"automation/example-projects"
@@ -101,7 +99,6 @@
 					"contribute/setup",
 					"contribute/architecture",
 					"contribute/providers-and-tools",
-					"contribute/editor-and-persistence",
 					"contribute/testing-and-docs"
 				]
 			},
@@ -126,6 +123,11 @@
 		{ "source": "/agent/comments", "destination": "/agent/comments-and-critique" },
 		{ "source": "/agent/observability", "destination": "/agent/activity-and-transcript" },
 		{ "source": "/agent/sessions-and-history", "destination": "/agent/sessions" },
+		{ "source": "/automation/hooks", "destination": "/customize/hooks" },
+		{ "source": "/automation/events", "destination": "/customize/hooks#choose-an-event" },
+		{ "source": "/automation/preview", "destination": "/customize/generated-previews" },
+		{ "source": "/automation/latex-and-synctex", "destination": "/guides/overleaf#open-the-preview" },
+		{ "source": "/contribute/editor-and-persistence", "destination": "/contribute/architecture#editor-representation" },
 		{ "source": "/guides/pandoc-html", "destination": "/automation/example-projects#pandoc" },
 		{ "source": "/guides/mermaid", "destination": "/automation/example-projects#mermaid" },
 		{ "source": "/guides/git-workflow", "destination": "/automation/example-projects#git" },

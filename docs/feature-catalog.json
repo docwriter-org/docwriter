@@ -735,70 +735,58 @@
       "targetPage": "agent/activity-and-transcript"
     },
     {
-      "id": "automation-hooks-01",
+      "id": "customize-hooks-01",
       "area": "Customize",
       "feature": "Create and review shell hooks",
-      "targetPage": "automation/hooks"
+      "targetPage": "customize/hooks"
     },
     {
-      "id": "automation-hooks-02",
+      "id": "customize-hooks-02",
       "area": "Automation",
       "feature": "Run hooks on agent events",
-      "targetPage": "automation/hooks"
+      "targetPage": "customize/hooks"
     },
     {
-      "id": "automation-hooks-03",
+      "id": "customize-hooks-03",
       "area": "Automation",
       "feature": "Start from pdflatex, Pandoc HTML or PDF, Mermaid, or Git templates",
-      "targetPage": "automation/hooks"
+      "targetPage": "customize/hooks"
     },
     {
-      "id": "automation-hooks-04",
+      "id": "customize-hooks-04",
       "area": "Automation",
       "feature": "Edit, enable, disable, remove, or run a hook manually",
-      "targetPage": "automation/hooks"
+      "targetPage": "customize/hooks"
     },
     {
-      "id": "automation-hooks-05",
+      "id": "customize-hooks-05",
       "area": "Automation",
       "feature": "Review a hook proposed by the agent",
-      "targetPage": "automation/hooks"
+      "targetPage": "customize/hooks"
     },
     {
-      "id": "automation-hooks-06",
+      "id": "customize-hooks-06",
       "area": "Automation",
       "feature": "Run hooks with full shell access in the workspace",
-      "targetPage": "automation/hooks"
+      "targetPage": "customize/hooks"
     },
     {
-      "id": "automation-events-01",
+      "id": "customize-hooks-07",
       "area": "Automation",
       "feature": "Use file, stem, and tool placeholders in hook commands",
-      "targetPage": "automation/events"
+      "targetPage": "customize/hooks"
     },
     {
-      "id": "automation-preview-01",
+      "id": "customize-generated-previews-01",
       "area": "Automation",
       "feature": "Preview PDF, HTML, SVG, and Mermaid output",
-      "targetPage": "automation/preview"
+      "targetPage": "customize/generated-previews"
     },
     {
-      "id": "automation-preview-02",
+      "id": "customize-generated-previews-02",
       "area": "Automation",
       "feature": "Reload preview output while preserving scroll and zoom",
-      "targetPage": "automation/preview"
-    },
-    {
-      "id": "automation-latex-and-synctex-01",
-      "area": "Workspace",
-      "feature": "Use forward and reverse SyncTeX between source and PDF",
-      "targetPage": "automation/latex-and-synctex"
-    },
-    {
-      "id": "automation-latex-and-synctex-02",
-      "area": "Automation",
-      "feature": "Find a same name PDF automatically for a TeX file",
-      "targetPage": "automation/latex-and-synctex"
+      "targetPage": "customize/generated-previews"
     },
     {
       "id": "guides-blog-with-research-01",
@@ -810,6 +798,18 @@
       "id": "guides-overleaf-01",
       "area": "Automation",
       "feature": "Edit, build, preview, and sync an Overleaf project",
+      "targetPage": "guides/overleaf"
+    },
+    {
+      "id": "guides-overleaf-02",
+      "area": "Workspace",
+      "feature": "Use forward and reverse SyncTeX between source and PDF",
+      "targetPage": "guides/overleaf"
+    },
+    {
+      "id": "guides-overleaf-03",
+      "area": "Automation",
+      "feature": "Find a same name PDF automatically for a TeX file",
       "targetPage": "guides/overleaf"
     },
     {

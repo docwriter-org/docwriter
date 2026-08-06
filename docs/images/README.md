@@ -34,6 +34,7 @@ The standard viewport is 1400 by 900 pixels. The introduction recording uses 120
 | `freeze-unlock-menu.png` | Writing rules | Unlock menu | None |
 | `chat-popover.png` | Send and steer requests | Chat panel with a draft request | None |
 | `agent-wakeup-button.png` | Send and steer requests | Close crop of the agent pill | None |
+| `agent-dock-opener.png` | Interface tour | Collapsed agent pill highlighted in the lower right corner | None |
 | `agent-paused.png` | Control agent behavior | Expanded dock while paused | None |
 | `agent-paused-pill.png` | Control agent behavior | Collapsed paused pill | None |
 | `agent-behavior-panel.png` | Control agent behavior | Low, Medium, and High autonomy | None |

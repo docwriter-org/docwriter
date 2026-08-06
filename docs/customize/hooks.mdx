@@ -1,6 +1,5 @@
 ---
 title: "Hooks"
-description: "Run a workspace command when an agent event occurs."
 ---
 
 Use a hook when an agent action should start a command that you would otherwise run by hand. A hook connects an agent event, such as the end of a turn, to a shell command. For example, a hook can rebuild a PDF after the agent edits a TeX file.
@@ -16,6 +15,37 @@ The included templates build LaTeX, convert Markdown with Pandoc, render Mermaid
 <Frame>
   ![Hook templates and settings](/images/hooks-panel.png)
 </Frame>
+
+## Choose an event
+
+The event controls when the command runs:
+
+* **PreToolUse** runs before a tool.
+* **PostToolUse** runs after a successful tool.
+* **PostToolUseFailure** runs after a failed tool.
+* **UserPromptSubmit** runs when you submit a request.
+* **Stop** runs when the main agent finishes a turn.
+* **SubagentStop** runs when a subagent finishes.
+* **SessionStart** and **SessionEnd** run when an agent session starts or ends.
+* **Notification** runs when the agent sends a notification.
+
+Claude supports every event in this list. Other providers currently support **PostToolUse**, **PostToolUseFailure**, and **Stop**.
+
+## Limit a hook with a matcher
+
+A matcher limits a hook to selected tool names. DocWriter treats the matcher as a case insensitive regular expression. For example, `Edit|Write` matches a tool name that contains `Edit` or `Write`.
+
+Leave the matcher empty to run the hook for every tool that reaches the chosen event. Tool names can differ across providers, so check the live activity before using a narrow matcher.
+
+## Use file variables
+
+Variables let a command use the file and tool that caused the event:
+
+* `{{file}}` is the workspace relative file used by the tool.
+* `{{stem}}` is the file path without the final extension.
+* `{{tool}}` is the tool name.
+
+For example, if a tool edits `notes/draft.md`, then `{{file}}` becomes `notes/draft.md` and `{{stem}}` becomes `notes/draft`. File values are empty when the event does not belong to a file tool.
 
 ## Manage hooks
 
