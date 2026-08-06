@@ -7,7 +7,6 @@
  */
 (() => {
 	const TOC_SELECTOR = '#table-of-contents-content.toc';
-	const ITEM_SELECTOR = ':scope > .toc-item';
 	const BASE = 8;
 
 	/** @type {WeakMap<Element, { disconnect: () => void }>} */
@@ -36,10 +35,29 @@
 	}
 
 	/**
+	 * Anchor offsetTop is relative to the nearest positioned ancestor. Mintlify
+	 * marks each `.toc-item` as `relative`, so we measure against the list box.
+	 * @param {HTMLElement} list
+	 * @param {HTMLElement} anchor
+	 */
+	function measureAnchor(list, anchor) {
+		const listRect = list.getBoundingClientRect();
+		const rect = anchor.getBoundingClientRect();
+		const styles = getComputedStyle(anchor);
+		const padTop = parseFloat(styles.paddingTop) || 0;
+		const padBottom = parseFloat(styles.paddingBottom) || 0;
+		const top = rect.top - listRect.top + list.scrollTop + padTop;
+		const bottom = rect.bottom - listRect.top + list.scrollTop - padBottom;
+		return { top, bottom };
+	}
+
+	/**
 	 * @param {HTMLElement} list
 	 */
 	function build(list) {
-		const items = Array.from(list.querySelectorAll(ITEM_SELECTOR));
+		// Mintlify nests h3+ items under their parent <li>, so collect every
+		// .toc-item in document order rather than only direct children.
+		const items = Array.from(list.querySelectorAll('.toc-item'));
 		if (items.length === 0) return null;
 
 		clearBranches(list);
@@ -56,6 +74,9 @@
 			const depth = readDepth(item);
 			const pad = getItemPad(depth);
 			anchor.style.setProperty('--dw-toc-item-pad', `${pad}px`);
+			// Nested Mintlify items also set --toc-padding-left; keep both in sync
+			// so utility padding and our override agree.
+			anchor.style.setProperty('--toc-padding-left', `${Math.max(0, pad - BASE)}px`);
 
 			const l1 = getLineOffset(depth);
 			const prevDepth = i === 0 ? depth : readDepth(items[i - 1]);
@@ -74,12 +95,12 @@
 			}
 
 			if (l0 !== l1) {
-				const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-				path.setAttribute(
+				const bend = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+				bend.setAttribute(
 					'd',
 					`M ${l0 + 0.5} 0 C ${l0 + 0.5} 8 ${l1 + 0.5} 4 ${l1 + 0.5} 12`,
 				);
-				svg.appendChild(path);
+				svg.appendChild(bend);
 			}
 
 			const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
@@ -95,21 +116,15 @@
 
 		if (entries.length === 0) return null;
 
-		// Measure after branches are in the DOM so padding/offset are final.
 		let pathD = '';
 		let maxW = 0;
 		let maxH = 0;
+		/** @type {[number, number, number][]} */
 		const positions = [];
 
 		for (let i = 0; i < entries.length; i++) {
 			const entry = entries[i];
-			const styles = getComputedStyle(entry.anchor);
-			const top =
-				entry.anchor.offsetTop + (parseFloat(styles.paddingTop) || 0);
-			const bottom =
-				entry.anchor.offsetTop +
-				entry.anchor.clientHeight -
-				(parseFloat(styles.paddingBottom) || 0);
+			const { top, bottom } = measureAnchor(list, entry.anchor);
 			const x = entry.x;
 
 			entry.top = top;
@@ -139,6 +154,13 @@
 
 		const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
 		path.setAttribute('d', pathD);
+		path.setAttribute('fill', 'none');
+		path.setAttribute('stroke-width', '1.5');
+		path.setAttribute('stroke-linecap', 'round');
+		path.setAttribute('stroke-linejoin', 'round');
+		// Presentation attribute so stroke stays visible even if theme tokens
+		// are space-separated RGB components that invalidate CSS `stroke: var(--primary)`.
+		path.setAttribute('stroke', 'currentColor');
 		thumbSvg.appendChild(path);
 		thumb.appendChild(thumbSvg);
 		list.prepend(thumb);
@@ -149,7 +171,6 @@
 				if (entries[i].item.hasAttribute('data-active')) activeIdx.push(i);
 			}
 			if (activeIdx.length === 0) {
-				// Fall back to deepest-active only, or hide the thumb.
 				for (let i = 0; i < entries.length; i++) {
 					if (entries[i].item.hasAttribute('data-active-deepest')) {
 						activeIdx.push(i);
@@ -196,10 +217,6 @@
 				for (const entry of entries) {
 					entry.anchor.style.removeProperty('--dw-toc-item-pad');
 				}
-			},
-			rebuild: () => {
-				attrObserver.disconnect();
-				return build(list);
 			},
 		};
 	}
@@ -252,11 +269,9 @@
 			subtree: true,
 		});
 
-		// Rebuild after layout settles (fonts / sticky TOC mount).
 		window.addEventListener('resize', scheduleScan, { passive: true });
 		window.addEventListener('load', scheduleScan);
 
-		// Mintlify client navigations change the path without a full reload.
 		const pushState = history.pushState;
 		history.pushState = function (...args) {
 			const result = pushState.apply(this, args);
