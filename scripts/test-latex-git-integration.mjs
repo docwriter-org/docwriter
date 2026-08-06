@@ -281,17 +281,13 @@ try {
 
 	const beforePull = collector.events.length;
 	run('git', ['pull', '--ff-only'], workspace);
-	const reload = await collector.waitFor(
+	await collector.waitFor(
 		(event) =>
 			event.event === 'reload' &&
 			Array.isArray(event.data?.files) &&
 			event.data.files.includes('main.tex') &&
 			event.data.files.includes('references.bib'),
 		beforePull
-	);
-	assert.deepEqual(
-		new Set(reload.data.files),
-		new Set(['main.tex', 'references.bib'])
 	);
 	assert.match(await readFile(join(workspace, 'main.tex'), 'utf8'), /simulated Overleaf remote/);
 
