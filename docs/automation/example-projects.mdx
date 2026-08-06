@@ -19,9 +19,17 @@ Attach an image to Chat when the image itself is evidence or needs a caption. Pl
 
 ## LaTeX and Overleaf
 
-Clone the Overleaf Git repository, run DocWriter with `--watch`, and configure the pdflatex hook. Pull before a writing session and push only accepted source changes.
+Clone the Git URL from Overleaf, enter the checkout, and start DocWriter in watch mode:
 
-Use [LaTeX and SyncTeX](/automation/latex-and-synctex) for the build and preview setup. DocWriter does not pull or push the Overleaf repository automatically unless you enable a Git hook.
+```sh
+git clone <overleaf-git-url> paper
+cd paper
+docwriter --watch .
+```
+
+Before a writing session, run `git pull --ff-only` and resolve any Git conflict before continuing. Watch mode reloads pulled `.tex`, `.bib`, and PDF changes. Use [LaTeX and SyncTeX](/automation/latex-and-synctex) to install the TeX commands and configure the build and preview hook.
+
+DocWriter does not pull or push the Overleaf repository automatically. Push accepted source changes yourself, or enable a Git hook after reviewing its command.
 
 <Frame>
   ![A TeX project open in the source editor](/images/overleaf-tex-open.png)
@@ -55,6 +63,15 @@ The template matches Edit or Write tool calls for Mermaid source files.
 
 ## Git
 
-Choose one of the Git templates when accepted changes should be committed and pushed at the end of a turn. The private variant excludes `.docwriter/`, `.claude/`, and `CLAUDE.md`.
+Before using an automatic Git hook, make sure commits and a normal push work from the workspace:
 
-The templates run at **Stop** and require a configured remote and upstream branch. Review the command and repository state before enabling an automatic push.
+```sh
+git status
+git push
+```
+
+If `git push` reports that the branch has no upstream, set it once with `git push -u origin <branch>`. Configure Git credentials and `user.name` / `user.email` in the shell when Git asks for them.
+
+Choose one of the Git templates when the current working-tree changes should be committed and pushed at the end of an agent turn. The private variant excludes `.docwriter/`, `.claude/`, and `CLAUDE.md`.
+
+The templates run at **Stop** and require a configured remote and upstream branch. They stage every non-excluded workspace change, not only the active document. Review `git status`, the command, and the repository state before enabling an automatic push.
