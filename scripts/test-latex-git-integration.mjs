@@ -353,6 +353,7 @@ try {
 		join(workspace, 'stop-hook-ran.txt')
 	);
 
+	run('git', ['pull', '--ff-only'], upstream);
 	await writeFile(
 		join(upstream, 'main.tex'),
 		[
