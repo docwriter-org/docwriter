@@ -1,19 +1,23 @@
 ---
 title: "Keyboard shortcuts"
-description: "Current shortcuts for the editor, agent, comments, and dialogs."
+description: "Find a keyboard action and understand whether it sends, changes, or removes work."
 ---
+
+A shortcut acts on the control that currently has focus, so the same keys can have different effects in the editor, Chat, or a comment.
 
 ## Editor
 
 | Shortcut | Action |
 | --- | --- |
-| Command or Control and Enter | Wake the agent now |
+| Command or Control and Enter | Wake the agent now and skip the idle countdown |
 | Command or Control and F | Find in the active document |
 | Command or Control and / | Comment or uncomment source |
 | Command or Control and Z | Undo the latest user action |
 | Command or Control, Shift, and Z | Redo |
 
-DocWriter saves continuously. There is no separate Command or Control and S action.
+Undo can reverse local typing and accepted or rejected review actions. Agent changes are kept outside the local undo stack until you accept or reject them, which protects your typing history from an agent edit.
+
+DocWriter saves continuously. It has no separate Command or Control and S action. Closing the browser immediately after typing can lose a change that has not reached the server. Once the server receives the change, it saves it in the database before writing the workspace file.
 
 ## Chat and comments
 
@@ -22,6 +26,8 @@ DocWriter saves continuously. There is no separate Command or Control and S acti
 | Command or Control and Enter | Send Chat or a comment reply |
 | Enter in Chat | Insert a new line |
 | Escape | Close the current popover, menu, or dialog |
+
+Sending Chat or a reply sends its text and selected document context to the current provider. Closing a draft popover or dialog can discard text that you have not sent or saved.
 
 ## Selected text feedback
 
@@ -32,14 +38,20 @@ DocWriter saves continuously. There is no separate Command or Control and S acti
 | Escape | Close the popup |
 | Backspace or Delete in an empty input | Delete the selected document text |
 
+The delete shortcut changes the document as soon as the feedback input is empty. Use Undo if you delete selected text by mistake.
+
 ## Find
 
-Enter moves to the next match. Shift and Enter moves to the previous match. Escape closes the find bar.
+Enter moves to the next match. Shift and Enter moves to the previous match. Escape closes the find bar. Find only changes the current selection and does not change document text.
 
 ## Agent dock
 
-Click the idle agent pill to wake it for the active text tab. Double click the pill to pause or resume. Click the active pill once to cancel the current run.
+Click the idle agent pill to wake it for the active text tab. Waking the agent can send context to the selected provider and use provider quota.
+
+Double click the pill to pause or resume agent requests. Pausing closes the current run in DocWriter, clears the idle countdown, and blocks Chat and new agent requests. Completed tool calls and proposals remain.
+
+Click the active pill once to close the current run in DocWriter and clear its queued messages. Some provider work may continue after the run closes.
 
 ## Tabs and names
 
-Enter saves an inline rename. Escape cancels it or closes a context menu.
+Enter saves an inline rename, which changes the workspace file path and the saved tab identifier. Links that use the old path may stop working. Escape cancels the rename or closes a context menu without changing the path.

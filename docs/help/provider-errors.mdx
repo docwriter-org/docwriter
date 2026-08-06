@@ -1,40 +1,48 @@
 ---
 title: "Provider errors"
-description: "Fix authentication, model, quota, and saved session failures."
+description: "Match an agent error to the credential, model, quota, session, or tool setting that caused it."
 ---
 
-Start with the message shown in the **Agent auth failed** or **Agent run failed** notice. The full error also remains in the agent activity log.
+Start with the message shown in the **Agent auth failed** or **Agent run failed** notice. The full error remains in the agent activity log and can identify the provider setting that needs to change.
 
 ## The provider says a credential is missing
 
 Open **Settings**, then **API keys**. Check whether the selected provider shows **Key set**, **Using login**, **Missing**, or **Optional**.
 
-Environment variables and project `.env` files take precedence over `~/.docwriter/keys.env`. Restart DocWriter after changing a shell environment variable.
+Adding a key allows future requests to use that provider. DocWriter stores keys entered in the panel in `~/.docwriter/keys.env` with permissions limited to your operating system user. Removing a key stops DocWriter from using that saved value, but the provider may still work through an environment variable or command line login.
+
+Process environment variables and project `.env` files take precedence over `~/.docwriter/keys.env`. Restart DocWriter after changing a shell environment variable. A wrong value in the environment can continue to override a correct value saved in the panel.
 
 ## A command line login expired
 
-Run the provider login command again, then choose **New session** in DocWriter. Claude and Codex can use existing command line logins.
+Run the provider login command again. Claude and Codex can use existing command line logins.
+
+Choose **New session** if the provider still tries to resume the expired conversation. New session clears the saved provider conversation, agent activity for the current session, temporary scratch files, and pending proposals. It keeps workspace files, comments, rules, hooks, and settings. Copy any proposal text you need before choosing it.
 
 ## The selected model does not exist
 
-Open the model pill and choose another model listed for the current provider. A custom model identifier can be saved in the interface even when the provider does not allow the account to use it.
+Open the model control and choose another model listed for the current provider. Changing the model affects future agent requests and does not change workspace files.
+
+A custom model identifier can be saved in the interface even when the provider does not allow the account to use it. Model access can depend on the account, subscription, region, and API endpoint.
 
 If OpenAI reports that `codex-mini` does not exist, choose an available GPT model. If Claude reports that enabled thinking is not supported, choose another Claude model.
 
-Model access can depend on the account, subscription, region, and API endpoint.
-
 ## The provider reached a quota or rate limit
 
-Wait for the limit to reset, or select another provider that has working credentials. Cancel the current run if queued messages should not run after the limit resets.
+Wait for the limit to reset, or select another provider that has working credentials. Switching providers starts a separate provider conversation, so the new provider does not receive the old provider's saved conversation.
+
+Cancel the current run if queued messages should not run after the limit resets. Cancellation closes the run in DocWriter and clears its queued messages, but some provider work may continue. Completed tool calls, comments, and proposals remain. Provider charges are not reversed.
 
 ## A saved session cannot resume
 
 Open **Settings**, then **Sessions**, and choose another session. Start a new session when the saved provider conversation no longer exists.
 
-Switching providers also starts a separate provider conversation. Your workspace files and saved writing settings remain.
+Choosing another session changes which saved provider conversation the agent continues. It does not replace workspace files. Starting a new session removes the current session's activity and pending proposals, so copy proposal text you need first.
 
 ## The provider starts but a tool fails
 
 Open the transcript and inspect the failed tool result. Confirm that the file is inside the workspace and that the selected provider supports the requested tool.
+
+Retry only after you fix the stated cause. A retry sends another provider request, can use more quota, and may repeat a command if the first attempt completed before reporting an error. Check the workspace before retrying any action that writes or deletes files.
 
 Read [Privacy and safety](/help/privacy-and-safety) to understand what a provider can read and which commands can run.

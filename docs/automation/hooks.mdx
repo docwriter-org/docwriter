@@ -1,15 +1,17 @@
 ---
 title: "Hooks"
-description: "Run workspace shell commands when agent events occur."
+description: "Run a workspace command when an agent event occurs."
 ---
 
-Hooks run shell commands from the workspace root. They have the same access as your shell, so review every command before enabling it.
+Use a hook when an agent action should start a command that you would otherwise run by hand. A hook connects an agent event, such as the end of a turn, to a shell command. For example, a hook can rebuild a PDF after the agent edits a TeX file.
+
+Hooks run from the workspace root and have the same access as your shell. A command can change or delete files, use saved credentials, and contact remote services, so review every command before you enable it.
 
 ## Create a hook
 
-Open **Settings**, then **Hooks**. Start from a template or add your own event, matcher, command, and optional output.
+Open **Settings**, then **Hooks**. Start from a template, or add your own event, matcher, command, and optional output path. The event says when the command runs. The matcher limits which tool names can start it. The output path tells DocWriter which generated file it can preview.
 
-Current templates cover pdflatex, Pandoc HTML, Pandoc PDF, Mermaid, and two Git commit and push variants.
+The included templates build LaTeX, convert Markdown with Pandoc, render Mermaid diagrams, or commit and push Git changes. Edit each template so its file names and command fit your project before you enable it.
 
 <Frame>
   ![Hook templates and settings](/images/hooks-panel.png)
@@ -17,18 +19,20 @@ Current templates cover pdflatex, Pandoc HTML, Pandoc PDF, Mermaid, and two Git 
 
 ## Manage hooks
 
-Use the checkbox to enable or disable a hook. Use **Run now** to test it. Remove a hook with the x control.
+Use the checkbox to enable or disable a hook. Use **Run now** to test its resolved command with the active file. Remove a hook with the x control.
 
-The agent can propose a hook through a **Proposed hook** toast. Accepting the toast saves the hook, but you still choose whether to enable it.
+The agent can also propose a hook through a **Proposed hook** toast. Accepting the toast saves the hook. You then review the saved command and choose whether to enable it.
 
 ## Preview output
 
-Set **Output** when the command produces a file that DocWriter can preview. The Preview controls use the first enabled hook whose output matches the active source file.
+Set **Output** when the command produces a file that DocWriter can preview. For example, a command that builds `main.tex` can set its output to `main.pdf`. The Preview controls use the first enabled hook whose output matches the active source file.
 
-The pdflatex template runs at **Stop**, after an agent turn. It does not run after every user keystroke.
+The pdflatex template runs at **Stop**, which means it runs after the main agent finishes a turn. Your own typing does not start the hook.
 
 ## Failures
 
-The live agent dock shows a hook as running, done, or failed. DocWriter records the exit code and clips long standard output and error streams.
+The live agent dock shows whether a hook is running, done, or failed. A successful test shows **done** and an exit code of zero. If the hook has an output path, open the preview and confirm that the generated file reflects the latest source.
 
-A failing **PreToolUse** hook can block the tool. Other failures are reported without reversing work that already completed.
+DocWriter records the exit code and keeps the last 2,000 characters from both standard output and the error stream. Standard output is the command's normal text output. The error stream contains warnings and errors.
+
+A failing hook is reported but does not block or undo the related action.

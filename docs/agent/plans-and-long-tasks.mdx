@@ -5,9 +5,11 @@ description: "Review a plan and follow work that uses tools or subagents."
 
 ## Ask for a plan
 
+Use a plan when a request can affect several files, has important choices, or needs a sequence of steps that you want to check first. For example, ask for a plan before reorganizing several chapters so you can review the proposed structure before any text changes.
+
 Enable **Plan first** in Chat or choose **Plan first** for selected text. The agent reads the relevant files without changing them, then opens **Plan from agent**.
 
-Use **Run it** to approve the plan. **Dismiss** closes it. **Reject with feedback** sends your response and asks for a revised plan.
+Use **Run it** to approve the plan and let the agent begin the work. **Dismiss** closes the plan without starting it. **Reject with feedback** sends your response and asks for a revised plan.
 
 <Frame caption="Review a proposed plan and approve it with Run it.">
   <video
@@ -26,13 +28,13 @@ Use **Run it** to approve the plan. **Dismiss** closes it. **Reject with feedbac
 
 ## Follow long work
 
-The agent can use file, shell, web research, code, and subagent tools. Tool calls and progress appear in the live agent dock. Subagent work appears under the relevant task description.
+Some requests take longer because the agent needs to inspect files, run commands, research a source, or ask another agent to handle part of the work. Tool calls and progress appear in the live agent dock. Work from another agent appears under the relevant task description.
 
-You can keep editing while the work runs. Open the full transcript when the short activity log does not contain enough detail.
+You can keep editing while the work runs. New edits from the agent still arrive as proposals for review. Open the full transcript when you need the exact input or result from a tool call.
 
 ## Use scratch space
 
-The agent can place temporary work under `.docwriter/agent/scratch/`. Scratch files do not appear until a tool creates them. Starting a new session clears the scratch folder.
+The agent can place temporary work under `.docwriter/agent/scratch/` when a task needs notes, downloaded material, or intermediate output that does not belong in your draft. Scratch files do not appear until a tool creates them. Starting a new session clears the scratch folder, so move anything you want to keep into the workspace first.
 
 ## Stop a task
 

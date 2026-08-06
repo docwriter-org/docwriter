@@ -5,6 +5,8 @@ description: "Change the editor or storage without losing text, formatting state
 
 Read this page before changing Tiptap extensions, Yjs encoding, undo, file loading, or SQLite updates. The editor looks like a Markdown editor, but it stores plain text in a small Tiptap schema and uses separate plugins for the visual formatting.
 
+Keep Markdown symbols as text, strip Yjs formatting from serialized Markdown, and route live edits through the server-owned document. Keep agent proposals out of the user's undo history.
+
 ## Keep the editor schema small
 
 The schema contains only Document, Paragraph, Text, and HardBreak. Markdown symbols remain in the text. ProseMirror plugins style headings, tables, code, media, comments, proposed edits, and search results without turning them into separate document nodes.
@@ -55,3 +57,5 @@ Test the following behavior by hand:
 - Restart the server while the browser is open.
 
 Run `npm run check` and `npm run build` after the manual checks.
+
+Successful verification means that accepted text survives a reload, rejected text never enters the committed document, and undo changes only the action the user expects. AI provenance must remain invisible in the saved Markdown, and typing during an agent request must remain after the request finishes.

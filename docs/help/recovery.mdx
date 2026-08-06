@@ -1,17 +1,19 @@
 ---
 title: "Recovery"
-description: "Fix common problems after a crash, restart, or file change."
+description: "Recover from a blank editor, stopped server, stale proposal, or unwanted saved state."
 ---
 
-Start with the section that matches what you see. Most recovery steps do not change your workspace files.
+Start with the heading that matches the problem you see. Each section states what its recovery steps change and what they may remove.
 
 ## The editor is blank
 
-The editor stays blank when the browser cannot connect to the document server. Check the terminal where you started DocWriter. If the server stopped, start DocWriter again and reload the browser.
+The editor can stay blank when the browser loses its connection to DocWriter.
 
-Confirm that you opened a text file. PDF and other binary tabs use a preview instead of the text editor.
+Check the terminal where you started DocWriter. If DocWriter stopped, start it again and reload the browser. Restarting preserves project files and saved DocWriter state, but the last text entered before a crash may not have finished saving.
 
-If the server is running, look in the terminal for an address or port error. Stop the other DocWriter process, then start this workspace again. Contributors running `npm run dev` should also confirm that ports 5173 and 3001 are available.
+Confirm that you opened a text file. PDF files and other binary files use a preview instead of the text editor.
+
+If DocWriter is running, look in the terminal for an address or port error. Stop the other DocWriter process, then start this workspace again. Stopping a process ends any agent run in that process.
 
 ## DocWriter keeps stopping
 
@@ -21,26 +23,34 @@ Run DocWriter with `--restart` if you want it to start again automatically after
 docwriter --restart
 ```
 
-Reload the browser after the new server starts. The browser reconnects to the new server and loads the latest saved document.
+The option starts the server again one second after an unexpected exit. It does not retry or restore the agent run that was active during the crash.
+
+Reload the browser after DocWriter starts again. It loads the latest saved text. Text entered immediately before the crash may be lost.
 
 ## A proposal is stale
 
-A proposal becomes stale when you change the text that the agent wanted to edit. The Accept button is disabled because the old proposal no longer fits.
+A proposal is stale when the text it was meant to replace no longer exists in the current document. DocWriter blocks acceptance to protect newer text from an edit based on an older version.
 
-Reject the proposal if you no longer need it. To request another version, reply in the related thread or send a new Chat request based on the current text. If an Accept request discovers the mismatch, DocWriter removes the old proposal and asks the agent for a new one automatically.
+Reject the proposal if you no longer need it. Reject removes the proposal and keeps the current document text. You cannot recover the rejected proposal from its review card unless you undo the rejection before later actions replace that undo history.
+
+Reply in the related thread or send a new Chat request to ask for a proposal based on the current text. The new agent request can use provider quota and may produce different text.
 
 ## A deleted file still appears
 
-Reload DocWriter so it can remove tabs for files that no longer exist. When you delete a file inside DocWriter, DocWriter also deletes its saved editing history.
+Reload DocWriter so it can remove tabs for files that no longer exist. Removing a missing tab from the list does not recreate or delete a workspace file.
+
+Deleting a file inside DocWriter also removes its comments, pending reviews, and saved AI authorship markers. Browser undo history lasts only while the tab is loaded. Restore the project file and `.docwriter` folder from a backup if you need this information.
 
 ## You need to reset DocWriter
 
-Delete `.docwriter/docwriter.db` only when you want to clear all DocWriter state for the workspace. Your workspace files remain, but you lose sessions, comments, pending reviews, rules, and interface settings.
+Delete `.docwriter/docwriter.db` only when you want to clear all saved DocWriter state for the workspace. A reset can help when the database is damaged or when you want the workspace to start with new DocWriter state.
 
-Stop DocWriter before deleting the database, then start it again.
+Your project files remain, but you lose open tabs, comments, pending reviews, rules, reviewers, sessions, recent agent activity, and interface settings. The next time you open a file, DocWriter starts from the text in that file.
 
-Back up the database before deleting it when you may need the old state.
+Stop DocWriter before deleting `docwriter.db`. Back up the `.docwriter` folder first when you may need the old state.
 
 ## Old temporary files remain
 
-Choose **New session** to clear `.docwriter/agent/scratch/`. If files remain, make sure the agent is not running before you delete them by hand.
+Choose **New session** to clear `.docwriter/agent/scratch/`. The scratch folder holds temporary files that the agent can use between requests. Starting a new session also clears the saved provider conversation and pending reviews, but it keeps workspace files, comments, rules, hooks, and settings.
+
+If scratch files remain, make sure the agent is not running before you delete them by hand. Manual deletion permanently removes those temporary files.

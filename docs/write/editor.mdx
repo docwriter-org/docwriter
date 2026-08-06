@@ -3,13 +3,13 @@ title: "Editor"
 description: "Edit plain source with Markdown and code previews."
 ---
 
-DocWriter is a plain source editor. The document text stays visible and is saved without Markdown escaping.
+Use the editor when you want to work directly with the text that DocWriter saves to disk. The document text and Markdown markers stay visible, so you can see the exact file contents while still getting visual help for common Markdown.
 
 ## Markdown layers
 
 Headings, lists, quotes, horizontal rules, bold, italic, code, links, and strikethrough receive visual styling while their source markers remain in the document.
 
-Pipe tables receive a rendered table preview. You can show the table source when you need to edit it. Fenced code blocks receive code styling and a language label.
+Pipe tables receive a rendered table preview, so you can check the rows and columns before you share the file. You can show the table source when you need to edit it. Fenced code blocks receive code styling and a language label.
 
 Markdown layers are disabled for LaTeX and related source files, including `.tex`, `.sty`, `.cls`, and `.bib`.
 
@@ -19,12 +19,12 @@ Press **Command or Control and /** to comment or uncomment the current line or s
 
 ## Saving and undo
 
-The browser synchronizes edits to the server owned Yjs document. The server writes plain text back to the file on a short flush cycle.
+The browser sends each edit to the DocWriter server, which keeps the shared working copy. The server writes plain text back to the file after a short delay. You can reopen the workspace and continue from the saved text.
 
-**Command or Control and Z** undoes local typing and user actions such as accepting or rejecting a proposal. Raw agent transactions are not added to the local undo stack.
+**Command or Control and Z** undoes your typing and actions such as accepting or rejecting a proposal. Agent changes are not added to your undo history.
 
 **Command or Control, Shift, and Z** redoes the latest user undo step.
 
 ## Agent changes
 
-Proposed text appears as a green addition or red removal in the editor and as a card in the comment gutter. Muting hides the proposal layers without pausing the agent.
+Proposed text appears as a green addition or red removal in the editor and as a card in the comment gutter. The colors show what the file would gain or lose before you decide. Muting hides the proposal layers without pausing the agent, which is useful when you want to read the draft without review marks.

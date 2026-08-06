@@ -5,6 +5,8 @@ description: "See how text moves between the editor, server, agent, database, an
 
 Read this page before changing document sync, agent edits, review actions, or file storage. The main rule is simple: the server owns the current document, and every browser and agent edits that same document.
 
+Route every update through the live server document, and limit review actions to the text they cover. Treat workspace files as backups rather than a second live document.
+
 ```mermaid
 flowchart LR
     Browser["Browser, Tiptap editor"] <-->|"WebSocket sync"| Server["Hocuspocus server, live Yjs document"]
@@ -65,3 +67,9 @@ Watch mode tells the browser to reload after an external file change. The browse
 - Runtime state and SQLite access are in `src/lib/server/runtime-state.ts`.
 
 Read [Editor and persistence](/contribute/editor-and-persistence) before changing the editor schema or file loading. Read [Providers and tools](/contribute/providers-and-tools) before changing an AI provider or tool.
+
+## Check an architecture change
+
+Start DocWriter with two browser windows open on the same file. Type in one window and confirm that the text appears in the other. Propose an agent edit and confirm that both windows show the pending review while the workspace file still contains the accepted text. Accept the edit in one window and confirm that both windows and the workspace file receive the accepted text.
+
+Then reject a separate proposal and confirm that the accepted text does not change. Run `npm run check` and `npm run build` after the manual checks. Successful verification means that every client converges on the same text, and no temporary document or file write bypasses the review state.

@@ -3,9 +3,9 @@ title: "Send and steer requests"
 description: "Wake the agent, send a request, and add work to the queue."
 ---
 
-Use the agent pill for an immediate check of the open draft. Use Chat when you want to give a specific instruction.
+Use the agent pill to have the agent inspect recent changes and propose comments or edits where needed. Use Chat when you already know what you want, such as shortening an opening or checking claims across several files.
 
-Steering means giving the agent another instruction while it works. Send another Chat message to place the instruction in the queue.
+You can also send another instruction while the agent works. DocWriter adds the message to the queue and starts it after the current request finishes.
 
 ## Wake the agent
 
@@ -19,7 +19,7 @@ Automatic wake does not run while the agent is paused or when the text has not c
 
 Click **Chat** in the floating agent dock. Write the request, then press **Command or Control and Enter**. Enter alone adds a new line.
 
-You can send a request with no open tab, attach an image, or ask the agent to work across several files. Messages sent during a run join the queue.
+You can send a request with no open tab, attach an image, or ask the agent to work across several files. For example, you can ask it to compare the introduction with a source image or make terminology consistent across open chapters. Messages sent during a run join the queue.
 
 <Frame caption="Pause and resume the agent, then prepare a request in Plan first mode.">
   <video
@@ -42,9 +42,9 @@ You can send a request with no open tab, attach an image, or ask the agent to wo
 
 ## Add work while the agent is running
 
-Send another Chat message during a run to add it to the queue. A number on the agent pill and Chat control shows how many messages are waiting.
+Send another Chat message during a run when you want to add a follow up task without stopping the current one. A number on the agent pill and Chat control shows how many messages are waiting.
 
-The expanded dock keeps the active request above the activity log while the agent responds.
+The expanded dock keeps the active request above the activity log while the agent responds. After the current request ends, the agent takes the next queued message and begins a new request.
 
 <Frame>
   ![The agent wake control in the expanded dock](/images/agent-wakeup-button.png)
@@ -52,7 +52,7 @@ The expanded dock keeps the active request above the activity log while the agen
 
 ## Questions from the agent
 
-The agent can open a question card with one or more questions. A single choice submits immediately. A multi-question card shows how many answers remain. Unanswered questions expire after 15 minutes so the run can continue.
+The agent can open a question card when it needs a choice before continuing, such as which audience a section should address. A single choice submits immediately. A multi-question card shows how many answers remain. Unanswered questions expire after 15 minutes so the run can continue.
 
 Authentication failures show a sticky **Agent auth failed** toast with sign in guidance. Other run failures show **Agent run failed** and remain in the activity log.
 

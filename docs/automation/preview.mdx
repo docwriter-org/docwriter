@@ -3,23 +3,25 @@ title: "Generated previews"
 description: "Open generated files and reload them when a hook completes."
 ---
 
+Use a generated preview when you write source text that another command turns into a finished document or image. For example, you can read a PDF beside its TeX source, or check an SVG while editing a Mermaid file. The preview lets you check the generated result without leaving DocWriter.
+
 ## Match an output
 
-DocWriter first looks for a same name PDF beside an active TeX file. If none exists, it resolves the output template from the first enabled matching hook.
+DocWriter needs an output path so it can connect the active source file to the generated file. For an active TeX file, it first looks for a PDF with the same path and base name. For example, `paper/main.tex` matches `paper/main.pdf`.
 
-Set a hook output such as `{{stem}}.html`, `{{stem}}.pdf`, or `{{stem}}.svg`.
+If DocWriter does not find that PDF, it checks enabled hooks in order and uses the output from the first hook that matches the active source file. Set an output such as `{{stem}}.html`, `{{stem}}.pdf`, or `{{stem}}.svg`.
 
 ## Open a preview
 
-**Preview window** opens a separate browser window. The split preview button opens the output beside the source and lets you resize both panes.
+Choose **Preview window** to open the generated file in a separate browser window. Choose the split preview button to open it beside the source, then drag the divider to resize the two panes.
 
-Supported output includes PDF, HTML, SVG, common image formats, Markdown, and plain text. Use **Raw** to open the generated file in a normal browser window.
+DocWriter can show PDF, HTML, SVG, common image formats, Markdown, and plain text. Use **Raw** to open the generated file in a normal browser tab when you need the browser's own controls or when DocWriter cannot show the file inline.
 
 ## Live reload
 
-After a successful hook with an output, DocWriter sends a preview update. The preview reloads while preserving PDF page and scale, document scroll, or image scroll when possible.
+After a hook with an output exits successfully, DocWriter tells open previews to reload that output. A failed hook leaves the previous output in place. During a reload, DocWriter keeps the PDF page and scale, document scroll position, or image scroll position when possible.
 
-The preview shows the connection state and the time of the latest update.
+Check the connection state and latest update time in the preview to confirm that it received the hook result. Then check that the visible output contains the source change you expected.
 
 <Frame caption="Open a split preview, resize it, and reload changed output.">
   <video

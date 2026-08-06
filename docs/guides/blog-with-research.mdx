@@ -7,7 +7,7 @@ Use this workflow when you know what you want to say but need evidence for one c
 
 ## Prepare the draft
 
-Open a Markdown file and write the claim in your own words. Add an inline directive beside it:
+Start with your own wording so the agent knows the exact claim that needs support. Open a Markdown file and add an inline directive beside the claim. An inline directive is a request written inside `[[` and `]]` in the draft.
 
 ```md
 People abandon AI tools when a simple request takes too long.
@@ -16,7 +16,7 @@ People abandon AI tools when a simple request takes too long.
 Add one sentence with a Markdown footnote citation. ]]
 ```
 
-The directive is ordinary text, so you can edit it until the request says exactly what evidence you need.
+The directive is ordinary text, so you can edit it until the request says exactly what evidence you need. Keep the request beside the claim so the proposed source and sentence are easy to review together.
 
 <Frame>
   ![A research draft with inline requests before the agent runs](/images/blog-post-open.png)
@@ -24,13 +24,13 @@ The directive is ordinary text, so you can edit it until the request says exactl
 
 ## Add writing guidance
 
-Add a [writing reference](/customize/references) when the new sentence should match an existing article. Add a [writing rule](/customize/rules) when the citation must follow a format such as footnotes.
+Use writing guidance when a supported sentence also needs to match your document. Add a [writing reference](/customize/references) when the new sentence should follow the style of an existing article. Add a [writing rule](/customize/rules) when the citation must use a format such as Markdown footnotes.
 
 Rules and references help the agent shape the edit. They do not prove that a source supports the claim.
 
 ## Let the agent research
 
-Stop typing and wait for automatic wake, or click the agent pill. The agent reads the directive and can search the web before it proposes an edit.
+Stop typing and wait for automatic wake, or click the agent pill. The agent reads the directive and can search the web before it proposes an edit. The proposal should replace the request with a supported sentence and its citation.
 
 You can keep writing elsewhere in the draft while the search runs.
 
@@ -40,7 +40,7 @@ You can keep writing elsewhere in the draft while the search runs.
 
 ## Check the source
 
-Open every cited source before accepting the proposal. Confirm:
+Source review tells you whether the evidence supports the exact sentence in your draft. Open every cited source before accepting the proposal. Confirm the following points:
 
 - The source makes the claim in the proposed sentence.
 - The date and population match what the sentence says.
@@ -50,8 +50,8 @@ Reject the proposal when the source does not support the wording. Send a new req
 
 ## Accept the edit
 
-Accept the proposal when the sentence and citation are supported. DocWriter replaces the directive with the accepted text and saves the plain Markdown to the workspace file.
+Accept the proposal when the sentence and citation are supported. Acceptance applies the proposed text to the document, removes the pending review, and saves plain Markdown to the workspace file.
 
-Repeat the workflow for another gap. Keep each directive focused on one claim so the source is easy to review.
+After you accept the proposal, the directive should be gone, the supported sentence and citation should appear in its place, and the cited link or footnote should open the source you checked. Repeat the workflow for another gap. Keep each directive focused on one claim so the source is easy to review.
 
 Read [Selected text and directives](/agent/selected-text-and-directives) for the other directive delimiters. Read [Generated previews](/automation/preview) if you want to build an HTML version with Pandoc.

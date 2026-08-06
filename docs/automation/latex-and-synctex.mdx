@@ -3,17 +3,19 @@ title: "LaTeX and SyncTeX"
 description: "Build a TeX project and move between source and PDF."
 ---
 
+Use this setup when you write a LaTeX document and need to check its PDF often. The build hook turns TeX source into a PDF after an agent turn. SyncTeX records where each part of the source appears in the PDF, so you can move between the two views.
+
 ## Build the PDF
 
-Open **Settings**, then **Hooks**, and choose the pdflatex template. Update the entry file and output path when the project does not use `main.tex`.
+Open **Settings**, then **Hooks**, and choose the pdflatex template. The template builds `main.tex` and sets `main.pdf` as the preview output. Update both paths when your project uses a different entry file.
 
-The template runs pdflatex with `-synctex=1` and performs additional passes for references. It runs at the end of an agent turn.
+The command runs `pdflatex`, then tries `bibtex`, and then runs `pdflatex` twice more. The extra passes update citations and cross references. Every `pdflatex` pass uses `-synctex=1`, which creates the `.synctex.gz` data needed for source navigation. The hook runs at **Stop**, after the main agent finishes a turn.
 
-DocWriter also finds a same stem PDF automatically. For example, `paper/main.tex` matches `paper/main.pdf`.
+Run the hook once from the Hooks settings. The status should be **done** with an exit code of zero, and the PDF should appear at the output path. DocWriter also finds a PDF with the same path and base name as the active TeX file. For example, `paper/main.tex` matches `paper/main.pdf`.
 
 ## Preview beside the source
 
-Open the TeX source, then use the split preview button. Drag the divider to resize the source and PDF.
+Open the TeX source, then use the split preview button. The PDF should appear beside the source. Drag the divider to resize the two panes.
 
 <Frame>
   ![A proposed LaTeX edit in the comment gutter](/images/overleaf-pending-edit.png)
@@ -25,10 +27,12 @@ Open the TeX source, then use the split preview button. Drag the divider to resi
 
 ## Move from source to PDF
 
-Select source text and choose **Locate in PDF**. DocWriter asks the `synctex` command for the page and position. When SyncTeX data is unavailable, it falls back to PDF text search.
+Use this direction when you want to see how a source passage appears in the finished document. Select source text and choose **Locate in PDF**. DocWriter runs the `synctex` command to find the matching page and position. When SyncTeX data is unavailable, DocWriter searches the PDF for the selected text.
+
+The preview should move to the matching PDF page and mark the location.
 
 ## Move from PDF to source
 
-Double click a location in the PDF. DocWriter asks SyncTeX for the source file and line, opens that file, and scrolls the editor.
+Use this direction when you find a problem in the PDF and need to edit its source. Double click a location in the PDF. DocWriter asks SyncTeX for the matching source file and line, opens that file, and scrolls the editor to the line.
 
-The `synctex` command must be on `PATH`, and the build must produce a `.synctex.gz` file. Source and PDF paths must remain inside the workspace.
+DocWriter should open the expected TeX file and place the source line in view. The `synctex` command must be on `PATH`, which is the shell's list of command locations. The build must also produce a `.synctex.gz` file. DocWriter only returns source and PDF paths inside the workspace.

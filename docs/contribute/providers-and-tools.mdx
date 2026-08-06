@@ -5,17 +5,20 @@ description: "Add or change an AI provider without changing the rest of the appl
 
 Read this page when you change a provider SDK, model list, streaming event, tool, or session. DocWriter supports Claude, OpenAI, Codex, Cursor, and Pi through one shared provider interface.
 
+Keep provider-specific details inside each adapter. Route open-tab edits through the document tools, preserve permission checks, and keep provider sessions separate.
+
 ## Provider interface
 
 `src/lib/server/providers/types.ts` defines `AgentProvider`. Each provider must:
 
 - Run a request and return a stream of `ProviderEvent` values.
 - List the models that DocWriter should show in settings.
-- Stop work when the request is cancelled.
 
 Each adapter lives in `src/lib/server/providers/`. Add a provider to the `ProviderId` type and register it in `src/lib/server/providers/index.ts`.
 
 The render route only reads the common events. An adapter must convert its SDK output into events such as assistant text, tool calls, tool results, cost, status, and errors.
+
+The request options include an `abortSignal`. Claude and Codex pass that signal to their SDKs. OpenAI and Cursor do not currently use it. Pi stops yielding events after cancellation, but its underlying request may continue.
 
 ## Document tools
 
@@ -48,3 +51,5 @@ E2E_PROVIDER=claude npm run test:e2e:provider
 ```
 
 Replace `claude` with the provider you changed. The smoke test needs valid credentials for that provider. Do not add credentials to the repository.
+
+A successful smoke test creates a pending review and receives the expected assistant reply. Cancel a request by hand and confirm that DocWriter closes the run. For Claude and Codex, also confirm that the SDK request stops. Switch to another provider and confirm that the new request does not resume the prior provider's session.

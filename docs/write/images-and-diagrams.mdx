@@ -3,15 +3,17 @@ title: "Images and diagrams"
 description: "Add images, links, SVG, and D3 previews to a document."
 ---
 
+Use images and diagrams when a draft needs a figure, screenshot, or visual result. DocWriter keeps the image file in the workspace and inserts or previews the source text that points to it. The saved document remains plain text that other Markdown tools can read.
+
 ## Paste or drop an image
 
-Paste an image into the editor or drop it onto the document. DocWriter saves the file under `assets/` and inserts a Markdown image reference at the cursor.
+Paste an image into the editor or drop it onto the document. DocWriter saves the file under `assets/` and inserts a Markdown image reference at the cursor. You can then move or edit the reference like any other text in the document.
 
 Supported image types include PNG, JPEG, GIF, WebP, SVG, BMP, and AVIF.
 
 ## Paste a URL
 
-Pasting an image URL inserts a Markdown image. Pasting a URL over selected text creates a Markdown link. A normal web link stays as text and receives a preview card when OpenGraph data is available.
+Pasting an image URL inserts a Markdown image. Pasting a URL over selected text creates a Markdown link. A normal web link stays as text and receives a preview card when the site provides a title, description, or image through OpenGraph metadata.
 
 Existing Markdown image references and bare image URLs on their own line also receive inline previews.
 
@@ -19,15 +21,15 @@ Remote link previews cause the local DocWriter server to request metadata from t
 
 ## Use images with the agent
 
-Paste or drag an image into **Chat** to attach it to the next request. The agent can also read image files already stored in the workspace, which is useful for captions, figure descriptions, and text extraction.
+Paste or drag an image into **Chat** to attach it to the next request. Use an attachment when the request depends on details that are visible in the image. The agent can also read image files already stored in the workspace, which is useful when you need a caption, a figure description, or text copied from an image.
 
 ## Preview SVG
 
-A raw SVG block receives an inline preview. You can reveal the source when you need to edit the SVG directly.
+A raw SVG block receives an inline preview, so you can check the drawing while keeping its source in the document. You can reveal the source when you need to edit the SVG directly.
 
 ## Run D3
 
-Use a fenced `d3` code block for an interactive D3 diagram:
+Use a fenced `d3` code block when you want an interactive diagram generated from code:
 
 ````md
 ```d3
@@ -36,8 +38,8 @@ svg.append("circle").attr("cx", 80).attr("cy", 80).attr("r", 30);
 ```
 ````
 
-DocWriter runs D3 in an iframe rather than the main editor page. The iframe loads D3 from the public D3 CDN, so the preview needs network access.
+DocWriter runs D3 in an isolated iframe. The iframe loads D3 from the public D3 CDN, so the preview needs network access.
 
 ## Mermaid
 
-DocWriter does not execute Mermaid inside the editor. Use the Mermaid hook template to turn a Mermaid file into SVG, then preview or embed the generated SVG.
+DocWriter does not execute Mermaid inside the editor. Use the Mermaid hook template to turn a Mermaid file into SVG. You can then preview the generated image or embed it in the document.

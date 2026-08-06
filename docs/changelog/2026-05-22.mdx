@@ -3,28 +3,32 @@ title: "Week of May 18, 2026"
 description: "Agent image reads, system prompt in transcripts, reply-only comments, and a new-file fix."
 ---
 
+<Note>
+  This page describes agent behavior in May 2026. The current agent can open a thread when it proposes an edit, and critique passes can create reviewer comments.
+</Note>
+
 ## New features
 
-- **Agent can read images.** The agent's `Read` tool now accepts image
-  files (PNG, JPEG, and friends) and ingests them natively, so you can
-  point it at a screenshot or figure on disk instead of pasting it into
+- **Agent can read images.** The agent's `Read` tool began accepting image
+  files such as PNG and JPEG files, so you could point it to a screenshot
+  or figure on disk instead of pasting the image into
   chat. See [Send and steer requests](/agent/ask-and-steer).
 - **System prompt in the session transcript.** The session viewer's
   **System** card now shows the full system prompt the agent ran with,
-  so you can see exactly what context — including your rules — was in
-  play. See [Activity and transcript](/agent/activity-and-transcript).
+  so you can see the context and writing rules used for the request. See
+  [Activity and transcript](/agent/activity-and-transcript).
 
 ## Updates
 
 - **Rules are inlined in the system prompt.** Your writing rules are now
-  baked into the agent's system prompt under "Rules to obey" instead of
+  included in the agent's system prompt under "Rules to obey" instead of
   being appended to each user turn. The agent has the full rule list on
   every request, and the rules show up in the transcript. See
   [Writing rules](/customize/rules).
-- **Agents reply, they don't start threads.** The agent can only reply
-  on comment threads you've opened, not start a new thread without a user request. Use
-  comments to drive a back-and-forth instead of getting unsolicited
-  threads. See [Comments and critique](/agent/comments-and-critique).
+- **Agents replied to existing threads.** At the time of this release, the
+  agent could reply only to comment threads that you opened. It could not
+  start a new thread without a user request. See
+  [Comments and critique](/agent/comments-and-critique).
 
 ## Bug fixes
 

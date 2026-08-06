@@ -7,24 +7,24 @@ Use this workflow when an Overleaf project is available through Git. DocWriter e
 
 ## Get the project
 
-Connect the Overleaf project to GitHub, or copy its Git URL from the Overleaf project menu. Clone the repository:
+Clone the project so DocWriter and your TeX tools can work with local files. Connect the Overleaf project to GitHub, or copy its Git URL from the Overleaf project menu. Then run:
 
 ```sh
 git clone <repository-url> ~/writing/my-paper
 cd ~/writing/my-paper
 ```
 
-Pull before each writing session so the local files include changes made in Overleaf.
+Confirm that `~/writing/my-paper` contains the TeX source and that `git status` runs there without an error. Pull before each writing session so the local files include changes made in Overleaf.
 
 ## Open the project
 
-Start DocWriter in watch mode:
+Start DocWriter in watch mode so it opens this project and watches its files for outside changes:
 
 ```sh
 docwriter --watch ~/writing/my-paper
 ```
 
-Open the main TeX file. DocWriter shows the source as plain text and keeps the file available to Git.
+Open the main TeX file. DocWriter should show the TeX source and list the project files in the file tree. The files remain normal workspace files, so Git and Overleaf can still track them.
 
 <Frame>
   ![A TeX project open in the source editor](/images/overleaf-tex-open.png)
@@ -32,19 +32,19 @@ Open the main TeX file. DocWriter shows the source as plain text and keeps the f
 
 ## Build the PDF
 
-Install a TeX distribution that provides `pdflatex`, `bibtex`, and `synctex`.
+Build the PDF so you can catch TeX errors and review the formatted paper after each accepted edit. Install a TeX distribution that provides `pdflatex`, `bibtex`, and `synctex`.
 
 Open **Settings**, then **Hooks**, and choose the `pdflatex` template. Change the entry file and output when the project does not use `main.tex` and `main.pdf`.
 
-Run the hook once. Fix any missing TeX packages or file names shown in the hook result.
+Run the hook once. The template builds the entry file, updates the bibliography and references, and writes the PDF named in **Output**. The status should be **done** with an exit code of zero, and the PDF should exist at that output path. Fix any missing TeX packages or file names shown in a failed hook result.
 
 ## Open the preview
 
-Open the TeX source and choose the split preview button. DocWriter shows the generated PDF beside the source.
+Use the split preview to compare source changes with the formatted paper. Open the TeX source and choose the split preview button. DocWriter shows the generated PDF beside the source.
 
 Select source text and choose **Locate in PDF** to find the matching place. Double click the PDF to return to the source line.
 
-SyncTeX navigation requires the build to use `-synctex=1` and produce a `.synctex.gz` file.
+SyncTeX navigation requires the build to use `-synctex=1` and produce a `.synctex.gz` file. Verify both directions: **Locate in PDF** should move to the selected passage, and a double click in the PDF should open the matching TeX line.
 
 <Frame>
   ![The generated PDF beside the LaTeX source](/images/overleaf-pdf-preview.png)
@@ -52,23 +52,23 @@ SyncTeX navigation requires the build to use `-synctex=1` and produce a `.syncte
 
 ## Ask for an edit
 
-Select a passage or leave an inline directive in a TeX comment:
+Select a passage when you want the agent to revise a specific part of the paper. You can also leave an inline directive in a TeX comment when you want the request to remain in the source until the agent handles it:
 
 ```tex
 % [[ Tighten this paragraph without changing the citations. ]]
 ```
 
-The comment keeps the TeX file valid while the request waits. Review the proposed source change before accepting it.
+The `%` starts a TeX comment, so LaTeX ignores the request while it waits. Review the proposed source change before accepting it.
 
 <Frame>
   ![A proposed LaTeX edit in the comment gutter](/images/overleaf-pending-edit.png)
 </Frame>
 
-Run the build again after accepting the change. Confirm that the PDF compiles and that the output is correct.
+Run the build again after accepting the change. Confirm that the request is gone, the accepted source is present, the hook finishes successfully, and the PDF shows the intended revision.
 
 ## Send the change back
 
-Review the Git diff, then commit and push:
+Use Git to send the accepted local files back to the remote repository connected to Overleaf. Review the Git diff, then commit and push:
 
 ```sh
 git status
@@ -78,6 +78,6 @@ git commit -m "Revise manuscript"
 git push
 ```
 
-DocWriter does not pull or push by default. You can add a Git hook later, but first confirm that manual pull and push work without a credential prompt.
+Confirm that `git status` is clean and that the remote repository contains the new commit. DocWriter does not pull or push by default. You can add a Git hook later, but first confirm that manual pull and push work without a credential prompt.
 
 Read [LaTeX and SyncTeX](/automation/latex-and-synctex) for preview details. Read [Hooks](/automation/hooks) before automating the build or Git commands.

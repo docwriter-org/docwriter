@@ -3,6 +3,8 @@ title: "Install"
 description: "Install DocWriter and open a local writing workspace."
 ---
 
+Install DocWriter when you want to edit a folder of local files in the browser. After this setup, you will have a `docwriter` command that opens a chosen folder as a writing workspace. You can confirm that local editing and saving work before you connect an AI provider.
+
 ## Requirements
 
 DocWriter supports macOS and Linux. Windows users can run it through WSL. Install Git and [nvm](https://github.com/nvm-sh/nvm) before continuing.
@@ -34,7 +36,7 @@ Pass the folder that contains your writing project:
 docwriter ~/writing/my-project
 ```
 
-DocWriter opens a browser and binds to `127.0.0.1` by default. The folder becomes the workspace boundary for files, previews, hooks, and agent tools.
+DocWriter opens a browser and binds to `127.0.0.1` by default. File and preview routes stay inside the folder you chose, so select the folder that contains the whole writing project. Hooks and shell commands can access other paths allowed by your operating system account.
 
 If the browser does not open, use the local address printed in the terminal. The first address is usually `http://127.0.0.1:7723`.
 

@@ -3,20 +3,22 @@ title: "PDFs and other files"
 description: "Open PDFs in tabs and preview generated files."
 ---
 
+Use a viewer or preview when you need to check a file without leaving the workspace. A viewer opens an existing PDF in a tab. A preview shows output produced from a source file, so you can compare the source and its result while you work.
+
 ## Open a PDF
 
-Click a PDF in the file tree to open it as an in-app viewer tab. PDF tabs do not create a text editor or Yjs document.
+Click a PDF in the file tree to open it as a viewer tab inside DocWriter. PDF tabs are for reading, so they do not create a text editor or a shared editing document.
 
-The PDF viewer supports page navigation, search, zoom, and the PDF sidebar. LaTeX projects can also use SyncTeX to move between source and PDF.
+The PDF viewer supports page navigation, search, zoom, and the PDF sidebar. LaTeX projects can also use SyncTeX, which links a place in the source file to the matching place in the PDF.
 
 ## Preview generated output
 
-When the active source file has a matching output, **Preview window** opens it in a separate window. The button beside it opens a resizable split preview.
+When the active source file has a matching output, **Preview window** opens it in a separate window. Use the button beside it when you want a resizable split preview next to the source.
 
 DocWriter can preview PDF, HTML, SVG, common image formats, Markdown, and plain text. The preview page also has a **Raw** action for opening the output in a normal browser window.
 
 ## Large and binary files
 
-DocWriter copies imported binary data without decoding it as text. The text file API limits reads to 2 MB and reports when a response is truncated.
+DocWriter copies imported binary data without decoding it as text, so importing a large image or PDF does not change its contents. When the agent or another tool reads a text file through DocWriter, each response is limited to 2 MB. DocWriter reports when the response contains only part of the file.
 
 Read [Generated previews](/automation/preview) for hook output matching and live reload.

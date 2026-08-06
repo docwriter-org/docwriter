@@ -3,15 +3,17 @@ title: "Files and tabs"
 description: "Create, import, organize, and open workspace files."
 ---
 
+Use the file tree and tabs to keep every part of a writing project in one workspace. The file tree manages files on disk, and tabs keep several files open at once. Changes you make here also affect the files in the workspace folder.
+
 ## Work inside one folder
 
-The folder passed to `docwriter` is the workspace root. File, preview, and agent paths must stay inside that folder. DocWriter rejects parent path and symbolic link escapes.
+The folder passed to `docwriter` is the workspace root. Choose a folder that contains the files for the writing project. The file tree and preview tools stay inside this folder.
 
 ## Create and organize files
 
 Use the file tree controls to create a file or folder. A file starts empty. Use the context menu to rename or delete an item, and drag files or folders to move them.
 
-You can also drag files from the desktop into the file tree or tab bar. DocWriter copies text and binary files without converting them.
+You can also drag files from the desktop into the file tree or tab bar. Use this option when source material already exists outside the workspace. DocWriter copies text and binary files without converting them, so the imported file keeps its original format.
 
 ## Use tabs
 
@@ -19,7 +21,7 @@ Click a file to open it as a tab. Tab order and the active tab survive a restart
 
 Use the tab context menu to rename the file, copy the workspace path, or delete the file. Double click a tab to rename it. Press **Enter** to save the name or **Escape** to cancel.
 
-A badge on a tab means the file has pending agent work or an unresolved agent comment. Stale edit proposals do not count toward the badge.
+A badge on a tab means the file has pending agent work or an unresolved agent comment. Use the badges to find files that still need your attention. Stale edit proposals do not count toward the badge.
 
 Markdown, plain text, LaTeX, JSON, YAML, and source files open as plain source tabs. Markdown receives visual layers. LaTeX related extensions remain plain source without Markdown rendering.
 
@@ -29,10 +31,10 @@ Markdown, plain text, LaTeX, JSON, YAML, and source files open as plain source t
 
 ## Internal files
 
-The `.docwriter` folder remains visible because it contains runtime state and hook configuration. Do not edit `docwriter.db` while DocWriter is running.
+The `.docwriter` folder remains visible because it contains saved DocWriter state and hook settings. Do not edit `docwriter.db` while DocWriter is running.
 
 DocWriter hides large implementation folders such as `.git`, `node_modules`, `.svelte-kit`, and `build`.
 
 ## Deleted files
 
-Deleting a file through DocWriter also removes the saved Yjs update log. Deleting a file outside DocWriter removes the matching tab during the next reconciliation.
+Deleting a file through DocWriter also removes its comments, pending reviews, and saved AI authorship markers. Deleting a file outside DocWriter removes the matching tab after you reload.

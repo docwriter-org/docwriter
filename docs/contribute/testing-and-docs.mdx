@@ -5,6 +5,8 @@ description: "Run the right checks and keep documentation examples up to date."
 
 Use this page before you submit a code or documentation change. The repository has build checks, provider smoke tests, documentation checks, and scripts that record screenshots and videos.
 
+These checks prevent broken links, missing images, unused media, stale generated catalog data, and examples that no longer match the interface. The provider smoke test also catches failures that static type checks cannot find, such as invalid credentials or changed SDK events.
+
 ## Check application code
 
 ```sh
@@ -38,6 +40,8 @@ npm run docs:assets:verify
 
 `docs:validate` checks navigation pages, feature assignments, redirects, internal links, and image paths. `docs:assets:verify` checks that referenced media exists and that shipped media is used by a page.
 
+Successful documentation verification finishes all three commands without errors. The local preview must also show the changed page at both window sizes, and every changed link and command must work as written.
+
 ## Update screenshots and videos
 
 Only record an asset when the page needs to show an interaction or a part of the interface that words cannot identify clearly. A screenshot or video should show the current interface and enough context for a reader to understand the action.
@@ -70,3 +74,5 @@ npm run docs:validate
 ```
 
 Do not edit the generated JSON by hand.
+
+The catalog update succeeds when `npm run docs:catalog` produces no unexpected changes after a second run, and `npm run docs:validate` reports no missing or duplicate assignments.

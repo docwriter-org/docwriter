@@ -1,36 +1,44 @@
 ---
 title: "Pandoc, Mermaid, and Git"
-description: "Start with short hook examples for generated files and Git."
+description: "Use included hooks to build files or send accepted work to Git."
 ---
 
 ## Pandoc
 
-Install Pandoc before enabling either template. PDF output also needs a PDF engine supported by the local Pandoc installation.
+Use a Pandoc hook when you write Markdown and want to review the result as HTML or PDF. The hook converts the active Markdown file after an agent edits or writes it, which saves you from running the conversion command by hand.
 
-The Pandoc HTML template runs:
+Install Pandoc before you enable either template. PDF output also needs a PDF engine that your local Pandoc installation supports.
+
+The Pandoc HTML template uses the active file and runs a command with the following form:
 
 ```sh
 pandoc "draft.md" --standalone --output "draft.html"
 ```
 
-Set the hook output to `{{stem}}.html`. Use the Pandoc PDF template and `{{stem}}.pdf` when a PDF engine is installed.
+The saved template uses `{{file}}` for the active Markdown path and `{{stem}}.html` for the output. The Pandoc PDF template uses `{{stem}}.pdf`. Both templates run after a successful Edit or Write tool call.
 
-The templates run after matching Edit or Write tool calls, so generated output can refresh during an agent turn.
+Run the hook once and open the preview. The status should be **done**, the output file should exist beside the source, and the preview should contain the latest Markdown changes.
 
 ## Mermaid
 
-Install `@mermaid-js/mermaid-cli`, which provides `mmdc`, then choose the Mermaid hook template:
+Use a Mermaid hook when you keep a diagram in a `.mmd` source file and need an SVG for a document or website. The hook renders the active Mermaid file after the agent edits or writes it.
+
+Install `@mermaid-js/mermaid-cli`, which provides the `mmdc` command. Then choose the Mermaid hook template. Its resolved command has the following form:
 
 ```sh
 mmdc -i "diagram.mmd" -o "diagram.svg"
 ```
 
-Set the output to `{{stem}}.svg`.
+The template sets the output to `{{stem}}.svg`. Run the hook and open the SVG preview. The status should be **done**, and the diagram should show the latest source change.
 
-The template matches Edit or Write tool calls for Mermaid source files.
+The matcher checks tool names for Edit or Write. It does not check the file extension, so the command itself must receive a Mermaid file through `{{file}}`.
 
 ## Git
 
-Choose one of the Git templates when accepted changes should be committed and pushed at the end of a turn. The private variant excludes `.docwriter/`, `.claude/`, and `CLAUDE.md`.
+Use a Git hook when you want every completed agent turn to commit pending workspace changes and push them to the current branch's configured upstream branch.
 
-The templates run at **Stop** and require a configured remote and upstream branch. Review the command and repository state before enabling an automatic push.
+The standard template stages all changes with `git add -A`. If the staged files contain changes, it creates a commit named `docwriter: auto-commit` and pushes it. The private template performs the same steps but does not stage `.docwriter/`, `.claude/`, or `CLAUDE.md`.
+
+Both templates run at **Stop**, after the main agent finishes a turn. Review the command and repository state before you enable automatic pushes, because the hook can send every staged workspace change to the remote repository.
+
+Confirm that the repository has a remote and an upstream branch, then use **Run now** on a test change. The status should be **done**, `git status` should show only the expected excluded files or no changes, and the remote branch should contain the new commit.
