@@ -29,7 +29,8 @@ export type { AgentSettings, Rule };
  *   - Session resume for the Claude Agent SDK (`sessionId`)
  *   - The selection-feedback action toolbar (`recentActions`, `actionUsageCounts`)
  *   - Writing rules (`rules`) — consumed by `/api/render` when building the agent prompt
- *   - Agent behavior settings (`agentSettings`) — autonomy level and review-mode toggle
+ *   - Agent behavior settings (`agentSettings`) — autonomy level, intended
+ *     audience, and review-mode toggle
  *   - Open tab order + active tab
  *
  * `Rule`, `AgentSettings`, and `DEFAULT_AGENT_SETTINGS` are imported from

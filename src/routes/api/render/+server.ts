@@ -128,6 +128,7 @@ interface ImageAttachmentPayload {
 const KV_LAST_RULES = 'last_render:rules';
 const KV_LAST_REFS = 'last_render:refs';
 const KV_LAST_AGENCY = 'last_render:agency';
+const KV_LAST_AUDIENCE = 'last_render:audience';
 
 function normalizeToolPath(pathLike: string): string {
 	return normalize(resolve(WORKSPACE_ROOT, pathLike));
@@ -330,7 +331,7 @@ Every edit proposal needs a comment thread that says what is about to happen, so
 Each turn may contain these blocks, in this order.
 
 - <workspace_state>: the open tabs, a diff of what changed in each since your last turn, and open comment threads as one-line stubs. Unchanged tabs say "Unchanged". Tab content is never inlined. Call read_doc(file_path) when you need it. Calls are cheap because the server holds the document in memory, so read what you need, not every tab.
-- <session_state>: rules, style references, and the agency level. Sent in full on the first turn, then only when something changed. If the block is absent, nothing changed.
+- <session_state>: rules, style references, the agency level, and the intended audience. Sent in full on the first turn, then only when something changed. If the block is absent, nothing changed.
 - <mode>: present only in special modes, such as plan-first.
 - <user_message>: the user's words, verbatim.
 - <user_feedback thread="..." mode="...">: the user's reply on a comment thread, verbatim, with the thread id and routing mode as attributes.
@@ -389,7 +390,11 @@ The agency level arrives in session_state when it changes.
 
 - Low: no edits, no new comments. Act only on an inline directive, a diff that needs a specific fix, or an explicit request. When in doubt, do nothing.
 - Medium: you have Low's edit permissions, and you may also open a comment thread when one would help. Open at most one per turn.
-- High: propose an edit or comment when you can name the specific defect: an unclear antecedent, a repeated point, a buried verb, a broken transition. Name the defect in the proposal. If you cannot name a defect, do not edit. Tighten, but do not rewrite.`;
+- High: propose an edit or comment when you can name the specific defect: an unclear antecedent, a repeated point, a buried verb, a broken transition. Name the defect in the proposal. If you cannot name a defect, do not edit. Tighten, but do not rewrite.
+
+## Intended audience
+
+When set, the intended reader arrives in session_state. Write for that audience: assume their background, match their jargon, and do not explain what they already know. If the block is absent, the audience is unchanged. If cleared, stop targeting a specific audience.`;
 }
 
 /** Build the per-render user prompt. Only the DYNAMIC content goes here —
@@ -502,12 +507,14 @@ function buildMultiTabPrompt(
 	const meta = readMeta();
 	const currentRuleTexts = meta.rules.map((r) => r.text);
 	const currentAgency = meta.agentSettings.agency;
+	const currentAudience = (meta.agentSettings.intendedAudience ?? '').trim();
 
 	// Read prior snapshots so we can emit only the deltas. First render of a
 	// session (snapshot absent) shows the full state — agent needs it once.
 	const priorRulesJson = kvGet(KV_LAST_RULES);
 	const priorRefsJson = kvGet(KV_LAST_REFS);
 	const priorAgency = kvGet(KV_LAST_AGENCY);
+	const priorAudience = kvGet(KV_LAST_AUDIENCE);
 
 	const currentRulesJson = snapshotRules(meta.rules);
 	const currentRefsJson = snapshotRefs();
@@ -548,6 +555,13 @@ function buildMultiTabPrompt(
 	if (currentAgency !== priorAgency) {
 		sessionParts.push(`Agency: ${currentAgency}`);
 	}
+	if (currentAudience !== (priorAudience ?? '')) {
+		sessionParts.push(
+			currentAudience
+				? `Intended audience: ${currentAudience}`
+				: 'Intended audience: (cleared — no specific audience set.)'
+		);
+	}
 	if (sessionParts.length > 0) {
 		sections.push(`<session_state>\n${sessionParts.join('\n\n')}\n</session_state>`);
 	}
@@ -574,6 +588,7 @@ function buildMultiTabPrompt(
 		kvSet(KV_LAST_RULES, currentRulesJson);
 		kvSet(KV_LAST_REFS, currentRefsJson);
 		kvSet(KV_LAST_AGENCY, currentAgency);
+		kvSet(KV_LAST_AUDIENCE, currentAudience);
 	} catch (err) {
 		console.error('[render] failed to persist prompt-state snapshot:', err);
 	}
