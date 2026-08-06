@@ -5,7 +5,13 @@
 <h1 align="center">DocWriter</h1>
 
 <p align="center">
-  Write with an AI agent in the same draft while keeping control of every change.
+  <strong>Reimagining AI-assisted writing to let you:</strong>
+</p>
+
+<p align="center">
+  Keep more of your voice and reduce AI slop.<br />
+  Work alongside the agent in the same live draft, at the same time.<br />
+  Dynamically reconfigure agency as the writing process changes.
 </p>
 
 <p align="center">
@@ -20,18 +26,17 @@
   <img src="docs/images/intro-flow.gif" width="900" alt="A writer keeps working while reviewing an agent edit in DocWriter" />
 </p>
 
-DocWriter is a local writing app where you and an AI agent work in the same draft. You can keep writing while the agent researches, comments, or proposes changes. Every proposed edit appears beside the text so you can accept it, reject it, or reply.
+DocWriter is a local writing app where you and an AI agent work alongside each other in the same draft. Write while the agent researches, comments, or proposes changes. Review agent work beside the text, then accept, reject, or respond.
 
 Your writing stays in ordinary project files that you can open with other editors, track with Git, and move between computers.
 
 ## Quick start
 
-DocWriter supports macOS and Linux. Windows users can run it through WSL. Install [Git](https://git-scm.com) and [nvm](https://github.com/nvm-sh/nvm) first.
+The interface opens in your browser, but the `docwriter` command runs on your computer so it can work with local files. Install [Git](https://git-scm.com) and Node.js 22.22.2 first.
 
 ```sh
 git clone https://github.com/docwriter-org/docwriter.git
 cd docwriter
-nvm use
 npm install
 npm run build
 npm link
@@ -45,12 +50,12 @@ Connect Claude, OpenAI, Codex, Cursor, or Pi when you want to use the agent. Fol
 
 ## How the agent helps
 
-- **Ask from the text.** Select a passage, leave an inline instruction, reply in a comment, or send a Chat request.
+- **Guide the agent from the draft.** Select a passage for feedback, leave an inline instruction, reply to a comment, or send the agent a request through Chat.
 - **Keep writing during longer work.** The agent can research sources or revise other files while you continue with the draft.
 - **Review changes in place.** Proposed edits show the words the agent wants to add or remove beside the affected passage. Your project file changes after you accept an edit.
 - **Save writing preferences.** Rules tell the agent what to preserve or avoid, and references give it examples to follow.
 - **Choose how proactive the agent can be.** Low, Medium, and High autonomy control what the agent may do without a direct request. Autonomy does not change how you review proposed edits.
-- **Work with a whole project.** Open Markdown, plain text, LaTeX, source files, images, and PDFs in one workspace.
+- **Use your project files as context.** Open a project folder so the agent can use your drafts, notes, sources, images, PDFs, and other files while it works.
 
 ## Start with the documentation
 

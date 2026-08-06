@@ -3,9 +3,13 @@ title: "DocWriter Overview"
 description: "DocWriter is a shared writing workspace where you and an AI agent work in the same live draft."
 ---
 
-DocWriter is useful when you want help with a draft but still want to control every change. You write in the center editor while the agent reads the same live draft. The agent can comment or propose changes, and you decide which changes become part of the file.
+DocWriter is a local writing app where you and an AI agent work alongside each other in the same draft. Write while the agent researches, comments, or proposes changes. Review agent work beside the text, then accept, reject, or respond.
 
-You can keep writing while the agent works. You can also set rules for the agent and change how much it may do. DocWriter saves the changes you chose to keep in a plain Markdown file.
+DocWriter reimagines AI-assisted writing to let you:
+
+- Keep more of your voice and reduce AI slop.
+- Work alongside the agent in the same live draft, at the same time.
+- Dynamically reconfigure agency as the writing process changes.
 
 <Frame caption="The writer keeps typing while the agent handles an inline request.">
   <video
@@ -26,7 +30,7 @@ You can keep writing while the agent works. You can also set rules for the agent
 ## What you can do
 
 - **Save writing rules and source material.** The agent can follow the same instructions and examples on later requests.
-- **Work across files and the web.** The agent can read and edit workspace files, search the web, run shell commands, and continue longer tasks in the background.
+- **Use your project files as context.** Open a project folder so the agent can use drafts, notes, sources, images, PDFs, and other files while it works.
 - **Review work beside the text.** Comments and proposed changes stay attached to the relevant passage, so you can accept, reject, or respond without leaving the document.
 - **Set up repeated work.** You can save instructions as skills, add agents that review for a specific concern, and run a shell command after an event such as accepting an edit.
 
@@ -50,6 +54,6 @@ You can keep writing while the agent works. You can also set rules for the agent
     Recover from a blank editor, crash, stale proposal, or reset.
   </Card>
   <Card title="How saving works" icon="database" href="/reference/how-it-works">
-    Learn what DocWriter stores in the database and workspace files.
+    Learn what to back up when you need your text, comments, and settings.
   </Card>
 </CardGroup>

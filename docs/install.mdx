@@ -7,16 +7,15 @@ Install DocWriter when you want to edit a folder of local files in the browser. 
 
 ## Requirements
 
-DocWriter supports macOS and Linux. Windows users can run it through WSL. Install Git and [nvm](https://github.com/nvm-sh/nvm) before continuing.
+The interface opens in your browser, but the `docwriter` command runs on your computer so it can read and write files in the chosen folder. Install Git and Node.js 22.22.2 before continuing.
 
-The repository pins Node.js 22.22.2. Run `node --version` before installing. If `nvm use` says the version is missing, run `nvm install` once.
+Run `node --version` to check the installed version. If you use [nvm](https://github.com/nvm-sh/nvm), run `nvm use` inside the repository. Run `nvm install` once if the pinned version is missing.
 
 ## Install from source
 
 ```sh
 git clone https://github.com/docwriter-org/docwriter.git
 cd docwriter
-nvm use
 npm install
 npm run build
 npm link
@@ -52,7 +51,6 @@ If the editor stays blank, follow [The editor is blank](/help/recovery#the-edito
 
 ```sh
 git pull origin main
-nvm use
 npm install
 npm run build
 npm link
