@@ -396,7 +396,7 @@
 				</footer>
 			{:else if step === 3}
 				{#if !activeTrial}
-					<p class="muted">No close calls pending. Active propositions are already in the skill.</p>
+					<p class="muted">No close calls pending. Re-run analysis with a provider to generate agent A/B pairs, or view the active skill.</p>
 					<button class="primary" onclick={() => (step = 4)}>View active skill</button>
 				{:else}
 					<p class="brief">{activeTrial.brief}</p>

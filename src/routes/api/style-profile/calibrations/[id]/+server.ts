@@ -5,11 +5,18 @@ import {
 	resolveCalibration
 } from '$lib/server/style/pipeline';
 import type { CalibrationResponse } from '$lib/server/style/calibrate';
+import type { ProviderId } from '$lib/server/providers/types';
 
-export const POST: RequestHandler = async ({ params }) => {
+export const POST: RequestHandler = async ({ params, request }) => {
+	const body = await request.json().catch(() => ({}));
+	const provider = typeof body.provider === 'string' ? (body.provider as ProviderId) : undefined;
+	const model = typeof body.model === 'string' ? body.model : undefined;
+	if (!provider) {
+		throw error(400, 'Select a provider/model to generate close-call pairs.');
+	}
 	try {
 		// id is proposition id for generation
-		const trial = await ensureCalibrationTrial(params.id);
+		const trial = await ensureCalibrationTrial(params.id, { provider, model });
 		return json({ trial });
 	} catch (err) {
 		throw error(400, (err as Error).message);

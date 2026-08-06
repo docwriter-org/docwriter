@@ -9,7 +9,8 @@ import { measureDocuments } from './measure';
 import { buildHeuristicPropositions } from './heuristic-propositions';
 import { computeFinalConfidence, statusFromConfidence } from './confidence';
 import { validateSubmission } from './specialists';
-import { generateCloseCall, applyCalibrationResponse, validateCloseCall } from './calibrate';
+import { applyCalibrationResponse, validateCloseCall } from './calibrate';
+import type { CalibrationTrial } from './schemas';
 import { renderSkillMarkdown } from './compile-skill';
 import {
 	stripHtml,
@@ -219,7 +220,7 @@ describe('specialist validation', () => {
 });
 
 describe('calibration', () => {
-	it('handles A/B/same/edited/skip responses', () => {
+	it('validates agent close calls and handles A/B/same/edited/skip responses', () => {
 		const docs = [
 			normalizeText('Short one. Another longer explanatory sentence about the work.', {
 				sourceId: 'x',
@@ -232,16 +233,35 @@ describe('calibration', () => {
 			props.find((p) => p.type === 'ai_ism_avoidance') ??
 			props.find((p) => p.status === 'calibration') ??
 			props[0];
-		const trial = generateCloseCall({ proposition: target, measurements });
-		expect('error' in trial).toBe(false);
-		if ('error' in trial) return;
 
-		const ok = validateCloseCall({
-			a: trial.variantA,
-			b: trial.variantB,
-			proposition: target
-		});
-		expect(ok.ok).toBe(true);
+		expect(
+			validateCloseCall({
+				a: 'We look at the data carefully.',
+				b: 'We delve into a robust tapestry of data.',
+				proposition: target
+			}).ok
+		).toBe(true);
+		expect(
+			validateCloseCall({
+				a: 'Same text.',
+				b: 'Same text.',
+				proposition: target
+			}).ok
+		).toBe(false);
+
+		const trial: CalibrationTrial = {
+			id: 'cal_test',
+			propositionId: target.id,
+			schemaVersion: 1,
+			brief: 'Pick the voice that matches the proposition.',
+			variantA: 'We look at the data carefully.',
+			variantB: 'We delve into a robust tapestry of data.',
+			supportsProposition: 'a',
+			targetMetricId: target.metrics[0]?.metricId ?? target.type,
+			status: 'pending',
+			createdAt: Date.now(),
+			updatedAt: Date.now()
+		};
 
 		const chose = applyCalibrationResponse({
 			proposition: target,

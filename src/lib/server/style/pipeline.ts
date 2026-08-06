@@ -16,7 +16,7 @@ import {
 	runSynthesisAgent
 } from './specialists';
 import {
-	generateCloseCall,
+	generateCloseCallsWithAgent,
 	selectCalibrationCandidates,
 	applyCalibrationResponse,
 	type CalibrationResponse
@@ -257,11 +257,29 @@ export async function startStyleAnalysisRun(opts: {
 
 			let trials: CalibrationTrial[] = [];
 			const calibProps = selectCalibrationCandidates(synthesized, 8);
-			for (const prop of calibProps) {
+			if (calibProps.length && opts.provider && !opts.useHeuristicsOnly) {
+				emit(run, {
+					type: 'status',
+					phase: 'calibration',
+					message: 'Asking the agent for close-call A/B pairs'
+				});
 				throwIfCancelled(run);
-				const trial = generateCloseCall({ proposition: prop, measurements });
-				if ('error' in trial) continue;
-				trials.push(trial);
+				try {
+					trials = await generateCloseCallsWithAgent({
+						propositions: synthesized,
+						measurements,
+						provider: opts.provider,
+						model: opts.model,
+						abortSignal: abort.signal
+					});
+				} catch (err) {
+					emit(run, {
+						type: 'status',
+						phase: 'calibration',
+						message: `Calibration pairs skipped: ${(err as Error).message}`
+					});
+					trials = [];
+				}
 			}
 
 			throwIfCancelled(run);
@@ -304,7 +322,6 @@ export async function startStyleAnalysisRun(opts: {
 				}
 				return;
 			}
-			if (run.status === 'cancelled') return;
 			run.status = 'failed';
 			emit(run, { type: 'error', message: (err as Error).message });
 		}
@@ -413,7 +430,10 @@ function loadSkillMetrics(skillId: string): FeatureMeasurement[] {
 	return [];
 }
 
-export async function ensureCalibrationTrial(propositionId: string): Promise<CalibrationTrial> {
+export async function ensureCalibrationTrial(
+	propositionId: string,
+	opts: { provider: ProviderId; model?: string }
+): Promise<CalibrationTrial> {
 	const state = readStyleSkillState();
 	if (!state) throw new Error('No style skill state');
 	const existing = state.calibrationTrials.find(
@@ -422,6 +442,7 @@ export async function ensureCalibrationTrial(propositionId: string): Promise<Cal
 	if (existing) return existing;
 	const prop = state.propositions.find((p) => p.id === propositionId);
 	if (!prop) throw new Error('Unknown proposition');
+	if (!opts.provider) throw new Error('Provider required to generate close-call pairs');
 
 	let metrics: FeatureMeasurement[] = [];
 	const path = join(authorStyleSkillDir(state.skillId), 'references', 'metrics.json');
@@ -444,8 +465,14 @@ export async function ensureCalibrationTrial(propositionId: string): Promise<Cal
 		punctuationBySource: {},
 		metricIndex
 	};
-	const trial = generateCloseCall({ proposition: prop, measurements });
-	if ('error' in trial) throw new Error(trial.error);
+	const trials = await generateCloseCallsWithAgent({
+		propositions: [prop],
+		measurements,
+		provider: opts.provider,
+		model: opts.model
+	});
+	const trial = trials.find((t) => t.propositionId === propositionId) ?? trials[0];
+	if (!trial) throw new Error('Calibration agent returned no close call for this proposition');
 	state.calibrationTrials = [...state.calibrationTrials, trial];
 	writeStyleSkillState(state);
 	return trial;

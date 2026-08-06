@@ -1,6 +1,10 @@
 /**
- * Close-call calibration: generate A/B variants and resolve user responses.
+ * Close-call calibration: agent-generated A/B variants + resolve user responses.
  */
+import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
+import { z } from 'zod';
+import { getProvider } from '../providers';
+import type { ProviderId, ToolDefinition } from '../providers/types';
 import type { StyleMeasurements } from './measure';
 import type { CalibrationTrial, StyleProposition } from './schemas';
 import { ACTIVE_CONFIDENCE_THRESHOLD } from './schemas';
@@ -21,103 +25,6 @@ function extractNumbers(text: string): string[] {
 	return text.match(/\b\d+(?:\.\d+)?%?\b/g) ?? [];
 }
 
-function extractProperNouns(text: string): string[] {
-	return text.match(/\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b/g) ?? [];
-}
-
-/** Deterministic close-call generator (no LLM required for v1). */
-export function generateCloseCall(opts: {
-	proposition: StyleProposition;
-	measurements: StyleMeasurements;
-}): CalibrationTrial | { error: string } {
-	const p = opts.proposition;
-	const brief = `Rewrite the following idea in two styles that differ mainly in: ${p.type.replace(/_/g, ' ')}. Keep meaning identical.`;
-
-	const seed =
-		p.examples[0]?.text ||
-		p.claim ||
-		'The system evaluates outputs with human feedback and updates the criteria as new cases appear.';
-
-	let a = seed;
-	let b = seed;
-	let supports: 'a' | 'b' = 'a';
-
-	if (p.type === 'sentence_range' || p.type === 'cadence' || p.type === 'variation') {
-		const p50 = Number(opts.measurements.metricIndex.get('corpus.sentence_len.p50')?.value ?? 16);
-		a = compressToWords(seed, Math.max(8, Math.round(p50 - 4)));
-		b = expandTowardWords(seed, Math.round(p50 + 8));
-		supports = 'a';
-	} else if (p.type === 'ai_ism_avoidance') {
-		a = seed
-			.replace(/\bdelve into\b/gi, 'look at')
-			.replace(/\brobust\b/gi, 'reliable')
-			.replace(/\bleverage\b/gi, 'use')
-			.replace(/\btapestry\b/gi, 'mix');
-		b = `We delve into a robust tapestry of ideas and leverage holistic synergies to unlock the landscape. ${seed}`;
-		supports = 'a';
-	} else if (p.type === 'clause_boundary' || p.type === 'punctuation_rhythm') {
-		a = seed.replace(/\s*[—–]\s*/g, '. ').replace(/\s+--\s+/g, '. ');
-		b = seed.includes('—') || seed.includes('--')
-			? seed
-			: seed.replace(/\.\s+/, ' — ').replace(/\.$/, ' — and that matters.');
-		supports = 'a';
-	} else if (p.type === 'formality') {
-		a = seed.replace(/\bdo not\b/gi, "don't").replace(/\bit is\b/gi, "it's").replace(/\bcannot\b/gi, "can't");
-		b = seed.replace(/\bdon't\b/gi, 'do not').replace(/\bit's\b/gi, 'it is').replace(/\bcan't\b/gi, 'cannot');
-		supports = 'a';
-	} else if (p.type === 'signature_lexicon' || p.type === 'terminology') {
-		const terms = (Array.isArray(p.metrics[0]?.value)
-			? (p.metrics[0].value as string[])
-			: Object.keys((p.metrics[0]?.value as Record<string, number>) ?? {})
-		).slice(0, 3);
-		a = terms.length ? `${seed} (using terms like ${terms.join(', ')})` : seed;
-		b = seed.replace(/\bassertion(s)?\b/gi, 'guardrail$1').replace(/\bcriteria\b/gi, 'rubrics');
-		supports = 'a';
-	} else {
-		a = seed;
-		b = `In essence, ${seed.charAt(0).toLowerCase()}${seed.slice(1)} This is crucial and seamless.`;
-		supports = 'a';
-	}
-
-	const validated = validateCloseCall({ a, b, proposition: p });
-	if (!validated.ok) {
-		// One regenerate attempt with safer defaults
-		a = seed;
-		b = `${seed} Additionally, the approach remains careful and concrete.`;
-		const again = validateCloseCall({ a, b, proposition: p });
-		if (!again.ok) return { error: again.error };
-	}
-
-	// Randomize labels
-	const flip = Math.random() < 0.5;
-	const now = Date.now();
-	return {
-		id: `cal_${p.id}_${now.toString(36)}`,
-		propositionId: p.id,
-		schemaVersion: 1,
-		brief,
-		variantA: flip ? b : a,
-		variantB: flip ? a : b,
-		supportsProposition: flip ? (supports === 'a' ? 'b' : 'a') : supports,
-		targetMetricId: p.metrics[0]?.metricId ?? p.type,
-		status: 'pending',
-		createdAt: now,
-		updatedAt: now
-	};
-}
-
-function compressToWords(text: string, target: number): string {
-	const words = text.split(/\s+/);
-	if (words.length <= target) return text;
-	return words.slice(0, target).join(' ').replace(/[,:;]$/, '') + '.';
-}
-
-function expandTowardWords(text: string, target: number): string {
-	const words = text.split(/\s+/);
-	if (words.length >= target) return text;
-	return `${text.replace(/\.$/, '')}, which makes the underlying tradeoff easier to see in practice.`;
-}
-
 export function validateCloseCall(opts: {
 	a: string;
 	b: string;
@@ -129,7 +36,6 @@ export function validateCloseCall(opts: {
 
 	const numsA = extractNumbers(a).sort().join(',');
 	const numsB = extractNumbers(b).sort().join(',');
-	// Allow length-targeted edits to drop trailing numbers only if not citation-heavy
 	if (proposition.type !== 'sentence_range' && numsA !== numsB) {
 		return { ok: false, error: 'Numbers diverged' };
 	}
@@ -146,15 +52,303 @@ export function validateCloseCall(opts: {
 		}
 	}
 
-	// Proper nouns roughly preserved
-	const properA = new Set(extractProperNouns(a));
-	for (const n of extractProperNouns(b)) {
-		if (properA.size && !properA.has(n) && /^[A-Z]/.test(n) && n.length > 3) {
-			// soft check — ignore
+	return { ok: true };
+}
+
+type CloseCallDraft = {
+	propositionId: string;
+	brief: string;
+	variantA: string;
+	variantB: string;
+	supportsProposition: 'a' | 'b';
+};
+
+function buildCloseCallSubmitTool(
+	allowedIds: Set<string>,
+	propById: Map<string, StyleProposition>,
+	onAccept: (drafts: CloseCallDraft[]) => { ok: boolean; error?: string }
+): ToolDefinition {
+	return {
+		name: 'submit_close_calls',
+		description:
+			'Submit A/B close-call calibration pairs for uncertain style propositions.',
+		inputSchema: {
+			type: 'object',
+			properties: {
+				closeCalls: {
+					type: 'array',
+					items: {
+						type: 'object',
+						properties: {
+							propositionId: { type: 'string' },
+							brief: { type: 'string' },
+							variantA: { type: 'string' },
+							variantB: { type: 'string' },
+							supportsProposition: { type: 'string', enum: ['a', 'b'] }
+						},
+						required: [
+							'propositionId',
+							'brief',
+							'variantA',
+							'variantB',
+							'supportsProposition'
+						]
+					}
+				}
+			},
+			required: ['closeCalls']
+		},
+		execute: async (input) => {
+			const parsed = z
+				.object({
+					closeCalls: z.array(
+						z.object({
+							propositionId: z.string(),
+							brief: z.string().min(1),
+							variantA: z.string().min(1),
+							variantB: z.string().min(1),
+							supportsProposition: z.enum(['a', 'b'])
+						})
+					)
+				})
+				.safeParse(input);
+			if (!parsed.success) {
+				return {
+					content: [{ type: 'text', text: `Rejected: ${parsed.error.message}` }],
+					isError: true
+				};
+			}
+			for (const c of parsed.data.closeCalls) {
+				if (!allowedIds.has(c.propositionId)) {
+					return {
+						content: [
+							{ type: 'text', text: `Rejected: unknown propositionId ${c.propositionId}` }
+						],
+						isError: true
+					};
+				}
+				const prop = propById.get(c.propositionId)!;
+				const v = validateCloseCall({ a: c.variantA, b: c.variantB, proposition: prop });
+				if (!v.ok) {
+					return {
+						content: [
+							{
+								type: 'text',
+								text: `Rejected close call for ${c.propositionId}: ${v.error}`
+							}
+						],
+						isError: true
+					};
+				}
+			}
+			const result = onAccept(parsed.data.closeCalls);
+			if (!result.ok) {
+				return {
+					content: [{ type: 'text', text: `Rejected: ${result.error}` }],
+					isError: true
+				};
+			}
+			return { content: [{ type: 'text', text: 'Close calls accepted.' }] };
 		}
+	};
+}
+
+function buildCloseCallMcp(
+	allowedIds: Set<string>,
+	propById: Map<string, StyleProposition>,
+	onAccept: (drafts: CloseCallDraft[]) => { ok: boolean; error?: string }
+) {
+	return createSdkMcpServer({
+		name: 'docwriter-style-calibrate',
+		version: '0.0.1',
+		tools: [
+			tool(
+				'submit_close_calls',
+				'Submit A/B close-call calibration pairs for uncertain style propositions.',
+				{
+					closeCalls: z.array(
+						z.object({
+							propositionId: z.string(),
+							brief: z.string().min(1),
+							variantA: z.string().min(1),
+							variantB: z.string().min(1),
+							supportsProposition: z.enum(['a', 'b'])
+						})
+					)
+				},
+				async (input) => {
+					for (const c of input.closeCalls) {
+						if (!allowedIds.has(c.propositionId)) {
+							return {
+								content: [
+									{
+										type: 'text',
+										text: `Rejected: unknown propositionId ${c.propositionId}`
+									}
+								],
+								isError: true
+							};
+						}
+						const prop = propById.get(c.propositionId)!;
+						const v = validateCloseCall({
+							a: c.variantA,
+							b: c.variantB,
+							proposition: prop
+						});
+						if (!v.ok) {
+							return {
+								content: [
+									{
+										type: 'text',
+										text: `Rejected close call for ${c.propositionId}: ${v.error}`
+									}
+								],
+								isError: true
+							};
+						}
+					}
+					const result = onAccept(input.closeCalls);
+					if (!result.ok) {
+						return {
+							content: [{ type: 'text', text: `Rejected: ${result.error}` }],
+							isError: true
+						};
+					}
+					return { content: [{ type: 'text', text: 'Close calls accepted.' }] };
+				}
+			)
+		]
+	});
+}
+
+function draftsToTrials(drafts: CloseCallDraft[], propById: Map<string, StyleProposition>): CalibrationTrial[] {
+	const now = Date.now();
+	return drafts.map((c, i) => {
+		const prop = propById.get(c.propositionId)!;
+		const flip = Math.random() < 0.5;
+		return {
+			id: `cal_${c.propositionId}_${now.toString(36)}_${i}`,
+			propositionId: c.propositionId,
+			schemaVersion: 1 as const,
+			brief: c.brief,
+			variantA: flip ? c.variantB : c.variantA,
+			variantB: flip ? c.variantA : c.variantB,
+			supportsProposition: flip
+				? c.supportsProposition === 'a'
+					? ('b' as const)
+					: ('a' as const)
+				: c.supportsProposition,
+			targetMetricId: prop.metrics[0]?.metricId ?? prop.type,
+			status: 'pending' as const,
+			createdAt: now,
+			updatedAt: now
+		};
+	});
+}
+
+/**
+ * Ask the selected provider to write close-call A/B pairs for uncertain
+ * propositions. No deterministic string mangling — the user's agent authors
+ * the variants via submit_close_calls.
+ */
+export async function generateCloseCallsWithAgent(opts: {
+	propositions: StyleProposition[];
+	measurements: StyleMeasurements;
+	provider: ProviderId;
+	model?: string;
+	abortSignal?: AbortSignal;
+}): Promise<CalibrationTrial[]> {
+	const candidates = selectCalibrationCandidates(opts.propositions, MAX_FIRST_SESSION);
+	if (!candidates.length) return [];
+
+	const propById = new Map(candidates.map((p) => [p.id, p]));
+	const allowedIds = new Set(propById.keys());
+	let accepted: CloseCallDraft[] | undefined;
+	let lastError: string | undefined;
+
+	const onAccept = (drafts: CloseCallDraft[]) => {
+		if (!drafts.length) return { ok: false, error: 'No close calls submitted' };
+		accepted = drafts;
+		return { ok: true };
+	};
+
+	const tools = [buildCloseCallSubmitTool(allowedIds, propById, onAccept)];
+	const provider = await getProvider(opts.provider);
+
+	const candidateBlob = JSON.stringify(
+		candidates.map((p) => ({
+			id: p.id,
+			family: p.family,
+			type: p.type,
+			instruction: p.instruction,
+			claim: p.claim,
+			metrics: p.metrics,
+			examples: p.examples.slice(0, 2).map((e) => e.text),
+			evidenceQuotes: p.evidence.slice(0, 3).map((e) => e.quote)
+		})),
+		null,
+		2
+	);
+
+	const metricHint = JSON.stringify(
+		opts.measurements.metrics
+			.filter((m) =>
+				candidates.some((p) => p.metrics.some((pm) => pm.metricId === m.metricId))
+			)
+			.slice(0, 40)
+			.map((m) => ({
+				metricId: m.metricId,
+				summary: m.summary,
+				value: m.value
+			})),
+		null,
+		2
+	);
+
+	const prompt = `You write close-call calibration pairs for DocWriter's author-style skill.
+For each uncertain proposition below, invent TWO short prose variants (A and B) that differ mainly on that style dimension, with nearly identical meaning.
+Mark which label currently supports the proposition (supportsProposition).
+Do not invent facts. Keep numbers/names stable unless the proposition is about sentence length.
+Call submit_close_calls exactly once covering as many propositions as you can (max ${candidates.length}).
+
+PROPOSITIONS:
+${candidateBlob}
+
+RELATED METRICS:
+${metricHint}`;
+
+	try {
+		for await (const event of provider.query(
+			{
+				prompt,
+				systemPrompt:
+					'You create A/B style close calls. Call submit_close_calls once. No document edits.',
+				model: opts.model,
+				allowedTools: [
+					'submit_close_calls',
+					'mcp__docwriter-style-calibrate__submit_close_calls'
+				],
+				effort: 'medium',
+				omitDefaultMcpServers: true,
+				extraMcpServers: {
+					'docwriter-style-calibrate': buildCloseCallMcp(allowedIds, propById, onAccept)
+				},
+				abortSignal: opts.abortSignal
+			},
+			tools
+		)) {
+			if (opts.abortSignal?.aborted) break;
+			if (event.type === 'error') lastError = event.error;
+		}
+	} catch (err) {
+		lastError = (err as Error).message;
 	}
 
-	return { ok: true };
+	if (!accepted?.length) {
+		throw new Error(lastError ?? 'Calibration agent did not submit close calls');
+	}
+
+	return draftsToTrials(accepted, propById);
 }
 
 export type CalibrationResponse = 'a' | 'b' | 'same' | 'edited' | 'skip';
@@ -215,14 +409,12 @@ export function applyCalibrationResponse(opts: {
 	}
 
 	// a or b
-	const chosen =
-		opts.response === 'a' ? opts.trial.variantA : opts.trial.variantB;
+	const chosen = opts.response === 'a' ? opts.trial.variantA : opts.trial.variantB;
 	const supports =
 		(opts.response === 'a' && opts.trial.supportsProposition === 'a') ||
 		(opts.response === 'b' && opts.trial.supportsProposition === 'b');
 
 	if (!supports) {
-		// User preferred the opposite of the current proposition — flip instruction lightly
 		return {
 			...p,
 			status: 'active',
