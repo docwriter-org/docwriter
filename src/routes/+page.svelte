@@ -231,7 +231,7 @@
 			pushToast({
 				kind: 'hook',
 				title: 'Agent proposed a hook',
-				body: `${h.event}${h.matcher ? ` · ${h.matcher}` : ''} → ${h.command}${h.output ? `\nOutput: ${h.output}` : ''}`,
+				body: `${h.event}${h.matcher ? ` · ${h.matcher}` : ''} → ${h.command}`,
 				refId: h.id
 			});
 		}
@@ -1410,10 +1410,6 @@
 									event: parsed.event,
 									matcher: typeof parsed.matcher === 'string' && parsed.matcher ? parsed.matcher : undefined,
 									command: parsed.command.trim(),
-									output:
-										typeof parsed.output === 'string' && parsed.output.trim()
-											? parsed.output.trim()
-											: undefined,
 									reason: typeof parsed.reason === 'string' ? parsed.reason : undefined,
 									timestamp: Date.now()
 								}
@@ -1875,7 +1871,6 @@
 					event: import('$lib/types').ProposedHookEvent;
 					matcher?: string;
 					command: string;
-					output?: string;
 			  }
 			| undefined;
 		proposedHooks.update((list) => {
@@ -1894,7 +1889,6 @@
 				event: proposal.event,
 				matcher: proposal.matcher,
 				command: proposal.command,
-				output: proposal.output,
 				enabled: true
 			};
 			const next = [...existing, hook];

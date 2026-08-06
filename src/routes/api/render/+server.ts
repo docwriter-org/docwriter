@@ -623,14 +623,9 @@ function hookMatchesTool(hook: Hook, toolName: string): boolean {
 	if (!hook.matcher?.trim()) return true;
 	if (!toolName) return false;
 	try {
-		// Match the actual tool segment, not the whole MCP-qualified name.
-		// Testing `mcp__docwriter-doc__read_doc` directly would make a matcher
-		// such as `Edit|Write` fire on read_doc merely because the namespace
-		// itself contains "writer".
-		const matchName = toolName.startsWith('mcp__')
-			? toolName.slice(toolName.lastIndexOf('__') + 2)
-			: toolName;
-		return new RegExp(hook.matcher, 'i').test(matchName);
+		// Case-insensitive so `Edit|Write` matches both built-in tools and
+		// namespaced MCP variants like `mcp__docwriter-doc__edit_doc`.
+		return new RegExp(hook.matcher, 'i').test(toolName);
 	} catch {
 		return false;
 	}

@@ -19,11 +19,11 @@ Current templates cover pdflatex, Pandoc HTML, Pandoc PDF, Mermaid, and two Git 
 
 Use the checkbox to enable or disable a hook. Use **Run now** to test it. Remove a hook with the x control.
 
-The agent can propose a hook through a **Proposed hook** toast, including its preview output path. Accepting the toast saves and enables the hook; use its checkbox in Settings to disable it.
+The agent can propose a hook through a **Proposed hook** toast. Accepting the toast saves the hook, but you still choose whether to enable it.
 
 ## Preview output
 
-Set **Output** when the command produces a file that DocWriter can preview. The Preview controls use the first enabled hook whose resolved output exists for the active source file.
+Set **Output** when the command produces a file that DocWriter can preview. The Preview controls use the first enabled hook whose output matches the active source file.
 
 The pdflatex template runs at **Stop**, after an agent turn. It does not run after every user keystroke.
 

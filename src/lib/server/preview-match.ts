@@ -26,8 +26,7 @@ export function resolvePreviewOutputPath(file: string): string | null {
 	for (const hook of hooks) {
 		const resolved = resolveCommand(hook.output ?? '', { file, tool: '' });
 		if (!resolved) continue;
-		const abs = resolvePath(WORKSPACE_ROOT, resolved);
-		if (existsSync(abs)) return abs;
+		return resolvePath(WORKSPACE_ROOT, resolved);
 	}
 	return null;
 }

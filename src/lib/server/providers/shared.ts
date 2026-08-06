@@ -120,10 +120,6 @@ export function emitProposalEvents(
 				event: validEvent,
 				matcher: typeof input.matcher === 'string' ? input.matcher : undefined,
 				command: typeof input.command === 'string' ? input.command : '',
-				output:
-					typeof input.output === 'string' && input.output.trim()
-						? input.output.trim()
-						: undefined,
 				reason: typeof input.reason === 'string' ? input.reason : undefined
 			}
 		];
