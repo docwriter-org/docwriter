@@ -188,6 +188,31 @@ async function openPdfInBrowser(origin) {
 	}
 }
 
+async function runAgentTurnForStopHook(origin, markerPath) {
+	if (!process.env.OPENAI_API_KEY) {
+		console.log('SKIP: OPENAI_API_KEY is not set; automatic Stop dispatch was not tested');
+		return false;
+	}
+	const response = await fetch(`${origin}/api/render`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({
+			provider: 'openai',
+			model: 'gpt-5.5',
+			tab: 'main.tex',
+			userMessage: 'Reply with exactly OK. Do not edit files and do not call tools.'
+		}),
+		signal: AbortSignal.timeout(120_000)
+	});
+	const stream = await response.text();
+	assert.equal(response.status, 200, stream);
+	assert(existsSync(markerPath), `Automatic Stop hook did not create ${markerPath}`);
+	assert.match(stream, /"type":"hook_run"/);
+	assert.match(stream, /"hookId":"stop-marker"/);
+	assert.match(stream, /"status":"done"/);
+	return true;
+}
+
 const tempRoot = await mkdtemp(join(tmpdir(), 'docwriter-latex-git-'));
 const remote = join(tempRoot, 'remote.git');
 const workspace = join(tempRoot, 'paper');
@@ -224,6 +249,7 @@ try {
 			'*.out',
 			'*.pdf',
 			'*.synctex.gz',
+			'stop-hook-ran.txt',
 			''
 		].join('\n')
 	);
@@ -277,7 +303,14 @@ try {
 			'git add -A && (git diff --cached --quiet || (git commit -m "docwriter: auto-commit" && git push))',
 		enabled: true
 	};
-	await putHooks(origin, [latexHook, gitHook]);
+	const stopMarkerHook = {
+		id: 'stop-marker',
+		event: 'Stop',
+		command:
+			'node -e "require(\'node:fs\').writeFileSync(\'stop-hook-ran.txt\', \'ran\\\\n\')"',
+		enabled: true
+	};
+	await putHooks(origin, [latexHook, gitHook, stopMarkerHook]);
 
 	const beforeLatex = collector.events.length;
 	await runHook(origin, 'latex');
@@ -315,6 +348,10 @@ try {
 	assert.equal(synctexResponse.ok, true, JSON.stringify(synctexResponse));
 	assert.equal(synctexResponse.page, 1);
 	await openPdfInBrowser(origin);
+	const automaticStopTested = await runAgentTurnForStopHook(
+		origin,
+		join(workspace, 'stop-hook-ran.txt')
+	);
 
 	await writeFile(
 		join(upstream, 'main.tex'),
@@ -378,6 +415,9 @@ try {
 	console.log('PASS: multi-file Git pull emitted one .tex/.bib reload batch');
 	console.log('PASS: external PDF rebuild emitted preview_ready');
 	console.log('PASS: Git hook committed and pushed the accepted source change');
+	if (automaticStopTested) {
+		console.log('PASS: a live OpenAI agent turn automatically fired the Stop hook');
+	}
 } finally {
 	if (collector) await collector.close();
 	if (child && child.exitCode === null) {
