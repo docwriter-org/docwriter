@@ -326,6 +326,9 @@ export interface AgentSettings {
 	 * Distinct from `muted` (which only hides the diff overlay). Toggled by
 	 * double-clicking the Agent pill. */
 	paused: boolean;
+	/** Free-text description of who the draft is for. Empty means no audience
+	 * bias. Injected into the agent prompt via session_state when it changes. */
+	intendedAudience: string;
 }
 
 /** Canonical default agent settings. Imported by the server runtime-state.
@@ -334,5 +337,6 @@ export interface AgentSettings {
 export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
 	agency: 'conservative',
 	muted: false,
-	paused: false
+	paused: false,
+	intendedAudience: ''
 };
