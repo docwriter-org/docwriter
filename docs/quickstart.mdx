@@ -7,7 +7,13 @@ Use this walkthrough to learn how an agent edit moves from a request into your f
 
 ## Confirm the provider
 
-Check that the provider and model you tested on [Connect a provider](/connect-provider) still appear in the header. If you have not sent a successful request yet, send the test request on that page before continuing.
+Check that your provider and model appear in the header. If you have not tested the connection, open a small text file, click **Chat**, and send:
+
+```text
+Read the open file and summarize the main point. Do not edit the file.
+```
+
+Continue when the summary appears in the agent dock and the file remains unchanged. If the request fails, follow [Connect a provider](/connect-provider) to check your account and model.
 
 ## Open a draft
 
@@ -41,11 +47,11 @@ The changed text appears in the editor, and a review card appears in the comment
   ![A proposed edit in the comment gutter beside the changed text](/images/quickstart-pending-edit.png)
 </Frame>
 
-You can accept and reject suggestions independently. A suggestion becomes stale when the text it depends on has changed. Reject a stale suggestion. If an Accept request discovers the mismatch, DocWriter removes the old suggestion and asks the agent for a new one based on the current text.
+You can accept and reject suggestions independently. If you change the same passage before reviewing a suggestion, the suggestion may become stale. Reject it and ask the agent for a new edit based on the current text.
 
 ## Check the file
 
-Open `draft.md` from the workspace folder in any other editor. The accepted text is plain Markdown on disk. Review state and comments remain in `.docwriter/docwriter.db`.
+Open `draft.md` from the project folder in another editor. The accepted text is plain Markdown that you can edit elsewhere or commit with Git. Comments and pending suggestions remain in DocWriter.
 
 ## Continue
 
