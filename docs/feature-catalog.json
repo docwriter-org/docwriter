@@ -627,22 +627,22 @@
       "targetPage": "customize/references"
     },
     {
-      "id": "customize-audience-01",
+      "id": "agent-customize-01",
       "area": "Customize",
       "feature": "Set an intended audience for the draft",
-      "targetPage": "customize/audience"
+      "targetPage": "agent/customize"
     },
     {
-      "id": "customize-audience-02",
+      "id": "agent-customize-02",
       "area": "Customize",
       "feature": "Clear the intended audience",
-      "targetPage": "customize/audience"
+      "targetPage": "agent/customize"
     },
     {
-      "id": "customize-audience-03",
+      "id": "agent-customize-03",
       "area": "Customize",
       "feature": "Wake the agent after saving or clearing the audience",
-      "targetPage": "customize/audience"
+      "targetPage": "agent/customize"
     },
     {
       "id": "customize-skills-01",
