@@ -366,7 +366,7 @@ export function buildHeuristicPropositions(
 			family: 'punctuation',
 			type: 'clause_boundary',
 			instruction:
-				'Secondary note: em/en dashes are rare in these samples. Prefer the author's other punctuation habits first.',
+				"Secondary note: em/en dashes are rare in these samples. Prefer the author's other punctuation habits first.",
 			claim: `Dash punctuation is rare (≈ ${dashRate.toFixed(2)} / 1k words) — weak signal.`,
 			scope: {},
 			metrics: [{ metricId: 'corpus.dash.rate', summary: 'Dash rate', value: dashRate }],
