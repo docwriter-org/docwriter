@@ -33,7 +33,7 @@
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, extname, join, resolve } from 'node:path';
 import { existsSync, mkdirSync, readFileSync, watch as fsWatch } from 'node:fs';
 
 // ---------------------------------------------------------------------------
@@ -277,8 +277,11 @@ if (openBrowser) {
 // File watcher (--watch)
 // ---------------------------------------------------------------------------
 if (watchFlag) {
-	// Debounce: coalesce rapid saves into a single reload after 150 ms.
+	// Debounce: coalesce rapid saves (including multi-file `git pull`s) into
+	// one reload after 150 ms without losing the individual changed paths.
 	let debounce = null;
+	const pendingFiles = new Set();
+	let pendingUnnamedChange = false;
 
 	// Server-managed state (.docwriter/*) must never trigger reloads — the
 	// server writes there on every keystroke/settings change. Note fs.watch
@@ -286,21 +289,91 @@ if (watchFlag) {
 	const IGNORE_RE =
 		/(^|[/\\])\.docwriter[/\\]|(^|[/\\])\.git[/\\]|node_modules[/\\]|\.svelte-kit[/\\]/;
 
-	const WATCH_EXTS = new Set(['.md', '.txt', '.json', '.yaml', '.yml']);
+	// Keep this aligned with the writing/source files users can open and the
+	// generated outputs DocWriter can preview. In particular, the documented
+	// Overleaf workflow relies on .tex/.bib changes from `git pull` reaching
+	// the browser, while PDF/HTML/image changes need to refresh open previews.
+	const SOURCE_EXTS = new Set([
+		'.md',
+		'.markdown',
+		'.txt',
+		'.json',
+		'.yaml',
+		'.yml',
+		'.tex',
+		'.ltx',
+		'.sty',
+		'.cls',
+		'.bib'
+	]);
+	const PREVIEW_EXTS = new Set([
+		'.pdf',
+		'.html',
+		'.htm',
+		'.svg',
+		'.png',
+		'.jpg',
+		'.jpeg',
+		'.gif',
+		'.webp'
+	]);
+	const WATCH_EXTS = new Set([...SOURCE_EXTS, ...PREVIEW_EXTS]);
 
 	function scheduleReload(filename) {
-		if (IGNORE_RE.test(filename ?? '')) return;
-		const ext = filename ? '.' + filename.split('.').pop() : '';
-		if (filename && !WATCH_EXTS.has(ext)) return;
+		const changedFile =
+			typeof filename === 'string'
+				? filename
+				: filename == null
+					? ''
+					: filename.toString();
+		if (IGNORE_RE.test(changedFile)) return;
+		const ext = changedFile ? extname(changedFile).toLowerCase() : '';
+		if (changedFile && !WATCH_EXTS.has(ext)) return;
+
+		if (changedFile) pendingFiles.add(changedFile);
+		else pendingUnnamedChange = true;
 
 		clearTimeout(debounce);
 		debounce = setTimeout(async () => {
+			const files = [...pendingFiles];
+			const unnamedChange = pendingUnnamedChange;
+			const sourceFiles = files.filter((file) =>
+				SOURCE_EXTS.has(extname(file).toLowerCase())
+			);
+			pendingFiles.clear();
+			pendingUnnamedChange = false;
 			try {
-				await fetch(`http://127.0.0.1:${port}/api/live`, {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ event: 'reload', file: filename })
-				});
+				if (sourceFiles.length > 0 || unnamedChange) {
+					await fetch(`http://127.0.0.1:${port}/api/live`, {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({
+							event: 'reload',
+							...(sourceFiles.length === 1 && !unnamedChange
+								? { file: sourceFiles[0] }
+								: {}),
+							...(sourceFiles.length > 0 ? { files: sourceFiles } : {})
+						})
+					});
+				}
+
+				// The main UI reload above refreshes source tabs and the file
+				// tree. Preview windows listen for preview_ready separately so
+				// an externally rebuilt PDF/HTML/image refreshes in place too.
+				await Promise.all(
+					files
+						.filter((file) => PREVIEW_EXTS.has(extname(file).toLowerCase()))
+						.map((file) =>
+							fetch(`http://127.0.0.1:${port}/api/live`, {
+								method: 'POST',
+								headers: { 'Content-Type': 'application/json' },
+								body: JSON.stringify({
+									event: 'preview_ready',
+									path: resolve(docwriterRoot, file)
+								})
+							})
+						)
+				);
 			} catch {
 				// Server may be restarting — ignore.
 			}

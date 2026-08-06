@@ -9,11 +9,11 @@ description: "Use another editor without losing changes."
 docwriter --watch ~/writing/my-project
 ```
 
-Watch mode reports changes to Markdown, text, JSON, YAML, and YML files. It ignores implementation and runtime folders such as `.git` and `.docwriter`.
+Watch mode reports changes to writing sources (including Markdown, text, JSON, YAML, TeX, BibTeX, style, and class files) and preview outputs such as PDF, HTML, SVG, and common image formats. It ignores implementation and runtime folders such as `.git` and `.docwriter`.
 
 ## How reload works
 
-The command line watcher sends a reload event to the browser. DocWriter refreshes the file tree and remounts the active tab from the server.
+The command line watcher batches rapid multi-file changes, sends one reload event to the browser, refreshes the file tree, and remounts the active tab from the server. Changed preview outputs reload in place.
 
 The server ignores file events that repeat a recent DocWriter flush, which prevents a reload loop while you type.
 
@@ -25,4 +25,4 @@ Watch mode is a reload system, not a text merge system. Avoid editing the same p
 
 ## Git changes
 
-DocWriter does not pull a repository automatically. Pull before the writing session, resolve conflicts in Git, then let DocWriter reload the resulting files.
+DocWriter does not pull a repository automatically. Pull before the writing session, resolve conflicts in Git, then let DocWriter reload the resulting files. A multi-file `git pull`, including changes to `.tex`, `.bib`, and generated PDFs, is handled as one batch.

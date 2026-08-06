@@ -5,11 +5,19 @@ description: "Build a TeX project and move between source and PDF."
 
 ## Build the PDF
 
-Open **Settings**, then **Hooks**, and choose the pdflatex template. Update the entry file and output path when the project does not use `main.tex`.
+Install a TeX distribution first (for example TeX Live, MacTeX, or MiKTeX), then confirm `pdflatex`, `bibtex`, and `synctex` are available on `PATH`:
+
+```sh
+pdflatex --version
+bibtex --version
+synctex --version
+```
+
+Open **Settings**, then **Hooks**, and choose the pdflatex template. Update both the entry file in the command and the output path when the project does not use `main.tex` and `main.pdf`.
 
 The template runs pdflatex with `-synctex=1` and performs additional passes for references. It runs at the end of an agent turn.
 
-DocWriter also finds a same stem PDF automatically. For example, `paper/main.tex` matches `paper/main.pdf`.
+Use **Run now** in the Hooks panel for the first build and check the agent dock if it fails. The Preview button appears after the configured output exists. DocWriter also finds an existing same-stem PDF automatically; for example, `paper/main.tex` matches `paper/main.pdf`.
 
 ## Preview beside the source
 
@@ -25,7 +33,7 @@ Open the TeX source, then use the split preview button. Drag the divider to resi
 
 ## Move from source to PDF
 
-Select source text and choose **Locate in PDF**. DocWriter asks the `synctex` command for the page and position. When SyncTeX data is unavailable, it falls back to PDF text search.
+Select source text, open its feedback popup, and choose **Locate in PDF**. DocWriter asks the `synctex` command for the page and position. When SyncTeX data is unavailable, it falls back to PDF text search.
 
 ## Move from PDF to source
 
