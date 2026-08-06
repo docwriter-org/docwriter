@@ -2,34 +2,38 @@
 title: "Writing references"
 ---
 
-Use a writing reference when the agent needs an example or source to complete a request. A published article can show the voice you want, while a source file or URL can provide facts and preferred terms for a project.
+Give DocWriter a few passages you have written and it learns how you write, then applies that style to later work. This is for voice, not facts: use a [writing rule](/customize/rules) for a standing instruction and an [intended audience](/agent/customize#set-the-intended-audience) to name the reader.
 
-## Add a reference
+## Add your writing
 
-Open **Settings**, then **Writing references**. Add a reference in one of these ways:
+Use the references control beside the model picker, or open **Settings**, then **Writing references**.
 
-- Use the current file.
-- Paste a writing sample.
-- Save a URL.
+Paste a passage, say what it is, and choose **Add source**. Repeat until you have three to five. That range is the useful one: fewer gives the analysis little to go on, more averages your voice away.
 
-Give the reference a name that explains why the agent should use it. For example, name a sample "Published posts in my voice" instead of "Sample 1."
+Describe each passage in your own words — "introduction of a paper", "related work section", "a post I like the tone of". The description is not just a label. The specialists read it alongside the passage, so an introduction is read as an introduction rather than as prose in general.
 
-<Frame>
-  ![Writing references in Settings](/images/writing-references-panel.png)
-</Frame>
+**Read** shows the stored text if you want to correct something before it is measured. Once you have three sources, **Analyze my style** moves you to the analysis.
 
-## Control when a reference is available
+## What the analysis does
 
-Enable a reference when the agent may use it in new requests. Disable it when the source is unrelated to your current work and you want to keep it saved for later. Removing a reference does not change the original file or URL.
+The analysis measures document structure, sections, paragraphs, sentence rhythm, voice, vocabulary, punctuation, rhetoric, citations, and formatting. Metrics that measured zero are discarded — a passage with no tables says nothing about how you use tables.
 
-When you add a reference, the agent wakes and considers the new material during the next pass. The saved name helps you tell the agent which reference matters for a later request.
+Three specialist agents then read your passages themselves, with the measurements and your characteristic vocabulary in front of them, and write style propositions. Select any specialist to watch its reasoning, or **Measurements computed** to see every metric that fired.
 
-## Tell the agent what to use
+Each proposition carries passages quoted verbatim from your writing. A proposition whose examples do not appear in your sources is discarded rather than shown to you.
 
-Name the reference in your request when one source is especially important:
+## Resolve the uncertain ones
 
-```text
-Revise the opening to match the tone of "Published posts in my voice."
-```
+Reliable propositions become active immediately. For the rest, **Pick your poison** shows a passage you actually wrote next to the same passage with one habit changed, and asks which you would rather have written.
 
-After you send the request, the agent can consult the named material while it works and propose edits based on it. A reference supplies material for the request. Use a [writing rule](/customize/rules) when the same instruction should apply to later requests. Use an [intended audience](/agent/customize#set-the-intended-audience) when you want to name the reader rather than point at an example.
+Choose either one, say they feel the same, or edit one when neither works. Your choice settles the proposition.
+
+**Start over** clears every proposition and the measurements behind them while leaving your sources in place.
+
+## The generated skill
+
+DocWriter saves the result as a skill under `.docwriter/skills/author-style/` and enables it for the workspace. If that name already belongs to a skill you installed, DocWriter uses a reserved fallback name and leaves your skill unchanged.
+
+From the same dialog you can inspect active instructions, disable or rewrite one, download the skill bundle, and export local study data. The header marks the skill as stale when a source changes; the current skill stays active until you run the analysis again.
+
+The local study export includes setup time, calibration choices, confidence bands, skipped choices, and time per choice. A study harness can also record the assigned condition, editing rounds, accepted and rejected edits, edit distance, final correction size, and a blind preference through `/api/style-study`. The event schema rejects prose fields, and the exporter removes raw references, prompts, generated passages, and edited text.

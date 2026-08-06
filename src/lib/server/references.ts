@@ -7,7 +7,6 @@ import {
 } from 'fs';
 import { basename, extname, join } from 'path';
 import { DOCWRITER_DIR } from './document-files';
-import { resolveWorkspacePath } from './workspace-path';
 import { writeJsonAtomic, writeTextAtomic } from './file-utils';
 import type { MaterializationStatus, StyleReferenceRole } from '$lib/style-profile';
 
@@ -15,7 +14,7 @@ export const REFERENCES_DIR = join(DOCWRITER_DIR, 'references');
 export const REFERENCES_INDEX_FILE = join(DOCWRITER_DIR, 'references.json');
 export const REFERENCES_CACHE_DIR = join(DOCWRITER_DIR, 'style-analysis', 'source-cache');
 
-export type StyleReferenceType = 'workspace-file' | 'stored-sample' | 'url';
+export type StyleReferenceType = 'stored-sample';
 
 export interface StyleReference {
 	id: string;
@@ -199,47 +198,13 @@ export function createStoredSampleReference(
 	});
 }
 
-export function addWorkspaceFileReference(tabId: string, role: StyleReferenceRole = 'authored'): StyleReference {
-	resolveWorkspacePath(tabId);
-	return upsertReference({
-		label: tabId,
-		type: 'workspace-file',
-		target: tabId,
-		role,
-		format: extname(tabId).slice(1).toLowerCase() || 'text',
-		materializationStatus: 'pending'
-	});
-}
-
-export function addUrlReference(
-	url: string,
-	label?: string,
-	role: StyleReferenceRole = 'inspiration',
-	selected = true
-): StyleReference {
-	const normalized = url.trim();
-	if (!/^https?:\/\//i.test(normalized)) {
-		throw new Error('Style reference URL must start with http:// or https://');
-	}
-	return upsertReference({
-		label: label?.trim() || normalized,
-		type: 'url',
-		target: normalized,
-		role,
-		selected,
-		materializationStatus: 'pending'
-	});
-}
-
 export function deleteStyleReference(id: string) {
 	const index = readIndex();
 	const doomed = index.references.find((ref) => ref.id === id);
 	if (!doomed) return;
-	if (doomed.type === 'stored-sample') {
-		const fileName = doomed.target.replace(/^\.docwriter\/references\//, '');
-		const path = join(REFERENCES_DIR, fileName);
-		if (existsSync(path)) unlinkSync(path);
-	}
+	const fileName = doomed.target.replace(/^\.docwriter\/references\//, '');
+	const path = join(REFERENCES_DIR, fileName);
+	if (existsSync(path)) unlinkSync(path);
 	if (doomed.cachePath) {
 		const cacheName = basename(doomed.cachePath);
 		const cacheFile = join(REFERENCES_CACHE_DIR, cacheName);

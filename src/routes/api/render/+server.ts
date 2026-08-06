@@ -495,14 +495,7 @@ function buildRefsBlock(): string | null {
 	const refs = listStyleReferences().slice(0, 6);
 	if (refs.length === 0) return null;
 	const lines = ['Style references:'];
-	for (const ref of refs) {
-		if (ref.type === 'url') {
-			lines.push(`- URL: ${ref.target}${ref.label !== ref.target ? ` (${ref.label})` : ''}`);
-		} else {
-			const kind = ref.type === 'stored-sample' ? 'Saved sample' : 'Workspace path';
-			lines.push(`- ${kind}: ${ref.target}`);
-		}
-	}
+	for (const ref of refs) lines.push(`- ${ref.description || ref.label}`);
 	return lines.join('\n');
 }
 
