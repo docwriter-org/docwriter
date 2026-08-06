@@ -8,7 +8,7 @@ import {
 import { basename, extname, join } from 'path';
 import { DOCWRITER_DIR } from './document-files';
 import { resolveWorkspacePath } from './workspace-path';
-import { writeBinaryAtomic, writeJsonAtomic, writeTextAtomic } from './file-utils';
+import { writeJsonAtomic, writeTextAtomic } from './file-utils';
 import type { MaterializationStatus, StyleReferenceRole } from '$lib/style-profile';
 
 export const REFERENCES_DIR = join(DOCWRITER_DIR, 'references');
@@ -31,16 +31,16 @@ export interface StyleReference {
 	extractedAt?: number;
 	error?: string;
 	addedAt: number;
+	/** What this passage is, in the writer's words — "introduction of a paper".
+	 *  The specialists read it, so they know what they are looking at. */
+	description?: string;
 	/** Whether this source feeds the style analysis. */
 	selected?: boolean;
 }
 
-/**
- * Keeping is opt-in. An agent can turn up dozens of pages; the writer picks the
- * handful that actually sound like them, so nothing counts until chosen.
- */
+/** Everything the writer pasted counts; they only paste what they mean. */
 export function isSelected(reference: StyleReference): boolean {
-	return reference.selected === true;
+	return reference.selected !== false;
 }
 
 interface ReferencesIndex {
@@ -177,45 +177,23 @@ export function updateStyleReference(
 	return next;
 }
 
-export function createStoredSampleReference(name: string, content: string, role: StyleReferenceRole = 'authored'): StyleReference {
+export function createStoredSampleReference(
+	name: string,
+	content: string,
+	role: StyleReferenceRole = 'authored',
+	description?: string
+): StyleReference {
 	const normalizedContent = content.trim();
 	if (!normalizedContent) throw new Error('Reference content is required');
 	const fileName = uniqueStoredSampleFileName(name);
 	writeTextAtomic(join(REFERENCES_DIR, fileName), normalizedContent + '\n');
 	return upsertReference({
-		label: basename(fileName, extname(fileName)),
+		label: description?.trim() || basename(fileName, extname(fileName)),
 		type: 'stored-sample',
 		target: `.docwriter/references/${fileName}`,
 		role,
 		format: extname(fileName).slice(1).toLowerCase() || 'text',
-		// The writer handed this over directly, so it starts kept.
-		selected: true,
-		materializationStatus: 'pending'
-	});
-}
-
-/**
- * Store an uploaded file verbatim under `.docwriter/references/` and register
- * it as a stored sample. The bytes are kept in their original format rather
- * than decoded here: materialization already reads local references with
- * format-aware extraction (pdf / html / tex / plain), so an uploaded PDF gets
- * the same treatment as a PDF fetched from a URL.
- */
-export function createUploadedFileReference(
-	fileName: string,
-	bytes: Uint8Array,
-	role: StyleReferenceRole = 'authored'
-): StyleReference {
-	if (bytes.byteLength === 0) throw new Error('Uploaded file is empty');
-	const storedName = uniqueStoredSampleFileName(fileName);
-	writeBinaryAtomic(join(REFERENCES_DIR, storedName), bytes);
-	return upsertReference({
-		label: basename(fileName) || storedName,
-		type: 'stored-sample',
-		target: `.docwriter/references/${storedName}`,
-		role,
-		format: extname(storedName).slice(1).toLowerCase() || 'text',
-		// The writer attached this file themselves, so it starts kept.
+		...(description?.trim() ? { description: description.trim() } : {}),
 		selected: true,
 		materializationStatus: 'pending'
 	});

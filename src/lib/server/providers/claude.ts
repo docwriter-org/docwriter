@@ -237,20 +237,8 @@ export class ClaudeProvider implements AgentProvider {
 		const effort = options.effort || 'low';
 
 		const queryOptions: any = {
-			// Isolated runs see only the tools handed to query() — plus any
-			// built-ins the caller names explicitly (e.g. WebSearch/WebFetch for
-			// the reference ingest agent). The docwriter MCP servers stay out
-			// either way, so no isolated agent can mutate the document. Callers
-			// that name their own custom tools here are already covered by the
-			// mcp__ entries; re-listing the bare name would change how the SDK
-			// resolves them, so those are filtered out.
 			allowedTools: isolated
-				? [
-					..._tools.map((definition) => `mcp__docwriter-style__${definition.name}`),
-					...(options.allowedTools ?? []).filter(
-						(name) => !_tools.some((definition) => definition.name === name)
-					)
-				]
+				? _tools.map((definition) => `mcp__docwriter-style__${definition.name}`)
 				: options.allowedTools,
 			mcpServers: isolated
 				? { 'docwriter-style': customMcp }

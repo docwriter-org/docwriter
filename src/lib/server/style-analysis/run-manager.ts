@@ -233,13 +233,19 @@ function characteristicVocabulary(documents: NormalizedDocument[], limit = 60): 
 		.map(([word]) => word);
 }
 
-/** Enough of each source to judge how it is written, without flooding context. */
-function sourceExcerpts(documents: NormalizedDocument[], perDocument = 6000): string {
+/** Enough of each source to judge how it is written, without flooding context.
+ *  Each is headed by the writer's own description of what it is. */
+function sourceExcerpts(
+	documents: NormalizedDocument[],
+	descriptions: Record<string, string>,
+	perDocument = 6000
+): string {
 	return documents
 		.map((document, index) => {
 			const text = document.text.trim();
 			const excerpt = text.length > perDocument ? `${text.slice(0, perDocument)}\n[…]` : text;
-			return `--- SOURCE ${index + 1} (${document.role}, ${document.format}) ---\n${excerpt}`;
+			const what = descriptions[document.sourceId];
+			return `--- SOURCE ${index + 1}${what ? `: ${what}` : ''} ---\n${excerpt}`;
 		})
 		.join('\n\n');
 }
@@ -247,6 +253,7 @@ function sourceExcerpts(documents: NormalizedDocument[], perDocument = 6000): st
 function specialistPrompt(
 	report: StyleAnalysisReport,
 	documents: NormalizedDocument[],
+	descriptions: Record<string, string>,
 	families: StyleFamily[]
 ): string {
 	const vocabulary = characteristicVocabulary(documents);
@@ -256,9 +263,10 @@ function specialistPrompt(
 		'',
 		`Characteristic vocabulary: ${vocabulary.join(', ')}`,
 		'',
-		'The writing itself — read this before concluding anything:',
+		'The writing itself, with the writer telling you what each passage is. Read it',
+		'before concluding anything, and let what a passage is inform what you make of it:',
 		'',
-		sourceExcerpts(documents)
+		sourceExcerpts(documents, descriptions)
 	].join('\n');
 }
 
@@ -368,6 +376,7 @@ async function runSpecialist(
 	run: ManagedRun,
 	report: StyleAnalysisReport,
 	documents: NormalizedDocument[],
+	descriptions: Record<string, string>,
 	specialist: (typeof SPECIALISTS)[number]
 ): Promise<PropositionDraft[]> {
 	updateSpecialist(run, specialist.id, { status: 'running', startedAt: now(), error: undefined });
@@ -375,7 +384,7 @@ async function runSpecialist(
 		providerId: run.state.provider as ProviderId,
 		model: run.state.model,
 		systemPrompt: specialistSystemPrompt(specialist.families),
-		prompt: specialistPrompt(report, documents, specialist.families),
+		prompt: specialistPrompt(report, documents, descriptions, specialist.families),
 		toolName: 'submit_style_families',
 		toolDescription: 'Submit all grounded style propositions for the assigned feature families.',
 		inputSchema: draftJsonSchema(),
@@ -469,6 +478,10 @@ async function executeRun(run: ManagedRun, force: boolean) {
 		run.state.progress = 20;
 		emit(run, 'progress', 'Computing deterministic style measurements');
 		const documents = materialized.map(normalizedDocumentFromMaterialized);
+		// What the writer said each passage is, keyed by source.
+		const descriptions = Object.fromEntries(
+			materialized.map((item) => [item.reference.id, item.reference.description ?? item.reference.label])
+		);
 		const report = writeStyleReport(analyzeDocuments(documents) as StyleAnalysisReport);
 		run.profile = createStyleProfile(report.sourceSnapshotHash);
 		run.profile.lastRun = publicRun(run);
@@ -478,7 +491,7 @@ async function executeRun(run: ManagedRun, force: boolean) {
 		run.state.progress = 35;
 		emit(run, 'progress', 'Running three style specialists');
 		const specialistResults = await Promise.all(
-			SPECIALISTS.map((specialist) => runSpecialist(run, report, documents, specialist))
+			SPECIALISTS.map((specialist) => runSpecialist(run, report, documents, descriptions, specialist))
 		);
 		if (run.abortController.signal.aborted) throw new Error('Style analysis was cancelled');
 		const drafts = specialistResults.flat();

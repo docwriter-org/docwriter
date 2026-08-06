@@ -6,19 +6,12 @@
 	import {
 		BarChart3,
 		BookOpen,
-		Cat,
 		Check,
 		CheckCircle2,
 		Circle,
 		Download,
-		ExternalLink,
 		FileStack,
-		FileText,
-		Link2,
 		LoaderCircle,
-		Paperclip,
-		Plus,
-		RefreshCw,
 		Sparkles,
 		Trash2,
 		TriangleAlert,
@@ -46,6 +39,7 @@
 		materializationStatus: 'pending' | 'ready' | 'stale' | 'error';
 		extractedAt?: number;
 		error?: string;
+		description?: string;
 		selected?: boolean;
 	}
 
@@ -72,19 +66,9 @@
 	let summary = $state<StyleProfileSummary | null>(null);
 	let loading = $state(false);
 	let errorMessage = $state('');
-	let composerText = $state('');
-	let pendingFiles = $state<File[]>([]);
-	let dragActive = $state(false);
-	let submitting = $state(false);
-	/** A chronological transcript. Text and thinking stream as deltas, so an
-	 *  in-flight entry is updated in place until a tool call closes it. */
-	type AgentLogEntry =
-		| { kind: 'text'; text: string }
-		| { kind: 'thinking'; text: string }
-		| { kind: 'tool'; toolName: string; input: Record<string, unknown> };
-	let agentLog = $state<AgentLogEntry[]>([]);
-	let logEl = $state<HTMLDivElement | null>(null);
-	let fileInput = $state<HTMLInputElement | null>(null);
+	let sampleDescription = $state('');
+	let sampleText = $state('');
+	let addingSample = $state(false);
 	let previewId = $state<string | null>(null);
 	let previewText = $state('');
 	let previewLoading = $state(false);
@@ -238,12 +222,11 @@
 		return data;
 	}
 
-	const canSubmitContext = $derived(
-		!submitting && (composerText.trim().length > 0 || pendingFiles.length > 0)
+	const sampleWordCount = $derived(sampleText.trim().split(/\s+/).filter(Boolean).length);
+	const canAddSample = $derived(
+		!addingSample && sampleDescription.trim().length > 0 && sampleText.trim().length > 0
 	);
-	/** A style is learned from a handful of pieces; more just averages it out. */
-	const IDEAL_SOURCES = { min: 3, max: 5 };
-	const selectedCount = $derived(references.filter((item) => item.selected === true).length);
+	const selectedCount = $derived(references.length);
 
 	async function setSelected(reference: ReferenceItem, selected: boolean) {
 		busyId = reference.id;
@@ -267,91 +250,31 @@
 		}
 	}
 
-	/** Everything the user hands over in one go — text, links, files. An agent on
-	 *  the selected provider sorts it into sources, which stream back and appear
-	 *  in the list as they are created. */
-	async function submitContext() {
-		if (!canSubmitContext) return;
-		submitting = true;
+	/** One pasted passage plus the writer's description of what it is. */
+	async function addSample() {
+		if (!canAddSample) return;
+		addingSample = true;
 		errorMessage = '';
-		agentLog = [];
-		// Index of the entry currently being streamed into, per kind. A tool call
-		// ends the current message, so the next delta starts a new entry.
-		let openText = -1;
-		let openThinking = -1;
 		try {
-			const form = new FormData();
-			form.set('note', composerText);
-			form.set('provider', provider);
-			if (model) form.set('model', model);
-			for (const file of pendingFiles) form.append('files', file);
-
-			const response = await fetch('/api/references/ingest', { method: 'POST', body: form });
-			if (!response.ok || !response.body) {
-				const data = await response.json().catch(() => ({}));
-				throw new Error(messageFromResponse(data, `HTTP ${response.status}`));
-			}
-			composerText = '';
-			pendingFiles = [];
-
-			const reader = response.body.getReader();
-			const decoder = new TextDecoder();
-			let buffer = '';
-			while (true) {
-				const { done, value } = await reader.read();
-				if (done) break;
-				buffer += decoder.decode(value, { stream: true });
-				const chunks = buffer.split('\n\n');
-				buffer = chunks.pop() ?? '';
-				for (const chunk of chunks) {
-					let name = '';
-					let payload = '';
-					for (const line of chunk.split('\n')) {
-						if (line.startsWith('event: ')) name = line.slice(7);
-						else if (line.startsWith('data: ')) payload = line.slice(6);
-					}
-					if (!name || !payload) continue;
-					const data = JSON.parse(payload);
-					if (name === 'source' && data.reference) {
-						// Append as it lands rather than waiting for the run to finish.
-						references = [
-							data.reference,
-							...references.filter((item) => item.id !== data.reference.id)
-						];
-					} else if (name === 'status' && data.text) {
-						if (openText >= 0) agentLog[openText] = { kind: 'text', text: data.text };
-						else openText = agentLog.push({ kind: 'text', text: data.text }) - 1;
-					} else if (name === 'thinking' && data.text) {
-						if (openThinking >= 0) agentLog[openThinking] = { kind: 'thinking', text: data.text };
-						else openThinking = agentLog.push({ kind: 'thinking', text: data.text }) - 1;
-					} else if (name === 'tool' && data.tool_name) {
-						agentLog.push({ kind: 'tool', toolName: data.tool_name, input: data.input ?? {} });
-						openText = -1;
-						openThinking = -1;
-					} else if (name === 'error' && data.message) {
-						errorMessage = data.message;
-					}
-				}
-			}
+			await requestJson('/api/references', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					mode: 'add-sample',
+					description: sampleDescription.trim(),
+					content: sampleText
+				})
+			});
+			sampleDescription = '';
+			sampleText = '';
 			await loadAll();
 			onChanged?.();
 		} catch (cause) {
-			errorMessage = cause instanceof Error ? cause.message : 'Could not add that context.';
+			errorMessage = cause instanceof Error ? cause.message : 'Could not add that passage.';
 		} finally {
-			submitting = false;
-			// The log stays up after the run so the writer can see what the agent
-			// actually looked at; the next submission clears it.
+			addingSample = false;
 		}
 	}
-
-	// Follow the run as it streams, but stop fighting the user the moment they
-	// scroll up to read something.
-	$effect(() => {
-		agentLog.length;
-		if (!submitting || !logEl) return;
-		const distanceFromBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight;
-		if (distanceFromBottom < 120) logEl.scrollTop = logEl.scrollHeight;
-	});
 
 	function formatToolInput(input: Record<string, unknown>): string {
 		return Object.entries(input)
@@ -359,22 +282,10 @@
 			.join('\n');
 	}
 
-	function onDrop(event: DragEvent) {
-		event.preventDefault();
-		dragActive = false;
-		pendingFiles = [...pendingFiles, ...Array.from(event.dataTransfer?.files ?? [])];
-	}
-
-	function onFilePicked(event: Event) {
-		const input = event.currentTarget as HTMLInputElement;
-		pendingFiles = [...pendingFiles, ...Array.from(input.files ?? [])];
-		input.value = '';
-	}
-
 	function onComposerKeydown(event: KeyboardEvent) {
 		if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
 			event.preventDefault();
-			void submitContext();
+			void addSample();
 		}
 	}
 
@@ -671,174 +582,97 @@
 			<div class="dialog-body">
 				{#if step === 'sources'}
 					<div class="step step-sources">
-						<section
-							class="source-column"
-							class:centered={references.length === 0 && agentLog.length === 0 && !loading}
-						>
-							<div
-								class="composer"
-								class:drag-active={dragActive}
-								role="presentation"
-								ondragover={(event) => { event.preventDefault(); dragActive = true; }}
-								ondragleave={() => (dragActive = false)}
-								ondrop={onDrop}
-							>
+						<div class="sources-inner">
+							<div class="sources-head">
+								<h3>Paste writing that sounds like you</h3>
+								<p class="column-note">
+									Three to five passages is the useful range. Say what each one is — the analysis
+									reads your description alongside the writing.
+								</p>
+							</div>
+
+							<div class="add-form">
 								<input
-									class="file-input"
-									type="file"
-									multiple
-									bind:this={fileInput}
-									onchange={onFilePicked}
-									tabindex="-1"
-									aria-hidden="true"
+									class="what-input"
+									bind:value={sampleDescription}
+									placeholder="What is this? e.g. introduction of a paper"
+									aria-label="What this passage is"
 								/>
 								<textarea
-									class="composer-text"
-									bind:value={composerText}
+									class="paste-area"
+									bind:value={sampleText}
 									onkeydown={onComposerKeydown}
-									placeholder="Paste writing, drop files, or add links…"
-									aria-label="Context to learn your style from"
+									placeholder="Paste the writing here"
+									aria-label="Passage text"
 								></textarea>
-								{#if pendingFiles.length > 0}
-									<div class="attachments">
-										{#each pendingFiles as file, index (`${file.name}-${index}`)}
-											<span class="attachment">
-												<Paperclip size={11} />
-												{file.name}
-												<button
-													class="attachment-remove"
-													aria-label={`Remove ${file.name}`}
-													onclick={() => (pendingFiles = pendingFiles.filter((_, i) => i !== index))}
-												><X size={10} /></button>
-											</span>
-										{/each}
-									</div>
-								{/if}
-								<div class="composer-actions">
-									<button class="icon-btn" onclick={() => fileInput?.click()} aria-label="Attach files">
-										<Paperclip size={15} />
-									</button>
-									<button class="btn primary" disabled={!canSubmitContext} onclick={submitContext}>
-										{#if submitting}<LoaderCircle size={13} class="spinner" />{/if}
-										Submit context
+								<div class="add-actions">
+									<span class="hint">
+										{#if sampleWordCount > 0}{sampleWordCount} words{/if}
+									</span>
+									<button class="btn primary" disabled={!canAddSample} onclick={addSample}>
+										{#if addingSample}<LoaderCircle size={13} class="spinner" />{/if}
+										Add source
 									</button>
 								</div>
 							</div>
 
-							<div class="source-scroll" bind:this={logEl}>
-								{#if agentLog.length > 0}
-									<div class="agent-log" aria-live="polite">
-										<div class="log-head">
-											<span class="mascot-face" class:running={submitting} aria-hidden="true">
-												<Cat size={15} strokeWidth={1.8} />
-											</span>
-											{#if submitting}
-												<span class="bounce-dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span>
-											{/if}
+							<div class="added-list">
+								{#each references as reference (reference.id)}
+									<div class="pick-row" class:busy={busyId === reference.id}>
+										<div class="source-main">
+											<strong>{reference.description || reference.label}</strong>
+											<span class="source-meta">{sourceKindLabel(reference)}</span>
+											{#if reference.error}<span class="source-error">{reference.error}</span>{/if}
 										</div>
-										{#each agentLog as entry, index (index)}
-											{#if entry.kind === 'text'}
-												<p class="agent-say">{entry.text}</p>
-											{:else if entry.kind === 'thinking'}
-												<p class="agent-think">{entry.text}</p>
-											{:else}
-												<details class="tool-call">
-													<summary><span class="tool-name">{entry.toolName}</span></summary>
-													<pre class="tool-detail">{formatToolInput(entry.input)}</pre>
-												</details>
-											{/if}
-										{/each}
-									</div>
-								{/if}
-							</div>
-						</section>
-
-						<aside class="picks-column">
-							<div class="picks-head">
-								<span class="eyebrow">Sources</span>
-								{#if references.length > 0}
-									<span
-										class="picks-count"
-										class:good={selectedCount >= IDEAL_SOURCES.min && selectedCount <= IDEAL_SOURCES.max}
-										class:over={selectedCount > IDEAL_SOURCES.max}
-									>{selectedCount} kept</span>
-								{/if}
-							</div>
-							<p class="picks-hint">
-								{#if references.length === 0}
-									Anything the agent finds shows up here to keep or drop.
-								{:else if selectedCount > IDEAL_SOURCES.max}
-									That's a lot — drop to {IDEAL_SOURCES.max} or fewer so your voice stays sharp.
-								{:else if selectedCount < IDEAL_SOURCES.min}
-									Keep {IDEAL_SOURCES.min}–{IDEAL_SOURCES.max} pieces that sound most like you.
-								{:else}
-									Good range. Only kept sources shape the style.
-								{/if}
-							</p>
-
-							<div class="picks-scroll">
-								{#if loading && references.length === 0}
-									<div class="empty"><LoaderCircle size={14} class="spinner" /> Loading</div>
-								{:else}
-									{#each references as reference (reference.id)}
-										{@const kept = reference.selected === true}
-										<div class="pick-row" class:busy={busyId === reference.id} class:kept>
+										<div class="source-controls">
 											<button
-												class="keep-box"
-												class:on={kept}
-												onclick={() => setSelected(reference, !kept)}
+												class="icon-btn"
+												onclick={() => materialize(reference, reference.materializationStatus === 'ready')}
+												disabled={previewLoading}
+												aria-label={`Read ${reference.label}`}
+											><BookOpen size={13} /></button>
+											<button
+												class="icon-btn"
+												onclick={() => removeReference(reference)}
 												disabled={busyId === reference.id}
-												aria-pressed={kept}
-												aria-label={kept ? `Drop ${reference.label}` : `Keep ${reference.label}`}
-											>{#if kept}<Check size={11} strokeWidth={3.2} />{/if}</button>
-											<div class="source-main">
-												<strong>{reference.label}</strong>
-												<span class="source-meta">
-													{sourceKindLabel(reference)} · {titleCase(reference.materializationStatus)}
-												</span>
-												{#if reference.error}<span class="source-error">{reference.error}</span>{/if}
-											</div>
-											<div class="source-controls">
-												<button
-													class="icon-btn"
-													onclick={() => materialize(reference, reference.materializationStatus === 'ready')}
-													disabled={previewLoading}
-													aria-label={`Read ${reference.label}`}
-												><BookOpen size={13} /></button>
-												<button
-													class="icon-btn"
-													onclick={() => removeReference(reference)}
-													disabled={busyId === reference.id}
-													aria-label={`Remove ${reference.label}`}
-												><Trash2 size={13} /></button>
-											</div>
+												aria-label={`Remove ${reference.label}`}
+											><Trash2 size={13} /></button>
 										</div>
-									{/each}
-								{/if}
+									</div>
+								{/each}
 							</div>
+
+							{#if references.length > 0}
+								<div class="sources-footer">
+									<span class="hint">
+										{references.length} of 3&ndash;5 added{references.length < 3 ? ` \u2014 add ${3 - references.length} more` : ''}
+									</span>
+									<button
+										class="btn primary"
+										disabled={references.length < 3}
+										onclick={() => (step = 'review')}
+									>Analyze my style</button>
+								</div>
+							{/if}
+
 							{#if previewId}
 								<div class="preview-panel">
 									<div class="column-head">
-										<span class="eyebrow">Extracted text</span>
-										<div class="head-actions">
-											<button class="btn" onclick={() => materialize(references.find((item) => item.id === previewId)!, true)}>
-												<RefreshCw size={12} /> Refresh source
-											</button>
-											<button class="btn" onclick={() => (previewId = null)} aria-label="Close extracted text"><X size={12} /></button>
-										</div>
+										<span class="eyebrow">Stored text</span>
+										<button class="btn" onclick={() => (previewId = null)} aria-label="Close stored text"><X size={12} /></button>
 									</div>
 									{#if previewLoading}
-										<div class="empty"><LoaderCircle size={14} class="spinner" /> Reading source</div>
+										<div class="empty"><LoaderCircle size={14} class="spinner" /> Reading</div>
 									{:else}
 										<textarea class="preview-text" bind:value={previewText}></textarea>
 										<div class="preview-actions">
-											<span class="hint">Correct anything the extractor got wrong before it is measured.</span>
-											<button class="btn primary" onclick={savePreview}>Save reviewed text</button>
+											<span class="hint">Fix anything that came across wrong before it is measured.</span>
+											<button class="btn primary" onclick={savePreview}>Save</button>
 										</div>
 									{/if}
 								</div>
 							{/if}
-						</aside>
+						</div>
 					</div>
 				{:else if step === 'review'}
 					<div class="step step-review">
@@ -1293,9 +1127,6 @@
 		outline: none;
 		border-color: var(--accent);
 	}
-	.file-input {
-		display: none;
-	}
 
 	/* Buttons follow ReviewerEditorDialog: same padding, radius and weight. */
 	.btn {
@@ -1366,45 +1197,6 @@
 		cursor: default;
 	}
 
-	/* One composer for everything the user wants the style learned from:
-	 * typed prose, pasted links, dropped files. The server sorts out what
-	 * each thing is. */
-	.composer {
-		display: flex;
-		flex-direction: column;
-		gap: 8px;
-		padding: 10px;
-		border: 1px solid var(--border-light);
-		border-radius: 10px;
-		background: var(--bg-surface);
-		transition: border-color 0.15s ease, background 0.15s ease;
-	}
-	.composer:focus-within {
-		border-color: var(--accent);
-	}
-	.composer.drag-active {
-		border-color: var(--accent);
-		border-style: dashed;
-		background: var(--accent-bg);
-	}
-	.composer-text {
-		min-height: 92px;
-		border: 0;
-		background: transparent;
-		padding: 2px 2px 0;
-		resize: none;
-	}
-	.composer-text:focus {
-		outline: none;
-	}
-	.composer-actions {
-		display: flex;
-		align-items: center;
-		gap: 10px;
-	}
-	.composer-actions .btn.primary {
-		margin-left: auto;
-	}
 	/* Same shape as the agent log in HistoryPane: raw tool name, input revealed
 	 * on demand. No invented prose for calls the SDK already names. */
 	.agent-log {
@@ -1413,57 +1205,6 @@
 		gap: 7px;
 		padding: 10px 0 14px;
 		font-size: 11.5px;
-	}
-	/* The same cat as the agent dock, running while the ingest agent works. */
-	.log-head {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		position: sticky;
-		top: 0;
-		z-index: 1;
-		padding: 2px 0 6px;
-		background: var(--bg-elevated);
-	}
-	.mascot-face {
-		display: inline-flex;
-		align-items: center;
-		color: var(--text-faint);
-		transform-origin: center bottom;
-		animation: mascot-sleep-bob 3.2s ease-in-out infinite;
-		transition: color 0.3s;
-	}
-	.mascot-face.running {
-		color: var(--accent);
-		animation: mascot-run 0.6s ease-in-out infinite;
-	}
-	@keyframes mascot-sleep-bob {
-		0%, 100% { transform: scaleY(1) translateY(0); }
-		50% { transform: scaleY(1.04) translateY(-1px); }
-	}
-	@keyframes mascot-run {
-		0% { transform: translateY(0) rotate(-4deg) scaleY(1); }
-		25% { transform: translateY(-5px) rotate(3deg) scaleY(1.05); }
-		50% { transform: translateY(0) rotate(4deg) scaleY(1); }
-		75% { transform: translateY(-3px) rotate(-3deg) scaleY(1.05); }
-		100% { transform: translateY(0) rotate(-4deg) scaleY(1); }
-	}
-	.bounce-dots {
-		display: inline-flex;
-		gap: 1px;
-		color: var(--accent);
-		font-family: 'Geist Mono', ui-monospace, monospace;
-		font-size: 11px;
-		font-weight: 700;
-	}
-	.bounce-dots span {
-		animation: bounce-dot 1.2s ease-in-out infinite;
-	}
-	.bounce-dots span:nth-child(2) { animation-delay: 0.15s; }
-	.bounce-dots span:nth-child(3) { animation-delay: 0.3s; }
-	@keyframes bounce-dot {
-		0%, 60%, 100% { transform: translateY(0); opacity: 0.5; }
-		30% { transform: translateY(-3px); opacity: 1; }
 	}
 
 	.agent-say {
@@ -1474,18 +1215,6 @@
 		color: var(--text-faint);
 		font-style: italic;
 		line-height: 1.5;
-	}
-	.tool-call summary {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		padding: 3px 0;
-		color: var(--text-faint);
-		cursor: pointer;
-		list-style: none;
-	}
-	.tool-call summary::-webkit-details-marker {
-		display: none;
 	}
 	.tool-name {
 		font-family: 'Geist Mono', ui-monospace, monospace;
@@ -1504,39 +1233,6 @@
 		line-height: 1.5;
 		white-space: pre-wrap;
 		overflow-wrap: anywhere;
-	}
-	.attachments {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 6px;
-	}
-	.attachment {
-		display: inline-flex;
-		align-items: center;
-		gap: 5px;
-		padding: 3px 4px 3px 8px;
-		border: 1px solid var(--border-light);
-		border-radius: 999px;
-		background: var(--bg-elevated);
-		color: var(--text-secondary);
-		font-size: 11.5px;
-	}
-	.attachment-remove {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		width: 15px;
-		height: 15px;
-		padding: 0;
-		border: 0;
-		border-radius: 50%;
-		background: transparent;
-		color: var(--text-faint);
-		cursor: pointer;
-	}
-	.attachment-remove:hover {
-		background: var(--bg-hover);
-		color: var(--text);
 	}
 
 	.count-chip {
@@ -1633,92 +1329,74 @@
 	/* Left: what you hand over and what the agent does with it. Right: the
 	 * sources it found, to keep or drop. */
 	.step-sources {
-		display: grid;
-		grid-template-columns: minmax(0, 1fr) minmax(420px, 520px);
-		height: 100%;
-		overflow: hidden;
-	}
-	.source-column {
 		display: flex;
-		min-width: 0;
-		height: 100%;
-		flex-direction: column;
-		overflow: hidden;
-	}
-	.source-column > .composer {
-		flex: none;
-	}
-	/* With nothing submitted yet the composer is the whole pane, so it sits in
-	 * the middle rather than clinging to the top of an empty column. */
-	.source-column.centered {
 		justify-content: center;
-		padding-bottom: 6vh;
-	}
-	.source-column.centered .source-scroll {
-		flex: 0 0 auto;
-	}
-	.composer {
-		margin: 20px 18px 0;
-	}
-	.source-scroll {
-		flex: 1;
-		min-height: 0;
-		overflow: auto;
-		padding: 6px 18px 16px;
-	}
-
-	.picks-column {
-		display: flex;
-		min-width: 0;
-		/* Without min-height the flex child grows past the grid row instead of
-		 * handing its overflow to .picks-scroll, and the list cannot scroll. */
-		min-height: 0;
 		height: 100%;
+		overflow: auto;
+	}
+	.sources-inner {
+		display: flex;
+		width: 100%;
+		max-width: 720px;
 		flex-direction: column;
-		overflow: hidden;
-		border-left: 1px solid var(--border-light);
+		gap: 14px;
+		padding: 24px 20px 28px;
+	}
+	.sources-head h3 {
+		font-size: 16px;
+	}
+	.add-form {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+		padding: 12px;
+		border: 1px solid var(--border-light);
+		border-radius: 10px;
 		background: var(--bg-surface);
 	}
-	.picks-head {
+	.what-input {
+		box-sizing: border-box;
+		width: 100%;
+		padding: 8px 10px;
+		border: 1px solid var(--border-light);
+		border-radius: 7px;
+		background: var(--bg);
+		color: var(--text);
+		font: inherit;
+		font-size: 13px;
+		font-weight: 500;
+	}
+	.what-input:focus,
+	.paste-area:focus {
+		outline: none;
+		border-color: var(--accent);
+	}
+	.paste-area {
+		min-height: 180px;
+		resize: vertical;
+	}
+	.add-actions {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
 		gap: 10px;
-		padding: 18px 16px 0;
 	}
-	.picks-count {
-		padding: 2px 8px;
-		border: 1px solid var(--border-light);
-		border-radius: 999px;
-		background: var(--bg-elevated);
-		color: var(--text-faint);
-		font-size: 11px;
-		font-weight: 600;
+	.added-list {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
 	}
-	.picks-count.good {
-		border-color: color-mix(in srgb, var(--diff-added-color) 40%, var(--border-light));
-		color: var(--diff-added-color);
+	.sources-footer {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+		padding-top: 6px;
 	}
-	.picks-count.over {
-		border-color: color-mix(in srgb, var(--feedback-border) 50%, var(--border-light));
-		color: color-mix(in srgb, var(--feedback-border) 65%, var(--text));
+	.composer {
+		margin: 20px 18px 0;
 	}
-	.picks-hint {
-		padding: 7px 16px 0;
-		color: var(--text-faint);
-		font-size: 11.5px;
-		line-height: 1.5;
-	}
-	.picks-scroll {
-		flex: 1;
-		min-height: 0;
-		margin-top: 10px;
-		overflow: auto;
-		padding: 0 16px 16px;
-	}
-	/* Keeping is the loud state: an unkept row is just a normal row, a kept one
-	 * is tinted and ticked. Fading the unkept ones made a mostly-unkept list
-	 * look broken. */
+
 	.pick-row {
 		display: flex;
 		align-items: flex-start;
@@ -1733,36 +1411,8 @@
 	.pick-row:hover {
 		background: var(--bg-hover);
 	}
-	.pick-row.kept {
-		border-color: color-mix(in srgb, var(--diff-added-color) 35%, var(--border-light));
-		background: color-mix(in srgb, var(--diff-added-color) 9%, var(--bg-elevated));
-	}
 	.pick-row.busy {
 		opacity: 0.6;
-	}
-	.keep-box {
-		flex: none;
-		display: grid;
-		place-items: center;
-		width: 18px;
-		height: 18px;
-		margin-top: 1px;
-		border: 1.5px solid var(--border);
-		border-radius: 5px;
-		background: var(--bg);
-		color: #fff;
-		cursor: pointer;
-		transition: background 0.12s ease, border-color 0.12s ease;
-	}
-	.keep-box:hover:not(:disabled) {
-		border-color: var(--diff-added-color);
-	}
-	.keep-box.on {
-		border-color: var(--diff-added-color);
-		background: var(--diff-added-color);
-	}
-	.keep-box:disabled {
-		cursor: default;
 	}
 	.source-list {
 		display: flex;
