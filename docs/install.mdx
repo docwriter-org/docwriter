@@ -6,7 +6,7 @@ Install DocWriter when you want to edit a folder of local files in the browser. 
 
 ## Requirements
 
-The interface opens in your browser, but the `docwriter` command runs on your computer so it can read and write files in the chosen folder. Install Git and Node.js 22.22.2 before continuing.
+You work in the browser, and the `docwriter` command on your computer reads and writes files in the chosen folder. Install Git and Node.js 22.22.2 before continuing.
 
 Run `node --version` to check the installed version. If you use [nvm](https://github.com/nvm-sh/nvm), run `nvm use` inside the repository. Run `nvm install` once if the pinned version is missing.
 
@@ -34,7 +34,7 @@ Pass the folder that contains your writing project:
 docwriter ~/writing/my-project
 ```
 
-DocWriter opens a browser and binds to `127.0.0.1` by default. File and preview routes stay inside the folder you chose, so select the folder that contains the whole writing project. Hooks and shell commands can access other paths allowed by your operating system account.
+When you start DocWriter, your browser opens and the app binds to `127.0.0.1` by default. You can open and preview only files inside the folder you chose, so select the folder that contains the whole writing project. Hooks and shell commands can access other paths allowed by your operating system account.
 
 If the browser does not open, use the local address printed in the terminal. The first address is usually `http://127.0.0.1:7723`.
 

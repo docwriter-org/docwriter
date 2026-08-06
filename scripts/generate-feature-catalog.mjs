@@ -186,7 +186,7 @@ const pageFeatures = {
 		['Automation', 'Reload preview output while preserving scroll and zoom', T, 'Preview covers reload but not preserved state']
 	],
 	'guides/blog-with-research': [
-		['Agent', 'Research a claim and propose a supported citation', C, 'Research guide']
+		['Agent', 'Write a blog post and add a supported citation', C, 'Blog writing example']
 	],
 	'guides/overleaf': [
 		['Automation', 'Edit, build, preview, and sync an Overleaf project', C, 'Overleaf guide'],

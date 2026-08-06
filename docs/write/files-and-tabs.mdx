@@ -2,7 +2,7 @@
 title: "Files and tabs"
 ---
 
-Use the file tree and tabs to keep every part of a writing project in one workspace. The file tree manages files on disk, and tabs keep several files open at once. Changes you make here also affect the files in the workspace folder.
+Use the file tree and tabs to keep every part of a writing project in one workspace. You manage files on disk in the file tree and keep several files open at once in tabs. Changes you make here also affect the files in the workspace folder.
 
 ## Work inside one folder
 
@@ -16,11 +16,11 @@ Use the file tree controls to create a file or folder. A file starts empty. Use 
   ![The file tree with its controls and file context menu](/images/file-tree-actions.png)
 </Frame>
 
-You can also drag files from the desktop into the file tree or tab bar. Use this option when source material already exists outside the workspace. DocWriter copies text and binary files without converting them, so the imported file keeps its original format.
+You can also drag files from the desktop into the file tree or tab bar. Use this option when source material already exists outside the workspace. When you import a file, DocWriter copies it without converting it, so the file keeps its original format.
 
 ## Use tabs
 
-Click a file to open it as a tab. Tab order and the active tab survive a restart. Closing a tab keeps the file on disk.
+Click a file to open it as a tab. Your tab order and active tab remain after you restart DocWriter. Closing a tab keeps the file on disk.
 
 Use the tab context menu to rename the file, copy the workspace path, or delete the file. Double click a tab to rename it. Press **Enter** to save the name or **Escape** to cancel.
 
@@ -34,10 +34,10 @@ Markdown, plain text, LaTeX, JSON, YAML, and source files open as plain source t
 
 ## Internal files
 
-The `.docwriter` folder remains visible because it contains saved DocWriter state and hook settings. Do not edit `docwriter.db` while DocWriter is running.
+You can see the `.docwriter` folder because it holds your saved DocWriter state and hook settings. Do not edit `docwriter.db` while DocWriter is running.
 
 DocWriter hides large implementation folders such as `.git`, `node_modules`, `.svelte-kit`, and `build`.
 
 ## Deleted files
 
-Deleting a file through DocWriter also removes its comments, pending reviews, and saved AI authorship markers. Deleting a file outside DocWriter removes the matching tab after you reload.
+When you delete a file in DocWriter, you also remove its comments, pending reviews, and saved AI authorship markers. Deleting a file outside DocWriter removes the matching tab after you reload.

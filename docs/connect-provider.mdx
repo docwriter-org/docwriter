@@ -4,7 +4,7 @@ title: "Connect a provider"
 
 You can use the editor without an AI account. Connect one provider when you want the agent to read files, answer questions, or propose edits. A successful test on this page confirms that DocWriter can reach a model with your account before you ask it to change a draft.
 
-DocWriter supports Claude, OpenAI, Codex, Cursor, and Pi. The provider and model controls are in the page header.
+DocWriter supports Claude, OpenAI, Codex, Cursor, and Pi. You choose the provider and model from pills in the page header.
 
 ## Choose a provider
 
@@ -18,15 +18,15 @@ Click the provider pill in the header and choose one provider where you already 
   ![The model menu open in the DocWriter header](/images/model-picker.png)
 </Frame>
 
-Changing providers starts a fresh provider conversation. Your workspace files, rules, references, hooks, and comments remain in place.
+When you change providers, your conversation with the agent starts fresh. Your workspace files, rules, references, hooks, and comments remain in place.
 
-When you switch to an earlier session through **Settings**, then **Sessions**, DocWriter restores the saved provider and model when the provider session is still valid. Read [Sessions](/agent/sessions) when an old provider session cannot resume.
+When you switch to an earlier session through **Settings**, then **Sessions**, you return to its saved provider and model when the provider session is still valid. Read [Sessions](/agent/sessions) when an old provider session cannot resume.
 
 ## Add credentials
 
-Open **Settings**, then **API keys**. The panel shows whether each provider is using a saved key, an existing login, or no credential.
+Open **Settings**, then **API keys**. You can see whether each provider uses a saved key, an existing login, or no credential.
 
-Paste a key in the matching field and choose **Save**. Use **Remove stored key** when DocWriter should stop using it.
+Paste a key in the matching field and choose **Save**. Choose **Remove stored key** when you no longer want DocWriter to use the saved key.
 
 <Frame caption="Open Settings, then API keys, to see and change provider credentials.">
   ![The API keys panel open from Settings](/images/api-keys-panel.png)
@@ -60,7 +60,7 @@ Pi can use provider keys such as `TOGETHER_API_KEY`, `GEMINI_API_KEY`, `OPENAI_A
 
 The model list can include models that are not enabled for every account. If a request returns a model error, choose another model from the same provider and send the test request below again.
 
-Provider features differ. For example, some providers have their own sessions, skills, or subagents. DocWriter keeps the main writing and review workflow the same.
+Provider features differ. For example, some providers have their own sessions, skills, or subagents. The main writing and review workflow stays the same across providers.
 
 ## Test the connection
 
@@ -76,4 +76,4 @@ Read the open file and summarize the main point. Do not edit the file.
 
 If the request fails, open [Provider errors](/help/provider-errors).
 
-The test asks the agent to read without editing, so the file should remain unchanged. When the summary appears in the agent dock, continue to [Your first writing workflow](/quickstart).
+The test asks the agent to read without editing, so the file should remain unchanged. When you see the summary in the agent dock, continue to [Your first writing workflow](/quickstart).

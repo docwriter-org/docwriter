@@ -8,7 +8,7 @@ Workspace files contain the document text. The `.docwriter` folder contains comm
 
 ## Choose what to back up
 
-Back up the writing project files when you only need the current text. Git is suitable for these plain files. A text only backup does not keep comments, pending reviews, saved AI authorship markers, sessions, or interface settings. Browser undo history is temporary and is not included in any backup.
+Back up the writing project files when you only need the current text. Git is suitable for these plain files. A text only backup keeps document text only. Comments, pending reviews, saved AI authorship markers, sessions, and interface settings need a separate backup. Browser undo history is temporary and is not included in any backup.
 
 Also back up `.docwriter/docwriter.db` when you need comments, pending reviews, tab state, rules, reviewers, sessions, recent agent activity, and interface settings.
 
@@ -29,14 +29,14 @@ Then copy:
 - `.docwriter/hooks.json`, when it exists.
 - Project skills and other saved files outside the database.
 
-Copy `.docwriter/agent/scratch/` only when you need the agent's temporary drafts or notes. New session clears that folder, and DocWriter does not show those files as document tabs.
+Copy `.docwriter/agent/scratch/` only when you need the agent's temporary drafts or notes. New session clears that folder. Those files never appear as document tabs.
 
 ## Restore a backup
 
-Stop DocWriter before restoring files so the running server cannot overwrite the restored copy. Restore the project files and their matching `.docwriter` folder before starting DocWriter.
+Stop DocWriter before restoring files so a running server cannot overwrite your restored copy. Restore the project files and their matching `.docwriter` folder before starting DocWriter.
 
 Restoring replaces newer files or DocWriter state at the destination. Copy newer work elsewhere first if you may need it.
 
-Restoring only the project files keeps the text but does not restore comments, pending reviews, or sessions. Restoring only `docwriter.db` can pair old comments and reviews with different project files. Restore the project files and `.docwriter` folder from the same backup when possible.
+Restoring only the project files brings back the text. Restore `.docwriter/docwriter.db` as well when you need comments, pending reviews, or sessions. Restoring only `docwriter.db` can pair old comments and reviews with different project files. Restore the project files and `.docwriter` folder from the same backup when possible.
 
 Read [How DocWriter saves your work](/reference/how-it-works) for the difference between project files and saved DocWriter state.

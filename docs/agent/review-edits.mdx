@@ -4,7 +4,7 @@ title: "Review edits"
 
 ## Read a proposal
 
-Proposed text appears in the editor and in a card in the comment gutter. Green text is an addition and red struck text is a removal.
+You will see proposed text in the editor and in a card in the comment gutter. Green text is an addition and red struck text is a removal.
 
 Hover an edit row to flash the matching text. Pin a diff to keep the proposal visible after closing a card. Small edits use a quieter presentation than large edits.
 
@@ -43,7 +43,7 @@ Thread edits stay grouped under the comment that led to them. You can accept eac
 
 Thread edits do not have a separate Reject button. Reply to the thread when the agent should revise the proposal. Resolve the thread when you are done with the discussion. Resolving it removes any linked proposals that you did not accept.
 
-An edit becomes stale when you or another edit changes the passage that the proposal was based on. DocWriter disables the Accept action because applying the old replacement could overwrite newer text. If the server detects stale source text during an Accept request, DocWriter rejects the old proposal and sends a follow up request for a new edit against the current text. There is no separate Regenerate button.
+An edit becomes stale when you or another edit changes the passage that the proposal was based on. You cannot accept a stale edit because applying the old replacement could overwrite newer text. If the source text changes while you are accepting the edit, you will see the old proposal rejected. The agent will receive a follow up request for a new edit based on the current text. There is no separate Regenerate button.
 
 ## Copy proposed text
 
@@ -57,6 +57,6 @@ Accepted agent text receives an AI provenance mark so you can find wording that 
 
 Accept and reject actions use the same undo history as your typing. Press **Command or Control and Z** to undo the latest action, including an accidental accept or reject.
 
-After an accepted paragraph edit lands, DocWriter briefly flashes the changed range so you can find it in the draft.
+After you accept a paragraph edit, the changed range briefly flashes so you can find it in the draft.
 
-Agent edits do not have a Track changes off setting. Muting hides proposal layers, but it does not accept changes or remove review state.
+You cannot turn track changes off for agent edits. When you mute proposals, you only hide the proposal layers. Your pending reviews stay in place until you accept or reject them.

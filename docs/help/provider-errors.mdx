@@ -12,7 +12,7 @@ Open **Settings**, then **API keys**. Check whether the selected provider shows 
   ![The API keys panel with a status beside each provider](/images/api-keys-panel.png)
 </Frame>
 
-Adding a key allows future requests to use that provider. DocWriter stores keys entered in the panel in `~/.docwriter/keys.env` with permissions limited to your operating system user. Removing a key stops DocWriter from using that saved value, but the provider may still work through an environment variable or command line login.
+Adding a key allows future requests to use that provider. When you enter a key in the panel, DocWriter stores it in `~/.docwriter/keys.env` with permissions limited to your operating system user. Removing a key stops DocWriter from using that saved value, but the provider may still work through an environment variable or command line login.
 
 Process environment variables and project `.env` files take precedence over `~/.docwriter/keys.env`. Restart DocWriter after changing a shell environment variable. A wrong value in the environment can continue to override a correct value saved in the panel.
 
@@ -24,7 +24,7 @@ Choose **New session** if the provider still tries to resume the expired convers
 
 ## The selected model does not exist
 
-Open the model control and choose another model listed for the current provider. Changing the model affects future agent requests and does not change workspace files.
+Open the model control and choose another model listed for the current provider. Changing the model affects future agent requests. Your workspace files stay the same.
 
 <Frame>
   ![The searchable model menu open in the DocWriter header](/images/model-picker.png)
@@ -36,9 +36,9 @@ If OpenAI reports that `codex-mini` does not exist, choose an available GPT mode
 
 ## The provider reached a quota or rate limit
 
-Wait for the limit to reset, or select another provider that has working credentials. Switching providers starts a separate provider conversation, so the new provider does not receive the old provider's saved conversation.
+Wait for the limit to reset, or select another provider that has working credentials. Switching providers starts a separate provider conversation. The new provider starts without the old provider's saved conversation.
 
-Cancel the current run if queued messages should not run after the limit resets. Cancellation closes the run in DocWriter and clears its queued messages, but some provider work may continue. Completed tool calls, comments, and proposals remain. Provider charges are not reversed.
+Cancel the current run if queued messages should not run after the limit resets. When you cancel the run, DocWriter closes it and clears queued messages. Some provider work may continue. Completed tool calls, comments, and proposals remain. Provider charges are not reversed.
 
 ## A saved session cannot resume
 
@@ -48,7 +48,7 @@ Open **Settings**, then **Sessions**, and choose another session. Start a new se
   ![The Sessions browser open from Settings](/images/sessions-browser.png)
 </Frame>
 
-Choosing another session changes which saved provider conversation the agent continues. It does not replace workspace files. Starting a new session removes the current session's activity and pending proposals, so copy proposal text you need first.
+Choosing another session changes which saved provider conversation the agent continues. Your workspace files stay the same. Starting a new session removes the current session's activity and pending proposals, so copy proposal text you need first.
 
 ## The provider starts but a tool fails
 

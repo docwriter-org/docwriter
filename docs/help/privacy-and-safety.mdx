@@ -6,13 +6,13 @@ Connecting a provider, enabling a hook, using the shell, or exposing DocWriter t
 
 ## Local data
 
-Workspace files, comments, transcripts, and other DocWriter state are stored on the machine running DocWriter. DocWriter state lives in `.docwriter/docwriter.db`. Saved API keys live in `~/.docwriter/keys.env`.
+Your workspace files, comments, transcripts, and other DocWriter state stay on the machine where you run DocWriter. DocWriter state lives in `.docwriter/docwriter.db`. Saved API keys live in `~/.docwriter/keys.env`.
 
-Deleting a workspace file through DocWriter also removes its comments, pending reviews, and saved AI authorship markers. Deleting `docwriter.db` removes saved DocWriter state for the whole workspace, including comments, pending reviews, sessions, rules, reviewers, and interface settings. Back up both the project files and `.docwriter` folder when you may need this information.
+When you delete a workspace file through DocWriter, you also lose its comments, pending reviews, and saved AI authorship markers. Deleting `docwriter.db` removes saved DocWriter state for the whole workspace, including comments, pending reviews, sessions, rules, reviewers, and interface settings. Back up both the project files and `.docwriter` folder when you may need this information.
 
 ## Provider requests
 
-Agent requests send selected context to the chosen provider. Each request includes open tab paths. A tab includes a diff when DocWriter has an earlier version and the text changed. Otherwise, the prompt marks the tab as new or unchanged. It does not include the full text of every open tab. The agent can send full file text to the provider when it calls a document read tool.
+Agent requests send selected context to the chosen provider. Each request includes open tab paths. A tab includes a diff when its text changed since DocWriter last recorded that tab. Otherwise, the prompt marks the tab as new or unchanged. Each request includes tab paths and diffs. The agent sends full file text only when it calls a document read tool.
 
 Comments, Chat messages, paths, and tool results can also become part of a provider request. Remove secrets or private text before asking the agent to read a file. Provider data retention and training rules follow the account and service selected in the header.
 
@@ -36,6 +36,6 @@ Shell commands are more powerful and can access anything allowed by the operatin
 
 ## Network exposure
 
-DocWriter listens only on `127.0.0.1` by default, so other devices cannot connect through the network. Using `--host 0.0.0.0` allows connections from the local network.
+By default, DocWriter listens only on `127.0.0.1`, which limits connections to your machine. Using `--host 0.0.0.0` allows connections from the local network.
 
 Use a firewall and a trusted network when changing the host. Anyone who can reach the server may be able to view workspace data, change files, or use provider access configured in DocWriter. Stop the server or return to the default host when network access is no longer needed.

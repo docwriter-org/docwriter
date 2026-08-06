@@ -4,7 +4,7 @@ title: "Pandoc, Mermaid, and Git"
 
 ## Pandoc
 
-Use a Pandoc hook when you write Markdown and want to review the result as HTML or PDF. The hook converts the active Markdown file after an agent edits or writes it, which saves you from running the conversion command by hand.
+Use a Pandoc hook when you write Markdown and want to review the result as HTML or PDF. After the agent edits or writes the active Markdown file, the hook converts it so you do not run the conversion command by hand.
 
 <Frame caption="Open Settings, then Hooks, to choose a build or Git template.">
   ![The Hooks panel with the included templates](/images/hooks-panel.png)
@@ -20,7 +20,7 @@ pandoc "draft.md" --standalone --output "draft.html"
 
 The saved template uses `{{file}}` for the active Markdown path and `{{stem}}.html` for the output. The Pandoc PDF template uses `{{stem}}.pdf`. Both templates run after a successful Edit or Write tool call.
 
-Run the hook once and open the preview. The status should be **done**, the output file should exist beside the source, and the preview should contain the latest Markdown changes.
+Run the hook once and open the preview. You should see a **done** status, an output file beside the source, and the latest Markdown changes in the preview.
 
 ## Mermaid
 
@@ -32,7 +32,7 @@ Install `@mermaid-js/mermaid-cli`, which provides the `mmdc` command. Then choos
 mmdc -i "diagram.mmd" -o "diagram.svg"
 ```
 
-The template sets the output to `{{stem}}.svg`. Run the hook and open the SVG preview. The status should be **done**, and the diagram should show the latest source change.
+The template sets the output to `{{stem}}.svg`. Run the hook and open the SVG preview. You should see a **done** status and the latest source change in the diagram.
 
 The matcher checks tool names for Edit or Write. It does not check the file extension, so the command itself must receive a Mermaid file through `{{file}}`.
 
@@ -44,4 +44,4 @@ The standard template stages all changes with `git add -A`. If the staged files 
 
 Both templates run at **Stop**, after the main agent finishes a turn. Review the command and repository state before you enable automatic pushes, because the hook can send every staged workspace change to the remote repository.
 
-Confirm that the repository has a remote and an upstream branch, then use **Run now** on a test change. The status should be **done**, `git status` should show only the expected excluded files or no changes, and the remote branch should contain the new commit.
+Confirm that the repository has a remote and an upstream branch, then use **Run now** on a test change. You should see a **done** status, a clean `git status` except for expected excluded files, and the new commit on the remote branch.

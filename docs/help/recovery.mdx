@@ -6,11 +6,11 @@ Start with the heading that matches the problem you see. Each section states wha
 
 ## The editor is blank
 
-The editor can stay blank when the browser loses its connection to DocWriter.
+You may see a blank editor when the browser loses its connection to DocWriter.
 
 Check the terminal where you started DocWriter. If DocWriter stopped, start it again and reload the browser. Restarting preserves project files and saved DocWriter state, but the last text entered before a crash may not have finished saving.
 
-Confirm that you opened a text file. PDF files and other binary files use a preview instead of the text editor.
+Confirm that you opened a text file. For PDF files and other binary files, you will see a preview instead of the text editor.
 
 If DocWriter is running, look in the terminal for an address or port error. Stop the other DocWriter process, then start this workspace again. Stopping a process ends any agent run in that process.
 
@@ -22,23 +22,23 @@ Run DocWriter with `--restart` if you want it to start again automatically after
 docwriter --restart
 ```
 
-The option starts the server again one second after an unexpected exit. It does not retry or restore the agent run that was active during the crash.
+The option starts the server again one second after an unexpected exit. The agent run that was active during the crash does not resume.
 
-Reload the browser after DocWriter starts again. It loads the latest saved text. Text entered immediately before the crash may be lost.
+Reload the browser after DocWriter starts again. You will see the latest saved text. Text entered immediately before the crash may be lost.
 
 ## A proposal is stale
 
-A proposal is stale when the text it was meant to replace no longer exists in the current document. DocWriter blocks acceptance to protect newer text from an edit based on an older version.
+A proposal is stale when the text it was meant to replace no longer exists in the current document. You cannot accept a stale proposal. This protects your newer text from an edit based on an older version.
 
-Reject the proposal if you no longer need it. Reject removes the proposal and keeps the current document text. You cannot recover the rejected proposal from its review card unless you undo the rejection before later actions replace that undo history.
+Reject the proposal if you no longer need it. When you reject the proposal, it disappears and your current document text stays unchanged. You cannot recover the rejected proposal from its review card unless you undo the rejection before later actions replace that undo history.
 
 Reply in the related thread or send a new Chat request to ask for a proposal based on the current text. The new agent request can use provider quota and may produce different text.
 
 ## A deleted file still appears
 
-Reload DocWriter so it can remove tabs for files that no longer exist. Removing a missing tab from the list does not recreate or delete a workspace file.
+Reload DocWriter so it can remove tabs for files that no longer exist. Removing a missing tab from the list only updates what you see. Your workspace file stays unchanged.
 
-Deleting a file inside DocWriter also removes its comments, pending reviews, and saved AI authorship markers. Browser undo history lasts only while the tab is loaded. Restore the project file and `.docwriter` folder from a backup if you need this information.
+When you delete a file inside DocWriter, you also lose its comments, pending reviews, and saved AI authorship markers. Browser undo history lasts only while the tab is loaded. Restore the project file and `.docwriter` folder from a backup if you need this information.
 
 ## You need to reset DocWriter
 

@@ -4,13 +4,13 @@ title: "Send and steer requests"
 
 Use the agent pill to have the agent inspect recent changes and propose comments or edits where needed. Use Chat when you already know what you want, such as shortening an opening or checking claims across several files.
 
-You can also send another instruction while the agent works. DocWriter adds the message to the queue and starts it after the current request finishes.
+You can also send another instruction while the agent works. DocWriter adds the message to the queue, and the agent starts it after the current request finishes.
 
 ## Wake the agent
 
 Click the idle agent pill to ask the agent to inspect the active text tab. The pill is unavailable when the active tab is a PDF or when no text tab is open.
 
-After you stop typing for three seconds, DocWriter can also wake the agent automatically. The pill shows the countdown. Press **Command or Control and Enter** in the editor to skip the remaining wait.
+After you stop typing for three seconds, the agent can wake automatically. The pill shows the countdown. Press **Command or Control and Enter** in the editor to skip the remaining wait.
 
 Automatic wake does not run while the agent is paused or when the text has not changed.
 
@@ -47,11 +47,11 @@ You can send a request with no open tab, attach an image, or ask the agent to wo
 
 Send another Chat message during a run when you want to add a follow up task without stopping the current one. A number on the agent pill and Chat control shows how many messages are waiting.
 
-The expanded dock keeps the active request above the activity log while the agent responds. After the current request ends, the agent takes the next queued message and begins a new request.
+While the agent responds, you can see the active request above the activity log in the expanded dock. After the current request ends, the agent takes the next queued message and begins a new request.
 
 ## Questions from the agent
 
-The agent can open a question card when it needs a choice before continuing, such as which audience a section should address. A single choice submits immediately. A multi-question card shows how many answers remain. Unanswered questions expire after 15 minutes so the run can continue.
+You may see a question card when the agent needs a choice before continuing, such as which audience a section should address. A single choice submits immediately. A multi-question card shows how many answers remain. Unanswered questions expire after 15 minutes so the run can continue.
 
 Authentication failures show a sticky **Agent auth failed** toast with sign in guidance. Other run failures show **Agent run failed** and remain in the activity log.
 

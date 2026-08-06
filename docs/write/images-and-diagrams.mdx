@@ -2,19 +2,19 @@
 title: "Images and diagrams"
 ---
 
-Use images and diagrams when a draft needs a figure, screenshot, or visual result. DocWriter keeps the image file in the workspace and inserts or previews the source text that points to it. The saved document remains plain text that other Markdown tools can read.
+Use images and diagrams when a draft needs a figure, screenshot, or visual result. When you add an image, it stays in your workspace and the editor inserts or previews the source text that points to it. The saved document remains plain text that other Markdown tools can read.
 
 ## Paste or drop an image
 
-Paste an image into the editor or drop it onto the document. DocWriter saves the file under `assets/` and inserts a Markdown image reference at the cursor. You can then move or edit the reference like any other text in the document.
+Paste an image into the editor or drop it onto the document. You will find the saved image under `assets/`, and you will see a Markdown image reference at the cursor. You can then move or edit the reference like any other text in the document.
 
 Supported image types include PNG, JPEG, GIF, WebP, SVG, BMP, and AVIF.
 
 ## Paste a URL
 
-Pasting an image URL inserts a Markdown image. Pasting a URL over selected text creates a Markdown link. A normal web link stays as text and receives a preview card when the site provides a title, description, or image through OpenGraph metadata.
+When you paste an image URL, the editor inserts a Markdown image. When you paste a URL over selected text, the editor creates a Markdown link. A normal web link stays as text and receives a preview card when the site provides a title, description, or image through OpenGraph metadata.
 
-Existing Markdown image references and bare image URLs on their own line also receive inline previews.
+You also see inline previews for existing Markdown image references and bare image URLs on their own line.
 
 Remote link previews cause the local DocWriter server to request metadata from the destination site.
 
@@ -24,7 +24,7 @@ Paste or drag an image into **Chat** to attach it to the next request. Use an at
 
 ## Preview SVG
 
-A raw SVG block receives an inline preview, so you can check the drawing while keeping its source in the document. You can reveal the source when you need to edit the SVG directly.
+You will see an inline preview for a raw SVG block, so you can check the drawing while keeping its source in the document. You can reveal the source when you need to edit the SVG directly.
 
 <Frame caption="A raw SVG block rendered above its hidden source.">
   ![An SVG preview inside the DocWriter editor](/images/images-diagrams-preview.png)
@@ -45,4 +45,4 @@ DocWriter runs D3 in an isolated iframe. The iframe loads D3 from the public D3 
 
 ## Mermaid
 
-DocWriter does not execute Mermaid inside the editor. Use the Mermaid hook template to turn a Mermaid file into SVG. You can then preview the generated image or embed it in the document.
+To preview Mermaid diagrams, use the Mermaid hook template to turn a Mermaid file into SVG. You can then preview the generated image or embed it in the document.

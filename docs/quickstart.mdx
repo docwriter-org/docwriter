@@ -4,23 +4,9 @@ title: "Your first writing workflow"
 
 Use this walkthrough for a complete writing project. You will give the agent examples before you write, improve a draft while teaching it your preferences, and ask several reviewer agents to critique the finished draft.
 
-## Confirm the provider
+## Connect a provider
 
-Check that your provider and model appear in the header. If you have not tested the connection, open a small text file, click **Chat**, and send:
-
-```text
-Read the open file and summarize the main point. Do not edit the file.
-```
-
-<Frame caption="The provider and model controls remain visible in the page header.">
-  ![The provider menu beside the selected model in the DocWriter header](/images/provider-picker.png)
-</Frame>
-
-<Frame caption="Open Chat from the agent dock to send the test request.">
-  ![The Chat panel with a request ready to send](/images/chat-popover.png)
-</Frame>
-
-Continue when the summary appears in the agent dock and the file remains unchanged. If the request fails, follow [Connect a provider](/connect-provider) to check your account and model.
+Before you start, follow the steps in [Connect a provider](/connect-provider). Continue after your provider and model appear in the header and the test request succeeds.
 
 ## Add writing references
 
@@ -34,7 +20,7 @@ Start with a sample that represents the voice you want for this project. Give it
 
 ## Start writing
 
-Open an existing Markdown file or choose **New file** in the file tree. Write the opening in your own words so the agent has your point and phrasing to work from. DocWriter saves the draft back to the project file while you type.
+Open an existing Markdown file or choose **New file** in the file tree. Write the opening in your own words so the agent has your point and phrasing to work from. You can find the latest draft in the project file because DocWriter saves your work as you type.
 
 <Frame>
   ![A new draft open in the DocWriter source editor](/images/quickstart-essay-open.png)
@@ -56,7 +42,7 @@ Choose **Direct edit** when you want proposed wording, or **Plan first** when yo
 
 ## Review the proposed change
 
-The proposed wording appears in the editor, and a review card appears in the comment gutter beside it. Use **Accept** when the proposal says what you mean. Use **Reject** when you want to keep the current text.
+You will see the proposed wording in the editor and a review card in the comment gutter beside it. You can use **Accept** when the proposal says what you mean. You can use **Reject** when you want to keep the current text.
 
 <Frame>
   ![A proposed edit in the comment gutter beside the changed text](/images/quickstart-pending-edit.png)
@@ -84,7 +70,7 @@ When the draft is complete, open **Settings**, then **Critique pass**. Choose a 
   ![The built in reviewer agents in the Critique pass menu](/images/critique-pass-menu.png)
 </Frame>
 
-DocWriter runs one reviewer for each critique pass. You can run several reviewers in sequence to get feedback from different points of view. Each reviewer reads the active draft and adds focused findings as comments, with a proposed edit when it has a concrete fix.
+Each critique pass uses one reviewer at a time. You can run several reviewers in sequence to get feedback from different points of view. When you run a pass, the reviewer reads the active draft. You receive focused findings as comments, with a proposed edit when the reviewer has a concrete fix.
 
 <Frame>
   ![A reviewer comment attached to the passage it discusses](/images/comment-thread.png)
@@ -94,6 +80,6 @@ Reply when a finding needs discussion. Accept a linked edit when the wording imp
 
 ## Finish the project
 
-Open the project file in another editor to confirm that the accepted text is plain Markdown. Comments and pending suggestions remain in DocWriter.
+Open the project file in another editor to confirm that the accepted text is plain Markdown. Your comments and pending suggestions stay in DocWriter until you resolve the comments and accept or reject the suggestions.
 
 Read [Writing references](/customize/references), [Writing rules](/customize/rules), and [Comments and critique](/agent/comments-and-critique) for the full controls. Read [Recovery](/help/recovery) if the editor, provider, or proposal does not behave as described.

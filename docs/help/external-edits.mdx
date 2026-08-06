@@ -10,26 +10,26 @@ Use watch mode when another editor, script, or Git command changes workspace fil
 docwriter --watch ~/writing/my-project
 ```
 
-Watch mode asks the browser to reload after a supported workspace file changes. The reload protects you from continuing to work from an old view of the file. Watch mode reports changes to Markdown, text, JSON, YAML, and YML files. It ignores folders such as `.git`, `.docwriter`, `node_modules`, and `.svelte-kit`.
+When a supported workspace file changes, watch mode reloads your browser. The reload protects you from continuing to work from an old view of the file. Watch mode reports changes to Markdown, text, JSON, YAML, and YML files. It ignores folders such as `.git`, `.docwriter`, `node_modules`, and `.svelte-kit`.
 
 ## An external change does not appear
 
 Confirm that you started DocWriter with `--watch`. Also confirm that the changed file is inside the workspace and has a supported text extension.
 
-Reload the browser if watch mode was already running. Reloading refreshes the file tree and shows the latest saved text. It does not delete the project file.
+Reload the browser if watch mode was already running. Reloading refreshes the file tree and shows the latest saved text. Your project file stays on disk.
 
 ## The same passage changed in two editors
 
-Stop typing in one editor before changing the same passage in the other. DocWriter does not combine two separate edits to the same passage.
+Stop typing in one editor before changing the same passage in the other. You need to choose which version to keep because DocWriter does not merge conflicting edits to the same passage.
 
-When DocWriter opens a tab, a newer project file with different text can replace the version that DocWriter was showing.
+When you open a tab, a newer project file with different text can replace what you were seeing.
 
-Replacing the saved version removes its pending reviews, comments, and AI authorship markers. Reloading also clears the browser undo history. Accept, reject, or copy any work you need before you let the external file replace the saved version.
+If the newer file replaces what you had open, you lose pending reviews, comments, and AI authorship markers for that version. Reloading also clears your browser undo history. Accept, reject, or copy any work you need before you let the external file replace the saved version.
 
 An external change can also make an open proposal stale, which means the proposal no longer matches the text it was based on. Review the affected tab after each reload. Reject a stale proposal or ask the agent for a new proposal based on the current text.
 
 ## A Git operation changed files
 
-Pull before the writing session when possible. DocWriter does not run Git pull for you.
+Pull before the writing session when possible. You run Git pull yourself.
 
 Resolve Git conflicts before you return to DocWriter, then let watch mode reload the resulting files. Resolving conflicts first protects the chosen Git version from being replaced by an older open tab. A Git reset, checkout, or conflict resolution can discard file text, so copy or commit work that you need before running the Git command.

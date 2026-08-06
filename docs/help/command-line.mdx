@@ -30,7 +30,7 @@ docwriter --no-open --port 9000 ~/writing/notes
 docwriter --host 0.0.0.0 ~/writing/shared
 ```
 
-The provider and model controls in DocWriter select among Claude, OpenAI, Codex, Cursor, and Pi. The `--api-key` and `--model` flags apply only to Claude.
+In DocWriter, you select among Claude, OpenAI, Codex, Cursor, and Pi through the provider and model controls. The `--api-key` and `--model` flags apply only to Claude.
 
 Use `--host 0.0.0.0` only on a trusted network. Anyone who can reach the server may be able to view workspace data or use configured provider credentials through DocWriter.
 
@@ -40,4 +40,4 @@ Use `--watch` when another program changes workspace files. A reload protects yo
 
 Useful environment values include `DOCWRITER_ROOT`, `DOCWRITER_DEFAULT_MODEL`, `DOCWRITER_NEW_SESSION`, `ANTHROPIC_API_KEY`, and provider keys described in [Connect a provider](/connect-provider).
 
-Environment values can override settings loaded from `~/.docwriter/keys.env`. Restart DocWriter after changing an environment value so the new process uses it. Removing a key can stop provider requests, but it does not remove earlier transcripts or provider records.
+Environment values can override settings loaded from `~/.docwriter/keys.env`. Restart DocWriter after changing an environment value so the new process uses it. Removing a key can stop provider requests. Your earlier transcripts and provider records remain.

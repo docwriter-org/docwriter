@@ -51,11 +51,11 @@ For example, if a tool edits `notes/draft.md`, then `{{file}}` becomes `notes/dr
 
 Use the checkbox to enable or disable a hook. Use **Run now** to test its resolved command with the active file. Remove a hook with the x control.
 
-The agent can also propose a hook through a **Proposed hook** toast. Accepting the toast saves the hook. You then review the saved command and choose whether to enable it.
+You may see a **Proposed hook** toast when the agent suggests a hook. Accepting the toast saves the hook. You then review the saved command and choose whether to enable it.
 
 ## Preview output
 
-Set **Output** when the command produces a file that DocWriter can preview. For example, a command that builds `main.tex` can set its output to `main.pdf`. The Preview controls use the first enabled hook whose output matches the active source file.
+Set **Output** when the command produces a file that DocWriter can preview. For example, a command that builds `main.tex` can set its output to `main.pdf`. When you open a preview, DocWriter uses the first enabled hook whose output matches your active source file.
 
 The pdflatex template runs at **Stop**, which means it runs after the main agent finishes a turn. Your own typing does not start the hook.
 
@@ -65,4 +65,4 @@ The live agent dock shows whether a hook is running, done, or failed. A successf
 
 DocWriter records the exit code and keeps the last 2,000 characters from both standard output and the error stream. Standard output is the command's normal text output. The error stream contains warnings and errors.
 
-A failing hook is reported but does not block or undo the related action.
+When a hook fails, you will see the failure in the activity log. The failed hook does not block or undo the related agent action.

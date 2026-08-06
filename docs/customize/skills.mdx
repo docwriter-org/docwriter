@@ -18,13 +18,13 @@ Project skills can also live under `.claude/skills/`. Each skill has a `SKILL.md
 
 Enable a skill when it should be available for new requests. Disable it when the procedure does not apply to your current work and you want to keep it installed for later.
 
-Choose **Run** beside a skill when you want to start its procedure directly. You can also ask the agent to use a named skill in Chat and include details about the current task. The agent reads the skill instructions and follows them during the request.
+Choose **Run** beside a skill when you want to start its procedure directly. You can also ask the agent to use a named skill in Chat and include details about the current task. When you run a skill, the agent reads its instructions and follows them during your request.
 
-DocWriter includes skills for plain writing and creating hooks.
+Built in skills cover plain writing and creating hooks.
 
 ## Provider support
 
-Providers handle skills in different ways. Some providers load skills through their own agent system. For other providers, DocWriter includes the skill instructions with your request so the agent can follow the same procedure.
+Providers handle skills in different ways. Some providers load skills through their own agent system. For other providers, the agent receives the skill instructions with your request so it can follow the same procedure.
 
 If a skill does not run, confirm that it is enabled and that its description clearly matches the task you requested. A clear description helps the agent decide when to load the skill.
 
