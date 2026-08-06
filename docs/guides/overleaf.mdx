@@ -36,6 +36,10 @@ Build the PDF so you can catch TeX errors and review the formatted paper after e
 
 Open **Settings**, then **Hooks**, and choose the `pdflatex` template. Change the entry file and output when the project does not use `main.tex` and `main.pdf`.
 
+<Frame caption="Choose the pdflatex template from the Hooks panel.">
+  ![The Hooks panel open from Settings](/images/hooks-panel.png)
+</Frame>
+
 Run the hook once. The template builds the entry file, updates the bibliography and references, and writes the PDF named in **Output**. The status should be **done** with an exit code of zero, and the PDF should exist at that output path. Fix any missing TeX packages or file names shown in a failed hook result.
 
 ## Open the preview
@@ -46,8 +50,8 @@ Select source text and choose **Locate in PDF** to find the matching place. Doub
 
 SyncTeX navigation requires the build to use `-synctex=1` and produce a `.synctex.gz` file. Verify both directions: **Locate in PDF** should move to the selected passage, and a double click in the PDF should open the matching TeX line.
 
-<Frame>
-  ![The generated PDF beside the LaTeX source](/images/overleaf-pdf-preview.png)
+<Frame caption="The split preview keeps the TeX source and generated PDF in the same workspace.">
+  ![The generated PDF beside the LaTeX source](/images/latex-split-preview.png)
 </Frame>
 
 ## Ask for an edit

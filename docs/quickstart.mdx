@@ -1,9 +1,9 @@
 ---
-title: "Make your first edit"
-description: "Open a file, ask for one change, and review the result."
+title: "Your first writing workflow"
+description: "Add writing references, draft with the agent, save rules from feedback, and run final critique passes."
 ---
 
-Use this walkthrough to learn how an agent edit moves from a request into your file. You will write a short draft, ask for one change, and decide whether to keep it. At the end, the accepted text will be in the Markdown file on disk.
+Use this walkthrough for a complete writing project. You will give the agent examples before you write, improve a draft while teaching it your preferences, and ask several reviewer agents to critique the finished draft.
 
 ## Confirm the provider
 
@@ -13,48 +13,88 @@ Check that your provider and model appear in the header. If you have not tested 
 Read the open file and summarize the main point. Do not edit the file.
 ```
 
+<Frame caption="The provider and model controls remain visible in the page header.">
+  ![The provider menu beside the selected model in the DocWriter header](/images/provider-picker.png)
+</Frame>
+
+<Frame caption="Open Chat from the agent dock to send the test request.">
+  ![The Chat panel with a request ready to send](/images/chat-popover.png)
+</Frame>
+
 Continue when the summary appears in the agent dock and the file remains unchanged. If the request fails, follow [Connect a provider](/connect-provider) to check your account and model.
 
-## Open a draft
+## Add writing references
 
-Return to the workspace you opened during installation. You can use an existing Markdown file or create a new one for this walkthrough.
+Give the agent an example of your writing before you ask it to help with the draft. Open **Settings**, then **Writing references**. Add the current file, paste a writing sample, or save a URL.
 
-## Write something
+Start with a sample that represents the voice you want for this project. Give it a clear name, such as "Published posts in my voice," so you can refer to it in later requests.
 
-Choose **New file** in the file tree and name it `draft.md`. Write a heading and a short paragraph about something you are already working on.
+<Frame caption="Writing references are available under Settings.">
+  ![The Writing references panel with options for adding source material](/images/writing-references-panel.png)
+</Frame>
 
-You can type directly in the center editor, and DocWriter saves the live draft back to the file.
+## Start writing
+
+Open an existing Markdown file or choose **New file** in the file tree. Write the opening in your own words so the agent has your point and phrasing to work from. DocWriter saves the draft back to the project file while you type.
 
 <Frame>
   ![A new draft open in the DocWriter source editor](/images/quickstart-essay-open.png)
 </Frame>
 
-## Ask for one edit
+## Ask for an edit while you write
 
-Click **Chat** in the floating agent dock. Send:
+Select the opening paragraph and type:
 
 ```text
-Rewrite the opening in fewer words. Make a direct edit while keeping my point and voice.
+Rewrite this opening in fewer words. Keep my point and match "Published posts in my voice."
 ```
 
-The agent reads the open file and proposes a smaller opening that should keep the same point and tone. You can continue typing while it works.
+Choose **Direct edit** when you want proposed wording, or **Plan first** when you want to review the approach before the agent changes anything. You can continue writing elsewhere while the agent works.
 
-## Review the suggestion
+<Frame caption="Select a passage to give the agent feedback beside the text.">
+  ![The feedback popup attached to selected text](/images/inline-feedback-popup.png)
+</Frame>
 
-The changed text appears in the editor, and a review card appears in the comment gutter beside it. Use **Accept** when the proposal says what you mean. Use **Reject** when you want to keep the current text.
+## Review the proposed change
+
+The proposed wording appears in the editor, and a review card appears in the comment gutter beside it. Use **Accept** when the proposal says what you mean. Use **Reject** when you want to keep the current text.
 
 <Frame>
   ![A proposed edit in the comment gutter beside the changed text](/images/quickstart-pending-edit.png)
 </Frame>
 
-You can accept and reject suggestions independently. If you change the same passage before reviewing a suggestion, the suggestion may become stale. Reject it and ask the agent for a new edit based on the current text.
+If you change the same passage before reviewing a suggestion, the suggestion may become stale. Reject it and ask the agent for a new edit based on the current text.
 
-## Check the file
+## Turn feedback into rules
 
-Open `draft.md` from the project folder in another editor. The accepted text is plain Markdown that you can edit elsewhere or commit with Git. Comments and pending suggestions remain in DocWriter.
+Save a writing rule when the same preference should apply to later requests. For example, if you repeatedly ask the agent to use complete sentences, add that instruction once as a rule.
 
-## Continue
+Open the rules toolbar above the editor and choose **Add rule**. The agent can also suggest a rule after it notices a repeated preference. Accept a proposed rule when you want to keep using it, or dismiss it when the feedback applies only to the current passage.
 
-Read [Send and steer requests](/agent/ask-and-steer) for automatic wake and queued requests. Read [Control agent behavior](/agent/agent-behavior) for autonomy and pause controls. Read [Review edits](/agent/review-edits) for bulk review, provenance, and undo.
+<Frame caption="Writing rules appear in the toolbar above the editor.">
+  ![The writing rules panel with saved instructions](/images/writing-rules-panel.png)
+</Frame>
 
-Add [writing rules](/customize/rules) when the agent should follow the same instruction on later requests. Open [Recovery](/help/recovery) if the editor, provider, or proposal does not behave as described.
+Continue drafting, reviewing suggestions, and adding rules when a preference repeats. The agent can use both the references and enabled rules on later requests.
+
+## Run final critique passes
+
+When the draft is complete, open **Settings**, then **Critique pass**. Choose a reviewer based on the feedback you need. The Copy Editor checks sentences, the Skeptic checks unsupported claims, the PhD Advisor checks the argument, and Fresh Eyes checks what may confuse a new reader.
+
+<Frame caption="Choose a reviewer from Settings, then Critique pass.">
+  ![The built in reviewer agents in the Critique pass menu](/images/critique-pass-menu.png)
+</Frame>
+
+DocWriter runs one reviewer for each critique pass. You can run several reviewers in sequence to get feedback from different points of view. Each reviewer reads the active draft and adds focused findings as comments, with a proposed edit when it has a concrete fix.
+
+<Frame>
+  ![A reviewer comment attached to the passage it discusses](/images/comment-thread.png)
+</Frame>
+
+Reply when a finding needs discussion. Accept a linked edit when the wording improves the draft, or resolve the thread when no change is needed.
+
+## Finish the project
+
+Open the project file in another editor to confirm that the accepted text is plain Markdown. Comments and pending suggestions remain in DocWriter.
+
+Read [Writing references](/customize/references), [Writing rules](/customize/rules), and [Comments and critique](/agent/comments-and-critique) for the full controls. Open [Recovery](/help/recovery) if the editor, provider, or proposal does not behave as described.

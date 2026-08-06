@@ -11,6 +11,14 @@ DocWriter supports Claude, OpenAI, Codex, Cursor, and Pi. The provider and model
 
 Click the provider pill in the header and choose one provider where you already have an account or API key. Click the model pill beside it to search the available models or add a custom model identifier.
 
+<Frame caption="The provider pill is beside Settings in the top-left corner.">
+  ![The provider menu open in the DocWriter header](/images/provider-picker.png)
+</Frame>
+
+<Frame caption="The model pill opens a searchable list beside the provider.">
+  ![The model menu open in the DocWriter header](/images/model-picker.png)
+</Frame>
+
 Changing providers starts a fresh provider conversation. Your workspace files, rules, references, hooks, and comments remain in place.
 
 When you switch to an earlier session through **Settings**, then **Sessions**, DocWriter restores the saved provider and model when the provider session is still valid. Read [Sessions](/agent/sessions) when an old provider session cannot resume.
@@ -20,6 +28,10 @@ When you switch to an earlier session through **Settings**, then **Sessions**, D
 Open **Settings**, then **API keys**. The panel shows whether each provider is using a saved key, an existing login, or no credential.
 
 Paste a key in the matching field and choose **Save**. Use **Remove stored key** when DocWriter should stop using it.
+
+<Frame caption="Open Settings, then API keys, to see and change provider credentials.">
+  ![The API keys panel open from Settings](/images/api-keys-panel.png)
+</Frame>
 
 Saved keys live in `~/.docwriter/keys.env`. A process environment variable or project `.env` value takes precedence over that file.
 
@@ -59,6 +71,10 @@ Open a small text file, click **Chat** in the agent dock, and send:
 Read the open file and summarize the main point. Do not edit the file.
 ```
 
+<Frame caption="Open Chat from the agent dock and enter the test request.">
+  ![The Chat panel with a request ready to send](/images/chat-popover.png)
+</Frame>
+
 If the request fails, open [Provider errors](/help/provider-errors).
 
-The test asks the agent to read without editing, so the file should remain unchanged. When the summary appears in the agent dock, continue to [Make your first edit](/quickstart).
+The test asks the agent to read without editing, so the file should remain unchanged. When the summary appears in the agent dock, continue to [Your first writing workflow](/quickstart).

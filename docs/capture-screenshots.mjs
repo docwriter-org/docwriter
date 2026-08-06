@@ -139,6 +139,21 @@ async function seedFixture() {
 		'utf8'
 	);
 	await writeFile(
+		join(dir, 'visuals.md'),
+		[
+			'# Images and diagrams',
+			'',
+			'<svg width="320" height="150" viewBox="0 0 320 150" xmlns="http://www.w3.org/2000/svg">',
+			'  <rect width="320" height="150" rx="16" fill="#f3e8ff"/>',
+			'  <circle cx="85" cy="75" r="34" fill="#7c3aed"/>',
+			'  <path d="M130 75h96" stroke="#6d28d9" stroke-width="6" stroke-linecap="round"/>',
+			'  <text x="244" y="82" font-family="Inter, sans-serif" font-size="18" fill="#4c1d95">Draft</text>',
+			'</svg>',
+			''
+		].join('\n'),
+		'utf8'
+	);
+	await writeFile(
 		join(dir, 'drafts', 'chapter-1.md'),
 		['# Chapter 1', '', 'Opening paragraph.', ''].join('\n'),
 		'utf8'
@@ -338,7 +353,9 @@ async function expandFolder(page, label) {
 
 async function openSettingsMenu(page) {
 	const trigger = page.locator('.menu-trigger', { hasText: /^Settings$/ }).first();
-	await trigger.click();
+	if ((await trigger.getAttribute('aria-expanded')) !== 'true') {
+		await trigger.click();
+	}
 	await sleep(200);
 }
 
@@ -350,7 +367,11 @@ async function hoverSettingsItem(page, label) {
 }
 
 async function closeMenu(page) {
-	await page.keyboard.press('Escape');
+	const trigger = page.locator('.menu-trigger', { hasText: /^Settings$/ }).first();
+	for (let i = 0; i < 2 && (await trigger.getAttribute('aria-expanded')) === 'true'; i++) {
+		await page.keyboard.press('Escape');
+		await sleep(100);
+	}
 	await sleep(200);
 }
 
@@ -484,6 +505,15 @@ async function captureStructural(page) {
 		.click();
 	await sleep(300);
 
+	await openFile(page, 'visuals.md');
+	await sleep(600);
+	await shot(page, 'images-diagrams-preview.png');
+	await page
+		.locator('.tab', { hasText: 'visuals.md' })
+		.locator('.tab-close')
+		.click();
+	await sleep(300);
+
 	await openFile(page, 'essay.md');
 	await shot(page, 'inline-directives-in-doc.png');
 	await shot(page, 'tour-interface-clean.png');
@@ -537,6 +567,26 @@ async function captureStructural(page) {
 	await page.locator('.tab-bar [role="tab"]', { hasText: 'essay.md' }).first().click();
 	await sleep(300);
 
+	// Provider and model controls in the page header.
+	await page.locator('.model-picker button[title="Provider"]').first().click();
+	await sleep(300);
+	await shot(page, 'provider-picker.png');
+	await page.keyboard.press('Escape');
+	await sleep(200);
+
+	await page.locator('.model-picker button[title="Model"]').first().click();
+	await sleep(300);
+	await shot(page, 'model-picker.png');
+	await page.keyboard.press('Escape');
+	await sleep(200);
+
+	// File tree actions and context menu.
+	await page.locator('.tree-name', { hasText: /^essay\.md$/ }).first().click({ button: 'right' });
+	await sleep(300);
+	await shot(page, 'file-tree-actions.png');
+	await page.keyboard.press('Escape');
+	await sleep(200);
+
 	// Inline-feedback popup: triple-click a paragraph in the prose. The
 	// editor's selection listener fires, and the feedback popup pops up
 	// anchored to the selection.
@@ -551,6 +601,14 @@ async function captureStructural(page) {
 
 	await hoverSettingsItem(page, 'Hooks');
 	await shot(page, 'hooks-panel.png');
+	await closeMenu(page);
+
+	await hoverSettingsItem(page, 'API keys');
+	await shot(page, 'api-keys-panel.png');
+	await closeMenu(page);
+
+	await hoverSettingsItem(page, 'Theme');
+	await shot(page, 'appearance-settings.png');
 	await closeMenu(page);
 
 	await page.locator('.rules-pill-bar .add-rule-btn').first().click();
@@ -574,6 +632,13 @@ async function captureStructural(page) {
 	await hoverSettingsItem(page, 'Skills');
 	await shot(page, 'skills-panel.png');
 	await closeMenu(page);
+
+	await openSettingsMenu(page);
+	await page.locator('.menu-item', { hasText: 'Sessions' }).first().click();
+	await sleep(600);
+	await shot(page, 'sessions-browser.png');
+	await page.keyboard.press('Escape');
+	await sleep(300);
 
 	await setDockExpanded(page, true);
 	const sendBtn = page.locator('.dock-message-btn').first();
@@ -931,7 +996,7 @@ async function captureLatex(page, context, fixtureDir, httpPort) {
 	// Tidy the file tree for this scenario: remove the unrelated
 	// markdown fixture files so the editor shows a clean LaTeX project.
 	console.log('  removing unrelated markdown fixtures...');
-	for (const f of ['essay.md', 'intro.md', 'outline.md', 'blog-post.md']) {
+	for (const f of ['essay.md', 'intro.md', 'outline.md', 'blog-post.md', 'draft.md', 'visuals.md']) {
 		await rm(join(fixtureDir, f), { force: true });
 	}
 	await rm(join(fixtureDir, 'drafts'), { recursive: true, force: true });
@@ -944,6 +1009,22 @@ async function captureLatex(page, context, fixtureDir, httpPort) {
 	await openFile(page, entry);
 	await sleep(800);
 	await shot(page, 'overleaf-tex-open.png');
+
+	const splitPreviewBtn = page.locator('button[aria-label="Open side preview"]').first();
+	if (await splitPreviewBtn.count()) {
+		await page.setViewportSize({ width: 1900, height: 1000 });
+		await splitPreviewBtn.click();
+		await sleep(5000);
+		await shot(page, 'latex-split-preview.png');
+		await splitPreviewBtn.click().catch(() => undefined);
+		await page.setViewportSize(VIEWPORT);
+		await sleep(500);
+	}
+
+	if (SKIP_AGENT) {
+		console.log('  SKIP_AGENT set; captured structural LaTeX shots only');
+		return;
+	}
 
 	// Wake the agent. The .tex file contains the injected directive; the
 	// agent's auto-handle behavior will pick it up.

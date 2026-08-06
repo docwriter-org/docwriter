@@ -9,6 +9,10 @@ Start with the message shown in the **Agent auth failed** or **Agent run failed*
 
 Open **Settings**, then **API keys**. Check whether the selected provider shows **Key set**, **Using login**, **Missing**, or **Optional**.
 
+<Frame>
+  ![The API keys panel with a status beside each provider](/images/api-keys-panel.png)
+</Frame>
+
 Adding a key allows future requests to use that provider. DocWriter stores keys entered in the panel in `~/.docwriter/keys.env` with permissions limited to your operating system user. Removing a key stops DocWriter from using that saved value, but the provider may still work through an environment variable or command line login.
 
 Process environment variables and project `.env` files take precedence over `~/.docwriter/keys.env`. Restart DocWriter after changing a shell environment variable. A wrong value in the environment can continue to override a correct value saved in the panel.
@@ -22,6 +26,10 @@ Choose **New session** if the provider still tries to resume the expired convers
 ## The selected model does not exist
 
 Open the model control and choose another model listed for the current provider. Changing the model affects future agent requests and does not change workspace files.
+
+<Frame>
+  ![The searchable model menu open in the DocWriter header](/images/model-picker.png)
+</Frame>
 
 A custom model identifier can be saved in the interface even when the provider does not allow the account to use it. Model access can depend on the account, subscription, region, and API endpoint.
 
@@ -37,11 +45,19 @@ Cancel the current run if queued messages should not run after the limit resets.
 
 Open **Settings**, then **Sessions**, and choose another session. Start a new session when the saved provider conversation no longer exists.
 
+<Frame>
+  ![The Sessions browser open from Settings](/images/sessions-browser.png)
+</Frame>
+
 Choosing another session changes which saved provider conversation the agent continues. It does not replace workspace files. Starting a new session removes the current session's activity and pending proposals, so copy proposal text you need first.
 
 ## The provider starts but a tool fails
 
 Open the transcript and inspect the failed tool result. Confirm that the file is inside the workspace and that the selected provider supports the requested tool.
+
+<Frame>
+  ![The transcript filtered to show detailed tool activity](/images/transcript-detail.png)
+</Frame>
 
 Retry only after you fix the stated cause. A retry sends another provider request, can use more quota, and may repeat a command if the first attempt completed before reporting an error. Check the workspace before retrying any action that writes or deletes files.
 

@@ -46,7 +46,7 @@ docwriter ~/writing/my-project
 
 The last command opens the chosen folder in your browser. You can create and edit files without an AI account.
 
-Connect Claude, OpenAI, Codex, Cursor, or Pi when you want to use the agent. Follow [Connect a provider](https://docs.docwriter.org/connect-provider), then [Make your first edit](https://docs.docwriter.org/quickstart).
+Connect Claude, OpenAI, Codex, Cursor, or Pi when you want to use the agent. Follow [Connect a provider](https://docs.docwriter.org/connect-provider), then complete [Your first writing workflow](https://docs.docwriter.org/quickstart).
 
 ## How the agent helps
 
@@ -60,7 +60,7 @@ Connect Claude, OpenAI, Codex, Cursor, or Pi when you want to use the agent. Fol
 ## Start with the documentation
 
 - [Install DocWriter](https://docs.docwriter.org/install) and open a project folder.
-- [Make your first edit](https://docs.docwriter.org/quickstart) and review the proposed change.
+- [Complete your first writing workflow](https://docs.docwriter.org/quickstart) with references, rules, and critique passes.
 - [Tour the interface](https://docs.docwriter.org/tour/interface) to find files, comments, reviews, and agent activity.
 - [Control agent behavior](https://docs.docwriter.org/agent/agent-behavior) to set autonomy or pause the agent.
 - [Add writing rules](https://docs.docwriter.org/customize/rules) for preferences that should apply across requests.

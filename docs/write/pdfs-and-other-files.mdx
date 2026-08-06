@@ -7,15 +7,34 @@ Use a viewer or preview when you need to check a file without leaving the worksp
 
 ## Open a PDF
 
-Click a PDF in the file tree to open it as a viewer tab inside DocWriter. PDF tabs are for reading, so they do not create a text editor or a shared editing document.
+Click a PDF in the file tree to open it as a read-only viewer tab inside DocWriter.
 
 The PDF viewer supports page navigation, search, zoom, and the PDF sidebar. LaTeX projects can also use SyncTeX, which links a place in the source file to the matching place in the PDF.
+
+<Frame>
+  ![A generated PDF open in the DocWriter PDF viewer](/images/overleaf-pdf-preview.png)
+</Frame>
 
 ## Preview generated output
 
 When the active source file has a matching output, **Preview window** opens it in a separate window. Use the button beside it when you want a resizable split preview next to the source.
 
 DocWriter can preview PDF, HTML, SVG, common image formats, Markdown, and plain text. The preview page also has a **Raw** action for opening the output in a normal browser window.
+
+<Frame caption="Open a split preview, resize it, and reload changed output.">
+  <video
+    autoPlay
+    muted
+    loop
+    playsInline
+    poster="/images/overleaf-pdf-preview.png"
+    className="w-full rounded-xl"
+  >
+    <source src="/images/split-preview.mp4" type="video/mp4" />
+    <source src="/images/split-preview.webm" type="video/webm" />
+    Your browser does not support embedded video.
+  </video>
+</Frame>
 
 ## Large and binary files
 

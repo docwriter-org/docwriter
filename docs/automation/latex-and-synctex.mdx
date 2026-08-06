@@ -9,6 +9,10 @@ Use this setup when you write a LaTeX document and need to check its PDF often. 
 
 Open **Settings**, then **Hooks**, and choose the pdflatex template. The template builds `main.tex` and sets `main.pdf` as the preview output. Update both paths when your project uses a different entry file.
 
+<Frame caption="The pdflatex template is available under Settings, then Hooks.">
+  ![The Hooks panel with the pdflatex template](/images/hooks-panel.png)
+</Frame>
+
 The command runs `pdflatex`, then tries `bibtex`, and then runs `pdflatex` twice more. The extra passes update citations and cross references. Every `pdflatex` pass uses `-synctex=1`, which creates the `.synctex.gz` data needed for source navigation. The hook runs at **Stop**, after the main agent finishes a turn.
 
 Run the hook once from the Hooks settings. The status should be **done** with an exit code of zero, and the PDF should appear at the output path. DocWriter also finds a PDF with the same path and base name as the active TeX file. For example, `paper/main.tex` matches `paper/main.pdf`.
@@ -17,12 +21,8 @@ Run the hook once from the Hooks settings. The status should be **done** with an
 
 Open the TeX source, then use the split preview button. The PDF should appear beside the source. Drag the divider to resize the two panes.
 
-<Frame>
-  ![A proposed LaTeX edit in the comment gutter](/images/overleaf-pending-edit.png)
-</Frame>
-
-<Frame>
-  ![The generated PDF after the LaTeX hook completes](/images/overleaf-pdf-preview.png)
+<Frame caption="At wider window sizes, the TeX source and generated PDF appear side by side.">
+  ![A TeX source file beside its generated PDF](/images/latex-split-preview.png)
 </Frame>
 
 ## Move from source to PDF

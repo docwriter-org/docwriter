@@ -17,7 +17,7 @@ A shortcut acts on the control that currently has focus, so the same keys can ha
 
 Undo can reverse local typing and accepted or rejected review actions. Agent changes are kept outside the local undo stack until you accept or reject them, which protects your typing history from an agent edit.
 
-DocWriter saves continuously. It has no separate Command or Control and S action. Closing the browser immediately after typing can lose a change that has not reached the server. Once the server receives the change, it saves it in the database before writing the workspace file.
+DocWriter saves continuously. It has no separate Command or Control and S action. Closing the browser immediately after typing can lose text that has not finished saving.
 
 ## Chat and comments
 
@@ -28,6 +28,10 @@ DocWriter saves continuously. It has no separate Command or Control and S action
 | Escape | Close the current popover, menu, or dialog |
 
 Sending Chat or a reply sends its text and selected document context to the current provider. Closing a draft popover or dialog can discard text that you have not sent or saved.
+
+<Frame>
+  ![The Chat panel with a request ready to send](/images/chat-popover.png)
+</Frame>
 
 ## Selected text feedback
 
@@ -40,15 +44,27 @@ Sending Chat or a reply sends its text and selected document context to the curr
 
 The delete shortcut changes the document as soon as the feedback input is empty. Use Undo if you delete selected text by mistake.
 
+<Frame>
+  ![The feedback popup attached to selected text](/images/inline-feedback-popup.png)
+</Frame>
+
 ## Find
 
 Enter moves to the next match. Shift and Enter moves to the previous match. Escape closes the find bar. Find only changes the current selection and does not change document text.
+
+<Frame>
+  ![The find bar with a query and match count](/images/editor-find-bar.png)
+</Frame>
 
 ## Agent dock
 
 Click the idle agent pill to wake it for the active text tab. Waking the agent can send context to the selected provider and use provider quota.
 
 Double click the pill to pause or resume agent requests. Pausing closes the current run in DocWriter, clears the idle countdown, and blocks Chat and new agent requests. Completed tool calls and proposals remain.
+
+<Frame>
+  ![The agent pill in its paused state](/images/agent-paused-pill.png)
+</Frame>
 
 Click the active pill once to close the current run in DocWriter and clear its queued messages. Some provider work may continue after the run closes.
 

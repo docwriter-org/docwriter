@@ -11,6 +11,10 @@ Headings, lists, quotes, horizontal rules, bold, italic, code, links, and strike
 
 Pipe tables receive a rendered table preview, so you can check the rows and columns before you share the file. You can show the table source when you need to edit it. Fenced code blocks receive code styling and a language label.
 
+<Frame caption="Markdown source remains visible while headings and other elements receive visual styling.">
+  ![A Markdown draft open in the DocWriter editor](/images/quickstart-essay-open.png)
+</Frame>
+
 Markdown layers are disabled for LaTeX and related source files, including `.tex`, `.sty`, `.cls`, and `.bib`.
 
 ## Source comments
@@ -19,7 +23,7 @@ Press **Command or Control and /** to comment or uncomment the current line or s
 
 ## Saving and undo
 
-The browser sends each edit to the DocWriter server, which keeps the shared working copy. The server writes plain text back to the file after a short delay. You can reopen the workspace and continue from the saved text.
+DocWriter saves your edits automatically and writes plain text back to the project file after a short delay. You can reopen the project and continue from the saved text.
 
 **Command or Control and Z** undoes your typing and actions such as accepting or rejecting a proposal. Agent changes are not added to your undo history.
 
@@ -28,3 +32,7 @@ The browser sends each edit to the DocWriter server, which keeps the shared work
 ## Agent changes
 
 Proposed text appears as a green addition or red removal in the editor and as a card in the comment gutter. The colors show what the file would gain or lose before you decide. Muting hides the proposal layers without pausing the agent, which is useful when you want to read the draft without review marks.
+
+<Frame>
+  ![A proposed edit shown in the editor and comment gutter](/images/reviewing-edits-pending.png)
+</Frame>
