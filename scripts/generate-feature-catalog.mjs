@@ -148,6 +148,11 @@ const pageFeatures = {
 		['Customize', 'Add the current file, pasted prose, or a URL as a reference', C, 'References'],
 		['Customize', 'Wake the agent after adding a reference', M, 'No page']
 	],
+	'agent/customize': [
+		['Customize', 'Set an intended audience for the draft', C, 'Customize the agent'],
+		['Customize', 'Clear the intended audience', C, 'Customize the agent'],
+		['Customize', 'Wake the agent after saving or clearing the audience', C, 'Customize the agent']
+	],
 	'customize/skills': [
 		['Customize', 'Install, enable, run, and remove skills in the UI', M, 'Skills covers files only'],
 		['Customize', 'Add a skill from GitHub shorthand or a local path', M, 'No page'],

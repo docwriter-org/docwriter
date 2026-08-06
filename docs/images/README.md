@@ -47,6 +47,7 @@ The standard viewport is 1400 by 900 pixels. The introduction recording uses 120
 | `sessions-browser.png` | Sessions | Session search and switch dialog | None |
 | `writing-rules-panel.png` | Writing rules | Rules toolbar popover | None |
 | `writing-references-panel.png` | Writing references | References settings | None |
+| `intended-audience-panel.png` | Customize the agent | Audience settings | None |
 | `skills-panel.png` | Customize the agent | Skills settings | None |
 | `hooks-panel.png` | Hooks | Hook settings | None |
 | `blog-post-open.png` | Example projects | Research draft before the run | Provider credential |
