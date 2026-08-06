@@ -253,10 +253,15 @@ function spawnServer() {
 }
 
 let server = spawnServer();
+// Keep the FSWatcher strongly referenced for the CLI process lifetime.
+// Without this, V8 can collect the wrapper after startup and silently stop
+// `--watch` before a later external edit or `git pull` occurs.
+let workspaceWatcher = null;
 
 // Forward signals to child.
 for (const sig of ['SIGINT', 'SIGTERM']) {
 	process.on(sig, () => {
+		workspaceWatcher?.close();
 		server.kill(sig);
 		process.exit(0);
 	});
@@ -387,7 +392,7 @@ if (watchFlag) {
 	}
 
 	try {
-		fsWatch(docwriterRoot, { recursive: true }, (event, filename) => {
+		workspaceWatcher = fsWatch(docwriterRoot, { recursive: true }, (event, filename) => {
 			if (debugWatch) {
 				console.log(`[docwriter] --watch raw: ${event} ${String(filename ?? '')}`);
 			}
