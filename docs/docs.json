@@ -62,6 +62,7 @@
 					"agent/customize",
 					"customize/rules",
 					"customize/references",
+					"customize/audience",
 					"customize/skills",
 					"customize/hooks",
 					"customize/generated-previews"

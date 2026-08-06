@@ -1,5 +1,5 @@
 {
-  "featureCount": 154,
+  "featureCount": 157,
   "unassignedCount": 0,
   "features": [
     {
@@ -625,6 +625,24 @@
       "area": "Customize",
       "feature": "Wake the agent after adding a reference",
       "targetPage": "customize/references"
+    },
+    {
+      "id": "customize-audience-01",
+      "area": "Customize",
+      "feature": "Set an intended audience for the draft",
+      "targetPage": "customize/audience"
+    },
+    {
+      "id": "customize-audience-02",
+      "area": "Customize",
+      "feature": "Clear the intended audience",
+      "targetPage": "customize/audience"
+    },
+    {
+      "id": "customize-audience-03",
+      "area": "Customize",
+      "feature": "Wake the agent after saving or clearing the audience",
+      "targetPage": "customize/audience"
     },
     {
       "id": "customize-skills-01",
