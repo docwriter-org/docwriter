@@ -1,30 +1,41 @@
 ---
 title: "Privacy and safety"
-description: "Understand what leaves the machine and what commands can run."
 ---
+
+Connecting a provider, enabling a hook, using the shell, or exposing DocWriter to a network can send, change, or delete data. Review the relevant section before allowing any of these actions.
 
 ## Local data
 
-Workspace files, SQLite state, comments, and transcripts are stored on the machine running DocWriter. Saved API keys live in `~/.docwriter/keys.env`.
+Your workspace files, comments, transcripts, and other DocWriter state stay on the machine where you run DocWriter. DocWriter state lives in `.docwriter/docwriter.db`. Saved API keys live in `~/.docwriter/keys.env`.
+
+When you delete a workspace file through DocWriter, you also lose its comments, pending reviews, and saved AI authorship markers. Deleting `docwriter.db` removes saved DocWriter state for the whole workspace, including comments, pending reviews, sessions, rules, reviewers, and interface settings. Back up both the project files and `.docwriter` folder when you may need this information.
 
 ## Provider requests
 
-Agent requests send selected context to the chosen provider. The initial prompt contains open tab paths and changes since the previous turn. The agent can read full files when it calls a document tool.
+Agent requests send selected context to the chosen provider. Each request includes open tab paths. A tab includes a diff when its text changed since DocWriter last recorded that tab. Otherwise, the prompt marks the tab as new or unchanged. Each request includes tab paths and diffs. The agent sends full file text only when it calls a document read tool.
 
-Provider data handling follows the account and service selected in the header.
+Comments, Chat messages, paths, and tool results can also become part of a provider request. Remove secrets or private text before asking the agent to read a file. Provider data retention and training rules follow the account and service selected in the header.
 
 ## Network requests
 
 OpenGraph link previews request metadata from the destination site. D3 previews load D3 from the public D3 CDN. Web research tools contact the services and pages needed for the request.
 
+Opening a link preview can reveal the server machine's network address to the destination site. A content delivery network, or CDN, is a public service that supplies a script to the browser. Avoid these previews when the network request itself would reveal sensitive work.
+
 ## Shell access
 
-Agent shell tools and hooks can execute commands with your user permissions inside the workspace process. A hook uses `shell: true` and receives the process environment. Review commands before enabling them.
+Agent shell tools and hooks can run commands with your operating system user permissions. A hook is a command that DocWriter runs after a configured event. Hooks use a system shell and receive the process environment, which can include API keys.
+
+Review the full command before enabling a hook or approving shell work. A command can change or delete files, send data over the network, install software, or read data outside the workspace when your user account has permission. Git or file backups protect data only when you create them before the command runs.
 
 ## Workspace boundary
 
-File, preview, and SyncTeX routes reject paths that escape the workspace, including symbolic link escapes. Shell commands are more powerful and can access anything allowed by the operating system account.
+File, preview, and SyncTeX routes reject paths that escape the workspace, including paths that use symbolic links to point outside it. SyncTeX links a location in a LaTeX source file to a location in its PDF output.
+
+Shell commands are more powerful and can access anything allowed by the operating system account. Choosing a narrow workspace root limits normal file tools, but it does not limit shell permissions.
 
 ## Network exposure
 
-DocWriter binds to `127.0.0.1` by default. Using `--host 0.0.0.0` exposes it to the local network. Use a firewall and trusted network when changing the host.
+By default, DocWriter listens only on `127.0.0.1`, which limits connections to your machine. Using `--host 0.0.0.0` allows connections from the local network.
+
+Use a firewall and a trusted network when changing the host. Anyone who can reach the server may be able to view workspace data, change files, or use provider access configured in DocWriter. Stop the server or return to the default host when network access is no longer needed.

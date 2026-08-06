@@ -1,0 +1,55 @@
+---
+title: "Writing rules"
+---
+
+Use a writing rule when an instruction should apply across requests. A rule is useful for choices such as tone, terminology, citation format, or text that the agent must not change.
+
+## Add a rule
+
+Open the rules toolbar above the workspace and choose **Add rule**. Write one clear instruction that the agent can check against the draft.
+
+For example:
+
+```text
+Use complete sentences. Do not use sentence fragments for emphasis.
+```
+
+Add an example violation when the rule could be interpreted in more than one way. You can edit or remove a rule from the same toolbar.
+
+When you save a rule, the agent wakes and checks the open files. When several tabs are open, you choose which tabs the rule should apply to.
+
+<Frame>
+  ![The writing rules popover above the workspace](/images/writing-rules-panel.png)
+</Frame>
+
+## Check a draft against the rules
+
+Choose **Apply rules to document** when you add or change a rule and want to find existing text that breaks it. Select the active tab, every open tab, or a set of tabs.
+
+When you apply rules to selected text, the agent proposes changes wherever the draft breaks a rule. You can review each proposal before accepting it.
+
+## Review a proposed rule
+
+After the agent notices a repeated preference, you may see a **Proposed rule** message above the workspace. You can accept it to save the rule, or dismiss it when the instruction should apply only to the current request.
+
+## Protect exact text
+
+Select a passage and choose **Freeze for agent** when the words must remain unchanged, such as an approved quotation or required legal text. Your selection becomes a rule for that exact text, and you will see a lock beside the passage. Later agent requests should preserve the frozen words.
+
+Click the lock and choose **Unlock, allow agent to edit** when the text can change again.
+
+<Frame>
+  ![The Freeze for agent action for selected text](/images/freeze-selection-popup.png)
+</Frame>
+
+<Frame>
+  ![A frozen passage with a lock marker](/images/freeze-passage.png)
+</Frame>
+
+<Frame>
+  ![The menu used to unlock a frozen passage](/images/freeze-unlock-menu.png)
+</Frame>
+
+## Choose between a rule and a reference
+
+Use a rule for an instruction the agent can follow, such as "Use sentence case for headings." Use a [writing reference](/customize/references) when the agent should learn from an example, such as an earlier article in your voice.

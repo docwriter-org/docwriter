@@ -1,33 +1,42 @@
 ---
 title: "Storage and backups"
-description: "Understand the live document, SQLite state, and files on disk."
 ---
 
-## The live document
+Before moving, restoring, or deleting a workspace, decide whether you need only the current document text or other saved DocWriter information, such as comments and sessions.
 
-The server owns one Yjs document for each open text tab. Browsers connect through Hocuspocus WebSocket sync, and agent tools connect to the same live document.
+Workspace files contain the document text. The `.docwriter` folder contains comments, pending reviews, sessions, settings, hooks, and temporary agent files.
 
-Each Yjs update is appended to `.docwriter/docwriter.db`. SQLite is the runtime source of truth for document updates, review rounds, comments, tabs, rules, reviewers, sessions, and interface settings.
+## Choose what to back up
 
-## Files on disk
+Back up the writing project files when you only need the current text. Git is suitable for these plain files. A text only backup keeps document text only. Comments, pending reviews, saved AI authorship markers, sessions, and interface settings need a separate backup. Browser undo history is temporary and is not included in any backup.
 
-The server checks for changed documents every 500 milliseconds and writes the live document back to the workspace file. The plain file is useful for Git, other editors, and recovery. The file is not a second live editor state.
+Also back up `.docwriter/docwriter.db` when you need comments, pending reviews, tab state, rules, reviewers, sessions, recent agent activity, and interface settings.
 
-`.docwriter/hooks.json` is the portable hook configuration. Agent scratch files live under `.docwriter/agent/scratch/`.
+Back up `.docwriter/hooks.json` when the workspace uses hooks. A hook is a shell command that DocWriter runs after a configured event. Keep project skills and other saved files outside the database with the rest of the project.
 
-There is no `.docwriter/state.json`.
+Keep API keys out of the repository. Keys saved through DocWriter live in `~/.docwriter/keys.env`, outside the workspace, and need a separate secure backup if you cannot restore them from the provider.
 
-## Back up a workspace
+Decide whether conversation and comment history belongs in the repository before adding `.docwriter`. The folder can contain document text, comments, file paths, provider conversations, and agent activity.
 
-Stop DocWriter, then copy:
+## Create a consistent backup
 
-* The writing project files
-* `.docwriter/docwriter.db`
-* `.docwriter/hooks.json`
-* Project skills and rules files that you keep outside SQLite
+Stop DocWriter before copying `docwriter.db` so it does not change while the copy is in progress.
 
-Git is suitable for plain project files. Do not commit API keys. Decide whether session and comment history in `.docwriter` belongs in the repository before adding it.
+Then copy:
 
-## Restore
+- The writing project files.
+- `.docwriter/docwriter.db`.
+- `.docwriter/hooks.json`, when it exists.
+- Project skills and other saved files outside the database.
 
-Restore the project files and matching `.docwriter` folder before starting DocWriter. When the database matches the workspace, DocWriter replays each tab from the `yjs_updates` table. Restoring only the plain files creates fresh Yjs state as each file is opened.
+Copy `.docwriter/agent/scratch/` only when you need the agent's temporary drafts or notes. New session clears that folder. Those files never appear as document tabs.
+
+## Restore a backup
+
+Stop DocWriter before restoring files so a running server cannot overwrite your restored copy. Restore the project files and their matching `.docwriter` folder before starting DocWriter.
+
+Restoring replaces newer files or DocWriter state at the destination. Copy newer work elsewhere first if you may need it.
+
+Restoring only the project files brings back the text. Restore `.docwriter/docwriter.db` as well when you need comments, pending reviews, or sessions. Restoring only `docwriter.db` can pair old comments and reviews with different project files. Restore the project files and `.docwriter` folder from the same backup when possible.
+
+Read [How DocWriter saves your work](/reference/how-it-works) for the difference between project files and saved DocWriter state.

@@ -1,13 +1,12 @@
 ---
 title: "Selected text and directives"
-description: "Give feedback at a passage or leave an instruction in the draft."
 ---
 
 ## Give feedback on selected text
 
-Select text to open the feedback popup. Enter a request or choose a recent action. Press **Enter** or click **Go** to send it.
+Use selected text feedback when your request concerns one passage and you want the agent to receive that passage with the instruction. Select text to open the feedback popup. Enter a request or choose a recent action. Press **Enter** or click **Go** to send it.
 
-**Direct edit** asks the agent to change the selected passage. **Plan first** asks the agent to explain the planned change in the thread before editing. The **AI smell** quick action always plans first.
+Choose **Direct edit** when the change is clear and you are ready to review proposed wording. Choose **Plan first** when you want to discuss the reason or approach before the agent changes the passage. You will see the planned change explained in the thread before you approve it. The **AI smell** quick action always plans first.
 
 The popup also contains **Locate in PDF** when a matching preview exists.
 
@@ -15,15 +14,9 @@ The popup also contains **Locate in PDF** when a matching preview exists.
   ![The selected text feedback popup with direct edit and plan first controls](/images/inline-feedback-popup.png)
 </Frame>
 
-## Freeze a passage
-
-Choose **Freeze for agent** to create a rule that protects the selected text. A lock appears beside the passage. Click the lock and choose **Unlock, allow agent to edit** when the passage can change again.
-
-<Frame>
-  ![The Freeze for agent action for selected text](/images/freeze-selection-popup.png)
-</Frame>
-
 ## Leave an inline directive
+
+Use an inline directive when you want to leave an instruction in the draft itself and continue writing. The agent will find the instruction the next time it checks the document.
 
 Place an instruction inside one of the following delimiter pairs:
 
@@ -33,10 +26,12 @@ Place an instruction inside one of the following delimiter pairs:
 << check the numbers >>
 ```
 
-The agent treats a directive as an explicit request. It should handle the request and remove the directive text in the same edit. The server can start one retry pass when the agent ignores a directive.
+The agent treats a directive as an explicit request. It should handle the request and remove the directive text in the same proposed edit. You can then review the requested change and the directive removal together. The server can start one retry pass when the agent ignores a directive.
 
-Directives remain ordinary document text until an edit removes them.
+Your directives remain ordinary document text until an edit removes them.
 
 <Frame>
   ![An inline directive written directly in the source document](/images/inline-directives-in-doc.png)
 </Frame>
+
+To prevent the agent from changing exact text, read [Protect exact text with a writing rule](/customize/rules#protect-exact-text).

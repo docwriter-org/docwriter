@@ -1,21 +1,36 @@
 ---
 title: "Connect a provider"
-description: "Choose a provider, authenticate it, and select a model."
 ---
 
-DocWriter supports Claude, OpenAI, Codex, Cursor, and Pi. The provider and model controls are in the page header.
+You can use the editor without an AI account. Connect one provider when you want the agent to read files, answer questions, or propose edits. A successful test on this page confirms that DocWriter can reach a model with your account before you ask it to change a draft.
+
+DocWriter supports Claude, OpenAI, Codex, Cursor, and Pi. You choose the provider and model from pills in the page header.
 
 ## Choose a provider
 
-Click the provider pill in the header and choose one provider. Click the model pill beside it to search the available models or add a custom model identifier.
+Click the provider pill in the header and choose one provider where you already have an account or API key. Click the model pill beside it to search the available models or add a custom model identifier.
 
-Changing providers starts a fresh provider conversation. Your workspace files, rules, references, hooks, and comments remain in place.
+<Frame caption="The provider pill is beside Settings in the top-left corner.">
+  ![The provider menu open in the DocWriter header](/images/provider-picker.png)
+</Frame>
 
-When you switch to an earlier session through **Settings**, then **Sessions**, DocWriter restores the saved provider and model when the provider session is still valid. Read [Sessions and history](/agent/sessions-and-history) when an old provider session cannot resume.
+<Frame caption="The model pill opens a searchable list beside the provider.">
+  ![The model menu open in the DocWriter header](/images/model-picker.png)
+</Frame>
+
+When you change providers, your conversation with the agent starts fresh. Your workspace files, rules, references, hooks, and comments remain in place.
+
+When you switch to an earlier session through **Settings**, then **Sessions**, you return to its saved provider and model when the provider session is still valid. Read [Sessions](/agent/sessions) when an old provider session cannot resume.
 
 ## Add credentials
 
-Open **Settings**, then **API keys**. The panel shows whether each provider is using a saved key, an existing login, or no credential.
+Open **Settings**, then **API keys**. You can see whether each provider uses a saved key, an existing login, or no credential.
+
+Paste a key in the matching field and choose **Save**. Choose **Remove stored key** when you no longer want DocWriter to use the saved key.
+
+<Frame caption="Open Settings, then API keys, to see and change provider credentials.">
+  ![The API keys panel open from Settings](/images/api-keys-panel.png)
+</Frame>
 
 Saved keys live in `~/.docwriter/keys.env`. A process environment variable or project `.env` value takes precedence over that file.
 
@@ -41,9 +56,11 @@ Cursor uses the signed in Cursor environment. Session recovery differs from prov
 
 Pi can use provider keys such as `TOGETHER_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, or `ANTHROPIC_API_KEY`, depending on the selected model.
 
-## Tools and skills
+## Choose a model the account can use
 
-Claude uses the Agent SDK tool set. Other providers use DocWriter's normalized tool handlers. Skills can use a provider's native skill support or be included in the provider prompt. Read [Providers and tools](/contribute/providers-and-tools) for implementation details.
+The model list can include models that are not enabled for every account. If a request returns a model error, choose another model from the same provider and send the test request below again.
+
+Provider features differ. For example, some providers have their own sessions, skills, or subagents. The main writing and review workflow stays the same across providers.
 
 ## Test the connection
 
@@ -53,4 +70,10 @@ Open a small text file, click **Chat** in the agent dock, and send:
 Read the open file and summarize the main point. Do not edit the file.
 ```
 
+<Frame caption="Open Chat from the agent dock and enter the test request.">
+  ![The Chat panel with a request ready to send](/images/chat-popover.png)
+</Frame>
+
 If the request fails, open [Provider errors](/help/provider-errors).
+
+The test asks the agent to read without editing, so the file should remain unchanged. When you see the summary in the agent dock, continue to [Your first writing workflow](/quickstart).

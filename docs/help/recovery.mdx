@@ -1,30 +1,55 @@
 ---
 title: "Recovery"
-description: "Recover from blank editors, restarts, stale proposals, and deleted state."
 ---
 
-## Blank editor
+Start with the heading that matches the problem you see. Each section states what its recovery steps change and what they may remove.
 
-A text tab paints after the first WebSocket sync. Check that the DocWriter server is still running and that the Hocuspocus port is available. Reload the browser after the server is healthy.
+## The editor is blank
 
-## Server restart
+You may see a blank editor when the browser loses its connection to DocWriter.
 
-Each server process has a new instance identifier. The browser discards old in-memory Yjs clients before attaching to the new server, which prevents stale browser operations from overwriting newer files.
+Check the terminal where you started DocWriter. If DocWriter stopped, start it again and reload the browser. Restarting preserves project files and saved DocWriter state, but the last text entered before a crash may not have finished saving.
 
-Use `docwriter --restart` when the command should start a replacement process after a crash.
+Confirm that you opened a text file. For PDF files and other binary files, you will see a preview instead of the text editor.
 
-## Stale proposal
+If DocWriter is running, look in the terminal for an address or port error. Stop the other DocWriter process, then start this workspace again. Stopping a process ends any agent run in that process.
 
-A proposal becomes stale when the source text changes. Reject the stale proposal or let DocWriter ask the agent to regenerate the proposal against the current file.
+## DocWriter keeps stopping
 
-## Deleted file
+Run DocWriter with `--restart` if you want it to start again automatically after a crash:
 
-The tabs API removes tabs for files that no longer exist. Deleting a file inside DocWriter also deletes the saved Yjs update log so the content cannot reappear on reopen.
+```sh
+docwriter --restart
+```
 
-## Removed runtime state
+The option starts the server again one second after an unexpected exit. The agent run that was active during the crash does not resume.
 
-Removing `.docwriter/docwriter.db` discards sessions, comments, pending reviews, rules, and saved interface state. The plain workspace files remain and create fresh Yjs documents when reopened.
+Reload the browser after DocWriter starts again. You will see the latest saved text. Text entered immediately before the crash may be lost.
 
-## Scratch cleanup
+## A proposal is stale
 
-Choose **New session** to clear `.docwriter/agent/scratch/`. Delete abandoned scratch files manually only when no agent run is using them.
+A proposal is stale when the text it was meant to replace no longer exists in the current document. You cannot accept a stale proposal. This protects your newer text from an edit based on an older version.
+
+Reject the proposal if you no longer need it. When you reject the proposal, it disappears and your current document text stays unchanged. You cannot recover the rejected proposal from its review card unless you undo the rejection before later actions replace that undo history.
+
+Reply in the related thread or send a new Chat request to ask for a proposal based on the current text. The new agent request can use provider quota and may produce different text.
+
+## A deleted file still appears
+
+Reload DocWriter so it can remove tabs for files that no longer exist. Removing a missing tab from the list only updates what you see. Your workspace file stays unchanged.
+
+When you delete a file inside DocWriter, you also lose its comments, pending reviews, and saved AI authorship markers. Browser undo history lasts only while the tab is loaded. Restore the project file and `.docwriter` folder from a backup if you need this information.
+
+## You need to reset DocWriter
+
+Delete `.docwriter/docwriter.db` only when you want to clear all saved DocWriter state for the workspace. A reset can help when the database is damaged or when you want the workspace to start with new DocWriter state.
+
+Your project files remain, but you lose open tabs, comments, pending reviews, rules, reviewers, sessions, recent agent activity, and interface settings. The next time you open a file, DocWriter starts from the text in that file.
+
+Stop DocWriter before deleting `docwriter.db`. Back up the `.docwriter` folder first when you may need the old state.
+
+## Old temporary files remain
+
+Choose **New session** to clear `.docwriter/agent/scratch/`. The scratch folder holds temporary files that the agent can use between requests. Starting a new session also clears the saved provider conversation and pending reviews, but it keeps workspace files, comments, rules, hooks, and settings.
+
+If scratch files remain, make sure the agent is not running before you delete them by hand. Manual deletion permanently removes those temporary files.

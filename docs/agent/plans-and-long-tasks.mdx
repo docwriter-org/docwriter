@@ -1,13 +1,14 @@
 ---
 title: "Plans and long tasks"
-description: "Review a plan and follow work that uses tools or subagents."
 ---
 
 ## Ask for a plan
 
-Enable **Plan first** in Chat or choose **Plan first** for selected text. The agent reads the relevant files without changing them, then opens **Plan from agent**.
+Use a plan when a request can affect several files, has important choices, or needs a sequence of steps that you want to check first. For example, ask for a plan before reorganizing several chapters so you can review the proposed structure before any text changes.
 
-Use **Run it** to approve the plan. **Dismiss** closes it. **Reject with feedback** sends your response and asks for a revised plan.
+Enable **Plan first** in Chat or choose **Plan first** for selected text. The agent reads the relevant files without changing them, then you will see the plan in **Plan from agent**.
+
+Use **Run it** to approve the plan and let the agent begin the work. Use **Dismiss** to close the plan without starting it. **Reject with feedback** sends your response and asks for a revised plan.
 
 <Frame caption="Review a proposed plan and approve it with Run it.">
   <video
@@ -26,16 +27,16 @@ Use **Run it** to approve the plan. **Dismiss** closes it. **Reject with feedbac
 
 ## Follow long work
 
-The agent can use file, shell, web research, code, and subagent tools. Tool calls and progress appear in the live agent dock. Subagent work appears under the relevant task description.
+Some requests take longer because the agent needs to inspect files, run commands, research a source, or ask another agent to handle part of the work. You can follow tool calls and progress in the live agent dock. You will see work from another agent under the relevant task description.
 
-You can keep editing while the work runs. Open the full transcript when the short activity log does not contain enough detail.
+You can keep editing while the work runs. You still receive new agent edits as proposals for review. Open the full transcript when you need the exact input or result from a tool call.
 
 ## Use scratch space
 
-The agent can place temporary work under `.docwriter/agent/scratch/`. Scratch files do not appear until a tool creates them. Starting a new session clears the scratch folder.
+The agent can place temporary work under `.docwriter/agent/scratch/` when a task needs notes, downloaded material, or intermediate output that does not belong in your draft. Scratch files do not appear until a tool creates them. Starting a new session clears the scratch folder, so move anything you want to keep into the workspace first.
 
 ## Stop a task
 
 Click the active agent pill to cancel the run and clear queued messages. Double clicking pauses all agent work until you resume.
 
-Provider tool support differs. Read [Providers and tools](/contribute/providers-and-tools) for implementation details and [Provider errors](/help/provider-errors) for user facing failures.
+Provider tool support differs. If a tool or provider fails, open [Provider errors](/help/provider-errors).
