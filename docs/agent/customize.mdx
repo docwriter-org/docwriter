@@ -1,52 +1,43 @@
 ---
 title: "Customize the agent"
-description: "Use rules, references, skills, and saved reviewer behavior."
 ---
 
-## Writing rules
+You can give the agent guidance that lasts beyond one request in three ways. Choose a type based on whether you need a standing instruction, material to consult, or a repeatable procedure.
 
-Rules appear in the toolbar above the workspace. Add a rule, edit it, remove it, or add an example violation. Use **Apply rules to document** to ask the agent to check the current file or selected tabs.
+<CardGroup cols={3}>
+  <Card title="Writing rules" icon="list-check" href="/customize/rules">
+    Save a short instruction that the agent should follow across requests, such as a required term or heading style.
+  </Card>
+  <Card title="Writing references" icon="book-open" href="/customize/references">
+    Give the agent a writing sample, source file, or URL to consult when a request needs that material.
+  </Card>
+  <Card title="Skills" icon="puzzle" href="/customize/skills">
+    Add a reusable procedure that explains how to complete a specific kind of work with several steps.
+  </Card>
+</CardGroup>
 
-When several tabs are open, the agent asks whether to apply the rules to the active tab, every open tab, or a selected set before it edits.
+## Choose the right type
 
-The agent can propose a new rule. A **Proposed rule** toast lets you accept or dismiss it.
+- Use a **rule** for a short instruction, such as a required term or citation format. Enabled rules apply to your later requests.
+- Use a **reference** when the agent should learn from an example or consult source material. You can enable or disable the saved material and name it in a request.
+- Use a **skill** for a task with a reusable procedure, such as reviewing prose or building a preview. You can run the skill directly or ask for it in Chat.
 
-Freezing a passage creates a rule for the exact text. Read [Selected text and directives](/agent/selected-text-and-directives) for the lock controls.
+You can use more than one type in the same project. For example, a rule can require plain headings while a reference shows the voice you want and a skill describes the review process.
 
-Saving a new rule wakes the agent with a request to bring the open files into compliance. You do not need to click Wake separately.
+## Find the controls
+
+You can find writing rules in the toolbar above the editor.
 
 <Frame>
-  ![The writing rules popover above the workspace](/images/writing-rules-panel.png)
+  ![The writing rules panel above the editor](/images/writing-rules-panel.png)
+</Frame>
+
+Writing references and skills are under **Settings**.
+
+<Frame>
+  ![The Writing references panel open from Settings](/images/writing-references-panel.png)
 </Frame>
 
 <Frame>
-  ![A frozen passage with a lock marker](/images/freeze-passage.png)
+  ![The Skills panel open from Settings](/images/skills-panel.png)
 </Frame>
-
-<Frame>
-  ![The unlock action for a frozen passage](/images/freeze-unlock-menu.png)
-</Frame>
-
-## Writing references
-
-Open **Settings**, then **Writing references**. You can use the current file, paste a writing sample, or save a URL.
-
-References are examples for the agent to consult when a request needs them. Enable, disable, or remove a reference without changing the source file.
-
-Adding a reference wakes the agent so it can consider the new material during the next pass.
-
-<Frame>
-  ![Writing references in Settings](/images/writing-references-panel.png)
-</Frame>
-
-## Skills
-
-Open **Settings**, then **Skills**. Install a skill from GitHub shorthand or a local path, enable or disable it, run it as a slash command, or remove it.
-
-DocWriter includes the plain writing and hooks creator skills. Project skills can also live under `.claude/skills/`.
-
-<Frame>
-  ![Installed and available skills in Settings](/images/skills-panel.png)
-</Frame>
-
-When a skill name is vague, ask the agent to find or create the right skill. Provider support differs because some providers receive skill instructions through their prompt rather than a native skill system.

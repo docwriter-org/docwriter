@@ -8,8 +8,10 @@ const M = 'Missing';
 const S = 'Stale';
 
 /**
- * Each tuple is [area, feature, current coverage, current documentation note].
- * The object key is the one page that will own the feature after the rewrite.
+ * Each tuple starts with [area, feature]. Older rows retain the coverage notes
+ * from the 2026 documentation audit, but those notes are historical input to
+ * the rewrite and are not emitted as current catalog data. The generated
+ * catalog records the one page that now owns each shipped feature.
  */
 const pageFeatures = {
 	'introduction': [
@@ -82,15 +84,16 @@ const pageFeatures = {
 		['Agent', 'Send a typed prompt', C, 'Quickstart and Steering'],
 		['Agent', 'Run a prompt with no open tab and create files', M, 'No page'],
 		['Agent', 'Queue prompts during a run', C, 'Steering'],
-		['Agent', 'Pause all agent activity by double clicking the pill', T, 'Steering uses old layout terms'],
-		['Agent', 'Mute diffs while the agent continues to work', T, 'Steering omits the full behavior'],
-		['Agent', 'Cancel the current run by clicking the active pill', T, 'Steering uses old history pane language'],
 		['Agent', 'Expand or collapse the floating agent dock', M, 'No current interface page'],
 		['Agent', 'See queued message badges and a wake up nudge', M, 'No page'],
 		['Agent', 'See the current in progress turn pinned above history', M, 'No page'],
-		['Agent', 'See failed run toasts with authentication recovery hints', T, 'Observability covers Claude only'],
-		['Customize', 'Set Low, Medium, or High autonomy', S, 'The docs use old names and behavior'],
-		['Customize', 'Turn track changes off', S, 'The docs describe a removed setting']
+		['Agent', 'See failed run toasts with authentication recovery hints', T, 'Observability covers Claude only']
+	],
+	'agent/agent-behavior': [
+		['Agent', 'Pause all agent activity by double clicking the pill', C, 'Agent behavior'],
+		['Agent', 'Mute diffs while the agent continues to work', C, 'Agent behavior'],
+		['Agent', 'Cancel the current run by clicking the active pill', C, 'Agent behavior'],
+		['Customize', 'Set Low, Medium, or High autonomy', C, 'Agent behavior']
 	],
 	'agent/selected-text-and-directives': [
 		['Agent', 'Give feedback on selected text', C, 'Feedback popup'],
@@ -133,22 +136,32 @@ const pageFeatures = {
 		['Review', 'Run built in or custom critique passes', C, 'Steering'],
 		['Customize', 'Create a reviewer with a name, mascot, color, and prompt', C, 'Steering']
 	],
-	'agent/customize': [
+	'customize/rules': [
 		['Customize', 'Manage rules from the toolbar pill bar', S, 'Rules points to Settings'],
 		['Customize', 'Create rules, examples, and agent proposed rules', C, 'Rules'],
 		['Customize', 'Apply all rules and confirm which tabs to check', M, 'No page'],
-		['Customize', 'Accept proposed rules and hooks from toasts', M, 'The docs point to removed panes'],
+		['Customize', 'Accept proposed writing rules from messages', C, 'Writing rules'],
+		['Customize', 'Wake the agent after adding a rule', M, 'No page']
+	],
+	'customize/references': [
 		['Customize', 'Add writing references', C, 'References'],
 		['Customize', 'Add the current file, pasted prose, or a URL as a reference', C, 'References'],
-		['Customize', 'Wake the agent after adding a rule or reference', M, 'No page'],
+		['Customize', 'Wake the agent after adding a reference', M, 'No page']
+	],
+	'customize/skills': [
 		['Customize', 'Install, enable, run, and remove skills in the UI', M, 'Skills covers files only'],
 		['Customize', 'Add a skill from GitHub shorthand or a local path', M, 'No page'],
 		['Customize', 'Ask the agent to find or create a vaguely named skill', M, 'No page'],
 		['Customize', 'Run an enabled skill as a slash command', M, 'No page'],
 		['Customize', 'Use bundled plain-writing and hooks-creator skills', S, 'Skills lists only one bundled skill']
 	],
-	'agent/sessions-and-history': [
+	'agent/sessions': [
 		['Sessions', 'Browse, search, and switch sessions', M, 'Sessions covers reset only'],
+		['Sessions', 'Start a new session without changing workspace settings', S, 'Sessions names an old menu location'],
+		['Sessions', 'Clear queued work, pending edits, cost, and scratch on reset', M, 'No page'],
+		['Sessions', 'Recover stale Cursor or Pi sessions automatically', M, 'No page']
+	],
+	'agent/activity-and-transcript': [
 		['Sessions', 'Inspect current activity and full transcripts', S, 'The docs assume a fixed right pane'],
 		['Sessions', 'Filter transcripts by role, tool, or search text', T, 'Observability covers some filters'],
 		['Sessions', 'Expand tool calls, messages, thinking, and the system prompt', T, 'Observability is incomplete'],
@@ -157,27 +170,26 @@ const pageFeatures = {
 		['Sessions', 'See token use and session cost', T, 'Observability omits current locations'],
 		['Sessions', 'Choose verbose or minimal history detail', T, 'Observability omits the Settings control'],
 		['Sessions', 'Expand long agent messages and follow subagent progress', M, 'No page'],
-		['Sessions', 'Start a new session without changing workspace settings', S, 'Sessions names an old menu location'],
-		['Sessions', 'Clear queued work, pending edits, cost, and scratch on reset', M, 'No page'],
-		['Sessions', 'Recover stale Cursor or Pi sessions automatically', M, 'No page'],
 		['Sessions', 'Open the full transcript from the agent dock', T, 'No complete procedure']
 	],
-	'automation/hooks': [
+	'customize/hooks': [
 		['Customize', 'Create and review shell hooks', C, 'Hooks and Events'],
 		['Automation', 'Run hooks on agent events', C, 'Hooks and Events'],
 		['Automation', 'Start from pdflatex, Pandoc HTML or PDF, Mermaid, or Git templates', T, 'Hooks omits part of the template set'],
 		['Automation', 'Edit, enable, disable, remove, or run a hook manually', C, 'Hooks'],
 		['Automation', 'Review a hook proposed by the agent', T, 'The docs point to an old review location'],
-		['Automation', 'Run hooks with full shell access in the workspace', T, 'The docs omit the safety boundary']
-	],
-	'automation/events': [
+		['Automation', 'Run hooks with full shell access in the workspace', T, 'The docs omit the safety boundary'],
 		['Automation', 'Use file, stem, and tool placeholders in hook commands', C, 'Hooks']
 	],
-	'automation/preview': [
+	'customize/generated-previews': [
 		['Automation', 'Preview PDF, HTML, SVG, and Mermaid output', C, 'Preview and Guides'],
 		['Automation', 'Reload preview output while preserving scroll and zoom', T, 'Preview covers reload but not preserved state']
 	],
-	'automation/latex-and-synctex': [
+	'guides/blog-with-research': [
+		['Agent', 'Write a blog post and add a supported citation', C, 'Blog writing example']
+	],
+	'guides/overleaf': [
+		['Automation', 'Edit, build, preview, and sync an Overleaf project', C, 'Overleaf guide'],
 		['Workspace', 'Use forward and reverse SyncTeX between source and PDF', T, 'Preview covers part of the flow'],
 		['Automation', 'Find a same name PDF automatically for a TeX file', M, 'No page']
 	],
@@ -190,8 +202,11 @@ const pageFeatures = {
 		['Reference', 'Understand what providers receive from open tabs', T, 'Steering covers paths and diffs only']
 	],
 	'help/storage-and-backups': [
-		['Reference', 'Understand storage and synchronization', S, 'The docs mention removed state.json and the wrong source of truth'],
-		['Reference', 'Understand Markdown backup timing and CRDT recovery', M, 'No accurate reference']
+		['Reference', 'Back up workspace text and DocWriter state', C, 'Storage and backups']
+	],
+	'reference/how-it-works': [
+		['Reference', 'Understand storage and synchronization', C, 'How DocWriter saves your work'],
+		['Reference', 'Understand workspace files and database state', C, 'How DocWriter saves your work']
 	],
 	'help/external-edits': [
 		['Workspace', 'Reload after files change outside DocWriter', T, 'CLI covers watch mode but not in-app reload'],
@@ -215,37 +230,16 @@ const pageFeatures = {
 		['Reference', 'Use the command line', S, 'The page has Claude-only flags and auth']
 	],
 	'contribute/architecture': [
-		['Reference', 'Follow the full system architecture', S, 'The published docs link to a missing ARCHITECTURE.md']
+		['Reference', 'Follow the full system architecture', C, 'Contributor architecture']
 	]
 };
 
-const priorityFor = (coverage, targetPage) => {
-	if (coverage === C) return 'P2';
-	if (
-		targetPage === 'introduction' ||
-		targetPage === 'connect-provider' ||
-		targetPage === 'agent/review-edits' ||
-		targetPage === 'contribute/architecture'
-	) return 'P0';
-	return coverage === S ? 'P0' : 'P1';
-};
-
-const actionFor = (coverage) => {
-	if (coverage === C) return 'keep-and-move';
-	if (coverage === S) return 'rewrite';
-	return 'document';
-};
-
 const features = Object.entries(pageFeatures).flatMap(([targetPage, rows]) =>
-	rows.map(([area, feature, coverage, currentDocs], index) => ({
+	rows.map(([area, feature], index) => ({
 		id: `${targetPage.replaceAll('/', '-')}-${String(index + 1).padStart(2, '0')}`,
 		area,
 		feature,
-		currentCoverage: coverage,
-		currentDocs,
-		targetPage,
-		action: actionFor(coverage),
-		priority: priorityFor(coverage, targetPage)
+		targetPage
 	}))
 );
 

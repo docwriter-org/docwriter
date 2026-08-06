@@ -1,0 +1,68 @@
+---
+title: "Write a blog post with sources"
+---
+
+Use this workflow to write a blog post that needs sources. Mark a claim that needs evidence, and keep drafting while the agent searches. Check the source before you accept the proposed edit.
+
+## Prepare the draft
+
+Start with your own wording so the agent knows the exact claim that needs support. Open a Markdown file and add an inline directive beside the claim. An inline directive is a request written inside `[[` and `]]` in the draft.
+
+```md
+People abandon AI tools when a simple request takes too long.
+
+[[ Find a recent study that measures tolerance for AI response time.
+Add one sentence with a Markdown footnote citation. ]]
+```
+
+The directive is ordinary text, so you can edit it until the request says exactly what evidence you need. Keep the request beside the claim so the proposed source and sentence are easy to review together.
+
+<Frame>
+  ![A research draft with inline requests before the agent runs](/images/blog-post-open.png)
+</Frame>
+
+## Add writing guidance
+
+Use writing guidance when a supported sentence also needs to match your document. Add a [writing reference](/customize/references) when the new sentence should follow the style of an existing article. Add a [writing rule](/customize/rules) when the citation must use a format such as Markdown footnotes.
+
+<Frame>
+  ![The Writing references panel open from Settings](/images/writing-references-panel.png)
+</Frame>
+
+<Frame>
+  ![The writing rules panel above the editor](/images/writing-rules-panel.png)
+</Frame>
+
+Rules and references help the agent shape the edit. You still need to confirm that a source supports the claim.
+
+## Let the agent research
+
+Stop typing and wait for automatic wake, or click the agent pill. The agent reads the directive and can search the web before it proposes an edit. You should see a proposal that replaces the request with a supported sentence and its citation.
+
+<Frame caption="Click the sleeping agent pill to start before the automatic wake timer finishes.">
+  ![The sleeping agent pill in the lower-right corner](/images/agent-wakeup-button.png)
+</Frame>
+
+You can keep writing elsewhere in the draft while the search runs.
+
+<Frame>
+  ![Research results and proposed citations beside the draft](/images/blog-pending-edit.png)
+</Frame>
+
+## Check the source
+
+Source review tells you whether the evidence supports the exact sentence in your draft. Open every cited source before accepting the proposal. Confirm the following points:
+
+- The source makes the claim in the proposed sentence.
+- The date and population match what the sentence says.
+- The citation points to the original source when possible.
+
+Reject the proposal when the source does not support the wording. Send a new request that names the problem, such as "Use a peer reviewed source from 2023 or later."
+
+## Accept the edit
+
+Accept the proposal when the sentence and citation are supported. When you accept the proposal, your document updates with the proposed text, the pending review disappears, and DocWriter saves plain Markdown to the workspace file.
+
+After you accept the proposal, the directive should be gone, the supported sentence and citation should appear in its place, and the cited link or footnote should open the source you checked. Repeat the workflow for another gap. Keep each directive focused on one claim so the source is easy to review.
+
+Read [Selected text and directives](/agent/selected-text-and-directives) for the other directive delimiters. Read [Generated previews](/customize/generated-previews) if you want to build an HTML version with Pandoc.

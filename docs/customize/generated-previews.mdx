@@ -1,0 +1,38 @@
+---
+title: "Generated previews"
+---
+
+Use a generated preview when you write source text that another command turns into a finished document or image. For example, you can read a PDF beside its TeX source, or check an SVG while editing a Mermaid file. You can check the generated result without leaving DocWriter.
+
+## Match an output
+
+You need an output path so DocWriter can connect your active source file to the generated file. When you edit a TeX file, DocWriter first looks for a PDF with the same path and base name. For example, `paper/main.tex` matches `paper/main.pdf`.
+
+If no matching PDF exists, DocWriter checks your enabled hooks in order and uses the output from the first hook that matches your active source file. Set an output such as `{{stem}}.html`, `{{stem}}.pdf`, or `{{stem}}.svg`.
+
+## Open a preview
+
+Choose **Preview window** to open the generated file in a separate browser window. Choose the split preview button to open it beside the source, then drag the divider to resize the two panes.
+
+You can preview PDF, HTML, SVG, common image formats, Markdown, and plain text. Use **Raw** to open the generated file in a normal browser tab when you need the browser's own controls or when DocWriter cannot show the file inline.
+
+## Live reload
+
+After a hook with an output exits successfully, you will see the updated output in every open preview. A failed hook leaves the previous output in place. During a reload, your PDF page and scale, document scroll position, or image scroll position stay in place when possible.
+
+Check the connection state and latest update time to confirm that you received the latest hook result in the preview. Then check that the visible output contains the source change you expected.
+
+<Frame caption="Open a split preview, resize it, and reload changed output.">
+  <video
+    autoPlay
+    muted
+    loop
+    playsInline
+    poster="/images/overleaf-pdf-preview.png"
+    className="w-full rounded-xl"
+  >
+    <source src="/images/split-preview.mp4" type="video/mp4" />
+    <source src="/images/split-preview.webm" type="video/webm" />
+    Your browser does not support embedded video.
+  </video>
+</Frame>

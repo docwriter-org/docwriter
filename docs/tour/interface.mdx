@@ -1,13 +1,14 @@
 ---
 title: "Interface tour"
-description: "Learn where files, writing, reviews, and agent activity appear."
 ---
+
+This tour shows where to open files, write text, review changes, and check the agent's work.
 
 <Frame>
   ![The current DocWriter workspace with a draft open](/images/tour-interface-clean.png)
 </Frame>
 
-The annotated view names the regions used throughout the documentation.
+The documentation uses these region names in later instructions.
 
 <Frame>
   ![The DocWriter interface with the main regions labeled](/images/tour-interface-overview.png)
@@ -15,30 +16,60 @@ The annotated view names the regions used throughout the documentation.
 
 ## Header
 
-The header contains the provider and model pills. Use them to change the service or model for the next agent request. **Settings** contains API keys, agent behavior, critique passes, sessions, hooks, skills, appearance, and history detail.
+You will find **Settings** and the provider and model pills in the header. For setup instructions, read [Connect a provider](/connect-provider).
+
+<Frame>
+  ![The provider menu open beside the model control](/images/provider-picker.png)
+</Frame>
 
 ## Rules toolbar
 
-Writing rules appear above the workspace. Add, edit, remove, and apply rules from the toolbar. Agent proposals for new rules or hooks appear as toasts.
+Your saved writing rules appear above the workspace. For instructions on adding and applying rules, read [Writing rules](/customize/rules).
+
+<Frame>
+  ![The writing rules panel above the editor](/images/writing-rules-panel.png)
+</Frame>
 
 ## Sidebar
 
-The left sidebar contains the heading outline and the file tree. The outline is a table of contents for the active Markdown file. The file tree contains workspace files and folders, including `.docwriter`.
+On the left, you will see the heading outline and the file tree. Use the outline to move through a long Markdown file. Use the file tree to open and organize workspace files and folders, including `.docwriter`.
 
-Drag the sidebar edge to resize it. Use **Settings** to hide the sidebar or file tree.
+Drag the sidebar edge to resize it.
+
+<Frame>
+  ![The file tree with file controls and a context menu](/images/file-tree-actions.png)
+</Frame>
 
 ## Tabs and editor
 
-Tabs appear above the center editor. A tab badge means that the file has pending agent work or an unresolved agent comment.
+You open files as tabs above the center editor, so you can move between them without closing your current draft. A tab badge can mark a pending edit, an unresolved agent comment, or a new file created by the agent.
 
-The editor stores plain text. Markdown styling, tables, images, SVG, and D3 previews appear as visual layers without replacing the source.
+You work with plain text in the editor. You will see Markdown styling and media previews without losing the source text.
+
+<Frame>
+  ![Two project files open as tabs above the editor](/images/editor-tabs.png)
+</Frame>
 
 ## Comment gutter
 
-Pending edits and comment threads appear beside the text in the comment gutter. The gutter contains individual review controls and the **Accept all** and **Reject all** actions.
+You will find pending edits and comment threads beside the related text in the comment gutter. You can review each suggestion next to the part of the draft it would change. For an explanation of the review controls, read [Review edits](/agent/review-edits).
+
+<Frame>
+  ![A proposed edit in the comment gutter beside the affected text](/images/quickstart-pending-edit.png)
+</Frame>
 
 ## Agent dock
 
-The floating dock contains **Chat**, the current activity log, queue status, mute, transcript, and new session controls. Collapse the dock to a small agent pill when you want more room.
+You will see the agent dock as a small pill in the lower right corner. Click the pill to open the dock.
 
-Double click the agent pill to pause or resume all agent activity. Click an active pill once to cancel the current run and clear queued messages.
+<Frame caption="Click the Agent pill in the lower right corner.">
+  ![The collapsed Agent pill highlighted in the lower right corner](/images/agent-dock-opener.png)
+</Frame>
+
+The open dock contains **Chat**, the agent's current activity, requests waiting to run, and controls for the current conversation. Check the dock to see whether the agent is working, waiting, or finished. Collapse it when you want more room.
+
+<Frame>
+  ![The Chat panel open from the agent dock](/images/chat-popover.png)
+</Frame>
+
+For instructions on sending work, read [Send and steer requests](/agent/ask-and-steer). To learn how to pause or cancel the agent and hide proposals, read [Control agent behavior](/agent/agent-behavior).

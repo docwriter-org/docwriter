@@ -1,7 +1,8 @@
 ---
 title: "External edits"
-description: "Use another editor without losing changes."
 ---
+
+Use watch mode when another editor, script, or Git command changes workspace files while DocWriter is open.
 
 ## Start watch mode
 
@@ -9,20 +10,28 @@ description: "Use another editor without losing changes."
 docwriter --watch ~/writing/my-project
 ```
 
-Watch mode reports changes to writing sources (including Markdown, text, JSON, YAML, TeX, BibTeX, style, and class files) and preview outputs such as PDF, HTML, SVG, and common image formats. It ignores implementation and runtime folders such as `.git` and `.docwriter`.
+When a supported workspace file changes, watch mode reloads your browser so you do not continue working from an old view. It reports changes to writing sources such as Markdown, text, JSON, YAML, TeX, BibTeX, style, and class files. It also reports changes to preview outputs such as PDF, HTML, SVG, and common image formats. Watch mode ignores implementation and runtime folders such as `.git` and `.docwriter`.
 
-## How reload works
+## An external change does not appear
+
+Confirm that you started DocWriter with `--watch`. Also confirm that the changed file is inside the workspace and has a supported text extension.
 
 The command line watcher batches rapid multi-file changes, sends one reload event to the browser, refreshes the file tree, and remounts the active tab from the server. Changed preview outputs reload in place.
 
-The server ignores file events that repeat a recent DocWriter flush, which prevents a reload loop while you type.
+Reload the browser if watch mode was already running. Reloading refreshes the file tree and shows the latest saved text. Your project file stays on disk.
 
-## Which copy wins
+## The same passage changed in two editors
 
-When a tab is hydrated, DocWriter compares the file modification time with the latest saved Yjs update. A newer disk file with different content replaces the stale update log after a small clock skew allowance.
+Stop typing in one editor before changing the same passage in the other. You need to choose which version to keep because DocWriter does not merge conflicting edits to the same passage.
 
-Watch mode is a reload system, not a text merge system. Avoid editing the same passage in two editors at the same moment.
+When you open a tab, a newer project file with different text can replace what you were seeing.
 
-## Git changes
+If the newer file replaces what you had open, you lose pending reviews, comments, and AI authorship markers for that version. Reloading also clears your browser undo history. Accept, reject, or copy any work you need before you let the external file replace the saved version.
 
-DocWriter does not pull a repository automatically. Pull before the writing session, resolve conflicts in Git, then let DocWriter reload the resulting files. A multi-file `git pull`, including changes to `.tex`, `.bib`, and generated PDFs, is handled as one batch.
+An external change can also make an open proposal stale, which means the proposal no longer matches the text it was based on. Review the affected tab after each reload. Reject a stale proposal or ask the agent for a new proposal based on the current text.
+
+## A Git operation changed files
+
+You run Git pull yourself because DocWriter does not pull a repository automatically. Pull before the writing session, resolve conflicts in Git, and then let DocWriter reload the resulting files. Watch mode handles a multi-file pull, including changes to `.tex`, `.bib`, and generated PDFs, as one batch.
+
+Resolve Git conflicts before you return to DocWriter so an older open tab does not replace the version you chose in Git. A Git reset, checkout, or conflict resolution can discard file text, so copy or commit work that you need before running the Git command.

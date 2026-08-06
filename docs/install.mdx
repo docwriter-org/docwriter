@@ -1,20 +1,20 @@
 ---
 title: "Install"
-description: "Install DocWriter and open a local writing workspace."
 ---
+
+Install DocWriter when you want to edit a folder of local files in the browser. After this setup, you will have a `docwriter` command that opens a chosen folder as a writing workspace. You can confirm that local editing and saving work before you connect an AI provider.
 
 ## Requirements
 
-DocWriter supports macOS and Linux. Windows users can run it through WSL.
+You work in the browser, and the `docwriter` command on your computer reads and writes files in the chosen folder. Install Git and Node.js 22.22.2 before continuing.
 
-The repository pins Node.js 22.22.2. Run `node --version` before installing, and use `nvm use` from the repository when another Node version is active.
+Run `node --version` to check the installed version. If you use [nvm](https://github.com/nvm-sh/nvm), run `nvm use` inside the repository. Run `nvm install` once if the pinned version is missing.
 
 ## Install from source
 
 ```sh
 git clone https://github.com/docwriter-org/docwriter.git
 cd docwriter
-nvm use
 npm install
 npm run build
 npm link
@@ -34,13 +34,26 @@ Pass the folder that contains your writing project:
 docwriter ~/writing/my-project
 ```
 
-DocWriter opens a browser and binds to `127.0.0.1` by default. The folder becomes the workspace boundary for files, previews, hooks, and agent tools.
+When you start DocWriter, your browser opens and the app binds to `127.0.0.1` by default. You can open and preview only files inside the folder you chose, so select the folder that contains the whole writing project. Hooks and shell commands can access other paths allowed by your operating system account.
+
+If the browser does not open, use the local address printed in the terminal. The first address is usually `http://127.0.0.1:7723`.
+
+## Confirm the editor works
+
+Create a text file in the file tree and type one sentence. Reload the browser and open the file again. The sentence should still be present.
+
+<Frame caption="A project file open in the editor after DocWriter starts.">
+  ![A Markdown file open beside the DocWriter file tree](/images/quickstart-essay-open.png)
+</Frame>
+
+You can write and manage local files before connecting an AI provider. A provider is required only when you ask the agent to read, comment, or edit.
+
+If the editor stays blank, follow [The editor is blank](/help/recovery#the-editor-is-blank).
 
 ## Update an existing installation
 
 ```sh
 git pull origin main
-nvm use
 npm install
 npm run build
 npm link
@@ -50,4 +63,4 @@ Back up the project files and `.docwriter/docwriter.db` before an update when th
 
 ## Next step
 
-[Connect a provider](/connect-provider), then follow [Make your first edit](/quickstart).
+[Connect a provider](/connect-provider), then follow [Your first writing workflow](/quickstart).

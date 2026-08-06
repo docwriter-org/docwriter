@@ -139,6 +139,21 @@ async function seedFixture() {
 		'utf8'
 	);
 	await writeFile(
+		join(dir, 'visuals.md'),
+		[
+			'# Images and diagrams',
+			'',
+			'<svg width="320" height="150" viewBox="0 0 320 150" xmlns="http://www.w3.org/2000/svg">',
+			'  <rect width="320" height="150" rx="16" fill="#f3e8ff"/>',
+			'  <circle cx="85" cy="75" r="34" fill="#7c3aed"/>',
+			'  <path d="M130 75h96" stroke="#6d28d9" stroke-width="6" stroke-linecap="round"/>',
+			'  <text x="244" y="82" font-family="Inter, sans-serif" font-size="18" fill="#4c1d95">Draft</text>',
+			'</svg>',
+			''
+		].join('\n'),
+		'utf8'
+	);
+	await writeFile(
 		join(dir, 'drafts', 'chapter-1.md'),
 		['# Chapter 1', '', 'Opening paragraph.', ''].join('\n'),
 		'utf8'
@@ -320,6 +335,64 @@ async function shot(page, name) {
 	console.log(`  wrote ${name}`);
 }
 
+async function focusElements(page, selectors, label, padding = 6) {
+	const found = await page.evaluate(
+		({ selectors, label, padding }) => {
+			const elements = selectors
+				.flatMap((selector) => [...document.querySelectorAll(selector)])
+				.filter((element) => {
+					const rect = element.getBoundingClientRect();
+					return rect.width > 0 && rect.height > 0;
+				});
+			if (elements.length === 0) return false;
+
+			const rects = elements.map((element) => element.getBoundingClientRect());
+			const left = Math.max(4, Math.min(...rects.map((rect) => rect.left)) - padding);
+			const top = Math.max(4, Math.min(...rects.map((rect) => rect.top)) - padding);
+			const right = Math.min(
+				window.innerWidth - 4,
+				Math.max(...rects.map((rect) => rect.right)) + padding
+			);
+			const bottom = Math.min(
+				window.innerHeight - 4,
+				Math.max(...rects.map((rect) => rect.bottom)) + padding
+			);
+
+			const overlay = document.createElement('div');
+			overlay.setAttribute('data-doc-focus-annotation', '');
+			overlay.style.cssText =
+				`position:fixed;left:${left}px;top:${top}px;width:${right - left}px;height:${bottom - top}px;` +
+				'box-sizing:border-box;border:3px solid #7c3aed;border-radius:8px;' +
+				'background:rgba(124,58,237,0.045);box-shadow:0 0 0 2px rgba(255,255,255,0.9);' +
+				'pointer-events:none;z-index:99998;';
+
+			const tag = document.createElement('div');
+			tag.textContent = label;
+			tag.style.cssText =
+				'position:absolute;left:-3px;top:-28px;background:#7c3aed;color:white;' +
+				'padding:4px 8px;border-radius:5px;font:600 11px Inter,-apple-system,sans-serif;' +
+				'line-height:1.2;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,0.18);';
+			if (top < 34) tag.style.top = `${bottom - top + 5}px`;
+			if (right > window.innerWidth - 140) {
+				tag.style.left = 'auto';
+				tag.style.right = '-3px';
+			}
+			overlay.appendChild(tag);
+			document.body.appendChild(overlay);
+			return true;
+		},
+		{ selectors, label, padding }
+	);
+	if (!found) throw new Error(`Could not focus "${label}": ${selectors.join(', ')}`);
+	await sleep(250);
+}
+
+async function focusedShot(page, name, selectors, label, padding = 6) {
+	await focusElements(page, selectors, label, padding);
+	await shot(page, name);
+	await clearAnnotations(page);
+}
+
 async function openFile(page, label) {
 	// Click the tree-name span with the exact label text. The click bubbles
 	// to the parent .tree-row's onclick handler which opens the file.
@@ -338,7 +411,9 @@ async function expandFolder(page, label) {
 
 async function openSettingsMenu(page) {
 	const trigger = page.locator('.menu-trigger', { hasText: /^Settings$/ }).first();
-	await trigger.click();
+	if ((await trigger.getAttribute('aria-expanded')) !== 'true') {
+		await trigger.click();
+	}
 	await sleep(200);
 }
 
@@ -350,7 +425,11 @@ async function hoverSettingsItem(page, label) {
 }
 
 async function closeMenu(page) {
-	await page.keyboard.press('Escape');
+	const trigger = page.locator('.menu-trigger', { hasText: /^Settings$/ }).first();
+	for (let i = 0; i < 2 && (await trigger.getAttribute('aria-expanded')) === 'true'; i++) {
+		await page.keyboard.press('Escape');
+		await sleep(100);
+	}
 	await sleep(200);
 }
 
@@ -448,7 +527,9 @@ async function annotateInterface(page) {
 
 async function clearAnnotations(page) {
 	await page.evaluate(() => {
-		document.querySelectorAll('[data-doc-annotations]').forEach((n) => n.remove());
+		document
+			.querySelectorAll('[data-doc-annotations], [data-doc-focus-annotation]')
+			.forEach((n) => n.remove());
 	});
 }
 
@@ -477,9 +558,30 @@ async function captureStructural(page) {
 	await sleep(1800);
 
 	await openFile(page, 'draft.md');
-	await shot(page, 'quickstart-essay-open.png');
+	await focusedShot(
+		page,
+		'quickstart-essay-open.png',
+		['.tree-action-btn[title="New file"]'],
+		'New file',
+		4
+	);
 	await page
 		.locator('.tab', { hasText: 'draft.md' })
+		.locator('.tab-close')
+		.click();
+	await sleep(300);
+
+	await openFile(page, 'visuals.md');
+	await sleep(600);
+	await focusedShot(
+		page,
+		'images-diagrams-preview.png',
+		['.media-svg-widget'],
+		'SVG preview',
+		8
+	);
+	await page
+		.locator('.tab', { hasText: 'visuals.md' })
 		.locator('.tab-close')
 		.click();
 	await sleep(300);
@@ -498,44 +600,91 @@ async function captureStructural(page) {
 	const agentPillEl = page.locator('.header-agent-btn').first();
 	const agentPillBox = await agentPillEl.boundingBox();
 	if (agentPillBox) {
-		const PAD = 16;
+		const SIDE_PAD = 16;
+		const TOP_PAD = 34;
+		const BOTTOM_PAD = 16;
+		const clipX = Math.max(0, agentPillBox.x - SIDE_PAD);
+		const clipY = Math.max(0, agentPillBox.y - TOP_PAD);
 		const clip = {
-			x: Math.max(0, agentPillBox.x - PAD),
-			y: Math.max(0, agentPillBox.y - PAD),
-			width: Math.min(VIEWPORT.width, agentPillBox.width + PAD * 2 + 120),
-			height: agentPillBox.height + PAD * 2
+			x: clipX,
+			y: clipY,
+			width: Math.min(
+				VIEWPORT.width - clipX,
+				agentPillBox.width + SIDE_PAD * 2
+			),
+			height: Math.min(
+				VIEWPORT.height - clipY,
+				agentPillBox.height + TOP_PAD + BOTTOM_PAD
+			)
 		};
-		await page.evaluate(({ x, y, w, h }) => {
-			const d = document.createElement('div');
-			d.setAttribute('data-doc-annotations', '');
-			d.style.cssText =
-				`position:fixed;left:${x}px;top:${y}px;width:${w}px;height:${h}px;` +
-				'box-sizing:border-box;border:2.5px solid #7c3aed;border-radius:6px;' +
-				'background:rgba(124,58,237,0.08);pointer-events:none;z-index:99999;';
-			document.body.appendChild(d);
-		}, { x: agentPillBox.x - 1, y: agentPillBox.y - 1, w: agentPillBox.width + 2, h: agentPillBox.height + 2 });
+		await focusElements(page, ['.header-agent-btn'], 'Wake the agent', 4);
 		await page.screenshot({ path: join(IMAGES_DIR, 'agent-wakeup-button.png'), clip });
 		console.log('  wrote agent-wakeup-button.png');
 		await clearAnnotations(page);
 	}
 	await setDockExpanded(page, false);
+	await focusedShot(
+		page,
+		'agent-dock-opener.png',
+		['.dock-agent-btn'],
+		'Click to open the agent dock',
+		6
+	);
 
 	// Editor with find bar open. Click the editor first to focus it.
 	await page.locator('.tiptap-content').first().click();
 	await sleep(200);
 	await page.keyboard.press('Meta+f');
 	await sleep(600);
-	await shot(page, 'editor-find-bar.png');
+	await focusedShot(page, 'editor-find-bar.png', ['.find-bar'], 'Find in document', 5);
 	await page.keyboard.press('Escape');
 	await sleep(300);
 
 	// Multiple tabs: open outline.md alongside the already-open essay.md.
 	await openFile(page, 'outline.md');
 	await sleep(400);
-	await shot(page, 'editor-tabs.png');
+	await focusedShot(page, 'editor-tabs.png', ['.tab-bar'], 'Open files', 4);
 	// Switch back to essay.md for subsequent shots.
 	await page.locator('.tab-bar [role="tab"]', { hasText: 'essay.md' }).first().click();
 	await sleep(300);
+
+	// Provider and model controls in the page header.
+	await page.locator('.model-picker button[title="Provider"]').first().click();
+	await sleep(300);
+	await focusedShot(
+		page,
+		'provider-picker.png',
+		['.model-picker .pill-wrap:first-child', '.model-picker .pill-wrap:first-child .dropdown'],
+		'Choose a provider',
+		4
+	);
+	await page.keyboard.press('Escape');
+	await sleep(200);
+
+	await page.locator('.model-picker button[title="Model"]').first().click();
+	await sleep(300);
+	await focusedShot(
+		page,
+		'model-picker.png',
+		['.model-picker .pill-wrap:nth-child(2)', '.model-picker .pill-wrap:nth-child(2) .dropdown'],
+		'Choose a model',
+		4
+	);
+	await page.keyboard.press('Escape');
+	await sleep(200);
+
+	// File tree actions and context menu.
+	await page.locator('.tree-name', { hasText: /^essay\.md$/ }).first().click({ button: 'right' });
+	await sleep(300);
+	await focusedShot(
+		page,
+		'file-tree-actions.png',
+		['.tree-actions', '.file-tree-menu'],
+		'File controls',
+		5
+	);
+	await page.keyboard.press('Escape');
+	await sleep(200);
 
 	// Inline-feedback popup: triple-click a paragraph in the prose. The
 	// editor's selection listener fires, and the feedback popup pops up
@@ -545,35 +694,110 @@ async function captureStructural(page) {
 		.first();
 	await paragraph.click({ clickCount: 3 });
 	await sleep(1000);
-	await shot(page, 'inline-feedback-popup.png');
+	await focusedShot(
+		page,
+		'inline-feedback-popup.png',
+		['.feedback-popup'],
+		'Give feedback here',
+		6
+	);
 	await page.keyboard.press('Escape');
 	await sleep(300);
 
 	await hoverSettingsItem(page, 'Hooks');
-	await shot(page, 'hooks-panel.png');
+	await focusedShot(
+		page,
+		'hooks-panel.png',
+		['.menu-panel', '.submenu-panel'],
+		'Hook settings',
+		5
+	);
+	await closeMenu(page);
+
+	await hoverSettingsItem(page, 'API keys');
+	await focusedShot(
+		page,
+		'api-keys-panel.png',
+		['.menu-panel', '.submenu-panel'],
+		'API keys',
+		5
+	);
+	await closeMenu(page);
+
+	await hoverSettingsItem(page, 'Theme');
+	await focusedShot(
+		page,
+		'appearance-settings.png',
+		['.menu-panel', '.submenu-panel'],
+		'Appearance',
+		5
+	);
 	await closeMenu(page);
 
 	await page.locator('.rules-pill-bar .add-rule-btn').first().click();
 	await sleep(400);
-	await shot(page, 'writing-rules-panel.png');
+	await focusedShot(
+		page,
+		'writing-rules-panel.png',
+		['.rules-popover'],
+		'Writing rules',
+		6
+	);
 	await page.keyboard.press('Escape');
 	await sleep(200);
 
 	await hoverSettingsItem(page, 'Writing references');
-	await shot(page, 'writing-references-panel.png');
+	await focusedShot(
+		page,
+		'writing-references-panel.png',
+		['.menu-panel', '.submenu-panel'],
+		'Writing references',
+		5
+	);
 	await closeMenu(page);
 
 	await hoverSettingsItem(page, 'Agent behavior');
-	await shot(page, 'agent-behavior-panel.png');
+	await focusedShot(
+		page,
+		'agent-behavior-panel.png',
+		['.menu-panel', '.submenu-panel'],
+		'Agent behavior',
+		5
+	);
 	await closeMenu(page);
 
 	await hoverSettingsItem(page, 'Critique pass');
-	await shot(page, 'critique-pass-menu.png');
+	await focusedShot(
+		page,
+		'critique-pass-menu.png',
+		['.menu-panel', '.submenu-panel'],
+		'Choose a reviewer',
+		5
+	);
 	await closeMenu(page);
 
 	await hoverSettingsItem(page, 'Skills');
-	await shot(page, 'skills-panel.png');
+	await focusedShot(
+		page,
+		'skills-panel.png',
+		['.menu-panel', '.submenu-panel'],
+		'Skills',
+		5
+	);
 	await closeMenu(page);
+
+	await openSettingsMenu(page);
+	await page.locator('.menu-item', { hasText: 'Sessions' }).first().click();
+	await sleep(600);
+	await focusedShot(
+		page,
+		'sessions-browser.png',
+		['[aria-label="Agent sessions"]'],
+		'Sessions',
+		6
+	);
+	await page.keyboard.press('Escape');
+	await sleep(300);
 
 	await setDockExpanded(page, true);
 	const sendBtn = page.locator('.dock-message-btn').first();
@@ -582,7 +806,13 @@ async function captureStructural(page) {
 	const textarea = page.locator('.dock-chat-popover textarea').first();
 	await textarea.fill('Make the introduction shorter.');
 	await sleep(300);
-	await shot(page, 'chat-popover.png');
+	await focusedShot(
+		page,
+		'chat-popover.png',
+		['.dock-chat-popover'],
+		'Send a request',
+		6
+	);
 	await page.keyboard.press('Escape');
 	await sleep(300);
 	await setDockExpanded(page, false);
@@ -851,7 +1081,13 @@ async function captureCommentThread(page) {
 		console.log('  agent reply not seen in thread; capturing anyway');
 	}
 	await sleep(1200);
-	await shot(page, 'comment-thread.png');
+	await focusedShot(
+		page,
+		'comment-thread.png',
+		['.gutter-card'],
+		'Comment thread',
+		6
+	);
 
 	// Resolve this thread so the next scenario (agent edit) starts with a
 	// clean gutter — one card, no ambiguity about which to capture.
@@ -867,7 +1103,13 @@ async function captureBlogResearch(page) {
 	await openFile(page, 'blog-post.md');
 	await setDockExpanded(page, false);
 	await sleep(800);
-	await shot(page, 'blog-post-open.png');
+	await focusedShot(
+		page,
+		'blog-post-open.png',
+		['.tab.active'],
+		'Project draft',
+		4
+	);
 
 	console.log('  waking agent (web search may take a couple minutes)...');
 	// Expand the dock to reach the wake-up button.
@@ -897,7 +1139,13 @@ async function captureBlogResearch(page) {
 	await setDockExpanded(page, false);
 	await pending.click().catch(() => undefined);
 	await sleep(1500);
-	await shot(page, 'blog-pending-edit.png');
+	await focusedShot(
+		page,
+		'blog-pending-edit.png',
+		['.gutter-card'],
+		'Research edit',
+		6
+	);
 }
 
 async function captureLatex(page, context, fixtureDir, httpPort) {
@@ -931,7 +1179,7 @@ async function captureLatex(page, context, fixtureDir, httpPort) {
 	// Tidy the file tree for this scenario: remove the unrelated
 	// markdown fixture files so the editor shows a clean LaTeX project.
 	console.log('  removing unrelated markdown fixtures...');
-	for (const f of ['essay.md', 'intro.md', 'outline.md', 'blog-post.md']) {
+	for (const f of ['essay.md', 'intro.md', 'outline.md', 'blog-post.md', 'draft.md', 'visuals.md']) {
 		await rm(join(fixtureDir, f), { force: true });
 	}
 	await rm(join(fixtureDir, 'drafts'), { recursive: true, force: true });
@@ -943,7 +1191,35 @@ async function captureLatex(page, context, fixtureDir, httpPort) {
 	await expandFolder(page, 'paper');
 	await openFile(page, entry);
 	await sleep(800);
-	await shot(page, 'overleaf-tex-open.png');
+	await focusedShot(
+		page,
+		'overleaf-tex-open.png',
+		['button[aria-label="Open side preview"]'],
+		'Open side preview',
+		4
+	);
+
+	const splitPreviewBtn = page.locator('button[aria-label="Open side preview"]').first();
+	if (await splitPreviewBtn.count()) {
+		await page.setViewportSize({ width: 1900, height: 1000 });
+		await splitPreviewBtn.click();
+		await sleep(5000);
+		await focusedShot(
+			page,
+			'latex-split-preview.png',
+			['.split-preview-pane'],
+			'PDF preview',
+			6
+		);
+		await splitPreviewBtn.click().catch(() => undefined);
+		await page.setViewportSize(VIEWPORT);
+		await sleep(500);
+	}
+
+	if (SKIP_AGENT) {
+		console.log('  SKIP_AGENT set; captured structural LaTeX shots only');
+		return;
+	}
 
 	// Wake the agent. The .tex file contains the injected directive; the
 	// agent's auto-handle behavior will pick it up.
@@ -1012,7 +1288,13 @@ async function captureLatex(page, context, fixtureDir, httpPort) {
 	await setDockExpanded(page, false);
 	await page.locator('.gutter-card').first().click().catch(() => undefined);
 	await sleep(1500);
-	await shot(page, 'overleaf-pending-edit.png');
+	await focusedShot(
+		page,
+		'overleaf-pending-edit.png',
+		['.gutter-card'],
+		'Proposed edit',
+		6
+	);
 
 	// Accept every proposed edit so the changes land on disk. Each gutter
 	// card must be expanded for its Accept buttons to mount; expand a
@@ -1086,8 +1368,10 @@ async function captureAgentDriven(page, httpPort, wsPort) {
 	// Collapse the dock so it does not cover the expanded edit card.
 	await setDockExpanded(page, false);
 	await sleep(1000);
+	await focusElements(page, ['.gutter-card'], 'Review this edit', 6);
 	await shot(page, 'quickstart-pending-edit.png');
 	await shot(page, 'reviewing-edits-pending.png');
+	await clearAnnotations(page);
 }
 
 async function main() {

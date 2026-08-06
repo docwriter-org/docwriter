@@ -1,36 +1,63 @@
 ---
 title: "Provider errors"
-description: "Fix authentication, model, quota, and saved session failures."
 ---
 
-## Missing credentials
+Start with the message shown in the **Agent auth failed** or **Agent run failed** notice. The full error remains in the agent activity log and can identify the provider setting that needs to change.
+
+## The provider says a credential is missing
 
 Open **Settings**, then **API keys**. Check whether the selected provider shows **Key set**, **Using login**, **Missing**, or **Optional**.
 
-Environment variables and project `.env` files take precedence over `~/.docwriter/keys.env`. Restart DocWriter after changing a shell environment variable.
+<Frame>
+  ![The API keys panel with a status beside each provider](/images/api-keys-panel.png)
+</Frame>
 
-## Context sent to a provider
+Adding a key allows future requests to use that provider. When you enter a key in the panel, DocWriter stores it in `~/.docwriter/keys.env` with permissions limited to your operating system user. Removing a key stops DocWriter from using that saved value, but the provider may still work through an environment variable or command line login.
 
-The first request contains the open tab paths and the changes since each tab was last seen. Full file bodies are loaded only when needed. The agent calls `read_doc` for the full content of an open tab, and workspace tools can inspect other files when the request requires them.
+Process environment variables and project `.env` files take precedence over `~/.docwriter/keys.env`. Restart DocWriter after changing a shell environment variable. A wrong value in the environment can continue to override a correct value saved in the panel.
 
-Read [Privacy and safety](/help/privacy-and-safety) for the other network requests and local boundaries.
+## A command line login expired
 
-## Expired login
+Run the provider login command again. Claude and Codex can use existing command line logins.
 
-Run the provider login command again, then start a new DocWriter session. Claude and Codex can use existing command line logins.
+Choose **New session** if the provider still tries to resume the expired conversation. New session clears the saved provider conversation, agent activity for the current session, temporary scratch files, and pending proposals. It keeps workspace files, comments, rules, hooks, and settings. Copy any proposal text you need before choosing it.
 
-## Model unavailable
+## The selected model does not exist
 
-Open the model pill and choose a model listed for the current provider. A custom identifier is accepted by the interface but can still be rejected by the provider.
+Open the model control and choose another model listed for the current provider. Changing the model affects future agent requests. Your workspace files stay the same.
 
-Model availability can depend on the account, subscription, region, and API endpoint.
+<Frame>
+  ![The searchable model menu open in the DocWriter header](/images/model-picker.png)
+</Frame>
 
-## Quota or rate limit
+A custom model identifier can be saved in the interface even when the provider does not allow the account to use it. Model access can depend on the account, subscription, region, and API endpoint.
 
-Wait for the provider limit to reset or use another available provider. Queued messages remain local until the current run completes or is canceled.
+If OpenAI reports that `codex-mini` does not exist, choose an available GPT model. If Claude reports that enabled thinking is not supported, choose another Claude model.
 
-## Saved session cannot resume
+## The provider reached a quota or rate limit
 
-Open **Settings**, then **Sessions**, and start a new session for the provider. Switching providers also clears the saved provider session identifier.
+Wait for the limit to reset, or select another provider that has working credentials. Switching providers starts a separate provider conversation. The new provider starts without the old provider's saved conversation.
 
-Authentication failures appear as a sticky **Agent auth failed** toast. Other failures appear as **Agent run failed** and remain visible in the activity log.
+Cancel the current run if queued messages should not run after the limit resets. When you cancel the run, DocWriter closes it and clears queued messages. Some provider work may continue. Completed tool calls, comments, and proposals remain. Provider charges are not reversed.
+
+## A saved session cannot resume
+
+Open **Settings**, then **Sessions**, and choose another session. Start a new session when the saved provider conversation no longer exists.
+
+<Frame>
+  ![The Sessions browser open from Settings](/images/sessions-browser.png)
+</Frame>
+
+Choosing another session changes which saved provider conversation the agent continues. Your workspace files stay the same. Starting a new session removes the current session's activity and pending proposals, so copy proposal text you need first.
+
+## The provider starts but a tool fails
+
+Open the transcript and inspect the failed tool result. Confirm that the file is inside the workspace and that the selected provider supports the requested tool.
+
+<Frame>
+  ![The transcript filtered to show detailed tool activity](/images/transcript-detail.png)
+</Frame>
+
+Retry only after you fix the stated cause. A retry sends another provider request, can use more quota, and may repeat a command if the first attempt completed before reporting an error. Check the workspace before retrying any action that writes or deletes files.
+
+Read [Privacy and safety](/help/privacy-and-safety) to understand what a provider can read and which commands can run.

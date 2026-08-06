@@ -1,7 +1,8 @@
 ---
 title: "Command line"
-description: "Launch DocWriter and control the local server."
 ---
+
+The directory passed to `docwriter` sets the workspace boundary. Confirm it before you create, rename, or delete files in DocWriter.
 
 ```text
 docwriter [options] [directory]
@@ -9,16 +10,16 @@ docwriter [options] [directory]
 
 | Option | Meaning |
 | --- | --- |
-| `-p, --port <n>` | HTTP port. The default is 7723 or the next free port. |
-| `--host [address]` | Bind address. A bare flag uses 0.0.0.0. |
-| `--no-open` | Do not open a browser. |
-| `-w, --watch` | Reload supported files after an external change. |
-| `--restart` | Start a replacement server after a crash. |
-| `--root <dir>` | Workspace root. The positional directory does the same job. |
-| `--new-session` | Clear the saved provider session at startup. |
-| `--api-key <key>` | Set the Anthropic key for the current process. |
-| `--model <name>` | Set the legacy Claude default model alias. |
-| `--version` | Print the installed version. |
+| `-p, --port <n>` | Use this HTTP port. The default is 7723 or another free port. Changing it changes the browser address but does not change saved work. |
+| `--host [address]` | Listen on this network address. A bare flag uses 0.0.0.0 and allows other devices on the local network to connect. |
+| `--no-open` | Start the server without opening a browser. Saved work is unchanged. |
+| `-w, --watch` | Reload the browser after supported files change outside DocWriter. A newer external file can replace saved tab state. |
+| `--restart` | Start the server again one second after a crash. The active agent run does not resume. |
+| `--root <dir>` | Use this directory as the workspace root. The positional directory does the same job. |
+| `--new-session` | Clear the saved provider conversation at startup. Workspace files remain. |
+| `--api-key <key>` | Set the Anthropic key for this process. The key can appear in shell history or process information. |
+| `--model <name>` | Set the Claude default model alias for this process. |
+| `--version` | Print the installed version without starting the server. |
 
 ## Common examples
 
@@ -29,8 +30,14 @@ docwriter --no-open --port 9000 ~/writing/notes
 docwriter --host 0.0.0.0 ~/writing/shared
 ```
 
-The provider and model header controls are the normal way to select among Claude, OpenAI, Codex, Cursor, and Pi. The `--api-key` and `--model` flags remain Claude specific.
+In DocWriter, you select among Claude, OpenAI, Codex, Cursor, and Pi through the provider and model controls. The `--api-key` and `--model` flags apply only to Claude.
+
+Use `--host 0.0.0.0` only on a trusted network. Anyone who can reach the server may be able to view workspace data or use configured provider credentials through DocWriter.
+
+Use `--watch` when another program changes workspace files. A reload protects you from continuing with an old browser view. A newer file with different text can replace the tab's saved comments, pending reviews, undo history, and AI provenance, so copy or finish that work first.
 
 ## Environment
 
 Useful environment values include `DOCWRITER_ROOT`, `DOCWRITER_DEFAULT_MODEL`, `DOCWRITER_NEW_SESSION`, `ANTHROPIC_API_KEY`, and provider keys described in [Connect a provider](/connect-provider).
+
+Environment values can override settings loaded from `~/.docwriter/keys.env`. Restart DocWriter after changing an environment value so the new process uses it. Removing a key can stop provider requests. Your earlier transcripts and provider records remain.

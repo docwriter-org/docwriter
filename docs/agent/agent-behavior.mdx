@@ -1,0 +1,58 @@
+---
+title: "Control agent behavior"
+---
+
+Use the agent behavior controls when you want to change when the agent wakes or what it may do without a direct request.
+
+## Choose an autonomy level
+
+Open **Settings**, then **Agent behavior**.
+
+You can configure your agent's autonomy. Autonomy describes what the agent can do without your explicit permission and how much it can do on its own.
+
+- **Low** waits for you to ask for a change. The agent may edit after an inline directive such as `[[ add a citation ]]`, feedback on selected text, a Chat request, or a reply in a comment thread. It may also fix an obvious problem such as a typo. Otherwise, it leaves the draft alone.
+- **Medium** includes everything in Low. The agent may also comment on something you wrote by opening one new comment thread during a turn. It can point out an unclear sentence or ask about a missing step, but it does not edit the text unless you ask.
+- **High** includes everything in Medium. The agent may also propose a focused edit when it can name a specific problem, such as a repeated point, unclear reference, or broken transition. It should tighten the affected passage rather than rewrite the draft.
+
+In all three levels, every edit appears as a diff that you can accept or reject.
+
+<Frame>
+  ![The Agent behavior panel with Low, Medium, and High autonomy settings](/images/agent-behavior-panel.png)
+</Frame>
+
+## Pause or resume the agent
+
+Double click the agent pill to pause or resume. When you pause, you cancel the current run, clear queued messages, and block automatic and manual requests until you resume.
+
+<Frame>
+  ![The collapsed agent pill in the paused state](/images/agent-paused-pill.png)
+</Frame>
+
+<Frame>
+  ![The expanded agent dock in the paused state](/images/agent-paused.png)
+</Frame>
+
+## Cancel the current run
+
+Click the active agent pill once to cancel the current run and clear its queued messages. The document changes you already accepted remain.
+
+## Hide proposed changes
+
+Use the bell control to hide proposal layers while the agent continues working. The pending reviews remain in the document, and you can show them again later.
+
+Hiding proposals does not accept or reject them. You cannot turn review off for edits to an existing document.
+
+<Frame caption="Hide proposal layers, then show them again.">
+  <video
+    autoPlay
+    muted
+    loop
+    playsInline
+    poster="/images/agent-behavior-panel.png"
+    className="w-full rounded-xl"
+  >
+    <source src="/images/mute-proposals.mp4" type="video/mp4" />
+    <source src="/images/mute-proposals.webm" type="video/webm" />
+    Your browser does not support embedded video.
+  </video>
+</Frame>
