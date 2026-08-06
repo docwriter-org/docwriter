@@ -53,6 +53,15 @@ async function waitForServer(origin, logs) {
 	throw new Error(`DocWriter did not start in time.\n${logs.join('')}`);
 }
 
+async function waitForLog(logs, text) {
+	const deadline = Date.now() + 10_000;
+	while (Date.now() < deadline) {
+		if (logs.join('').includes(text)) return;
+		await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+	}
+	throw new Error(`DocWriter did not log "${text}" in time.\n${logs.join('')}`);
+}
+
 function startEventCollector(origin, diagnostics = () => '') {
 	const controller = new AbortController();
 	const events = [];
@@ -185,6 +194,7 @@ try {
 	child.stdout.on('data', (chunk) => logs.push(chunk.toString()));
 	child.stderr.on('data', (chunk) => logs.push(chunk.toString()));
 	await waitForServer(origin, logs);
+	await waitForLog(logs, `[docwriter] Watching ${workspace} for changes...`);
 
 	collector = startEventCollector(origin, () => logs.join(''));
 	await collector.waitFor((event) => event.event === 'connected');

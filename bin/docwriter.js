@@ -253,9 +253,8 @@ function spawnServer() {
 }
 
 let server = spawnServer();
-// Keep the FSWatcher strongly referenced for the CLI process lifetime.
-// Without this, V8 can collect the wrapper after startup and silently stop
-// `--watch` before a later external edit or `git pull` occurs.
+// Keep the FSWatcher strongly referenced for the CLI process lifetime and
+// close it explicitly when the CLI receives a termination signal.
 let workspaceWatcher = null;
 
 // Forward signals to child.
