@@ -10,6 +10,12 @@ Your workspace files, comments, transcripts, and other DocWriter state stay on t
 
 When you delete a workspace file through DocWriter, you also lose its comments, pending reviews, and saved AI authorship markers. Deleting `docwriter.db` removes saved DocWriter state for the whole workspace, including comments, pending reviews, sessions, rules, reviewers, and interface settings. Back up both the project files and `.docwriter` folder when you may need this information.
 
+When you add a web page or PDF as a writing reference, DocWriter fetches that address and stores extracted text under the workspace `.docwriter` folder. Requests to local and private network addresses are blocked. Review the extracted text before analysis when the page contains navigation, repeated headers, or unrelated material.
+
+Submitting context runs an agent that searches the web and fetches pages to find more of your writing. What you type in that box, and the names of any files you attach, are sent to the provider you have selected. Files you attach are stored in the workspace and are not uploaded anywhere else. Nothing is collected until you keep a source and run the analysis.
+
+Style study exports contain event types, choices, timing, counts, provider names, model names, and schema versions. They do not contain raw references, prompts, generated passages, or edited prose.
+
 ## Provider requests
 
 Agent requests send selected context to the chosen provider. Each request includes open tab paths. A tab includes a diff when its text changed since DocWriter last recorded that tab. Otherwise, the prompt marks the tab as new or unchanged. Each request includes tab paths and diffs. The agent sends full file text only when it calls a document read tool.

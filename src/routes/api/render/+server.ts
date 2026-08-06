@@ -26,6 +26,7 @@ import { replayUpdatesInto } from '$lib/server/ydoc-persistence';
 import { registerPendingAskUser } from '$lib/server/ask-user-state';
 import { unifiedLineDiff } from '$lib/diff';
 import { listStyleReferences } from '$lib/server/references';
+import { readStyleProfile } from '$lib/server/style-analysis/profile-store';
 import { buildSkillsPromptBlock } from '$lib/server/skills-config';
 import { lastSeenKey, readTabMarkdownForAgent } from '$lib/server/last-seen';
 import {
@@ -445,7 +446,9 @@ function snapshotRules(rules: { text: string }[]): string {
  * sample paths). Sorted so cosmetic re-ordering doesn't trip the change detector. */
 function snapshotRefs(): string {
 	const refs = listStyleReferences().map((r) => `${r.type}::${r.target}`);
-	return JSON.stringify(refs.sort());
+	const profile = readStyleProfile();
+	const active = profile?.propositions.filter((proposition) => ['active', 'confirmed'].includes(proposition.status)).length ?? 0;
+	return JSON.stringify({ refs: refs.sort(), active, profileUpdatedAt: profile?.updatedAt ?? 0 });
 }
 
 /** Build the diff line block for rules vs. the prior snapshot. Returns null
@@ -484,6 +487,11 @@ function buildRulesDelta(
 /** Build the active style-reference list as a small bullet block. Returned
  * only when the list has changed since the prior render. */
 function buildRefsBlock(): string | null {
+	const profile = readStyleProfile();
+	const activeStyle = profile?.propositions.some((proposition) => ['active', 'confirmed'].includes(proposition.status));
+	if (activeStyle) {
+		return 'The generated author-style skill is active. Use that skill for writing style. Do not read raw references unless the user explicitly asks you to inspect a source.';
+	}
 	const refs = listStyleReferences().slice(0, 6);
 	if (refs.length === 0) return null;
 	const lines = ['Style references:'];
@@ -800,7 +808,7 @@ export const POST: RequestHandler = async ({ request }) => {
 				planModeInstruction;
 		const baseSystemPromptBlock = warmup ? undefined : buildSystemPrompt();
 		const skillsPromptBlock =
-			!warmup && (providerId === 'openai' || providerId === 'cursor')
+			!warmup && providerId !== 'claude'
 				? buildSkillsPromptBlock()
 				: null;
 		const systemPromptBlock = [baseSystemPromptBlock, skillsPromptBlock]
