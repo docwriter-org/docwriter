@@ -559,29 +559,31 @@
 									<li>
 										<div class="ref-main">
 											<strong>{ref.label}</strong>
-											<span class="muted">{ref.type} · {ref.target}</span>
+											<span class="muted path">{ref.target}</span>
 										</div>
-										<select
-											value={ref.role ?? 'authored'}
-											onchange={(e) =>
-												void setRole(
-													ref.id,
-													(e.currentTarget as HTMLSelectElement).value as any
-												)}
-										>
-											<option value="authored">authored</option>
-											<option value="inspiration">inspiration</option>
-										</select>
-										<button class="ghost" onclick={() => void preview(ref.id)} title="Preview">
-											<Eye size={15} />
-										</button>
-										<button
-											class="ghost"
-											onclick={() => void removeRef(ref.id)}
-											aria-label="Remove"
-										>
-											<Trash2 size={15} />
-										</button>
+										<div class="ref-actions">
+											<select
+												value={ref.role ?? 'authored'}
+												onchange={(e) =>
+													void setRole(
+														ref.id,
+														(e.currentTarget as HTMLSelectElement).value as any
+													)}
+											>
+												<option value="authored">authored</option>
+												<option value="inspiration">inspiration</option>
+											</select>
+											<button class="ghost" onclick={() => void preview(ref.id)} title="Preview">
+												<Eye size={15} />
+											</button>
+											<button
+												class="ghost"
+												onclick={() => void removeRef(ref.id)}
+												aria-label="Remove"
+											>
+												<Trash2 size={15} />
+											</button>
+										</div>
 									</li>
 								{/each}
 							</ul>
@@ -1096,26 +1098,44 @@
 		padding: 0;
 		margin: 0;
 	}
-	.refs li,
-	.props li {
-		display: flex;
-		gap: 0.55rem;
+	.refs li {
+		display: grid;
+		grid-template-columns: 1fr auto;
+		gap: 0.65rem 1rem;
 		align-items: center;
-		padding: 0.7rem 0.15rem;
+		padding: 0.85rem 0.15rem;
 		border-bottom: 1px solid var(--border-light, #e5e5e5);
 		font-size: 0.9rem;
 	}
 	.props li {
+		display: flex;
 		align-items: flex-start;
 		gap: 0.65rem;
 		padding: 0.85rem 0;
+		border-bottom: 1px solid var(--border-light, #e5e5e5);
+		font-size: 0.9rem;
 	}
 	.ref-main {
-		flex: 1;
 		display: flex;
 		flex-direction: column;
 		min-width: 0;
-		gap: 0.15rem;
+		gap: 0.2rem;
+	}
+	.ref-main .path {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.ref-actions {
+		display: flex;
+		align-items: center;
+		gap: 0.35rem;
+		flex-shrink: 0;
+	}
+	.ref-actions select {
+		width: auto;
+		min-width: 7.5rem;
+		margin: 0;
 	}
 	.prop-text {
 		flex: 1;
