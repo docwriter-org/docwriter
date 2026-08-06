@@ -1,0 +1,94 @@
+/* Compass-style "On this page" TOC: muted tree track + sliding primary thumb. */
+
+#table-of-contents-content.toc.dw-toc-clerk {
+	position: relative;
+	padding-inline-start: 0;
+	list-style: none;
+	margin: 0;
+}
+
+#table-of-contents-content.toc.dw-toc-clerk .toc-item,
+#table-of-contents-content.toc.dw-toc-clerk ul {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+#table-of-contents-content.toc.dw-toc-clerk .toc-item > a {
+	position: relative;
+	display: block;
+	padding-block: 0.375rem;
+	padding-inline-start: var(--dw-toc-item-pad, 1.25rem) !important;
+	transition: color 180ms ease;
+}
+
+/* Soft hierarchical connectors behind each entry. */
+#table-of-contents-content.toc.dw-toc-clerk .dw-toc-branch {
+	position: absolute;
+	inset-inline-start: 0;
+	top: -0.375rem;
+	bottom: 0;
+	height: calc(100% + 0.375rem);
+	pointer-events: none;
+	z-index: 0;
+	color: #64748b;
+}
+
+#table-of-contents-content.toc.dw-toc-clerk .dw-toc-branch line,
+#table-of-contents-content.toc.dw-toc-clerk .dw-toc-branch path {
+	stroke: currentColor;
+	stroke-width: 1;
+	fill: none;
+	opacity: 0.35;
+}
+
+html.dark #table-of-contents-content.toc.dw-toc-clerk .dw-toc-branch,
+.dark #table-of-contents-content.toc.dw-toc-clerk .dw-toc-branch {
+	color: #94a3b8;
+}
+
+/* Sliding primary highlight clipped over the full tree path. */
+#table-of-contents-content.toc.dw-toc-clerk .dw-toc-thumb {
+	position: absolute;
+	inset-inline-start: 0;
+	top: 0;
+	pointer-events: none;
+	z-index: 1;
+	transform-origin: center;
+	color: #7c3aed;
+}
+
+html.dark #table-of-contents-content.toc.dw-toc-clerk .dw-toc-thumb,
+.dark #table-of-contents-content.toc.dw-toc-clerk .dw-toc-thumb {
+	color: #a78bfa;
+}
+
+#table-of-contents-content.toc.dw-toc-clerk .dw-toc-thumb svg {
+	position: absolute;
+	inset-inline-start: 0;
+	top: 0;
+	overflow: visible;
+	color: inherit;
+	transition: clip-path 280ms cubic-bezier(0.22, 1, 0.36, 1);
+	clip-path: polygon(
+		0 var(--dw-track-top, 0px),
+		100% var(--dw-track-top, 0px),
+		100% var(--dw-track-bottom, 0px),
+		0 var(--dw-track-bottom, 0px)
+	);
+}
+
+#table-of-contents-content.toc.dw-toc-clerk .dw-toc-thumb path {
+	stroke: currentColor;
+	stroke-width: 1.5;
+	fill: none;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	#table-of-contents-content.toc.dw-toc-clerk .toc-item > a,
+	#table-of-contents-content.toc.dw-toc-clerk .dw-toc-thumb svg {
+		transition: none;
+	}
+}
