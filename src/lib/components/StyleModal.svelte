@@ -131,6 +131,14 @@
 	const activeProps = $derived(
 		(profile?.propositions ?? []).filter((p) => p.status === 'active' && p.enabled)
 	);
+	const calibrationProps = $derived(
+		(profile?.propositions ?? []).filter((p) => p.status === 'calibration' && p.enabled)
+	);
+	const hasCompiledSkill = $derived(
+		!!profile && ((profile.propositions?.length ?? 0) > 0 || profile.hasSkill)
+	);
+
+	let stepInitialized = false;
 
 	function phaseNotice(
 		phase: string,
@@ -166,14 +174,14 @@
 		return 'Working…';
 	}
 
-	function pushNotice(partial: Omit<Notice, 'id' | 'at' | 'timeLabel'>) {
+	function pushNotice(partial: Omit<Notice, 'id' | 'at' | 'timeLabel'>, timeLabel = 'just now') {
 		const at = Date.now();
 		notices = [
 			{
 				...partial,
 				id: `n_${at}_${Math.random().toString(36).slice(2, 6)}`,
 				at,
-				timeLabel: 'just now'
+				timeLabel
 			},
 			...notices
 		].slice(0, 24);
@@ -182,7 +190,56 @@
 		});
 	}
 
-	async function refresh() {
+	/** Reconstruct a short completed-run feed when reopening Review after analyze. */
+	function seedCompletedNotices(prof: {
+		activeCount: number;
+		unresolvedCalibration: number;
+		lastRunId?: string | null;
+	}) {
+		if (notices.length || analyzing) return;
+		if (!prof.lastRunId && !prof.unresolvedCalibration && !prof.activeCount) return;
+		const seeded: Notice[] = [
+			{
+				id: 'seed_ready',
+				title: 'Ready for your review',
+				description: `${prof.activeCount} active rules · ${prof.unresolvedCalibration} close calls to decide`,
+				tone: 'success',
+				icon: 'check',
+				timeLabel: 'last run',
+				at: Date.now()
+			},
+			{
+				id: 'seed_compile',
+				title: 'Author-style skill compiled',
+				description: 'SKILL.md is synced into this workspace.',
+				tone: 'info',
+				icon: 'package',
+				timeLabel: 'last run',
+				at: Date.now() - 1
+			},
+			{
+				id: 'seed_calib',
+				title: 'Close calls prepared',
+				description: 'Agent wrote A/B pairs for uncertain style choices.',
+				tone: 'info',
+				icon: 'scale',
+				timeLabel: 'last run',
+				at: Date.now() - 2
+			},
+			{
+				id: 'seed_synth',
+				title: 'Style rules synthesized',
+				description: 'Specialist findings merged into one profile.',
+				tone: 'info',
+				icon: 'merge',
+				timeLabel: 'last run',
+				at: Date.now() - 3
+			}
+		];
+		notices = seeded;
+	}
+
+	async function refresh(opts: { initStep?: boolean } = {}) {
 		loading = true;
 		try {
 			const [refsRes, profRes] = await Promise.all([
@@ -201,10 +258,15 @@
 			} else {
 				activeTrial = null;
 			}
-			if (!analyzing) {
-				if (!references.length) step = 1;
-				else if (pending.length > 0 || notices.length > 0) step = 2;
-				else if (profData.hasSkill) step = 3;
+			seedCompletedNotices(profData);
+			if (opts.initStep || !stepInitialized) {
+				stepInitialized = true;
+				if (!analyzing) {
+					if (!references.length) step = 1;
+					else if (pending.length > 0) step = 2;
+					else if (profData.hasSkill || (profData.propositions?.length ?? 0) > 0) step = 3;
+					else step = 1;
+				}
 			}
 		} finally {
 			loading = false;
@@ -213,11 +275,14 @@
 	}
 
 	onMount(() => {
-		if (open) void refresh();
+		if (open) void refresh({ initStep: true });
 	});
 
 	$effect(() => {
-		if (open) void refresh();
+		if (open) {
+			stepInitialized = false;
+			void refresh({ initStep: true });
+		}
 	});
 
 	async function addCurrent() {
@@ -561,9 +626,19 @@
 						<div class="notice-list" bind:this={noticeListEl}>
 							{#if notices.length === 0 && !analyzing}
 								<div class="empty compact">
-									<p class="muted">Run analysis to see live updates here.</p>
-									<button class="primary" disabled={!provider || !references.length} onclick={() => void startAnalysis()}>
-										Start analysis
+									<p class="muted">
+										{#if remainingTrials.length}
+											Close calls are ready on the right. Re-run anytime to rebuild.
+										{:else}
+											Run analysis to see live updates here.
+										{/if}
+									</p>
+									<button
+										class="primary"
+										disabled={!provider || !references.length}
+										onclick={() => void startAnalysis()}
+									>
+										{remainingTrials.length ? 'Re-run analysis' : 'Start analysis'}
 									</button>
 								</div>
 							{/if}
@@ -685,36 +760,66 @@
 					</section>
 				</div>
 			{:else}
-				{#if !profile?.hasSkill}
+				{#if !hasCompiledSkill}
 					<div class="hero-status">
-						<p class="muted">No active skill yet. Analyze from Sources or Review.</p>
+						<p class="muted">No skill draft yet. Analyze from Sources or Review.</p>
 						<button class="primary" onclick={() => (step = 1)}>Back to sources</button>
 					</div>
 				{:else}
 					<div class="skill-layout">
 						<div class="panel-head">
 							<div>
-								<h3>Active author-style skill</h3>
+								<h3>Author-style skill</h3>
 								<p class="muted">
-									{profile.activeCount} rules
-									{#if profile.stale}<span class="warn"> · stale vs references</span>{/if}
+									{activeProps.length} active
+									{#if calibrationProps.length}
+										· {calibrationProps.length} awaiting close calls
+									{/if}
+									{#if profile?.stale}<span class="warn"> · stale vs references</span>{/if}
 								</p>
 							</div>
 							<div class="foot">
-								<a class="primary" href="/api/style-profile/bundle">
-									<Download size={14} /> Download zip
-								</a>
+								{#if activeProps.length}
+									<a class="primary" href="/api/style-profile/bundle">
+										<Download size={14} /> Download zip
+									</a>
+								{/if}
+								{#if remainingTrials.length}
+									<button class="primary" onclick={() => (step = 2)}>Continue review</button>
+								{/if}
 								<button onclick={() => void startAnalysis()}>Rerun analysis</button>
 							</div>
 						</div>
-						<ul class="props">
-							{#each activeProps as p (p.id)}
-								<li>
-									<span class="tag">{p.family.replace(/_/g, ' ')}</span>
-									<span class="prop-text">{p.instruction}</span>
-								</li>
-							{/each}
-						</ul>
+						{#if activeProps.length}
+							<h4 class="skill-section">Active in SKILL.md</h4>
+							<ul class="props">
+								{#each activeProps as p (p.id)}
+									<li>
+										<span class="tag">{p.family.replace(/_/g, ' ')}</span>
+										<span class="prop-text">{p.instruction}</span>
+									</li>
+								{/each}
+							</ul>
+						{:else}
+							<div class="skill-banner">
+								<p>
+									Rules are drafted but not active yet — finish the
+									{remainingTrials.length || calibrationProps.length} close calls in Review
+									to promote them into SKILL.md.
+								</p>
+							</div>
+						{/if}
+						{#if calibrationProps.length}
+							<h4 class="skill-section">Awaiting your close calls</h4>
+							<ul class="props muted-list">
+								{#each calibrationProps as p (p.id)}
+									<li>
+										<span class="tag warn-tag">{p.family.replace(/_/g, ' ')}</span>
+										<span class="prop-text">{p.instruction}</span>
+									</li>
+								{/each}
+							</ul>
+						{/if}
 					</div>
 				{/if}
 			{/if}
@@ -1264,11 +1369,36 @@
 	}
 	.skill-layout {
 		height: 100%;
+		overflow: auto;
 	}
 	.skill-layout .props {
-		overflow: auto;
-		flex: 1;
 		padding-right: 0.25rem;
+	}
+	.skill-section {
+		margin: 1rem 0 0.25rem;
+		font-size: 0.78rem;
+		font-weight: 600;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		color: var(--text-secondary, #888);
+	}
+	.skill-banner {
+		padding: 0.9rem 1rem;
+		border-radius: 12px;
+		border: 1px solid color-mix(in srgb, #a15c2d 35%, var(--border-light, #e5e5e5));
+		background: color-mix(in srgb, #a15c2d 8%, var(--bg-surface, #fff));
+	}
+	.skill-banner p {
+		margin: 0;
+		font-size: 0.92rem;
+		line-height: 1.45;
+		color: var(--text, #333);
+	}
+	.warn-tag {
+		background: color-mix(in srgb, #a15c2d 16%, transparent);
+	}
+	.muted-list .prop-text {
+		color: var(--text-secondary, #555);
 	}
 
 	@media (max-width: 860px) {
