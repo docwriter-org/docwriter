@@ -597,7 +597,8 @@ if (typeof window !== 'undefined') {
 export const agentSettings = writable<AgentSettings>({
 	agency: 'conservative',
 	muted: false,
-	paused: false
+	paused: false,
+	intendedAudience: ''
 });
 
 /** When the agent is muted, the editor's diff overlay stays hidden by

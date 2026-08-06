@@ -10,7 +10,12 @@
 	}
 	let { onSettingsChange }: Props = $props();
 
-	let settings: AgentSettings = $state({ agency: 'conservative', muted: false, paused: false });
+	let settings: AgentSettings = $state({
+		agency: 'conservative',
+		muted: false,
+		paused: false,
+		intendedAudience: ''
+	});
 	let previewAgency: Agency | null = $state(null);
 	agentSettings.subscribe((v) => (settings = v));
 

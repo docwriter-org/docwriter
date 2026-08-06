@@ -21,6 +21,7 @@
 	import AgentModal from '$lib/components/AgentModal.svelte';
 	import Dialog from '$lib/components/Dialog.svelte';
 	import AgentSettingsPanel from '$lib/components/AgentSettingsPanel.svelte';
+	import AudiencePanel from '$lib/components/AudiencePanel.svelte';
 	import HooksPanel from '$lib/components/HooksPanel.svelte';
 	import SkillsPanel from '$lib/components/SkillsPanel.svelte';
 	import ApiKeysPanel from '$lib/components/ApiKeysPanel.svelte';
@@ -141,11 +142,17 @@
 	import type { AgentSettings, CommentThread, HistoryEntry, ImageAttachment, PendingReviewRound, ProposedRule, ProposedHook, Rule } from '$lib/types';
 	import type { MaterializedPendingReviewRound } from '$lib/review-rounds';
 
-	type AgentSettingsChange = {
-		type: 'agency';
-		from: AgentSettings['agency'];
-		to: AgentSettings['agency'];
-	};
+	type AgentSettingsChange =
+		| {
+				type: 'agency';
+				from: AgentSettings['agency'];
+				to: AgentSettings['agency'];
+		  }
+		| {
+				type: 'intendedAudience';
+				from: string;
+				to: string;
+		  };
 
 	type AgentSessionForSwitch = {
 		id: string;
@@ -928,7 +935,9 @@
 		aggressive: 2
 	};
 
-	function buildAutonomyChangeMessage(change: AgentSettingsChange): string {
+	function buildAutonomyChangeMessage(
+		change: Extract<AgentSettingsChange, { type: 'agency' }>
+	): string {
 		const copy = autonomyChangeCopy[change.to];
 		const wentUp = autonomyRank[change.to] > autonomyRank[change.from];
 		if (wentUp) {
@@ -937,11 +946,40 @@
 		return `Autonomy changed to ${copy.label}. ${copy.instruction} Use this policy from now on. Do not start new proactive work solely because autonomy was lowered.`;
 	}
 
+	function buildAudienceChangeMessage(audience: string): string {
+		if (!audience) {
+			return 'The user cleared the intended audience. Stop targeting a specific reader from now on.';
+		}
+		return (
+			`The user set the intended audience to: "${audience}". ` +
+			`Write for that reader from now on. Review the open documents with that audience in mind. ` +
+			`If a useful edit or comment follows, make it; otherwise keep the response brief.`
+		);
+	}
+
 	async function handleAgentSettingsChange(next: AgentSettings, change?: AgentSettingsChange) {
 		await persistAgentSettings(next);
 		if (change?.type === 'agency' && !next.paused) {
 			void submit(buildAutonomyChangeMessage(change));
+		} else if (change?.type === 'intendedAudience' && !next.paused) {
+			void submit(buildAudienceChangeMessage(change.to));
 		}
+	}
+
+	async function handleAudienceSave(audience: string) {
+		let prev = '';
+		let next: AgentSettings | null = null;
+		agentSettings.update((s) => {
+			prev = (s.intendedAudience ?? '').trim();
+			next = { ...s, intendedAudience: audience };
+			return next;
+		});
+		if (!next || prev === audience) return;
+		await handleAgentSettingsChange(next, {
+			type: 'intendedAudience',
+			from: prev,
+			to: audience
+		});
 	}
 
 	function isAcceptedEditsMessage(trigger?: string): boolean {
@@ -2214,6 +2252,7 @@
 					onClick: () => editorLineNumbers.update((v) => !v)
 				},
 				{ kind: 'panel', label: 'Writing references', panelKey: 'references' },
+				{ kind: 'panel', label: 'Intended audience', panelKey: 'audience' },
 				{ kind: 'panel', label: 'Skills', panelKey: 'skills' },
 				{ kind: 'panel', label: 'Hooks', panelKey: 'hooks' },
 				{ kind: 'divider' },
@@ -2980,6 +3019,7 @@
 					references: referencesPanelSnippet,
 					rules: rulesPanelSnippet,
 					agentSettings: agentSettingsSnippet,
+					audience: audiencePanelSnippet,
 					hooks: hooksPanelSnippet,
 					skills: skillsPanelSnippet,
 					apiKeys: apiKeysPanelSnippet
@@ -3010,6 +3050,10 @@
 
 	{#snippet agentSettingsSnippet()}
 		<AgentSettingsPanel onSettingsChange={handleAgentSettingsChange} />
+	{/snippet}
+
+	{#snippet audiencePanelSnippet()}
+		<AudiencePanel onSave={(audience) => void handleAudienceSave(audience)} />
 	{/snippet}
 
 	{#snippet hooksPanelSnippet()}
