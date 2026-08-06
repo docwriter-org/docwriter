@@ -207,7 +207,7 @@ async function runAgentTurnForStopHook(origin, markerPath) {
 	const stream = await response.text();
 	assert.equal(response.status, 200, stream);
 	assert(existsSync(markerPath), `Automatic Stop hook did not create ${markerPath}`);
-	assert.match(stream, /"type":"hook_run"/);
+	assert.match(stream, /event: hook_run/);
 	assert.match(stream, /"hookId":"stop-marker"/);
 	assert.match(stream, /"status":"done"/);
 	return true;
