@@ -189,6 +189,18 @@ try {
 	collector = startEventCollector(origin, () => logs.join(''));
 	await collector.waitFor((event) => event.event === 'connected');
 
+	const watcherProbe = join(workspace, 'watch-probe.tex');
+	const beforeProbe = collector.events.length;
+	await writeFile(watcherProbe, '% watcher probe\n');
+	await collector.waitFor(
+		(event) =>
+			event.event === 'reload' &&
+			Array.isArray(event.data?.files) &&
+			event.data.files.includes('watch-probe.tex'),
+		beforeProbe
+	);
+	await rm(watcherProbe);
+
 	const latexHook = {
 		id: 'latex',
 		event: 'Stop',
