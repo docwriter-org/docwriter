@@ -40,8 +40,17 @@ The matcher checks tool names for Edit or Write. It does not check the file exte
 
 Use a Git hook when you want every completed agent turn to commit pending workspace changes and push them to the current branch's configured upstream branch.
 
-The standard template stages all changes with `git add -A`. If the staged files contain changes, it creates a commit named `docwriter: auto-commit` and pushes it. The private template performs the same steps but does not stage `.docwriter/`, `.claude/`, or `CLAUDE.md`.
+Before using an automatic Git hook, make sure commits and a normal push work from the workspace:
 
-Both templates run at **Stop**, after the main agent finishes a turn. Review the command and repository state before you enable automatic pushes, because the hook can send every staged workspace change to the remote repository.
+```sh
+git status
+git push
+```
 
-Confirm that the repository has a remote and an upstream branch, then use **Run now** on a test change. You should see a **done** status, a clean `git status` except for expected excluded files, and the new commit on the remote branch.
+If `git push` reports that the branch has no upstream, set it once with `git push -u origin <branch>`. Configure Git credentials and `user.name` / `user.email` in the shell when Git asks for them.
+
+Choose one of the Git templates when you want to commit and push the current workspace changes at the end of an agent turn. The standard template stages all changes with `git add -A`. The private template does not stage `.docwriter/`, `.claude/`, or `CLAUDE.md`.
+
+Both templates run at **Stop** and require a configured remote and upstream branch. They stage every non-excluded workspace change, not only the active document. Review `git status`, the command, and the repository state before enabling an automatic push.
+
+Use **Run now** on a test change. You should see a **done** status, a clean `git status` except for expected excluded files, and the new commit on the remote branch.

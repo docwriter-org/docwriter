@@ -63,18 +63,34 @@ export const POST: RequestHandler = async ({ request }) => {
 		/* ignore */
 	}
 	const event = typeof body.event === 'string' ? body.event : 'reload';
-	// The CLI watcher can't tell external edits from the server's own
-	// debounced Y.Doc → markdown flushes (typing produces one every second).
-	// If the changed file holds exactly what we last wrote, it's our own
-	// flush echoing back — broadcasting it would remount the editor while
-	// the user types. Drop it.
-	if (
-		event === 'reload' &&
-		typeof body.file === 'string' &&
-		body.file &&
-		isOwnFlushEcho(resolve(WORKSPACE_ROOT, body.file))
-	) {
-		return new Response('ok');
+	if (event === 'reload') {
+		// The CLI watcher can't tell external edits from the server's own
+		// debounced Y.Doc → disk flushes. Filter those echoes out before
+		// broadcasting. Newer CLIs batch multi-file changes (for example a
+		// `git pull`) in `files`; retain any genuinely external paths so one
+		// own flush cannot hide the rest of the batch.
+		const files = Array.isArray(body.files)
+			? body.files.filter((file): file is string => typeof file === 'string' && file.length > 0)
+			: [];
+		if (files.length > 0) {
+			const externalFiles = files.filter(
+				(file) => !isOwnFlushEcho(resolve(WORKSPACE_ROOT, file))
+			);
+			if (externalFiles.length === 0) return new Response('ok');
+			body.files = externalFiles;
+			if (
+				typeof body.file === 'string' &&
+				!externalFiles.includes(body.file)
+			) {
+				delete body.file;
+			}
+		} else if (
+			typeof body.file === 'string' &&
+			body.file &&
+			isOwnFlushEcho(resolve(WORKSPACE_ROOT, body.file))
+		) {
+			return new Response('ok');
+		}
 	}
 	const data = JSON.stringify(body);
 	for (const ctrl of clients) push(ctrl, `event: ${event}\ndata: ${data}\n\n`);

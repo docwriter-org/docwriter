@@ -10,11 +10,13 @@ Use watch mode when another editor, script, or Git command changes workspace fil
 docwriter --watch ~/writing/my-project
 ```
 
-When a supported workspace file changes, watch mode reloads your browser. The reload protects you from continuing to work from an old view of the file. Watch mode reports changes to Markdown, text, JSON, YAML, and YML files. It ignores folders such as `.git`, `.docwriter`, `node_modules`, and `.svelte-kit`.
+When a supported workspace file changes, watch mode reloads your browser so you do not continue working from an old view. It reports changes to writing sources such as Markdown, text, JSON, YAML, TeX, BibTeX, style, and class files. It also reports changes to preview outputs such as PDF, HTML, SVG, and common image formats. Watch mode ignores implementation and runtime folders such as `.git` and `.docwriter`.
 
 ## An external change does not appear
 
 Confirm that you started DocWriter with `--watch`. Also confirm that the changed file is inside the workspace and has a supported text extension.
+
+The command line watcher batches rapid multi-file changes, sends one reload event to the browser, refreshes the file tree, and remounts the active tab from the server. Changed preview outputs reload in place.
 
 Reload the browser if watch mode was already running. Reloading refreshes the file tree and shows the latest saved text. Your project file stays on disk.
 
@@ -30,6 +32,6 @@ An external change can also make an open proposal stale, which means the proposa
 
 ## A Git operation changed files
 
-Pull before the writing session when possible. You run Git pull yourself.
+You run Git pull yourself because DocWriter does not pull a repository automatically. Pull before the writing session, resolve conflicts in Git, and then let DocWriter reload the resulting files. Watch mode handles a multi-file pull, including changes to `.tex`, `.bib`, and generated PDFs, as one batch.
 
-Resolve Git conflicts before you return to DocWriter, then let watch mode reload the resulting files. Resolving conflicts first protects the chosen Git version from being replaced by an older open tab. A Git reset, checkout, or conflict resolution can discard file text, so copy or commit work that you need before running the Git command.
+Resolve Git conflicts before you return to DocWriter so an older open tab does not replace the version you chose in Git. A Git reset, checkout, or conflict resolution can discard file text, so copy or commit work that you need before running the Git command.
