@@ -282,6 +282,7 @@ if (watchFlag) {
 	let debounce = null;
 	const pendingFiles = new Set();
 	let pendingUnnamedChange = false;
+	const debugWatch = process.env.DOCWRITER_DEBUG_WATCH === '1';
 
 	// Server-managed state (.docwriter/*) must never trigger reloads — the
 	// server writes there on every keystroke/settings change. Note fs.watch
@@ -342,6 +343,11 @@ if (watchFlag) {
 			);
 			pendingFiles.clear();
 			pendingUnnamedChange = false;
+			if (debugWatch) {
+				console.log(
+					`[docwriter] --watch batch: sources=${JSON.stringify(sourceFiles)} all=${JSON.stringify(files)} unnamed=${unnamedChange}`
+				);
+			}
 			try {
 				if (sourceFiles.length > 0 || unnamedChange) {
 					await fetch(`http://127.0.0.1:${port}/api/live`, {
@@ -381,7 +387,10 @@ if (watchFlag) {
 	}
 
 	try {
-		fsWatch(docwriterRoot, { recursive: true }, (_event, filename) => {
+		fsWatch(docwriterRoot, { recursive: true }, (event, filename) => {
+			if (debugWatch) {
+				console.log(`[docwriter] --watch raw: ${event} ${String(filename ?? '')}`);
+			}
 			scheduleReload(filename);
 		});
 		console.log(`[docwriter] Watching ${docwriterRoot} for changes...`);

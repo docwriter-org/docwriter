@@ -53,7 +53,7 @@ async function waitForServer(origin, logs) {
 	throw new Error(`DocWriter did not start in time.\n${logs.join('')}`);
 }
 
-function startEventCollector(origin) {
+function startEventCollector(origin, diagnostics = () => '') {
 	const controller = new AbortController();
 	const events = [];
 	const collecting = (async () => {
@@ -97,7 +97,7 @@ function startEventCollector(origin) {
 				await new Promise((resolveWait) => setTimeout(resolveWait, 50));
 			}
 			throw new Error(
-				`Timed out waiting for live event. Saw:\n${JSON.stringify(events.slice(from), null, 2)}`
+				`Timed out waiting for live event. Saw:\n${JSON.stringify(events.slice(from), null, 2)}\n\nServer logs:\n${diagnostics()}`
 			);
 		},
 		async close() {
@@ -179,14 +179,14 @@ try {
 	const logs = [];
 	child = spawn(process.execPath, [CLI_PATH, '--watch', '--no-open', '--port', String(port), workspace], {
 		cwd: REPO_ROOT,
-		env: process.env,
+		env: { ...process.env, DOCWRITER_DEBUG_WATCH: '1' },
 		stdio: ['ignore', 'pipe', 'pipe']
 	});
 	child.stdout.on('data', (chunk) => logs.push(chunk.toString()));
 	child.stderr.on('data', (chunk) => logs.push(chunk.toString()));
 	await waitForServer(origin, logs);
 
-	collector = startEventCollector(origin);
+	collector = startEventCollector(origin, () => logs.join(''));
 	await collector.waitFor((event) => event.event === 'connected');
 
 	const latexHook = {
