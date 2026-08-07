@@ -168,6 +168,12 @@ export interface StyleProposition {
 }
 
 /**
+ * Confidence at or above this skips calibration and lands in the skill as
+ * `active`. Below it, the writer judges an A/B card first.
+ */
+export const STYLE_AUTO_ACTIVE_CONFIDENCE = 0.9;
+
+/**
  * Whether a proposition is part of the skill the writing agent follows. This is
  * the central question of the feature, so it has one definition rather than a
  * status list spelled out at each of its dozen call sites.

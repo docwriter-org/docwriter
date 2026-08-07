@@ -118,6 +118,7 @@ export async function generateCalibrationTrial(input: {
 		const generated = await runStructuredStyleAgent<{ variant: string; targetExplanation: string }>({
 			providerId: input.provider,
 			model: input.model,
+			effort: 'medium',
 			systemPrompt: `You rewrite one passage of the author's own writing to test a single style proposition.
 
 Return the passage rewritten so that it no longer follows the proposition, changing nothing else. Keep the meaning, facts, names, numbers, citations, and length as close to the original as you can. The rewrite must still be good, publishable prose — it is an alternative, not a worse version. Change only what the proposition governs.
@@ -179,6 +180,7 @@ async function reviseFromChoice(input: {
 	return runStructuredStyleAgent({
 		providerId: input.provider,
 		model: input.model,
+		effort: 'medium',
 		systemPrompt: `Update one style proposition from direct user feedback. The chosen passage is a positive example. Derive a concise descriptive statement and an imperative writing instruction. Do not infer subject matter preferences. Call submit_calibration_revision once.`,
 		prompt: `Previous proposition:\n${JSON.stringify(input.proposition)}\n\nFeedback reason:\n${input.reason}\n\nPositive example:\n${input.chosenText}`,
 		toolName: 'submit_calibration_revision',

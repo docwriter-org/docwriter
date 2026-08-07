@@ -9,7 +9,11 @@ import type {
 	StyleProfile,
 	StyleProposition
 } from '$lib/style-profile';
-import { deriveStyleProfileStatus, isActiveProposition } from '$lib/style-profile';
+import {
+	deriveStyleProfileStatus,
+	isActiveProposition,
+	STYLE_AUTO_ACTIVE_CONFIDENCE
+} from '$lib/style-profile';
 import type { ProviderEvent, ProviderId, ToolDefinition } from '$lib/server/providers/types';
 import { getProvider } from '$lib/server/providers';
 import { analyzeDocuments } from './analyze-style.mjs';
@@ -293,7 +297,9 @@ Leave out:
 
 statement = the habit in one plain sentence. instruction = what to do when writing. Prefer fewer sharp ones.
 
-Think out loud before you submit. Write what you notice as you read: the patterns you are chasing, the ones you tried and threw out because the evidence was thin, the passages that changed your mind. The writer can watch this while you work, and a silent run of several minutes looks broken. Keep it to short paragraphs as you go, not one essay at the end.
+Do not restate or summarize the sources. Do not paraphrase each paper or post before deciding. Scan for habits, then submit.
+
+Status for the writer: at most two or three short lines while you work (e.g. which habit you are checking, or that a contrast failed grounding). No essay, no source-by-source walkthrough, no second pass that repeats what you already wrote.
 
 Then call submit_style_families once with everything.`;
 }
@@ -351,7 +357,7 @@ function specialistPrompt(
 		`Words this author reuses: ${vocabulary.join(', ')}`,
 		'',
 		'The writing. Each source is labeled with what the author says it is.',
-		'Read it, then write ghostwriter instructions in plain language:',
+		'Scan for habits in your families. Do not summarize the sources back. Submit propositions:',
 		'',
 		excerpts
 	].join('\n');
@@ -373,7 +379,9 @@ Drop propositions that:
 - are so general every competent writer already does them,
 - lean on literary or linguistics jargon the ghostwriter does not need.
 
-Keep authored habits as "this is how they write" and inspiration preferences as "aim for this" when those differ. Smallest useful set wins. Call submit_style_profile exactly once.`;
+Keep authored habits as "this is how they write" and inspiration preferences as "aim for this" when those differ. Smallest useful set wins.
+
+Work fast: decide merges, then call submit_style_profile exactly once. Do not restate the input propositions. At most one short status line before the tool call — no merge essay.`;
 }
 
 export async function runStructuredStyleAgent<T>(input: {
@@ -389,6 +397,12 @@ export async function runStructuredStyleAgent<T>(input: {
 	abortSignal?: AbortSignal;
 	/** Observe the agent's working trace. Purely for display. */
 	onEvent?: (event: ProviderEvent) => void;
+	/**
+	 * Provider reasoning budget. Style specialists and synthesis default to
+	 * `low` — long adaptive thinking mostly restated the sources. Calibration
+	 * rewrites stay at `medium` when they need a careful paraphrase.
+	 */
+	effort?: 'low' | 'medium' | 'high';
 }): Promise<T> {
 	let submission: T | undefined;
 	const toolDefinition: ToolDefinition = {
@@ -412,7 +426,7 @@ export async function runStructuredStyleAgent<T>(input: {
 		model: input.model,
 		allowedTools: [input.toolName],
 		abortSignal: input.abortSignal,
-		effort: 'medium',
+		effort: input.effort ?? 'low',
 		isolatedTools: true
 	}, [toolDefinition])) {
 		input.onEvent?.(event);
@@ -512,6 +526,7 @@ async function runSpecialist(
 		toolName: 'submit_style_families',
 		toolDescription: 'Submit all grounded style propositions for the assigned feature families.',
 		inputSchema: draftJsonSchema(),
+		effort: 'low',
 		onEvent: (event) => forwardSpecialistEvent(run, specialist.id, event),
 		parse: (value) => {
 			const parsed = SpecialistSubmissionSchema.parse(value);
@@ -557,10 +572,11 @@ async function runSynthesis(
 			providerId: run.state.provider as ProviderId,
 			model: run.state.model,
 			systemPrompt: synthesisSystemPrompt(),
-			prompt: `Synthesize these specialist propositions.\n\n${JSON.stringify({ propositions: drafts })}`,
+			prompt: `Merge these specialist propositions. Decide overlaps, then submit once.\n\n${JSON.stringify({ propositions: drafts })}`,
 			toolName: 'submit_style_profile',
 			toolDescription: 'Submit the complete merged and grounded author style profile.',
 			inputSchema: draftJsonSchema(),
+			effort: 'low',
 			// Synthesis is a specialist like the others; without this its trace
 			// panel stayed empty even while it was working.
 			onEvent: (event) => forwardSpecialistEvent(run, 'synthesis', event),
@@ -701,8 +717,8 @@ async function executeRun(run: ManagedRun, force: boolean) {
 			inspirationReferenceCount: report.documents.filter((document) => document.role === 'inspiration').length,
 			confidenceBins: {
 				low: propositions.filter((item) => item.confidence < 0.5).length,
-				medium: propositions.filter((item) => item.confidence >= 0.5 && item.confidence < 0.75).length,
-				high: propositions.filter((item) => item.confidence >= 0.75).length
+				medium: propositions.filter((item) => item.confidence >= 0.5 && item.confidence < STYLE_AUTO_ACTIVE_CONFIDENCE).length,
+				high: propositions.filter((item) => item.confidence >= STYLE_AUTO_ACTIVE_CONFIDENCE).length
 			},
 			failedSpecialists: run.state.specialists.filter((item) => item.status === 'error').map((item) => item.id)
 		});

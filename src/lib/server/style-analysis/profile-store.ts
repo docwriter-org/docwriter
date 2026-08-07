@@ -12,6 +12,7 @@ import {
 	deriveStyleProfileStatus,
 	isActiveProposition,
 	STYLE_ANALYZER_VERSION,
+	STYLE_AUTO_ACTIVE_CONFIDENCE,
 	STYLE_PROFILE_SCHEMA_VERSION
 } from '$lib/style-profile';
 import { DOCWRITER_DIR, ensureDocWriterDir } from '$lib/server/document-files';
@@ -189,7 +190,7 @@ export function propositionFromDraft(
 		...(focus.some(Boolean) ? { focus } : {}),
 		...(contrast ? { contrast } : {}),
 		confidence,
-		status: confidence >= 0.75 ? 'active' : 'pending',
+		status: confidence >= STYLE_AUTO_ACTIVE_CONFIDENCE ? 'active' : 'pending',
 		createdAt: now,
 		updatedAt: now
 	};
