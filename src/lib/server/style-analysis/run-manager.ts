@@ -91,16 +91,36 @@ function publicRun(run: ManagedRun): StyleAnalysisRun {
 	return JSON.parse(JSON.stringify(run.state)) as StyleAnalysisRun;
 }
 
+/** Serialize profile writes — specialists finish in parallel and would otherwise
+ *  race the same style-profile.json. */
+const profileWriteQueues = new Map<string, Promise<void>>();
+
+function scheduleProfileWrite(run: ManagedRun) {
+	if (!run.profile) return;
+	run.profile.lastRun = publicRun(run);
+	const previous = profileWriteQueues.get(run.state.id) ?? Promise.resolve();
+	const next = previous
+		.catch(() => {
+			/* prior write failure must not block the next snapshot */
+		})
+		.then(() => {
+			if (!run.profile) return;
+			run.profile.lastRun = publicRun(run);
+			run.profile = writeStyleProfile(run.profile);
+		});
+	profileWriteQueues.set(run.state.id, next);
+}
+
 function emit(run: ManagedRun, type: StyleRunEvent['type'], message?: string) {
 	run.state.updatedAt = now();
 	const snapshot = publicRun(run);
 	if (run.profile) {
 		run.profile.lastRun = snapshot;
-		// Specialists run in parallel; persisting on every status tick races the
-		// same JSON file. Keep lastRun in memory and write only at terminal events
-		// (executeRun also writes explicitly at phase boundaries).
-		if (type === 'completed' || type === 'error' || type === 'cancelled') {
-			run.profile = writeStyleProfile(run.profile);
+		// Persist on specialist transitions + terminal events so the status pill
+		// (which polls the on-disk profile) moves in real time. Progress ticks
+		// stay memory-only — they fire often and don't need a disk round-trip.
+		if (type === 'specialist' || type === 'completed' || type === 'error' || type === 'cancelled') {
+			scheduleProfileWrite(run);
 		}
 	}
 	run.emitter.emit('event', { type, run: snapshot, message } satisfies StyleRunEvent);
@@ -114,12 +134,25 @@ function emitLog(run: ManagedRun, log: SpecialistLogEntry) {
 	} satisfies StyleRunEvent);
 }
 
+/** Map finished specialists onto the 35→75 reflecting window so the bar moves
+ *  while the three parallel agents are still in flight. */
+function refreshReflectingProgress(run: ManagedRun) {
+	if (run.state.phase !== 'reflecting') return;
+	const specialists = run.state.specialists.filter((specialist) => specialist.id !== 'synthesis');
+	if (!specialists.length) return;
+	const finished = specialists.filter((specialist) =>
+		specialist.status === 'completed' || specialist.status === 'error' || specialist.status === 'cancelled'
+	).length;
+	run.state.progress = 35 + Math.round((finished / specialists.length) * 40);
+}
+
 function updateSpecialist(
 	run: ManagedRun,
 	id: SpecialistRunState['id'],
 	patch: Partial<SpecialistRunState>
 ) {
 	run.state.specialists = run.state.specialists.map((specialist) => specialist.id === id ? { ...specialist, ...patch } : specialist);
+	refreshReflectingProgress(run);
 	emit(run, 'specialist');
 }
 
@@ -695,6 +728,7 @@ async function executeRun(run: ManagedRun, force: boolean) {
 		for (const key of specialistForwarders.keys()) {
 			if (key.startsWith(`${run.state.id}:`)) specialistForwarders.delete(key);
 		}
+		profileWriteQueues.delete(run.state.id);
 	}
 }
 
