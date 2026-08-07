@@ -146,9 +146,9 @@ export type PropositionStatus =
 export interface StyleProposition {
 	id: string;
 	family: StyleFamily;
-	/** The pattern, in a sentence you could tell a ghostwriter. */
+	/** The habit in plain language, as you'd tell a ghostwriter out loud. */
 	statement: string;
-	/** What to actually do when writing. */
+	/** What to do when writing, as a plain imperative. */
 	instruction: string;
 	/** Passages from the author's writing showing this proposition in action. */
 	examples: string[];
