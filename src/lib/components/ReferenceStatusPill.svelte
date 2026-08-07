@@ -20,8 +20,9 @@
 		if (summary.status === 'stale') return 'Update style';
 		if (summary.status === 'error') return 'Analysis failed';
 		if (summary.activeCount === 0 && summary.unresolvedCount > 0) return 'Calibrate references';
-		if (summary.unresolvedCount > 0) return `Style active · ${summary.unresolvedCount} choices`;
-		return 'Style active';
+		// Outstanding choices are the dialog's business; the pill only reports
+		// that a style is in force.
+		return 'Style uploaded';
 	});
 
 	const tone = $derived.by(() => {
@@ -42,9 +43,6 @@
 		if (summary.status === 'analyzing') return 'Measuring your references and drafting style guidance.';
 		if (summary.status === 'error') return 'The last style analysis failed.\nClick to see what went wrong.';
 		if (summary.status === 'stale') return 'Your references changed since the last analysis.\nClick to re-run it.';
-		if (summary.unresolvedCount > 0) {
-			return `Your style is active. ${summary.unresolvedCount} close call${summary.unresolvedCount === 1 ? '' : 's'} left to resolve.`;
-		}
 		return 'Your author style is active and guiding the writing agent.';
 	});
 

@@ -8,7 +8,7 @@ import type {
 	StyleProfileSummary,
 	StyleProposition
 } from '$lib/style-profile';
-import { STYLE_ANALYZER_VERSION, STYLE_PROFILE_SCHEMA_VERSION } from '$lib/style-profile';
+import { isActiveProposition, STYLE_ANALYZER_VERSION, STYLE_PROFILE_SCHEMA_VERSION } from '$lib/style-profile';
 import { DOCWRITER_DIR, ensureDocWriterDir } from '$lib/server/document-files';
 import { writeJsonAtomic } from '$lib/server/file-utils';
 import { listStyleReferences } from '$lib/server/references';
@@ -98,8 +98,9 @@ function roleAgreement(measurement: FeatureMeasurement): number {
 	return Math.max(0, 1 - Math.min(1, Math.abs(authored - inspiration) / Math.max(0.01, Math.abs(authored) + Math.abs(inspiration))));
 }
 
-/** Quotes drift in punctuation and spacing; match on the shape of the words. */
-function normalizeForMatch(text: string): string {
+/** Quotes drift in punctuation and spacing; match on the shape of the words.
+ *  Shared so the compiler locates an example the same way grounding stored it. */
+export function normalizeForMatch(text: string): string {
 	return text
 		.toLowerCase()
 		.replace(/[“”„]/g, '"')
@@ -114,17 +115,36 @@ function normalizeForMatch(text: string): string {
  * or it was invented. This replaced citing metric and evidence IDs, which
  * proved only that the model could copy an identifier.
  */
+function isVerified(example: string, haystack: string): boolean {
+	const needle = normalizeForMatch(example);
+	return needle.length >= 12 && haystack.includes(needle);
+}
+
 export function verifiedExamples(examples: string[], corpus: string): string[] {
 	const haystack = normalizeForMatch(corpus);
-	return examples.filter((example) => {
-		const needle = normalizeForMatch(example);
-		return needle.length >= 12 && haystack.includes(needle);
-	});
+	return examples.filter((example) => isVerified(example, haystack));
+}
+
+/** Stable id for a proposition. Shared so a restored skill and a fresh
+ *  analysis of the same propositions agree on ids. */
+export function propositionId(family: string, instruction: string, index: number): string {
+	return `style_${createHash('sha256').update(`${family}:${instruction}:${index}`).digest('hex').slice(0, 14)}`;
 }
 
 export function validateDraftGrounding(draft: PropositionDraft, corpus: string): void {
 	if (!verifiedExamples(draft.examples, corpus).length) {
 		throw new Error(`No example for "${draft.statement}" appears in the sources`);
+	}
+	if (draft.contrast) {
+		// Half of the pair is the author's own writing and must be found in it;
+		// the other half is a rewrite and must not be, or there is no contrast
+		// to judge and the comparison shows the writer two identical passages.
+		if (!verifiedExamples([draft.contrast.passage], corpus).length) {
+			throw new Error(`The contrast passage for "${draft.statement}" is not from the sources`);
+		}
+		if (normalizeForMatch(draft.contrast.rewritten) === normalizeForMatch(draft.contrast.passage)) {
+			throw new Error(`The contrast for "${draft.statement}" did not change the passage`);
+		}
 	}
 }
 
@@ -133,24 +153,39 @@ export function propositionFromDraft(
 	corpus: string,
 	index = 0
 ): StyleProposition {
-	const examples = verifiedExamples(draft.examples, corpus);
+	// Kept together: an unverified example is dropped, and its focus sentence
+	// has to go with it or the two arrays stop lining up.
+	const haystack = normalizeForMatch(corpus);
+	const kept = draft.examples
+		.map((example, at) => ({ example, focus: draft.focus?.[at] }))
+		.filter(({ example }) => isVerified(example, haystack));
+	const examples = kept.map((item) => item.example);
 	if (!examples.length) {
 		throw new Error(`No example for "${draft.statement}" appears in the sources`);
 	}
+	// A focus sentence only means anything if it is inside its own example.
+	const focus = kept.map(({ example, focus: sentence }) =>
+		sentence && normalizeForMatch(example).includes(normalizeForMatch(sentence)) ? sentence : ''
+	);
 	// A pattern shown once is a coincidence; shown three times it is a habit.
 	const support = Math.min(1, examples.length / 3);
 	const confidence = Math.round(Math.max(0, Math.min(1, draft.confidence * (0.6 + 0.4 * support))) * 1000) / 1000;
 	const now = Date.now();
-	const propositionId = `style_${createHash('sha256')
-		.update(`${draft.family}:${draft.instruction}:${index}`)
-		.digest('hex')
-		.slice(0, 14)}`;
+	// A contrast whose passage is not in the sources is dropped rather than
+	// carried: the trial falls back to building one on demand, which is worse
+	// but honest, instead of showing the writer an invented passage as theirs.
+	const contrast =
+		draft.contrast && verifiedExamples([draft.contrast.passage], corpus).length
+			? draft.contrast
+			: undefined;
 	return {
-		id: propositionId,
+		id: propositionId(draft.family, draft.instruction, index),
 		family: draft.family,
 		statement: draft.statement,
 		instruction: draft.instruction,
 		examples,
+		...(focus.some(Boolean) ? { focus } : {}),
+		...(contrast ? { contrast } : {}),
 		confidence,
 		status: confidence >= 0.75 ? 'active' : 'pending',
 		createdAt: now,
@@ -172,7 +207,7 @@ export function styleProfileSummary(): StyleProfileSummary {
 		|| createHash('sha256')
 			.update(references.map((reference) => `${reference.id}:${reference.role}:${reference.contentHash ?? ''}`).sort().join('|'))
 			.digest('hex') !== profile.sourceSnapshotHash;
-	const activeCount = profile.propositions.filter((proposition) => ['active', 'confirmed'].includes(proposition.status)).length;
+	const activeCount = profile.propositions.filter(isActiveProposition).length;
 	const unresolvedCount = profile.propositions.filter((proposition) => proposition.status === 'pending').length;
 	const status = stale && profile.status !== 'analyzing' ? 'stale' : profile.status;
 	return { status, referenceCount: references.length, activeCount, unresolvedCount, stale, profile: styleProfileForClient({ ...profile, status }) };

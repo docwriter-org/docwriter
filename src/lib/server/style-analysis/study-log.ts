@@ -1,7 +1,19 @@
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+/**
+ * Study telemetry for the author-style feature: which arm a workspace is in
+ * (no references / raw references / compiled skill) and what happened under it.
+ *
+ * Rows in SQLite, not a JSONL file. This is runtime state, not something a
+ * human opens, so it sits with rules, hooks and reviewers. A pre-existing
+ * events.jsonl is imported once and then left alone.
+ *
+ * Nothing anyone wrote is recorded. `scrubStyleStudyData` strips every prose
+ * field before a row is written, so the log knows that a proposition was
+ * confirmed in 11 seconds and never what either passage said.
+ */
+import { existsSync, readFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
-import { appendFileSync } from 'node:fs';
 import { DOCWRITER_DIR } from '$lib/server/document-files';
+import { getDb } from '$lib/server/db';
 
 export const STYLE_STUDY_DIR = join(DOCWRITER_DIR, 'style-study');
 export const STYLE_STUDY_EVENTS_FILE = join(STYLE_STUDY_DIR, 'events.jsonl');
@@ -16,23 +28,60 @@ export function scrubStyleStudyData(value: unknown): unknown {
 		.map(([key, item]) => [key, scrubStyleStudyData(item)]));
 }
 
+let importChecked = false;
+
+/** Carry a pre-SQLite log across, once, then rename it out of the way. */
+function importLegacyLog() {
+	if (importChecked) return;
+	importChecked = true;
+	if (!existsSync(STYLE_STUDY_EVENTS_FILE)) return;
+	try {
+		const db = getDb();
+		const insert = db.prepare(
+			'INSERT INTO style_study_events (type, timestamp, data) VALUES (?, ?, ?)'
+		);
+		db.transaction(() => {
+			for (const line of readFileSync(STYLE_STUDY_EVENTS_FILE, 'utf8').split('\n')) {
+				if (!line.trim()) continue;
+				try {
+					const { type, timestamp, ...rest } = JSON.parse(line);
+					if (typeof type !== 'string') continue;
+					insert.run(type, typeof timestamp === 'number' ? timestamp : 0, JSON.stringify(rest));
+				} catch {
+					// A corrupt line is not worth failing the import over.
+				}
+			}
+		})();
+		renameSync(STYLE_STUDY_EVENTS_FILE, `${STYLE_STUDY_EVENTS_FILE}.imported`);
+	} catch {
+		// Telemetry must never break the app.
+	}
+}
+
 export function appendStyleStudyEvent(type: string, data: Record<string, unknown> = {}) {
-	if (!existsSync(STYLE_STUDY_DIR)) mkdirSync(STYLE_STUDY_DIR, { recursive: true });
-	const event = {
-		schemaVersion: 1,
-		type,
-		timestamp: Date.now(),
-		...scrubStyleStudyData(data) as Record<string, unknown>
-	};
-	appendFileSync(STYLE_STUDY_EVENTS_FILE, `${JSON.stringify(event)}\n`, 'utf8');
+	try {
+		importLegacyLog();
+		const scrubbed = scrubStyleStudyData(data) as Record<string, unknown>;
+		getDb()
+			.prepare('INSERT INTO style_study_events (type, timestamp, data) VALUES (?, ?, ?)')
+			.run(type, Date.now(), JSON.stringify({ schemaVersion: 1, ...scrubbed }));
+	} catch {
+		// Same: losing a metric is not a reason to fail a render or a pass.
+	}
 }
 
 export function readStyleStudyEvents(): Array<Record<string, unknown>> {
-	if (!existsSync(STYLE_STUDY_EVENTS_FILE)) return [];
-	return readFileSync(STYLE_STUDY_EVENTS_FILE, 'utf8')
-		.split('\n')
-		.filter(Boolean)
-		.flatMap((line) => {
-			try { return [JSON.parse(line) as Record<string, unknown>]; } catch { return []; }
-		});
+	importLegacyLog();
+	const rows = getDb()
+		.prepare('SELECT type, timestamp, data FROM style_study_events ORDER BY id')
+		.all() as Array<{ type: string; timestamp: number; data: string }>;
+	return rows.map((row) => {
+		let parsed: Record<string, unknown> = {};
+		try {
+			parsed = JSON.parse(row.data);
+		} catch {
+			// Fall through to just the columns.
+		}
+		return { schemaVersion: 1, ...parsed, type: row.type, timestamp: row.timestamp };
+	});
 }

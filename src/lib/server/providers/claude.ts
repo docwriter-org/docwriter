@@ -34,6 +34,7 @@ import {
 } from '$lib/server/hooks-config';
 import { runHookCommand, type HookRunEmitter } from '$lib/server/hook-runner';
 import { addCustomSkill } from '$lib/server/skills-config';
+import { getEffectiveRoot } from '$lib/server/document-files';
 import { executeReviewAction } from './tool-handlers';
 import {
 	formatClaudeModelLabel,
@@ -244,6 +245,12 @@ export class ClaudeProvider implements AgentProvider {
 				? { 'docwriter-style': customMcp }
 				: { docwriter: docwriterMcp, 'docwriter-doc': docToolsMcp },
 			settingSources: isolated ? [] : ['user', 'project'],
+			// The server process runs from the docwriter package, not the
+			// workspace, so without this the SDK discovers project skills and
+			// settings from the package's own .claude directory. That is why the
+			// compiled author-style skill came back as "Unknown skill": it is
+			// installed into the workspace, which the SDK was never looking at.
+			cwd: getEffectiveRoot(),
 			permissionMode: options.planMode ? 'plan' : 'acceptEdits',
 			includePartialMessages: true,
 			agentProgressSummaries: true,

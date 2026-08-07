@@ -12,6 +12,27 @@ export const PropositionDraftSchema = z.object({
 	statement: z.string().trim().min(1).max(1000),
 	instruction: z.string().trim().min(1).max(1000),
 	examples: z.array(z.string().trim().min(1).max(2000)).min(1).max(8),
+	/**
+	 * Per example, the sentence inside it that shows the habit. The specialist
+	 * knows which one; string-matching it back out of the passage afterwards is
+	 * guesswork that gets it wrong. Optional so older profiles still load.
+	 */
+	focus: z.array(z.string().trim().max(2000)).max(8).optional(),
+	/**
+	 * The comparison the writer is asked to judge, written by the specialist
+	 * that read the sources. It used to be built later by a separate agent that
+	 * saw one passage and a rule and had no idea whether they were related —
+	 * which is why comparisons routinely failed to build at all. Optional so
+	 * profiles written before this still load.
+	 */
+	// Capped well below the example limit: this pair is judged side by side at a
+	// glance, and a paragraph of it is more than anyone compares in one look.
+	contrast: z
+		.object({
+			passage: z.string().trim().min(20).max(600),
+			rewritten: z.string().trim().min(20).max(600)
+		})
+		.optional(),
 	confidence: z.number().min(0).max(1)
 });
 

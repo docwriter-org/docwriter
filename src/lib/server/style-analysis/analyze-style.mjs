@@ -551,6 +551,15 @@ function countMatches(text, regex) {
 	return [...text.matchAll(regex)].length;
 }
 
+/**
+ * Numeric ([12]), author-year ((Shankar et al., 2024)) and LaTeX (\cite{...})
+ * citations. The name after "et al." / "and" is optional — requiring it meant
+ * the commonest form of all, "(Author et al., 2024)", never matched, so every
+ * evidence-citations metric read as zero.
+ */
+const CITATION_PATTERN =
+	/\[[0-9,;\s-]+\]|\([A-Z][A-Za-z'’.-]+(?:\s+(?:et al\.|and)(?:\s+[A-Z][A-Za-z'’.-]+)?)?,?\s+\d{4}[a-z]?\)|\\cite\w*\{[^}]+\}/g;
+
 function movingTypeTokenRatio(tokens, window = 50) {
 	if (!tokens.length) return 0;
 	if (tokens.length <= window) return new Set(tokens).size / tokens.length;
@@ -590,7 +599,7 @@ function metricSpecForDocument(document, punctuation) {
 	const emphasisCount = countMatches(document.text, /(?:\*\*|__)[^\n]+?(?:\*\*|__)/g);
 	const inlineCodeCount = countMatches(document.text, /`[^`\n]+`/g);
 	const linkCount = countMatches(document.text, /\[[^\]]+\]\([^)]+\)|https?:\/\/\S+/g);
-	const citationCount = countMatches(document.text, /\[[0-9,;\s-]+\]|\([A-Z][A-Za-z'’.-]+(?:\s+(?:et al\.|and)\s+[A-Z][A-Za-z'’.-]+)?,?\s+\d{4}[a-z]?\)|\\cite\w*\{[^}]+\}/g);
+	const citationCount = countMatches(document.text, CITATION_PATTERN);
 	const footnoteCount = countMatches(document.text, /\[\^[^\]]+\]|\\footnote\{/g);
 	const quoteCount = countMatches(document.text, /(?:"[^"\n]+"|“[^”\n]+”)/g);
 	const attributionCount = counts(ATTRIBUTION);
@@ -623,8 +632,7 @@ function metricSpecForDocument(document, punctuation) {
 	const repeatedContentShare = contentWords.length ? Math.max(0, ...contentFrequencies.values()) / contentWords.length : 0;
 	const discourseMarkerCount = Object.values(RHETORIC).flat().reduce((sum, phrase) =>
 		sum + countMatches(document.text, new RegExp(`\\b${phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'giu')), 0);
-	const citationPattern = /\[[0-9,;\s-]+\]|\([A-Z][A-Za-z'’.-]+(?:\s+(?:et al\.|and)\s+[A-Z][A-Za-z'’.-]+)?,?\s+\d{4}[a-z]?\)|\\cite\w*\{[^}]+\}/g;
-	const citationMatches = [...document.text.matchAll(citationPattern)];
+	const citationMatches = [...document.text.matchAll(CITATION_PATTERN)];
 	const citationEndRate = citationMatches.length ? citationMatches.filter((match) => {
 		const sentence = containingSentence(document, match.index ?? 0);
 		return sentence ? ((match.index ?? 0) - sentence.start) / Math.max(1, sentence.text.length) >= 0.55 : false;

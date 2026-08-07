@@ -9,6 +9,7 @@ import type {
 	StyleProfile,
 	StyleProposition
 } from '$lib/style-profile';
+import { isActiveProposition } from '$lib/style-profile';
 import type { ProviderEvent, ProviderId, ToolDefinition } from '$lib/server/providers/types';
 import { getProvider } from '$lib/server/providers';
 import { analyzeDocuments } from './analyze-style.mjs';
@@ -33,6 +34,7 @@ import {
 } from './schemas';
 import { compileAuthorStyleSkill } from './skill-compiler';
 import { appendStyleStudyEvent } from './study-log';
+import { appendRunLog } from './run-log-store';
 import { STYLE_FEATURE_REGISTRY } from './feature-registry';
 import { listStyleReferences } from '$lib/server/references';
 
@@ -126,7 +128,7 @@ function draftJsonSchema() {
 				items: {
 					type: 'object',
 					additionalProperties: false,
-					required: ['family', 'statement', 'instruction', 'examples', 'confidence'],
+					required: ['family', 'statement', 'instruction', 'examples', 'contrast', 'confidence'],
 					properties: {
 						family: { type: 'string' },
 						statement: {
@@ -139,8 +141,34 @@ function draftJsonSchema() {
 						},
 						examples: {
 							type: 'array',
-							description: 'Three or more passages quoted verbatim from the sources that show this proposition in action.',
+							description:
+								'Three or more passages quoted verbatim from the sources that show this proposition in action. Each is three to four consecutive sentences, not a lone sentence.',
 							items: { type: 'string' }
+						},
+						focus: {
+							type: 'array',
+							description:
+								'For each example, in the same order, the one sentence inside it that shows the habit, copied exactly as it appears in that example.',
+							items: { type: 'string' }
+						},
+						contrast: {
+							type: 'object',
+							description:
+								'The comparison the author will be asked to judge, side by side and at a glance. Much shorter than an example.',
+							additionalProperties: false,
+							required: ['passage', 'rewritten'],
+							properties: {
+								passage: {
+									type: 'string',
+									description:
+										'One or two sentences quoted verbatim from the sources, 20 to 60 words, that plainly follow this proposition. Pick the shortest passage that still shows the habit.'
+								},
+								rewritten: {
+									type: 'string',
+									description:
+										'That same passage rewritten so it no longer follows the proposition, changing nothing else. Same meaning, facts, names, numbers and length. It must still be good prose: an alternative, not a worse version.'
+								}
+							}
 						},
 						confidence: {
 							type: 'number',
@@ -158,12 +186,19 @@ function draftJsonSchema() {
 }
 
 /**
- * A metric that never fired says nothing about how someone writes — a personal
- * page with no tables should not produce a proposition about tables. Zero-valued
+ * A metric that never fired says nothing about how someone writes: a personal
+ * page with no tables should not produce a proposition about tables. Zero
  * measurements are dropped before a specialist ever sees them.
+ *
+ * The test is `sourceCount`, how many sources the metric was non-zero in. It
+ * used to be `occurrenceCount`, which only punctuation ever populates, so all
+ * 80-odd other metrics read as never-fired and the specialists were briefed on
+ * punctuation alone. Do not reintroduce a per-family branch here: the analyzer
+ * derives punctuation's value from its occurrences, so the two agree for that
+ * family and `sourceCount` is right for every family.
  */
 export function isMeasured(measurement: FeatureMeasurement): boolean {
-	return measurement.count > 0 && measurement.value !== 0;
+	return measurement.sourceCount > 0 && measurement.value !== 0;
 }
 
 function reportSlice(report: StyleAnalysisReport, families: StyleFamily[]) {
@@ -194,7 +229,15 @@ function specialistSystemPrompt(families: StyleFamily[]): string {
 
 You get measurements that fired, the author's common words, and the source texts. The measurements are a hint for where to look — read the writing itself before you decide anything.
 
-Write style propositions the ghostwriter can follow while drafting. Each one needs at least three examples: sentences copied word for word from the sources that show the habit. Invented quotes are discarded with the proposition. Quote whole sentences. Do not invent counter-examples.
+The sources were pasted from web pages and documents, so some of what you see is not the author's writing at all. Navigation links, site menus, bylines, dates, "12 min read" labels, share buttons, cookie notices, footers, raw URLs, HTML tags and reference lists all come along with a copy and paste. Skip that text. Do not describe it, do not measure it, and never quote it as an example of how the author writes. Judge style only from the running prose.
+
+Write style propositions the ghostwriter can follow while drafting. Each one needs at least three examples, copied word for word from the sources. Invented quotes are discarded with the proposition.
+
+An example is a passage, not a sentence. Quote three or four consecutive sentences: the one that shows the habit, plus enough either side that the ghostwriter can see what it is doing in a paragraph. An opener means nothing without what it opens; a short closing line means nothing without the long sentence before it. Then set the matching focus entry to the one sentence inside that passage the proposition is actually about, copied exactly as it appears there.
+
+Each proposition also needs a contrast, because the author will be shown it and asked which they would rather have written. Take the one passage of theirs that follows the habit most plainly and rewrite it so it no longer follows the habit.
+
+Keep the contrast short: one or two sentences, 20 to 60 words. This is not the example. The examples are long because the ghostwriter studies them; the contrast is a snap judgement the author makes side by side with the other version, and a long one is too much to hold in the eye at once. Pick the shortest passage that still shows the habit. Change only what the proposition governs: same meaning, facts, names, numbers and roughly the same length. The rewrite has to be prose a competent writer would be happy with, because the question is which the author prefers, not which is better written. If you cannot write a contrast for a proposition, the proposition is too vague to be worth keeping — drop it.
 
 A good proposition:
 - Sounds like advice you'd say out loud: "Open with the hard problem, then name your system." Not like a paper about writing.
@@ -209,7 +252,11 @@ Leave out:
 - Facts about the topic or the author's biography.
 - Advice so vague that every decent writer already does it.
 
-statement = the habit in one plain sentence. instruction = what to do when writing. Prefer fewer sharp ones. Call submit_style_families once with everything.`;
+statement = the habit in one plain sentence. instruction = what to do when writing. Prefer fewer sharp ones.
+
+Think out loud before you submit. Write what you notice as you read: the patterns you are chasing, the ones you tried and threw out because the evidence was thin, the passages that changed your mind. The writer can watch this while you work, and a silent run of several minutes looks broken. Keep it to short paragraphs as you go, not one essay at the end.
+
+Then call submit_style_families once with everything.`;
 }
 
 /** Every kept source as one blob, for checking quoted examples against. */
@@ -277,9 +324,12 @@ function synthesisSystemPrompt(): string {
 
 Merge hard. If two propositions would make the ghostwriter change a sentence the same way, keep one — the plainer wording. Split them only when following each would produce a visibly different sentence.
 
+Carry each kept proposition's examples and its contrast through unchanged. The contrast passage is quoted from the author's own writing and the rewrite was made against it, so editing either breaks the pair. When you merge two propositions, keep the contrast belonging to the one whose wording you kept.
+
 Rewrite anything that sounds like writing theory into plain advice. Prefer "Put the claim first, then the example" over "Use a claim-warrant paragraph structure." Strip jargon about writing.
 
 Drop propositions that:
+- rest on text that is not the author's writing (navigation links, bylines, dates, "12 min read" labels, footers, raw URLs or HTML that came along with a copy and paste),
 - restate a measurement,
 - describe something the author does not do,
 - are so general every competent writer already does them,
@@ -338,43 +388,71 @@ export async function runStructuredStyleAgent<T>(input: {
  * Turn a specialist's provider events into trace lines. Text and thinking arrive
  * as deltas, so they are accumulated per message and re-emitted whole — the
  * client replaces the open line rather than collecting half-words.
+ *
+ * The stream is live; the database copy is the record. Only whole lines are
+ * written, when a tool call or the end of the specialist closes them, so a run
+ * stores the paragraphs it produced rather than every prefix of them.
  */
 function makeSpecialistForwarder(run: ManagedRun, specialistId: SpecialistRunState['id']) {
 	let text = '';
 	let thinking = '';
-	return (event: ProviderEvent) => {
-		if (event.type === 'assistant_text') {
-			text += event.text;
-			if (text.trim()) emitLog(run, { specialistId, kind: 'text', text: text.trim() });
-		} else if (event.type === 'assistant_thinking') {
-			thinking += event.text;
-			if (thinking.trim()) emitLog(run, { specialistId, kind: 'thinking', text: thinking.trim() });
-		} else if (event.type === 'tool_call') {
-			text = '';
-			thinking = '';
-			emitLog(run, {
-				specialistId,
-				kind: 'tool',
-				toolName: event.tool_name.split('__').pop() ?? event.tool_name
-			});
-		}
+	const store = (kind: 'text' | 'thinking', value: string) => {
+		if (value.trim()) appendRunLog(run.state.id, { specialistId, kind, text: value.trim() });
+	};
+	const closeOpenLines = () => {
+		store('thinking', thinking);
+		store('text', text);
+		text = '';
+		thinking = '';
+	};
+	return {
+		handle(event: ProviderEvent) {
+			if (event.type === 'assistant_text') {
+				text += event.text;
+				if (text.trim()) emitLog(run, { specialistId, kind: 'text', text: text.trim() });
+			} else if (event.type === 'assistant_thinking') {
+				thinking += event.text;
+				if (thinking.trim()) emitLog(run, { specialistId, kind: 'thinking', text: thinking.trim() });
+			} else if (event.type === 'tool_call') {
+				closeOpenLines();
+				const toolName = event.tool_name.split('__').pop() ?? event.tool_name;
+				// ToolSearch is the harness finding the tool we already handed it,
+				// not the specialist doing anything. Showing it as the only line in
+				// an otherwise empty panel reads as a stuck run.
+				if (toolName === 'ToolSearch') return;
+				emitLog(run, { specialistId, kind: 'tool', toolName });
+				appendRunLog(run.state.id, { specialistId, kind: 'tool', toolName });
+			}
+		},
+		flush: closeOpenLines
 	};
 }
 
-const specialistForwarders = new Map<string, (event: ProviderEvent) => void>();
+type SpecialistForwarder = ReturnType<typeof makeSpecialistForwarder>;
 
-function forwardSpecialistEvent(
-	run: ManagedRun,
-	specialistId: SpecialistRunState['id'],
-	event: ProviderEvent
-) {
+const specialistForwarders = new Map<string, SpecialistForwarder>();
+
+function forwarderFor(run: ManagedRun, specialistId: SpecialistRunState['id']): SpecialistForwarder {
 	const key = `${run.state.id}:${specialistId}`;
 	let forwarder = specialistForwarders.get(key);
 	if (!forwarder) {
 		forwarder = makeSpecialistForwarder(run, specialistId);
 		specialistForwarders.set(key, forwarder);
 	}
-	forwarder(event);
+	return forwarder;
+}
+
+function forwardSpecialistEvent(
+	run: ManagedRun,
+	specialistId: SpecialistRunState['id'],
+	event: ProviderEvent
+) {
+	forwarderFor(run, specialistId).handle(event);
+}
+
+/** Write whatever the specialist was mid-sentence on when it stopped. */
+function flushSpecialistTrace(run: ManagedRun, specialistId: SpecialistRunState['id']) {
+	specialistForwarders.get(`${run.state.id}:${specialistId}`)?.flush();
 }
 
 async function runSpecialist(
@@ -421,6 +499,8 @@ async function runSpecialist(
 			error: error instanceof Error ? error.message : String(error)
 		});
 		return [];
+	} finally {
+		flushSpecialistTrace(run, specialist.id);
 	}
 }
 
@@ -439,6 +519,9 @@ async function runSynthesis(
 			toolName: 'submit_style_profile',
 			toolDescription: 'Submit the complete merged and grounded author style profile.',
 			inputSchema: draftJsonSchema(),
+			// Synthesis is a specialist like the others; without this its trace
+			// panel stayed empty even while it was working.
+			onEvent: (event) => forwardSpecialistEvent(run, 'synthesis', event),
 			parse: (value) => {
 				const parsed = SynthesisSubmissionSchema.parse(value);
 				for (const draft of parsed.propositions) validateDraftGrounding(draft, corpus);
@@ -455,6 +538,8 @@ async function runSynthesis(
 			error: error instanceof Error ? error.message : String(error)
 		});
 		return drafts;
+	} finally {
+		flushSpecialistTrace(run, 'synthesis');
 	}
 }
 
@@ -518,7 +603,7 @@ async function executeRun(run: ManagedRun, force: boolean) {
 		});
 		const propositions = carryConfirmed(previous, grounded);
 		const pending = propositions.filter((proposition) => proposition.status === 'pending');
-		const active = propositions.filter((proposition) => ['active', 'confirmed'].includes(proposition.status));
+		const active = propositions.filter(isActiveProposition);
 		run.profile.propositions = propositions;
 		run.profile.calibrations = pending.map((proposition) => ({
 			id: `cal_${proposition.id}`,

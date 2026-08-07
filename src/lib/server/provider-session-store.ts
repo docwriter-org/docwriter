@@ -66,22 +66,22 @@ export function createProviderSessionStore(provider: ProviderId): ProviderSessio
 		},
 
 		async load(key: ProviderSessionKey) {
+			// Deliberately not filtered by project key. That key is derived from
+			// the working directory, so it changes when the directory does and a
+			// session recorded under the old one becomes unresumable ("No
+			// conversation found with session ID"). This database belongs to one
+			// workspace and session ids are unique within it, so the id alone
+			// identifies the conversation. The column is kept as provenance, and
+			// loadProviderSessionEntries/hasProviderSessionEntries already read
+			// this way.
 			const rows = getDb()
 				.prepare(`
 					SELECT entry_json
 					FROM provider_session_entries
-					WHERE provider = ?
-						AND project_key = ?
-						AND session_id = ?
-						AND subpath = ?
+					WHERE provider = ? AND session_id = ? AND subpath = ?
 					ORDER BY id ASC
 				`)
-				.all(
-					provider,
-					key.projectKey,
-					key.sessionId,
-					normalizeSubpath(key.subpath)
-				) as Row[];
+				.all(provider, key.sessionId, normalizeSubpath(key.subpath)) as Row[];
 			if (rows.length === 0) return null;
 			return rows.map(parseEntry);
 		},
@@ -97,24 +97,20 @@ export function createProviderSessionStore(provider: ProviderId): ProviderSessio
 				.all(provider, projectKey) as Array<{ sessionId: string; mtime: number }>;
 		},
 
+		// Keyed by session id for the same reason as load(): a session that can
+		// be resumed must also be deletable and enumerable.
 		async delete(key: ProviderSessionKey) {
 			if (key.subpath) {
 				getDb()
 					.prepare(`
 						DELETE FROM provider_session_entries
-						WHERE provider = ?
-							AND project_key = ?
-							AND session_id = ?
-							AND subpath = ?
+						WHERE provider = ? AND session_id = ? AND subpath = ?
 					`)
-					.run(provider, key.projectKey, key.sessionId, key.subpath);
+					.run(provider, key.sessionId, key.subpath);
 			} else {
 				getDb()
-					.prepare(`
-						DELETE FROM provider_session_entries
-						WHERE provider = ? AND project_key = ? AND session_id = ?
-					`)
-					.run(provider, key.projectKey, key.sessionId);
+					.prepare('DELETE FROM provider_session_entries WHERE provider = ? AND session_id = ?')
+					.run(provider, key.sessionId);
 			}
 		},
 
@@ -123,13 +119,10 @@ export function createProviderSessionStore(provider: ProviderId): ProviderSessio
 				.prepare(`
 					SELECT DISTINCT subpath
 					FROM provider_session_entries
-					WHERE provider = ?
-						AND project_key = ?
-						AND session_id = ?
-						AND subpath <> ''
+					WHERE provider = ? AND session_id = ? AND subpath <> ''
 					ORDER BY subpath ASC
 				`)
-				.all(provider, key.projectKey, key.sessionId) as Array<{ subpath: string }>;
+				.all(provider, key.sessionId) as Array<{ subpath: string }>;
 			return rows.map((row) => row.subpath);
 		}
 	};

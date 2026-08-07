@@ -2190,6 +2190,39 @@
 	// ── Critique passes (reviewer agents) ────────────────────────────────
 	let reviewerDialogOpen = $state(false);
 	let styleDialogOpen = $state(false);
+	/**
+	 * The agent reads the style from every turn's author_style block, but nothing
+	 * prompts a turn when you finish calibrating, so a new style would sit unused
+	 * until you happened to type something. Stamped when the dialog opens and
+	 * compared when it closes, so only a real change to the guidance sends a
+	 * message — not merely adding a source or reading one.
+	 */
+	let styleStampOnOpen: string | null = null;
+
+	async function styleStamp(): Promise<string | null> {
+		try {
+			const response = await fetch('/api/style-profile');
+			if (!response.ok) return null;
+			const summary = await response.json();
+			const active = (summary?.profile?.propositions ?? [])
+				.filter((p: { status: string }) => p.status === 'active' || p.status === 'confirmed')
+				.map((p: { id: string; instruction: string }) => `${p.id}:${p.instruction}`)
+				.sort();
+			return JSON.stringify(active);
+		} catch {
+			return null;
+		}
+	}
+
+	async function notifyAgentOfStyleChange() {
+		const before = styleStampOnOpen;
+		styleStampOnOpen = null;
+		const after = await styleStamp();
+		if (before === null || after === null || before === after) return;
+		void submit(
+			'The writer changed their author style. The instructions now in force are in the author_style block. Follow them from here on. Do not revise anything already written unless asked.'
+		);
+	}
 	let styleRefreshToken = $state(0);
 
 	async function loadReviewers() {
@@ -2269,7 +2302,21 @@
 					checked: lineNumbersOn,
 					onClick: () => editorLineNumbers.update((v) => !v)
 				},
-				{ kind: 'action', label: 'Writing references', onClick: () => { styleDialogOpen = true; } },
+				{
+					kind: 'action',
+					label: 'Writing references',
+					onClick: () => {
+						styleDialogOpen = true;
+						void styleStamp().then((stamp) => (styleStampOnOpen = stamp));
+					}
+				},
+				{
+					kind: 'action',
+					label: 'Export study data',
+					onClick: () => {
+						window.location.href = '/api/style-study/export';
+					}
+				},
 				{ kind: 'panel', label: 'Intended audience', panelKey: 'audience' },
 				{ kind: 'panel', label: 'Skills', panelKey: 'skills' },
 				{ kind: 'panel', label: 'Hooks', panelKey: 'hooks' },
@@ -3052,7 +3099,10 @@
 				onCustomModel={() => (customModelOpen = true)}
 			/>
 			<ReferenceStatusPill
-				onOpen={() => (styleDialogOpen = true)}
+				onOpen={() => {
+				styleDialogOpen = true;
+				void styleStamp().then((stamp) => (styleStampOnOpen = stamp));
+			}}
 				refreshToken={styleRefreshToken}
 			/>
 		</div>
@@ -3062,7 +3112,10 @@
 		open={styleDialogOpen}
 		provider={currentProvider}
 		{model}
-		onClose={() => (styleDialogOpen = false)}
+		onClose={() => {
+			styleDialogOpen = false;
+			void notifyAgentOfStyleChange();
+		}}
 		onChanged={() => (styleRefreshToken += 1)}
 	/>
 

@@ -152,10 +152,28 @@ export interface StyleProposition {
 	instruction: string;
 	/** Passages from the author's writing showing this proposition in action. */
 	examples: string[];
+	/** Per example, the sentence inside it the proposition is about. */
+	focus?: string[];
+	/**
+	 * The pair the author judges during calibration: one of their own passages
+	 * and the same passage rewritten without this habit. Written by the
+	 * specialist that read the sources, so it is grounded in text that actually
+	 * shows the habit. Absent on profiles created before this existed.
+	 */
+	contrast?: { passage: string; rewritten: string };
 	confidence: number;
 	status: PropositionStatus;
 	createdAt: number;
 	updatedAt: number;
+}
+
+/**
+ * Whether a proposition is part of the skill the writing agent follows. This is
+ * the central question of the feature, so it has one definition rather than a
+ * status list spelled out at each of its dozen call sites.
+ */
+export function isActiveProposition(proposition: { status: PropositionStatus }): boolean {
+	return proposition.status === 'active' || proposition.status === 'confirmed';
 }
 
 export type CalibrationChoice = 'a' | 'b' | 'same' | 'neither' | 'skip';

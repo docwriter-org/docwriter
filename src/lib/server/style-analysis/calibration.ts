@@ -1,4 +1,5 @@
 import type { CalibrationChoice, CalibrationTrial, StyleAnalysisReport, StyleProfile, StyleProposition } from '$lib/style-profile';
+import { isActiveProposition } from '$lib/style-profile';
 import type { ProviderId } from '$lib/server/providers/types';
 import { compileAuthorStyleSkill } from './skill-compiler';
 import { CalibrationRevisionSchema } from './schemas';
@@ -42,6 +43,26 @@ function findTrial(profile: StyleProfile, id: string): { trial: CalibrationTrial
 	return { trial, proposition };
 }
 
+// A bare URL is deliberately not a marker: the author's own prose cites links,
+// and a navigation strip is already caught by running on without a full stop.
+const CHROME_MARKERS =
+	/\b\d+\s*min read\b|\bfollow\s+\S+\s+on\b|\bsubscribe\b|\bshare this\b|\bcookie\b|\ball rights reserved\b|<\/?[a-z][^>]*>/gi;
+
+/**
+ * Sources are pasted from web pages, so they drag in navigation strips,
+ * bylines and "12 min read" labels. Chrome runs on for dozens of words without
+ * a full stop, which is the tell: prose stops. A passage scoring high here is a
+ * bad thing to ask the writer to judge, because they never wrote it.
+ */
+function chromePenalty(text: string): number {
+	const words = text.split(/\s+/).filter(Boolean);
+	if (!words.length) return Number.POSITIVE_INFINITY;
+	const stops = (text.match(/[.!?]["'’)\]]?(?:\s|$)/g) ?? []).length;
+	const wordsPerSentence = stops ? words.length / stops : words.length;
+	const markers = (text.match(CHROME_MARKERS) ?? []).length;
+	return markers * 2 + Math.max(0, wordsPerSentence - 45) / 45;
+}
+
 /**
  * A passage the author actually wrote, for this proposition. Comparing two
  * invented passages about a generic topic tells the writer nothing — the
@@ -49,21 +70,24 @@ function findTrial(profile: StyleProfile, id: string): { trial: CalibrationTrial
  * proposition applied.
  */
 function passageFor(proposition: StyleProposition, report: StyleAnalysisReport | null): string | null {
-	const fromProposition = (proposition.examples ?? [])
-		.map((example) => example.trim())
-		.filter((example) => example.split(/\s+/).length >= 12);
-	if (fromProposition.length) return fromProposition[0];
-
-	const spans = (report?.examples ?? [])
-		.filter((example) => example.kind === proposition.family || example.kind.startsWith(`${proposition.family}.`))
-		.map((example) => example.text.trim())
-		.filter((text) => text.split(/\s+/).length >= 12);
-	if (spans.length) return spans[0];
-
-	const anySpan = (report?.examples ?? [])
-		.map((example) => example.text.trim())
-		.filter((text) => text.split(/\s+/).length >= 12);
-	return anySpan[0] ?? null;
+	const longEnough = (text: string) => text.split(/\s+/).length >= 12;
+	const tiers = [
+		(proposition.examples ?? []).map((example) => example.trim()).filter(longEnough),
+		(report?.examples ?? [])
+			.filter((example) => example.kind === proposition.family || example.kind.startsWith(`${proposition.family}.`))
+			.map((example) => example.text.trim())
+			.filter(longEnough),
+		(report?.examples ?? []).map((example) => example.text.trim()).filter(longEnough)
+	];
+	for (const tier of tiers) {
+		const prose = tier.filter((text) => chromePenalty(text) < 1);
+		if (prose.length) return prose[0];
+	}
+	// Everything available looks like chrome. The least of it still beats
+	// handing the writer a navigation bar to judge.
+	const all = tiers.flat();
+	if (!all.length) return null;
+	return all.reduce((best, text) => (chromePenalty(text) < chromePenalty(best) ? text : best));
 }
 
 export async function generateCalibrationTrial(input: {
@@ -76,44 +100,52 @@ export async function generateCalibrationTrial(input: {
 	const report = readStyleReport();
 	if (!profile || !report) throw new Error('Style profile not found');
 	const { trial, proposition } = findTrial(profile, input.id);
-	const brief = input.contentBrief?.trim() || 'Write a short, self-contained passage about planning a small research project. Keep all facts generic.';
-	let feedback = '';
-	// The comparison is the writer's own passage against the same passage with
-	// this one proposition undone. Anything else asks them to judge prose they
-	// never wrote about a topic they did not choose.
-	const original = passageFor(proposition, report);
-	if (!original) throw new Error('No passage from your sources was long enough to compare');
 
-	const generated = await runStructuredStyleAgent<{ variant: string; targetExplanation: string }>({
-		providerId: input.provider,
-		model: input.model,
-		systemPrompt: `You rewrite one passage of the author's own writing to test a single style proposition.
+	// The specialist that wrote this proposition also wrote the comparison,
+	// while it had the sources in front of it. Use that. The agent below only
+	// runs for propositions from before contrasts existed, or ones whose
+	// contrast failed grounding.
+	let original: string;
+	let variant: string;
+	if (proposition.contrast) {
+		original = proposition.contrast.passage;
+		variant = proposition.contrast.rewritten;
+	} else {
+		const fallbackPassage = passageFor(proposition, report);
+		if (!fallbackPassage) throw new Error('No passage from your sources was long enough to compare');
+		const generated = await runStructuredStyleAgent<{ variant: string; targetExplanation: string }>({
+			providerId: input.provider,
+			model: input.model,
+			systemPrompt: `You rewrite one passage of the author's own writing to test a single style proposition.
 
 Return the passage rewritten so that it no longer follows the proposition, changing nothing else. Keep the meaning, facts, names, numbers, citations, and length as close to the original as you can. The rewrite must still be good, publishable prose — it is an alternative, not a worse version. Change only what the proposition governs.
 
 Call submit_style_variant once.`,
-		prompt: `Proposition to vary:\n${proposition.statement}\n\nWhat following it means:\n${proposition.instruction}\n\nThe author's passage:\n${original}${feedback ? `\n\nPrevious problem:\n${feedback}` : ''}`,
-		toolName: 'submit_style_variant',
-		toolDescription: 'Submit the passage rewritten without the proposition applied.',
-		inputSchema: VARIANT_SCHEMA,
-		parse: (value) => {
-			const parsed = value as { variant?: unknown; targetExplanation?: unknown };
-			const variant = typeof parsed.variant === 'string' ? parsed.variant.trim() : '';
-			if (variant.length < 20) throw new Error('The variant is too short');
-			if (variant === original.trim()) throw new Error('The variant is identical to the original');
-			return {
-				variant,
-				targetExplanation: typeof parsed.targetExplanation === 'string' ? parsed.targetExplanation : ''
-			};
-		},
-		abortSignal: new AbortController().signal
-	});
+			prompt: `Proposition to vary:\n${proposition.statement}\n\nWhat following it means:\n${proposition.instruction}\n\nThe author's passage:\n${fallbackPassage}`,
+			toolName: 'submit_style_variant',
+			toolDescription: 'Submit the passage rewritten without the proposition applied.',
+			inputSchema: VARIANT_SCHEMA,
+			parse: (value) => {
+				const parsed = value as { variant?: unknown; targetExplanation?: unknown };
+				const rewritten = typeof parsed.variant === 'string' ? parsed.variant.trim() : '';
+				if (rewritten.length < 20) throw new Error('The variant is too short');
+				if (rewritten === fallbackPassage.trim()) throw new Error('The variant is identical to the original');
+				return {
+					variant: rewritten,
+					targetExplanation: typeof parsed.targetExplanation === 'string' ? parsed.targetExplanation : ''
+				};
+			},
+			abortSignal: new AbortController().signal
+		});
+		original = fallbackPassage;
+		variant = generated.variant;
+	}
 
 	// The original follows the proposition, so whichever slot holds it is the
 	// target. Randomize the slot so position does not bias the choice.
 	const swap = Math.random() < 0.5;
-	const candidateA = swap ? generated.variant : original;
-	const candidateB = swap ? original : generated.variant;
+	const candidateA = swap ? variant : original;
+	const candidateB = swap ? original : variant;
 	const targetCandidate: 'a' | 'b' = swap ? 'b' : 'a';
 	const nextTrial: CalibrationTrial = {
 		...trial,
@@ -210,7 +242,7 @@ export async function answerCalibrationTrial(input: {
 	profile.propositions = profile.propositions.map((candidate) => candidate.id === proposition.id ? nextProposition : candidate);
 	profile.calibrations = profile.calibrations.map((candidate) => candidate.id === trial.id ? nextTrial : candidate);
 	const unresolved = profile.propositions.filter((candidate) => candidate.status === 'pending').length;
-	const active = profile.propositions.filter((candidate) => ['active', 'confirmed'].includes(candidate.status));
+	const active = profile.propositions.filter(isActiveProposition);
 	profile.status = unresolved ? 'needs-calibration' : active.length ? 'active' : 'ready-to-analyze';
 	if (active.length) {
 		const skill = compileAuthorStyleSkill(profile, report);

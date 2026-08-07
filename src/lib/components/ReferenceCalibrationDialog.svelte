@@ -4,8 +4,10 @@
 	import { fade, fly } from 'svelte/transition';
 	import { cubicOut } from 'svelte/easing';
 	import {
+		ArrowLeft,
 		BarChart3,
 		BookOpen,
+		Cat,
 		Check,
 		CheckCircle2,
 		Circle,
@@ -15,6 +17,7 @@
 		Sparkles,
 		Trash2,
 		TriangleAlert,
+		Upload,
 		X
 	} from 'lucide-svelte';
 	import type {
@@ -49,7 +52,7 @@
 		title: string;
 		description: string;
 		status: ActivityStatus;
-		icon: 'sources' | 'measurements' | 'specialist' | 'skill';
+		icon: 'sources' | 'measurements' | 'specialist';
 	}
 
 	interface Props {
@@ -82,42 +85,59 @@
 	let eventSource: EventSource | null = null;
 	let busyId = $state<string | null>(null);
 	let neitherEdits = $state<Record<string, string>>({});
-	let propositionEdits = $state<Record<string, string>>({});
 	let calibrationSessionIds = $state<string[]>([]);
+	let importOpen = $state(false);
+	let importPath = $state('');
+	let importing = $state(false);
+	let skillVersions = $state<Array<{ version: number; createdAt: number; propositionCount: number }>>([]);
 
 	const pendingTrials = $derived((summary?.profile?.calibrations ?? [])
 		.filter((trial) => calibrationSessionIds.includes(trial.id) && ['pending', 'generated', 'error'].includes(trial.status)));
 	const activePropositions = $derived((summary?.profile?.propositions ?? [])
 		.filter((proposition) => ['active', 'confirmed'].includes(proposition.status)));
 	const allPropositions = $derived(summary?.profile?.propositions ?? []);
+	const inactivePropositions = $derived(allPropositions
+		.filter((proposition) => !['active', 'confirmed'].includes(proposition.status)));
+
+	/** Why a proposition is not in the skill, in the reader's terms rather than
+	 *  the status name stored on it. */
+	function inactiveReason(status: string): string {
+		if (status === 'pending') return 'Waiting on your pick';
+		if (status === 'disabled') return 'You removed it';
+		if (status === 'not-actionable') return 'Too vague to act on';
+		if (status === 'rejected') return 'You rejected it';
+		return titleCase(status);
+	}
 	const analysisRunning = $derived(Boolean(run && ['queued', 'running'].includes(run.status)));
 
 	const analysisActivities = $derived.by((): AnalysisActivity[] => {
 		const currentRun = run;
 		if (!currentRun) return [];
-		const terminal = ['completed', 'error', 'cancelled'].includes(currentRun.status);
 		const thresholdStatus = (completeAt: number, startAt: number): ActivityStatus => {
 			if (currentRun.progress >= completeAt) return 'completed';
 			if (currentRun.status === 'error' && currentRun.progress >= startAt) return 'error';
 			if (currentRun.status === 'cancelled' && currentRun.progress >= startAt) return 'cancelled';
 			return currentRun.progress >= startAt || ['queued', 'running'].includes(currentRun.status) ? 'running' : 'pending';
 		};
-		const items: AnalysisActivity[] = [{
-			id: 'sources',
-			title: 'Sources prepared',
-			description: `Reading and normalizing ${selectedCount} kept source${selectedCount === 1 ? '' : 's'}.`,
-			status: thresholdStatus(20, 0),
-			icon: 'sources'
-		}];
-		if (currentRun.progress >= 12 || terminal) {
-			items.push({
+		// Every stage is listed from the start, so the reader can see what is
+		// coming and what is left. Stages that have not begun sit as pending
+		// rather than appearing out of nowhere partway through the run.
+		const items: AnalysisActivity[] = [
+			{
+				id: 'sources',
+				title: 'Sources prepared',
+				description: `Reading and normalizing ${selectedCount} kept source${selectedCount === 1 ? '' : 's'}.`,
+				status: thresholdStatus(20, 0),
+				icon: 'sources'
+			},
+			{
 				id: 'measurements',
 				title: 'Measurements computed',
 				description: 'Measuring structure, rhythm, voice, punctuation, citations, and formatting.',
 				status: thresholdStatus(35, 12),
 				icon: 'measurements'
-			});
-		}
+			}
+		];
 
 		const specialistCopy: Record<SpecialistRunState['id'], { title: string; description: string }> = {
 			organization: {
@@ -138,28 +158,18 @@
 			}
 		};
 		for (const specialist of currentRun.specialists.filter((item) => item.id !== 'synthesis')) {
-			if (currentRun.progress >= 35 || specialist.status !== 'pending' || terminal) {
-				items.push({
-					id: specialist.id,
-					...specialistCopy[specialist.id],
-					status: specialist.status,
-					icon: 'specialist'
-				});
-			}
-		}
-		const synthesis = currentRun.specialists.find((specialist) => specialist.id === 'synthesis');
-		if (synthesis && (currentRun.progress >= 70 || synthesis.status !== 'pending' || terminal)) {
-			items.push({ id: synthesis.id, ...specialistCopy.synthesis, status: synthesis.status, icon: 'specialist' });
-		}
-		if (currentRun.progress >= 88 || terminal) {
 			items.push({
-				id: 'skill',
-				title: 'Author skill updated',
-				description: 'Saving active guidance for the writing agent.',
-				status: currentRun.status === 'completed' ? 'completed' : currentRun.status === 'error' ? 'error' : currentRun.status === 'cancelled' ? 'cancelled' : 'running',
-				icon: 'skill'
+				id: specialist.id,
+				...specialistCopy[specialist.id],
+				status: specialist.status,
+				icon: 'specialist'
 			});
 		}
+		const synthesis = currentRun.specialists.find((specialist) => specialist.id === 'synthesis');
+		if (synthesis) {
+			items.push({ id: synthesis.id, ...specialistCopy.synthesis, status: synthesis.status, icon: 'specialist' });
+		}
+
 		return items;
 	});
 
@@ -197,10 +207,31 @@
 		}
 	}
 
+	/** Traces are stored per run, so a finished run still has a trace to read.
+	 *  Fetched once per run rather than from loadAll, which fires on every
+	 *  mutation and would replace live SSE lines mid-stream. */
+	let tracesLoadedFor = $state<string | null>(null);
+	async function loadStoredTraces(runId: string) {
+		if (tracesLoadedFor === runId) return;
+		tracesLoadedFor = runId;
+		try {
+			const data = await requestJson(`/api/style-profile/runs/${encodeURIComponent(runId)}/logs`);
+			if (data?.traces && typeof data.traces === 'object') {
+				specialistTraces = { ...(data.traces as Record<string, TraceEntry[]>) };
+			}
+		} catch {
+			// A missing trace is not worth an error banner.
+		}
+	}
+
 	$effect(() => {
 		if (open) {
 			calibrationSessionIds = [];
-			void loadAll();
+			tracesLoadedFor = null;
+			void loadAll().then(() => {
+				if (run?.id) void loadStoredTraces(run.id);
+			});
+			void loadSkillVersions();
 		}
 		else eventSource?.close();
 	});
@@ -227,6 +258,7 @@
 		!addingSample && sampleDescription.trim().length > 0 && sampleText.trim().length > 0
 	);
 	const selectedCount = $derived(references.length);
+	const previewReference = $derived(references.find((item) => item.id === previewId) ?? null);
 
 	async function setSelected(reference: ReferenceItem, selected: boolean) {
 		busyId = reference.id;
@@ -404,7 +436,7 @@
 		}
 	}
 
-	/** Throw away every learned proposition so the next run starts clean. */
+	/** Throw away every learned proposition so the next pass starts clean. */
 	async function resetAnalysis() {
 		errorMessage = '';
 		try {
@@ -416,6 +448,39 @@
 			onChanged?.();
 		} catch (cause) {
 			errorMessage = cause instanceof Error ? cause.message : 'Could not clear the analysis.';
+		}
+	}
+
+	async function loadSkillVersions() {
+		try {
+			const data = await requestJson('/api/style-profile/versions');
+			skillVersions = Array.isArray(data.versions) ? data.versions : [];
+		} catch {
+			skillVersions = [];
+		}
+	}
+
+	/** Put a saved version or a downloaded bundle back in place. */
+	async function restoreSkill(source: { version: number } | { path: string }) {
+		const path = 'path' in source ? source.path.trim() : '';
+		if ('path' in source && !path) return;
+		importing = true;
+		errorMessage = '';
+		try {
+			await requestJson('/api/style-profile/import', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify('version' in source ? { version: source.version } : { path })
+			});
+			importPath = '';
+			importOpen = false;
+			await loadAll();
+			await loadSkillVersions();
+			onChanged?.();
+		} catch (cause) {
+			errorMessage = cause instanceof Error ? cause.message : 'Could not restore that skill.';
+		} finally {
+			importing = false;
 		}
 	}
 
@@ -433,14 +498,32 @@
 		return Boolean(edited && edited !== trial.candidateA?.trim() && edited !== trial.candidateB?.trim());
 	}
 
-	function isPropositionDirty(proposition: StyleProposition): boolean {
-		const edited = propositionEdits[proposition.id];
-		return edited !== undefined && edited.trim() !== proposition.instruction.trim();
-	}
-
 	/** Trials whose generation has been kicked off, so a failure doesn't retry
 	 *  forever. Plain Set: this drives nothing that needs to re-render. */
 	const attemptedTrials = new SvelteSet<string>();
+
+	/**
+	 * Trials become answerable one at a time and not in list order, so filtering
+	 * the source array alone would slot a late arrival above cards you were
+	 * already reading. The server stamps generatedAt when it builds a comparison,
+	 * so sorting on it fixes each card where it first appeared and appends new
+	 * ones below.
+	 */
+	const readyTrials = $derived(
+		pendingTrials
+			.filter((trial) => trial.candidateA && trial.candidateB)
+			.sort((a, b) => (a.generatedAt ?? 0) - (b.generatedAt ?? 0))
+	);
+	const unbuiltTrials = $derived(pendingTrials.filter((trial) => !trial.candidateA));
+	/** Tried and came back empty. Shown so a failure is not silent. */
+	const failedTrials = $derived(unbuiltTrials.filter(
+		(trial) => attemptedTrials.has(trial.id) && busyId !== trial.id
+	));
+	/** More cards are still on the way: the pass itself is running, or a trial is
+	 *  building and has not failed. Drives the bouncing cat. */
+	const cardsIncoming = $derived(
+		analysisRunning || unbuiltTrials.length > failedTrials.length
+	);
 
 	// Comparisons build themselves. Asking the writer to press a button per
 	// proposition just puts a chore between them and the choice.
@@ -496,16 +579,13 @@
 		}
 	}
 
-	async function updateProposition(proposition: StyleProposition, status?: 'active' | 'confirmed' | 'disabled') {
+	async function updateProposition(proposition: StyleProposition, status: 'active' | 'disabled') {
 		busyId = proposition.id;
 		try {
 			await requestJson(`/api/style-profile/propositions/${encodeURIComponent(proposition.id)}`, {
 				method: 'PATCH',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({
-					instruction: propositionEdits[proposition.id] || proposition.instruction,
-					...(status ? { status } : {})
-				})
+				body: JSON.stringify({ status })
 			});
 			await loadAll();
 			onChanged?.();
@@ -557,8 +637,65 @@
 		>
 			<div class="dialog-header">
 				<span id="reference-dialog-title">Writing references</span>
-				<button class="icon-btn" onclick={onClose} aria-label="Close writing references"><X size={14} /></button>
+				<div class="header-actions">
+					<!-- Lives here rather than on the Active skill tab: the writer who
+					     wants this has no profile yet, so they are on the first tab. -->
+					<button class="btn" onclick={() => (importOpen = !importOpen)}>
+						<Upload size={13} /> Restore from a skill
+					</button>
+					<button class="icon-btn" onclick={onClose} aria-label="Close writing references"><X size={14} /></button>
+				</div>
 			</div>
+
+			{#if importOpen}
+				<div class="import-panel">
+					{#if skillVersions.length > 0}
+						<div class="version-list">
+							{#each skillVersions as entry (entry.version)}
+								<div class="version-row">
+									<div class="version-main">
+										<strong>Version {entry.version}</strong>
+										<span class="source-meta">
+											{entry.propositionCount} instruction{entry.propositionCount === 1 ? '' : 's'}
+											· {new Date(entry.createdAt).toLocaleString()}
+										</span>
+									</div>
+									<button
+										class="btn"
+										disabled={importing}
+										onclick={() => restoreSkill({ version: entry.version })}
+									>Restore</button>
+								</div>
+							{/each}
+						</div>
+					{:else}
+						<p class="hint">No saved versions yet. One is kept every time the skill is built.</p>
+					{/if}
+
+					<div class="import-row">
+						<input
+							bind:value={importPath}
+							placeholder="…or a path to a skill folder or .zip"
+							aria-label="Path to a skill folder or zip"
+							onkeydown={(event) => {
+								if (event.key === 'Enter') void restoreSkill({ path: importPath });
+							}}
+						/>
+						<button
+							class="btn"
+							disabled={!importPath.trim() || importing}
+							onclick={() => restoreSkill({ path: importPath })}
+						>
+							{#if importing}<LoaderCircle size={13} class="spinner" />{/if}
+							Restore
+						</button>
+					</div>
+					<p class="hint">
+						Restoring installs that whole skill folder and replaces your guidance. Your sources and
+						measurements are untouched.
+					</p>
+				</div>
+			{/if}
 
 			<nav class="steps" aria-label="Reference setup steps">
 				<button class:current={step === 'sources'} onclick={() => (step = 'sources')}>
@@ -581,97 +718,118 @@
 
 			<div class="dialog-body">
 				{#if step === 'sources'}
+					<!-- Two columns: paste on the left, what you have on the right. -->
 					<div class="step step-sources">
 						<div class="sources-inner">
-							<div class="sources-head">
-								<h3>Paste writing that sounds like you</h3>
-								<p class="column-note">
-									Three to five passages is the useful range. Say what each one is — the analysis
-									reads your description alongside the writing.
-								</p>
-							</div>
-
-							<div class="add-form">
-								<input
-									class="what-input"
-									bind:value={sampleDescription}
-									placeholder="What is this? e.g. introduction of a paper"
-									aria-label="What this passage is"
-								/>
-								<textarea
-									class="paste-area"
-									bind:value={sampleText}
-									onkeydown={onComposerKeydown}
-									placeholder="Paste the writing here"
-									aria-label="Passage text"
-								></textarea>
-								<div class="add-actions">
-									<span class="hint">
-										{#if sampleWordCount > 0}{sampleWordCount} words{/if}
-									</span>
-									<button class="btn primary" disabled={!canAddSample} onclick={addSample}>
-										{#if addingSample}<LoaderCircle size={13} class="spinner" />{/if}
-										Add source
-									</button>
+							<div class="sources-col">
+								<div class="sources-head">
+									<h3>Paste your writing here</h3>
 								</div>
-							</div>
 
-							<div class="added-list">
-								{#each references as reference (reference.id)}
-									<div class="pick-row" class:busy={busyId === reference.id}>
-										<div class="source-main">
-											<strong>{reference.description || reference.label}</strong>
-											<span class="source-meta">{sourceKindLabel(reference)}</span>
-											{#if reference.error}<span class="source-error">{reference.error}</span>{/if}
-										</div>
-										<div class="source-controls">
-											<button
-												class="icon-btn"
-												onclick={() => materialize(reference, reference.materializationStatus === 'ready')}
-												disabled={previewLoading}
-												aria-label={`Read ${reference.label}`}
-											><BookOpen size={13} /></button>
-											<button
-												class="icon-btn"
-												onclick={() => removeReference(reference)}
-												disabled={busyId === reference.id}
-												aria-label={`Remove ${reference.label}`}
-											><Trash2 size={13} /></button>
+								<div class="add-form">
+										<input
+											class="what-input"
+											bind:value={sampleDescription}
+											placeholder="What is this? e.g. paper introduction"
+											aria-label="What this passage is"
+										/>
+										<textarea
+											class="paste-area"
+											bind:value={sampleText}
+											onkeydown={onComposerKeydown}
+											placeholder="Paste the writing here"
+											aria-label="Passage text"
+										></textarea>
+										<div class="add-actions">
+											<span class="hint">
+												{#if sampleWordCount > 0}
+												{sampleWordCount} words
+											{:else}
+												Navigation text, dates, URLs and HTML are fine to leave in.
+											{/if}
+											</span>
+											<button class="btn primary" disabled={!canAddSample} onclick={addSample}>
+												{#if addingSample}<LoaderCircle size={13} class="spinner" />{/if}
+												Add source
+											</button>
 										</div>
 									</div>
-								{/each}
 							</div>
 
-							{#if references.length > 0}
-								<div class="sources-footer">
-									<span class="hint">
-										{references.length} of 3&ndash;5 added{references.length < 3 ? ` \u2014 add ${3 - references.length} more` : ''}
-									</span>
-									<button
-										class="btn primary"
-										disabled={references.length < 3}
-										onclick={() => (step = 'review')}
-									>Analyze my style</button>
+							<div class="sources-col">
+								<div class="sources-head">
+									<h3>Your sources</h3>
 								</div>
-							{/if}
 
-							{#if previewId}
-								<div class="preview-panel">
-									<div class="column-head">
-										<span class="eyebrow">Stored text</span>
-										<button class="btn" onclick={() => (previewId = null)} aria-label="Close stored text"><X size={12} /></button>
+								<!-- One panel, two faces: the list, or the text of the source
+								     you opened. Swapping in place keeps the Analyze button
+								     still instead of shoving it down the sheet. -->
+								<div class="panel">
+								{#if previewId}
+									<div class="panel-head">
+										<button
+											class="icon-btn"
+											onclick={() => (previewId = null)}
+											aria-label="Back to sources"
+										><ArrowLeft size={14} /></button>
+										<span class="panel-title"
+											>{previewReference?.description || previewReference?.label || 'Stored text'}</span
+										>
 									</div>
 									{#if previewLoading}
 										<div class="empty"><LoaderCircle size={14} class="spinner" /> Reading</div>
 									{:else}
-										<textarea class="preview-text" bind:value={previewText}></textarea>
-										<div class="preview-actions">
-											<span class="hint">Fix anything that came across wrong before it is measured.</span>
+										<textarea class="preview-text" bind:value={previewText} aria-label="Stored text"
+										></textarea>
+										<div class="panel-foot">
+											<span class="hint">Edit anything that came through wrong.</span>
 											<button class="btn primary" onclick={savePreview}>Save</button>
 										</div>
 									{/if}
+								{:else}
+									<div class="panel-body">
+										{#if references.length === 0}
+											<p class="panel-empty">Nothing added yet.</p>
+										{:else}
+											{#each references as reference (reference.id)}
+												<div class="pick-row" class:busy={busyId === reference.id}>
+													<div class="source-main">
+														<strong>{reference.description || reference.label}</strong>
+														<span class="source-meta">{sourceKindLabel(reference)}</span>
+														{#if reference.error}<span class="source-error">{reference.error}</span>{/if}
+													</div>
+													<div class="source-controls">
+														<button
+															class="icon-btn"
+															onclick={() =>
+																materialize(reference, reference.materializationStatus === 'ready')}
+															disabled={previewLoading}
+															aria-label={`Read ${reference.label}`}
+														><BookOpen size={13} /></button>
+														<button
+															class="icon-btn"
+															onclick={() => removeReference(reference)}
+															disabled={busyId === reference.id}
+															aria-label={`Remove ${reference.label}`}
+														><Trash2 size={13} /></button>
+													</div>
+												</div>
+											{/each}
+										{/if}
+									</div>
+									<div class="panel-foot">
+										<span class="hint">
+											{#if references.length < 3}Add {3 - references.length} more{/if}
+										</span>
+										<button
+											class="btn primary"
+											disabled={references.length < 3}
+											onclick={() => (step = 'review')}
+										>Analyze my style</button>
+									</div>
+								{/if}
 								</div>
-							{/if}
+							</div>
 						</div>
 					</div>
 				{:else if step === 'review'}
@@ -679,8 +837,7 @@
 						<aside class="analysis-column">
 							<div class="column-head">
 								<div class="head-copy">
-									<span class="eyebrow">Style analysis</span>
-									<h3>Measure first, then interpret</h3>
+									<h3>Style analysis</h3>
 								</div>
 								{#if analysisRunning}
 									<button class="btn" onclick={cancelAnalysis}>Cancel</button>
@@ -689,13 +846,12 @@
 										<button class="btn" onclick={resetAnalysis}>Start over</button>
 									{/if}
 									<button class="btn primary" disabled={selectedCount === 0} onclick={startAnalysis}>
-										{run ? 'Run again' : 'Run analysis'}
+										{run ? 'Do another pass' : 'Run analysis'}
 									</button>
 								{/if}
 							</div>
 							<p class="column-note">
-								DocWriter measures the references, then three specialist agents turn the measurements into
-								style guidance.
+								Reading your writing and turning it into style guidance. This takes a few minutes.
 							</p>
 
 							{#if run}
@@ -738,7 +894,6 @@
 												{:else if activity.status === 'running'}<LoaderCircle size={15} class="spinner" />
 												{:else if activity.icon === 'sources'}<FileStack size={15} />
 												{:else if activity.icon === 'measurements'}<BarChart3 size={15} />
-												{:else if activity.icon === 'skill'}<Sparkles size={15} />
 												{:else}<Circle size={15} />{/if}
 											</span>
 											<div class="activity-copy">
@@ -785,7 +940,7 @@
 										{:else if measurements.length === 0}
 											<div class="empty">No measurements yet.</div>
 										{:else}
-											<p class="column-note">{measurements.length} metrics fired. Metrics that measured zero are left out.</p>
+											<p class="column-note">{measurements.length} metrics</p>
 											{#each measurements as measurement (measurement.id)}
 												<div class="measurement-row">
 													<div class="measurement-main">
@@ -800,12 +955,10 @@
 										{/if}
 									{:else}
 										{@const trace = specialistTraces[selectedStep] ?? []}
-										{#if trace.length === 0}
+										{@const stepRunning = step?.status === 'running'}
+										{#if trace.length === 0 && !stepRunning}
 											<div class="empty large-empty">
-												<p>
-													Nothing recorded yet. Traces stream while a specialist works — run the analysis
-													with this panel open to watch it think.
-												</p>
+												<p>Nothing recorded for this step.</p>
 											</div>
 										{:else}
 											<div class="agent-log">
@@ -818,6 +971,14 @@
 														<span class="tool-name">{entry.toolName}</span>
 													{/if}
 												{/each}
+												<!-- A specialist reads for minutes before it writes anything.
+												     Without this the panel looks stuck rather than busy. -->
+												{#if stepRunning}
+													<div class="trace-working">
+														<LoaderCircle size={13} class="spinner" />
+														<span>{trace.length === 0 ? 'Reading your sources' : 'Still working'}</span>
+													</div>
+												{/if}
 											</div>
 										{/if}
 									{/if}
@@ -828,51 +989,38 @@
 						<section class="calibration-column">
 							<div class="column-head">
 								<div class="head-copy">
-									<span class="eyebrow">Your choices</span>
-									<h3>Pick your poison</h3>
+									<h3>Which piece of writing sounds more like you?</h3>
 								</div>
-								{#if pendingTrials.length > 0}
-									<span class="count-chip">{pendingTrials.length} left</span>
+								{#if readyTrials.length > 0}
+									<span class="count-chip">{readyTrials.length} left</span>
 								{/if}
 							</div>
-							<p class="column-note">
-								One of these is a passage you actually wrote. The other is the same passage with one habit
-								changed. Pick whichever you would rather have written.
-							</p>
 
 							<div class="calibration-scroll">
-								{#if pendingTrials.length === 0}
+								{#if readyTrials.length === 0 && failedTrials.length === 0 && !cardsIncoming}
 									<div class="empty large-empty">
 										<Check size={22} />
 										<p>
-											{#if analysisRunning}Analysis is running. Choices will appear here as soon as they are ready.
-											{:else if !run}Run the analysis to get some choices.
+											{#if !run}Run the analysis to get some choices.
 											{:else if summary?.unresolvedCount}Nothing left for now. Come back later for more.
 											{:else}Nothing left to choose.{/if}
 										</p>
 									</div>
 								{/if}
-								{#each pendingTrials as trial (trial.id)}
+
+								<!-- Only cards you can actually answer. Ones still building show
+								     as the bouncing cat at the bottom instead of a row of
+								     placeholder spinners. -->
+								{#each readyTrials as trial (trial.id)}
 									{@const proposition = propositionFor(trial)}
 									<div class="calibration-card">
 										<div class="proposition-top">
 											<span class="family-chip">{proposition?.family.replace(/-/g, ' ')}</span>
-											<span class="confidence">{Math.round((proposition?.confidence ?? 0) * 100)}% confidence</span>
 										</div>
 										<h4>{proposition?.statement}</h4>
 										<p class="instruction">{proposition?.instruction}</p>
 
-										{#if !trial.candidateA || !trial.candidateB}
-											<div class="comparison-pending">
-												{#if attemptedTrials.has(trial.id) && busyId !== trial.id}
-													<span>Could not build a comparison from your sources.</span>
-													<button class="btn" onclick={() => generateComparison(trial)}>Try again</button>
-												{:else}
-													<LoaderCircle size={13} class="spinner" />
-													<span>Rewriting one of your passages without this pattern…</span>
-												{/if}
-											</div>
-										{:else}
+										{#if trial.candidateA && trial.candidateB}
 											<div class="candidate-grid">
 												<button class="candidate" disabled={busyId === trial.id} onclick={() => answerComparison(trial, 'a')}>
 													<span class="candidate-badge">A</span>
@@ -900,28 +1048,44 @@
 										{/if}
 									</div>
 								{/each}
+
+								{#each failedTrials as trial (trial.id)}
+									{@const proposition = propositionFor(trial)}
+									<div class="calibration-card muted">
+										<div class="proposition-top">
+											<span class="family-chip">{proposition?.family.replace(/-/g, ' ')}</span>
+										</div>
+										<h4>{proposition?.statement}</h4>
+										<div class="comparison-pending">
+											<span>Could not build a comparison from your sources.</span>
+											<button class="btn" onclick={() => generateComparison(trial)}>Try again</button>
+										</div>
+									</div>
+								{/each}
+
+								{#if cardsIncoming}
+									<div class="incoming">
+										<!-- The dock's cat, so the agent looks like the same animal
+									     everywhere it appears. -->
+									<span class="incoming-cat"><Cat size={22} strokeWidth={1.8} /></span>
+										<span class="hint">Reading your writing</span>
+									</div>
+								{/if}
 							</div>
 						</section>
 					</div>
 				{:else}
+					<!-- The old list mixed everything together under a count that only
+					     described part of it, so there was no way to tell what the
+					     writing agent actually follows. Two groups, and the boundary
+					     between them is the answer. -->
 					<div class="step step-active">
 						<div class="active-inner">
-							<div class="column-head">
-								<div class="head-copy">
-									<span class="eyebrow">Active skill</span>
-									<h3>Active author skill</h3>
+							{#if summary?.profile?.skillPath}
+								<div class="skill-actions">
+									<a class="btn" href="/api/style-profile/bundle"><Download size={13} /> Download skill</a>
 								</div>
-								<div class="head-actions">
-									{#if summary?.profile?.skillPath}
-										<a class="btn" href="/api/style-profile/bundle"><Download size={13} /> Download skill</a>
-									{/if}
-									<a class="btn" href="/api/style-study/export"><Download size={13} /> Export study data</a>
-								</div>
-							</div>
-							<p class="column-note">
-								{activePropositions.length} proposition{activePropositions.length === 1 ? ' is' : 's are'} available
-								to the writing agent. All measured propositions remain listed below.
-							</p>
+							{/if}
 
 							{#if allPropositions.length === 0}
 								<div class="empty large-empty">
@@ -929,35 +1093,58 @@
 									<strong>No guidance yet</strong>
 									<p>Analyze your references to create style guidance.</p>
 								</div>
-							{/if}
-
-							<div class="proposition-list">
-								{#each allPropositions as proposition (proposition.id)}
-									<div class="proposition-card" class:muted={proposition.status === 'disabled'}>
-										<div class="proposition-top">
-											<span class="family-chip">{proposition.family.replace(/-/g, ' ')}</span>
-											<span class="status-chip {proposition.status}"><span class="chip-dot" aria-hidden="true"></span>{titleCase(proposition.status)}</span>
-											<span class="confidence">{Math.round(proposition.confidence * 100)}%</span>
-										</div>
-										<h4>{proposition.statement}</h4>
-										<textarea
-											aria-label={`Instruction for ${proposition.statement}`}
-											value={propositionEdits[proposition.id] ?? proposition.instruction}
-											oninput={(event) => (propositionEdits[proposition.id] = (event.currentTarget as HTMLTextAreaElement).value)}
-										></textarea>
-										<div class="proposition-actions">
-											{#if ['active', 'confirmed'].includes(proposition.status)}
-												<button class="btn" disabled={busyId === proposition.id} onclick={() => updateProposition(proposition, 'disabled')}>Disable</button>
-											{:else if proposition.status === 'disabled'}
-												<button class="btn" disabled={busyId === proposition.id} onclick={() => updateProposition(proposition, 'active')}>Enable</button>
-											{/if}
-											{#if isPropositionDirty(proposition)}
-												<button class="btn primary" disabled={busyId === proposition.id} onclick={() => updateProposition(proposition)}>Save wording</button>
-											{/if}
-										</div>
+							{:else}
+								{#if activePropositions.length === 0}
+									<p class="panel-empty">Nothing yet. Answer the picks on the Analyze tab to keep some.</p>
+								{:else}
+									<div class="proposition-list">
+										{#each activePropositions as proposition (proposition.id)}
+											<div class="proposition-card">
+												<div class="proposition-top">
+													<span class="family-chip">{proposition.family.replace(/-/g, ' ')}</span>
+												</div>
+												<h4>{proposition.statement}</h4>
+												<p class="instruction">{proposition.instruction}</p>
+												<!-- The passages do more work than the rule: this is what the
+												     agent is actually imitating, so it is what you should see. -->
+												{#if proposition.examples.length > 0}
+													<ul class="example-list">
+														{#each proposition.examples.slice(0, 3) as example (example)}
+															<li>{example}</li>
+														{/each}
+													</ul>
+												{/if}
+												<div class="proposition-actions">
+													<button class="btn" disabled={busyId === proposition.id} onclick={() => updateProposition(proposition, 'disabled')}>Remove</button>
+												</div>
+											</div>
+										{/each}
 									</div>
-								{/each}
-							</div>
+								{/if}
+
+								{#if inactivePropositions.length > 0}
+									<div class="group-head">
+										<h4>Not in the skill</h4>
+										<span class="hint">{inactivePropositions.length}</span>
+									</div>
+									<div class="proposition-list">
+										{#each inactivePropositions as proposition (proposition.id)}
+											<div class="proposition-card muted">
+												<div class="proposition-top">
+													<span class="family-chip">{proposition.family.replace(/-/g, ' ')}</span>
+													<span class="status-chip {proposition.status}"
+														><span class="chip-dot" aria-hidden="true"></span>{inactiveReason(proposition.status)}</span
+													>
+												</div>
+												<h4>{proposition.statement}</h4>
+												<div class="proposition-actions">
+													<button class="btn" disabled={busyId === proposition.id} onclick={() => updateProposition(proposition, 'active')}>Use it</button>
+												</div>
+											</div>
+										{/each}
+									</div>
+								{/if}
+							{/if}
 						</div>
 					</div>
 				{/if}
@@ -1080,11 +1267,6 @@
 		flex-direction: column;
 		gap: 3px;
 		min-width: 0;
-	}
-	.head-actions {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 6px;
 	}
 	.column-note {
 		margin-top: 8px;
@@ -1252,11 +1434,6 @@
 		font-size: 10.5px;
 		text-transform: capitalize;
 	}
-	.confidence {
-		font-size: 11px;
-		color: var(--text-faint);
-		font-variant-numeric: tabular-nums;
-	}
 	/* Status is a dot + word, so it reads at a glance without relying on a
 	 * hue the theme may not have contrast for. */
 	.status-chip {
@@ -1326,72 +1503,124 @@
 	}
 
 	/* ---- step 1: sources ---------------------------------------------- */
-	/* Left: what you hand over and what the agent does with it. Right: the
-	 * sources it found, to keep or drop. */
+	/* Left: paste a new passage. Right: the ones you already have, and the
+	 * text of whichever you opened. The dialog is a fixed-size sheet, so the
+	 * grid fills it top to bottom instead of floating in the upper third —
+	 * both columns end at the same line and neither one grows the page. */
 	.step-sources {
 		display: flex;
 		justify-content: center;
 		height: 100%;
-		overflow: auto;
+		overflow: hidden;
 	}
 	.sources-inner {
-		display: flex;
+		display: grid;
+		box-sizing: border-box;
 		width: 100%;
-		max-width: 720px;
+		max-width: 1120px;
+		height: 100%;
+		min-height: 0;
+		grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+		gap: 28px;
+		padding: 24px 24px 28px;
+	}
+	.sources-col {
+		display: flex;
+		min-height: 0;
 		flex-direction: column;
 		gap: 14px;
-		padding: 24px 20px 28px;
+	}
+	.sources-head {
+		flex: none;
 	}
 	.sources-head h3 {
 		font-size: 16px;
 	}
-	.add-form {
+	/* One composer, not a card holding cards: a single border owns the whole
+	 * form and the fields inside are separated by hairlines only. */
+	/* One box, used by both columns so they read as one system. */
+	.add-form,
+	.panel {
 		display: flex;
+		flex: 1 1 auto;
+		min-height: 0;
 		flex-direction: column;
-		gap: 8px;
-		padding: 12px;
+		overflow: hidden;
 		border: 1px solid var(--border-light);
 		border-radius: 10px;
-		background: var(--bg-surface);
+		background: var(--bg);
+	}
+	.add-form:focus-within {
+		border-color: var(--accent);
 	}
 	.what-input {
 		box-sizing: border-box;
 		width: 100%;
-		padding: 8px 10px;
-		border: 1px solid var(--border-light);
-		border-radius: 7px;
-		background: var(--bg);
+		padding: 10px 12px;
+		border: none;
+		border-bottom: 1px solid var(--border-light);
+		border-radius: 0;
+		background: transparent;
 		color: var(--text);
 		font: inherit;
 		font-size: 13px;
 		font-weight: 500;
 	}
 	.what-input:focus,
-	.paste-area:focus {
+	.paste-area:focus,
+	.preview-text:focus {
 		outline: none;
-		border-color: var(--accent);
 	}
-	.paste-area {
-		min-height: 180px;
-		resize: vertical;
+	/* Grows with its box instead of being hand-resized, so `resize` is off. */
+	.paste-area,
+	.preview-text {
+		flex: 1 1 auto;
+		min-height: 0;
+		padding: 10px 12px;
+		border: none;
+		border-radius: 0;
+		background: transparent;
+		resize: none;
 	}
-	.add-actions {
+	.add-actions,
+	.panel-foot {
 		display: flex;
+		flex: none;
 		align-items: center;
 		justify-content: space-between;
 		gap: 10px;
+		padding: 8px 10px;
+		border-top: 1px solid var(--border-light);
 	}
-	.added-list {
+
+	.panel-head {
 		display: flex;
-		flex-direction: column;
-		gap: 2px;
-	}
-	.sources-footer {
-		display: flex;
+		flex: none;
 		align-items: center;
-		justify-content: space-between;
-		gap: 12px;
-		padding-top: 6px;
+		gap: 8px;
+		padding: 7px 10px;
+		border-bottom: 1px solid var(--border-light);
+	}
+	.panel-title {
+		min-width: 0;
+		overflow: hidden;
+		font-size: 12.5px;
+		font-weight: 600;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.panel-body {
+		flex: 1 1 auto;
+		min-height: 0;
+		padding: 6px;
+		overflow-y: auto;
+	}
+
+	.panel-empty {
+		padding: 28px 12px;
+		color: var(--text-faint);
+		font-size: 12.5px;
+		text-align: center;
 	}
 	.composer {
 		margin: 20px 18px 0;
@@ -1471,25 +1700,6 @@
 		gap: 10px;
 	}
 
-	.preview-panel {
-		display: flex;
-		max-height: 46%;
-		flex-direction: column;
-		gap: 10px;
-		padding: 14px 18px 16px;
-		border-top: 1px solid var(--border-light);
-		background: var(--bg-surface);
-	}
-	.preview-text {
-		flex: 1;
-		min-height: 120px;
-	}
-	.preview-actions {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 12px;
-	}
 	.hint {
 		font-size: 11.5px;
 		color: var(--text-faint);
@@ -1716,6 +1926,9 @@
 		border-radius: 8px;
 		background: var(--bg-surface);
 	}
+	.calibration-card.muted {
+		opacity: 0.6;
+	}
 	.calibration-card + .calibration-card {
 		margin-top: 12px;
 	}
@@ -1724,9 +1937,6 @@
 		align-items: center;
 		gap: 8px;
 		margin-bottom: 8px;
-	}
-	.proposition-top .confidence {
-		margin-left: auto;
 	}
 	.instruction {
 		margin: 6px 0 12px;
@@ -1817,11 +2027,127 @@
 		margin: 0 auto;
 		padding: 18px 18px 24px;
 	}
+	.skill-actions {
+		display: flex;
+		justify-content: flex-end;
+		gap: 8px;
+	}
+	.trace-working {
+		display: flex;
+		align-items: center;
+		gap: 7px;
+		padding: 10px 0 4px;
+		color: var(--text-faint);
+		font-size: 12.5px;
+	}
+	.header-actions {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+	}
+	/* Drops out of the dialog header, so it sits above the tabs rather than
+	 * inside whichever step happens to be open. */
+	.import-panel {
+		display: flex;
+		flex-direction: column;
+		gap: 10px;
+		margin: 12px 24px 0;
+		padding: 12px;
+		border: 1px solid var(--border-light);
+		border-radius: 10px;
+		background: var(--bg-surface);
+	}
+	.version-list {
+		display: flex;
+		flex-direction: column;
+	}
+	.version-row {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+		padding: 7px 0;
+	}
+	.version-row + .version-row {
+		border-top: 1px solid var(--border-light);
+	}
+	.version-main {
+		display: flex;
+		min-width: 0;
+		flex-direction: column;
+		gap: 2px;
+		font-size: 12.5px;
+	}
+	.import-row {
+		display: flex;
+		gap: 8px;
+	}
+	.import-row input {
+		box-sizing: border-box;
+		width: 100%;
+		flex: 1;
+		padding: 7px 10px;
+		border: 1px solid var(--border-light);
+		border-radius: 7px;
+		background: var(--bg);
+		color: var(--text);
+		font: inherit;
+		font-size: 12.5px;
+	}
+	.import-row input:focus {
+		outline: none;
+		border-color: var(--accent);
+	}
 	.proposition-list {
 		display: flex;
 		flex-direction: column;
 		gap: 10px;
-		margin-top: 16px;
+		margin-top: 10px;
+	}
+	/* The line between "the agent follows these" and everything else is the
+	 * whole point of the tab, so it gets a rule rather than a heading alone. */
+	/* Bounces while cards are still arriving, stops when the passes finish. */
+	.incoming {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 9px;
+		padding: 22px 12px;
+		color: var(--text-faint);
+	}
+	.incoming-cat {
+		display: inline-flex;
+		animation: cat-bounce 1s ease-in-out infinite;
+	}
+	@keyframes cat-bounce {
+		0%,
+		100% {
+			transform: translateY(0);
+		}
+		50% {
+			transform: translateY(-6px);
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.incoming-cat {
+			animation: none;
+		}
+	}
+	.group-head {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: 12px;
+		margin-top: 26px;
+		padding-bottom: 8px;
+		border-bottom: 1px solid var(--border-light);
+	}
+	.group-head:first-of-type {
+		margin-top: 18px;
+	}
+	.group-head h4 {
+		font-size: 13px;
+		font-weight: 600;
 	}
 	.proposition-card {
 		padding: 14px 16px;
@@ -1832,9 +2158,21 @@
 	.proposition-card.muted {
 		opacity: 0.6;
 	}
-	.proposition-card textarea {
-		margin-top: 9px;
-		min-height: 54px;
+	/* Quoted from the author, so it reads as quotation rather than as UI. */
+	.example-list {
+		margin: 10px 0 0;
+		padding: 0;
+		list-style: none;
+	}
+	.example-list li {
+		padding: 3px 0 3px 11px;
+		border-left: 2px solid var(--border-light);
+		color: var(--text-secondary);
+		font-size: 12.5px;
+		line-height: 1.5;
+	}
+	.example-list li + li {
+		margin-top: 6px;
 	}
 	.proposition-actions {
 		display: flex;
@@ -1858,27 +2196,24 @@
 			grid-template-columns: 1fr;
 			overflow: auto;
 		}
+		/* Too narrow for two columns: stack them and scroll the step, with
+		 * each box tall enough to still be worth using. */
+		.sources-inner {
+			height: auto;
+			grid-template-columns: minmax(0, 1fr);
+			grid-template-rows: none;
+		}
+		.add-form,
+		.panel {
+			min-height: 260px;
+		}
 		.analysis-column {
 			border-right: 0;
 			border-bottom: 1px solid var(--border-light);
 			overflow: visible;
 		}
-		.picks-column {
-			border-left: 0;
-			border-top: 1px solid var(--border-light);
-		}
-		.source-column,
-		.picks-column {
-			height: auto;
-			overflow: visible;
-		}
-		.source-scroll,
-		.picks-scroll,
 		.calibration-scroll {
 			overflow: visible;
-		}
-		.preview-panel {
-			max-height: none;
 		}
 	}
 	@media (max-width: 780px) {
