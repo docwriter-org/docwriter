@@ -17,6 +17,19 @@ import type { SpecialistLogEntry } from './run-manager';
 /** Belt and braces against a runaway agent filling the database. */
 const MAX_LINES_PER_RUN = 2000;
 
+/** Per-run insert counts so we do not COUNT(*) on every closed line. */
+const lineCounts = new Map<string, number>();
+
+function countedLines(runId: string): number {
+	const cached = lineCounts.get(runId);
+	if (cached !== undefined) return cached;
+	const { count } = getDb()
+		.prepare('SELECT COUNT(*) AS count FROM style_run_logs WHERE run_id = ?')
+		.get(runId) as { count: number };
+	lineCounts.set(runId, count);
+	return count;
+}
+
 /** Never throws: a trace is for looking at, and losing a line must not fail a
  *  run. Callers can append without guarding. */
 export function appendRunLog(runId: string, entry: SpecialistLogEntry) {
@@ -28,12 +41,9 @@ export function appendRunLog(runId: string, entry: SpecialistLogEntry) {
 }
 
 function appendRunLogOrThrow(runId: string, entry: SpecialistLogEntry) {
-	const db = getDb();
-	const { count } = db
-		.prepare('SELECT COUNT(*) AS count FROM style_run_logs WHERE run_id = ?')
-		.get(runId) as { count: number };
+	const count = countedLines(runId);
 	if (count >= MAX_LINES_PER_RUN) return;
-	db.prepare(
+	getDb().prepare(
 		`INSERT INTO style_run_logs (run_id, specialist_id, kind, text, tool_name, created)
 		 VALUES (?, ?, ?, ?, ?, ?)`
 	).run(
@@ -44,6 +54,7 @@ function appendRunLogOrThrow(runId: string, entry: SpecialistLogEntry) {
 		entry.toolName ?? null,
 		Date.now()
 	);
+	lineCounts.set(runId, count + 1);
 }
 
 /** Every stored line for a run, in the order it happened, keyed by specialist. */
@@ -74,4 +85,5 @@ export function readRunLogs(runId: string): Record<string, SpecialistLogEntry[]>
 
 export function deleteRunLogs(runId: string) {
 	getDb().prepare('DELETE FROM style_run_logs WHERE run_id = ?').run(runId);
+	lineCounts.delete(runId);
 }

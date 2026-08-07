@@ -10,7 +10,7 @@ export const GET: RequestHandler = async ({ params }) => {
 			const send = (event: StyleRunEvent) => {
 				controller.enqueue(encoder.encode(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`));
 				if (['completed', 'error', 'cancelled'].includes(event.type)
-					|| ['completed', 'error', 'cancelled'].includes(event.run.status)) {
+					|| (event.run && ['completed', 'error', 'cancelled'].includes(event.run.status))) {
 					unsubscribe?.();
 					controller.close();
 				}

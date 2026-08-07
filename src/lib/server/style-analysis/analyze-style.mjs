@@ -32,7 +32,8 @@ function hash(value) {
 }
 
 function id(prefix, value) {
-	return `${prefix}_${hash(value).slice(0, 12)}`;
+	// Structural ids only need uniqueness within a report — avoid SHA-256 per token.
+	return `${prefix}:${value}`;
 }
 
 function round(value, digits = 4) {
@@ -50,9 +51,8 @@ function words(text) {
 	}));
 }
 
-function percentile(values, fraction) {
-	if (!values.length) return 0;
-	const sorted = [...values].sort((a, b) => a - b);
+function percentileSorted(sorted, fraction) {
+	if (!sorted.length) return 0;
 	const position = (sorted.length - 1) * fraction;
 	const lower = Math.floor(position);
 	const upper = Math.ceil(position);
@@ -60,19 +60,26 @@ function percentile(values, fraction) {
 	return sorted[lower] + (sorted[upper] - sorted[lower]) * (position - lower);
 }
 
+function percentile(values, fraction) {
+	if (!values.length) return 0;
+	return percentileSorted([...values].sort((a, b) => a - b), fraction);
+}
+
 function distribution(values) {
 	if (!values.length) {
 		return { min: 0, p10: 0, median: 0, p90: 0, max: 0, mean: 0, mad: 0 };
 	}
-	const median = percentile(values, 0.5);
+	const sorted = [...values].sort((a, b) => a - b);
+	const median = percentileSorted(sorted, 0.5);
+	const deviations = sorted.map((value) => Math.abs(value - median)).sort((a, b) => a - b);
 	return {
-		min: round(Math.min(...values)),
-		p10: round(percentile(values, 0.1)),
+		min: round(sorted[0]),
+		p10: round(percentileSorted(sorted, 0.1)),
 		median: round(median),
-		p90: round(percentile(values, 0.9)),
-		max: round(Math.max(...values)),
+		p90: round(percentileSorted(sorted, 0.9)),
+		max: round(sorted[sorted.length - 1]),
 		mean: round(values.reduce((sum, value) => sum + value, 0) / values.length),
-		mad: round(percentile(values.map((value) => Math.abs(value - median)), 0.5))
+		mad: round(percentileSorted(deviations, 0.5))
 	};
 }
 
@@ -414,27 +421,34 @@ function containingSentence(document, start) {
 	return document.sentences.find((sentence) => sentence.start <= start && sentence.end >= start);
 }
 
+function nestingDepthSeries(text) {
+	const depths = new Uint16Array(text.length + 1);
+	const stack = [];
+	let straightDoubleQuoteOpen = false;
+	let straightSingleQuoteOpen = false;
+	for (let cursor = 0; cursor < text.length; cursor += 1) {
+		depths[cursor] = stack.length + Number(straightDoubleQuoteOpen) + Number(straightSingleQuoteOpen);
+		const character = text[cursor];
+		if (character === '(' || character === '[') stack.push(character);
+		else if (character === ')' && stack.at(-1) === '(') stack.pop();
+		else if (character === ']' && stack.at(-1) === '[') stack.pop();
+		else if (character === '“') stack.push(character);
+		else if (character === '”' && stack.at(-1) === '“') stack.pop();
+		else if (character === '‘') stack.push(character);
+		else if (character === '’' && stack.at(-1) === '‘') stack.pop();
+		else if (character === '"') straightDoubleQuoteOpen = !straightDoubleQuoteOpen;
+		else if (character === "'" && !(/[\p{L}]/u.test(text[cursor - 1] ?? '') && /[\p{L}]/u.test(text[cursor + 1] ?? ''))) {
+			straightSingleQuoteOpen = !straightSingleQuoteOpen;
+		}
+	}
+	depths[text.length] = stack.length + Number(straightDoubleQuoteOpen) + Number(straightSingleQuoteOpen);
+	return depths;
+}
+
 function punctuationOccurrences(document) {
 	const occurrences = [];
 	const consumed = new Set();
-	const nestingDepthAt = (text, index) => {
-		const stack = [];
-		let straightDoubleQuoteOpen = false;
-		let straightSingleQuoteOpen = false;
-		for (let cursor = 0; cursor < index; cursor += 1) {
-			const character = text[cursor];
-			if (character === '(' || character === '[') stack.push(character);
-			else if (character === ')' && stack.at(-1) === '(') stack.pop();
-			else if (character === ']' && stack.at(-1) === '[') stack.pop();
-			else if (character === '“') stack.push(character);
-			else if (character === '”' && stack.at(-1) === '“') stack.pop();
-			else if (character === '‘') stack.push(character);
-			else if (character === '’' && stack.at(-1) === '‘') stack.pop();
-			else if (character === '"') straightDoubleQuoteOpen = !straightDoubleQuoteOpen;
-			else if (character === "'" && !(/[\p{L}]/u.test(text[cursor - 1] ?? '') && /[\p{L}]/u.test(text[cursor + 1] ?? ''))) straightSingleQuoteOpen = !straightSingleQuoteOpen;
-		}
-		return stack.length + Number(straightDoubleQuoteOpen) + Number(straightSingleQuoteOpen);
-	};
+	const nestingDepths = nestingDepthSeries(document.text);
 	const isFalsePeriod = (text, index) => {
 		if (/\d/.test(text[index - 1] ?? '') && /\d/.test(text[index + 1] ?? '')) return true;
 		const whitespaceStart = Math.max(text.lastIndexOf(' ', index), text.lastIndexOf('\n', index), text.lastIndexOf('\t', index)) + 1;
@@ -487,7 +501,7 @@ function punctuationOccurrences(document) {
 				rightClauseWords: words(rightText.slice(0, rightBoundary)).length,
 				normalizedPosition: sentence ? round(local / Math.max(1, sentence.text.length)) : 0,
 				followingConjunction: after && CONJUNCTIONS.has(after) ? after : null,
-				nestingDepth: nestingDepthAt(document.text, start),
+				nestingDepth: nestingDepths[start],
 				likelyFunction,
 				sentenceText: sentence?.text ?? '',
 				...extra
@@ -745,7 +759,7 @@ const FAMILY_LABELS = {
 };
 
 function metricFamily(metricId) {
-	return metricId.split('.').slice(0, metricId.startsWith('punctuation.') ? 1 : 1)[0];
+	return metricId.split('.')[0];
 }
 
 function metricUnit(metricId) {

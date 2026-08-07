@@ -48,7 +48,8 @@ export interface SpecialistLogEntry {
 
 export interface StyleRunEvent {
 	type: 'snapshot' | 'progress' | 'specialist' | 'specialist_log' | 'completed' | 'error' | 'cancelled';
-	run: StyleAnalysisRun;
+	/** Omitted on high-volume `specialist_log` lines — clients keep their last run snapshot. */
+	run?: StyleAnalysisRun;
 	message?: string;
 	log?: SpecialistLogEntry;
 }
@@ -95,20 +96,20 @@ function emit(run: ManagedRun, type: StyleRunEvent['type'], message?: string) {
 	const snapshot = publicRun(run);
 	if (run.profile) {
 		run.profile.lastRun = snapshot;
-		// Progress ticks are frequent; persist durable outcomes and specialist
-		// transitions so a reload mid-run is accurate without rewriting on every tick.
-		if (type !== 'progress') {
+		// Specialists run in parallel; persisting on every status tick races the
+		// same JSON file. Keep lastRun in memory and write only at terminal events
+		// (executeRun also writes explicitly at phase boundaries).
+		if (type === 'completed' || type === 'error' || type === 'cancelled') {
 			run.profile = writeStyleProfile(run.profile);
 		}
 	}
 	run.emitter.emit('event', { type, run: snapshot, message } satisfies StyleRunEvent);
 }
 
-/** Trace lines are high-volume: skip profile writes and deep-clones. */
+/** Trace lines are high-volume: no profile write, no run clone/payload. */
 function emitLog(run: ManagedRun, log: SpecialistLogEntry) {
 	run.emitter.emit('event', {
 		type: 'specialist_log',
-		run: run.state,
 		log
 	} satisfies StyleRunEvent);
 }
@@ -306,11 +307,10 @@ function sourceExcerpts(
 
 function specialistPrompt(
 	report: StyleAnalysisReport,
-	documents: NormalizedDocument[],
-	descriptions: Record<string, string>,
-	families: StyleFamily[]
+	families: StyleFamily[],
+	vocabulary: string[],
+	excerpts: string
 ): string {
-	const vocabulary = characteristicVocabulary(documents);
 	return [
 		'Measurements that fired for your families (zeros already removed — treat these as hints, not the answer):',
 		JSON.stringify(reportSlice(report, families)),
@@ -320,7 +320,7 @@ function specialistPrompt(
 		'The writing. Each source is labeled with what the author says it is.',
 		'Read it, then write ghostwriter instructions in plain language:',
 		'',
-		sourceExcerpts(documents, descriptions)
+		excerpts
 	].join('\n');
 }
 
@@ -465,7 +465,9 @@ async function runSpecialist(
 	run: ManagedRun,
 	report: StyleAnalysisReport,
 	documents: NormalizedDocument[],
-	descriptions: Record<string, string>,
+	corpus: string,
+	vocabulary: string[],
+	excerpts: string,
 	specialist: (typeof SPECIALISTS)[number]
 ): Promise<PropositionDraft[]> {
 	updateSpecialist(run, specialist.id, { status: 'running', startedAt: now(), error: undefined });
@@ -473,14 +475,13 @@ async function runSpecialist(
 		providerId: run.state.provider as ProviderId,
 		model: run.state.model,
 		systemPrompt: specialistSystemPrompt(specialist.families),
-		prompt: specialistPrompt(report, documents, descriptions, specialist.families),
+		prompt: specialistPrompt(report, specialist.families, vocabulary, excerpts),
 		toolName: 'submit_style_families',
 		toolDescription: 'Submit all grounded style propositions for the assigned feature families.',
 		inputSchema: draftJsonSchema(),
 		onEvent: (event) => forwardSpecialistEvent(run, specialist.id, event),
 		parse: (value) => {
 			const parsed = SpecialistSubmissionSchema.parse(value);
-			const corpus = corpusText(documents);
 			for (const draft of parsed.propositions) {
 				if (!specialist.families.includes(draft.family)) throw new Error(`Family ${draft.family} is outside this specialist assignment`);
 				validateDraftGrounding(draft, corpus);
@@ -596,8 +597,13 @@ async function executeRun(run: ManagedRun, force: boolean) {
 		run.state.phase = 'reflecting';
 		run.state.progress = 35;
 		emit(run, 'progress', 'Running three style specialists');
+		const corpus = corpusText(documents);
+		const vocabulary = characteristicVocabulary(documents);
+		const excerpts = sourceExcerpts(documents, descriptions);
 		const specialistResults = await Promise.all(
-			SPECIALISTS.map((specialist) => runSpecialist(run, report, documents, descriptions, specialist))
+			SPECIALISTS.map((specialist) =>
+				runSpecialist(run, report, documents, corpus, vocabulary, excerpts, specialist)
+			)
 		);
 		if (run.abortController.signal.aborted) throw new Error('Style analysis was cancelled');
 		const drafts = specialistResults.flat();
@@ -605,8 +611,7 @@ async function executeRun(run: ManagedRun, force: boolean) {
 		run.state.phase = 'synthesizing';
 		run.state.progress = 75;
 		emit(run, 'progress', 'Merging grounded propositions');
-		const synthesized = drafts.length ? await runSynthesis(run, corpusText(documents), drafts) : [];
-		const corpus = corpusText(documents);
+		const synthesized = drafts.length ? await runSynthesis(run, corpus, drafts) : [];
 		const grounded: StyleProposition[] = [];
 		let droppedUngrounded = 0;
 		synthesized.forEach((draft, index) => {
