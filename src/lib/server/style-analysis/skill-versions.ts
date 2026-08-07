@@ -80,12 +80,19 @@ export function skillVersionDir(version: number): string | null {
 }
 
 /**
- * The number the next build will carry. Read before compiling so the version
- * can be written into the skill's own files: a downloaded bundle that cannot
- * say which version it is leaves you guessing when you come back to restore it.
+ * The version a build belongs to, read before compiling so the number can be
+ * written into the skill's own files: a downloaded bundle that cannot say which
+ * version it is leaves you guessing when you come back to restore it.
+ *
+ * `startNew` is true only at the boundaries a writer would call a version — a
+ * finished pass, or a restore. Recompiles in between (answering a pick,
+ * removing an instruction) refine the version they are already in, rather than
+ * marching the number up on every click.
  */
-export function nextSkillVersion(): number {
-	return (listSkillVersions()[0]?.version ?? 0) + 1;
+export function skillVersionFor(startNew: boolean): number {
+	const latest = listSkillVersions()[0]?.version ?? 0;
+	if (startNew) return latest + 1;
+	return latest || 1;
 }
 
 /**
@@ -102,10 +109,10 @@ export function snapshotSkillVersion(
 	try {
 		if (!existsSync(skillDir)) return null;
 		const existing = listSkillVersions();
-		// Identical content back to back is a re-compile, not a new version:
-		// answering ten calibration questions should not fill the history with
-		// ten near-identical snapshots and push out the versions worth keeping.
-		if (existing[0] && sameSkillContent(existing[0].path, skillDir)) return existing[0];
+		// Same number means refine that version in place rather than add one.
+		// Same content means nothing to record at all.
+		const current = existing.find((candidate) => candidate.version === version);
+		if (current && sameSkillContent(current.path, skillDir)) return current;
 		mkdirSync(SKILL_VERSIONS_DIR, { recursive: true });
 		const dir = join(SKILL_VERSIONS_DIR, `v${String(version).padStart(4, '0')}`);
 		rmSync(dir, { recursive: true, force: true });
@@ -113,7 +120,7 @@ export function snapshotSkillVersion(
 		const createdAt = Date.now();
 		writeJsonAtomic(join(dir, META_FILE), { version, createdAt, propositionCount });
 
-		for (const old of existing.slice(MAX_VERSIONS - 1)) {
+		for (const old of existing.filter((c) => c.version !== version).slice(MAX_VERSIONS - 1)) {
 			rmSync(old.path, { recursive: true, force: true });
 		}
 		return { version, createdAt, propositionCount, path: dir };

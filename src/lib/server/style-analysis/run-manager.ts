@@ -616,7 +616,7 @@ async function executeRun(run: ManagedRun, force: boolean) {
 		run.state.progress = 90;
 		emit(run, 'progress', 'Compiling the author skill');
 		if (active.length) {
-			const skill = compileAuthorStyleSkill(run.profile, report);
+			const skill = compileAuthorStyleSkill(run.profile, report, { startsNewVersion: true });
 			run.profile.skillId = skill.skillId;
 			run.profile.skillPath = skill.skillPath;
 		}

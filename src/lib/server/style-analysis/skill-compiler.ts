@@ -6,7 +6,7 @@ import { DOCWRITER_DIR } from '$lib/server/document-files';
 import { readSkillsConfig, upsertManagedSkill } from '$lib/server/skills-config';
 import { writeJsonAtomic, writeTextAtomic } from '$lib/server/file-utils';
 import { listStyleReferences, REFERENCES_CACHE_DIR } from '$lib/server/references';
-import { nextSkillVersion, snapshotSkillVersion } from './skill-versions';
+import { skillVersionFor, snapshotSkillVersion } from './skill-versions';
 import { normalizeForMatch } from './profile-store';
 import analyzerScript from './analyze-style.mjs?raw';
 
@@ -302,13 +302,19 @@ function freshStagingDir(skillDir: string, tag: string): string {
 	return staging;
 }
 
-export function compileAuthorStyleSkill(profile: StyleProfile, report: StyleAnalysisReport): { skillId: string; skillPath: string } {
+export function compileAuthorStyleSkill(
+	profile: StyleProfile,
+	report: StyleAnalysisReport,
+	/** True when this build is a new version of the skill: a pass that just
+	 *  finished. False for the recompiles that follow as the writer refines it. */
+	options: { startsNewVersion?: boolean } = {}
+): { skillId: string; skillPath: string } {
 	const target = resolveAuthorStyleTarget();
 	const skillDir = target.path;
 	const staging = freshStagingDir(skillDir, 'build');
 	for (const directory of ['agents', 'references', 'scripts']) mkdirSync(join(staging, directory), { recursive: true });
 	// Decided before writing so the number in the files matches the snapshot.
-	const skillVersion = nextSkillVersion();
+	const skillVersion = skillVersionFor(options.startsNewVersion === true);
 	// One index and one rendered body for the whole compile: SKILL.md and
 	// references/style-profile.md carry the same text.
 	const sentenceIndex = makeSentenceIndex();
@@ -372,7 +378,7 @@ export function installSkillFolder(
 	// A folder from outside has never been recorded here, so keep a copy.
 	// A folder from history already is one, and re-snapshotting it would file
 	// the same skill under a second number that contradicts its own stamp.
-	if (options.snapshot) snapshotSkillVersion(skillDir, countPropositions(skillDir), nextSkillVersion());
+	if (options.snapshot) snapshotSkillVersion(skillDir, countPropositions(skillDir), skillVersionFor(true));
 	return { skillId: registered.id, skillPath: skillDir };
 }
 

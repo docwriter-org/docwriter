@@ -10,10 +10,11 @@
  * field before a row is written, so the log knows that a proposition was
  * confirmed in 11 seconds and never what either passage said.
  */
-import { existsSync, readFileSync, renameSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DOCWRITER_DIR } from '$lib/server/document-files';
 import { getDb } from '$lib/server/db';
+import { kvGet, kvSet } from '$lib/server/db-writes';
 
 export const STYLE_STUDY_DIR = join(DOCWRITER_DIR, 'style-study');
 export const STYLE_STUDY_EVENTS_FILE = join(STYLE_STUDY_DIR, 'events.jsonl');
@@ -29,14 +30,26 @@ export function scrubStyleStudyData(value: unknown): unknown {
 }
 
 let importChecked = false;
+const IMPORTED_KEY = 'style_study:jsonl_imported';
 
-/** Carry a pre-SQLite log across, once, then rename it out of the way. */
+/**
+ * Carry a pre-SQLite log across, once.
+ *
+ * The marker is a kv flag written inside the same transaction as the rows, not
+ * a renamed file: a rename that failed after the rows committed would import
+ * the file again on the next start and double the history. The original file is
+ * left exactly where it is, so nothing of the writer's is moved or deleted.
+ */
 function importLegacyLog() {
 	if (importChecked) return;
 	importChecked = true;
-	if (!existsSync(STYLE_STUDY_EVENTS_FILE)) return;
 	try {
+		if (kvGet(IMPORTED_KEY)) return;
 		const db = getDb();
+		if (!existsSync(STYLE_STUDY_EVENTS_FILE)) {
+			kvSet(IMPORTED_KEY, String(Date.now()));
+			return;
+		}
 		const insert = db.prepare(
 			'INSERT INTO style_study_events (type, timestamp, data) VALUES (?, ?, ?)'
 		);
@@ -51,8 +64,8 @@ function importLegacyLog() {
 					// A corrupt line is not worth failing the import over.
 				}
 			}
+			kvSet(IMPORTED_KEY, String(Date.now()));
 		})();
-		renameSync(STYLE_STUDY_EVENTS_FILE, `${STYLE_STUDY_EVENTS_FILE}.imported`);
 	} catch {
 		// Telemetry must never break the app.
 	}
