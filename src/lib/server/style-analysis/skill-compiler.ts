@@ -86,7 +86,8 @@ function examplesMarkdown(profile: StyleProfile): string {
 	return `${lines.join('\n').trim()}\n`;
 }
 
-function skillMarkdown(skillName: string): string {
+function skillMarkdown(skillName: string, profile: StyleProfile): string {
+	const profileBody = profileMarkdown(profile).trim();
 	return `---
 name: ${skillName}
 description: Apply the writing style learned from this workspace's references. Use when drafting or revising prose for this workspace unless the user requests a different style. Do not use reference facts or claims as content.
@@ -94,15 +95,13 @@ description: Apply the writing style learned from this workspace's references. U
 
 # Apply the learned author style
 
-Read \`references/style-profile.md\` before drafting or revising prose.
+Apply the active instructions below. Preserve the meaning, facts, citations, and requested format of the document. Do not copy claims, names, data, or subject matter from the source references.
 
-Apply only the active instructions in that profile, and apply each instruction only in its recorded scope. Preserve the meaning, facts, citations, and requested format of the document. Do not copy claims, names, data, or subject matter from the source references.
-
-Read \`references/examples.md\` when an instruction needs clarification. Use the examples to understand form and rhythm, not as source material. Read \`references/metrics.json\` or \`references/propositions.json\` only when the concise profile is insufficient.
+Read \`references/examples.md\` when an instruction needs clarification. Use the examples to understand form and rhythm, not as source material. Read \`references/metrics.json\` or \`references/propositions.json\` only when this profile is insufficient.
 
 If the user requests a different style, follow the user's request. If two active instructions conflict in the current context, prefer the instruction with higher confidence and explain the conflict briefly.
 
-Run \`scripts/analyze-style.mjs\` only when asked to inspect new plain text or Markdown outside DocWriter. The script prints deterministic measurements and does not update this profile.
+${profileBody}
 `;
 }
 
@@ -167,8 +166,9 @@ export function compileAuthorStyleSkill(profile: StyleProfile, report: StyleAnal
 	rmSync(staging, { recursive: true, force: true });
 	for (const directory of ['agents', 'references', 'scripts']) mkdirSync(join(staging, directory), { recursive: true });
 	try {
-		writeTextAtomic(join(staging, 'SKILL.md'), skillMarkdown(target.id));
+		writeTextAtomic(join(staging, 'SKILL.md'), skillMarkdown(target.id, profile));
 		writeTextAtomic(join(staging, 'agents', 'openai.yaml'), openAiYaml(target.id));
+		// Keep a copy under references/ for agents that dig past SKILL.md.
 		writeTextAtomic(join(staging, 'references', 'style-profile.md'), profileMarkdown(profile));
 		writeJsonAtomic(join(staging, 'references', 'metrics.json'), {
 			schemaVersion: report.schemaVersion,
