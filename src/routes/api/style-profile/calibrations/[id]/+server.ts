@@ -3,7 +3,7 @@ import type { RequestHandler } from './$types';
 import type { CalibrationChoice } from '$lib/style-profile';
 import type { ProviderId } from '$lib/server/providers/types';
 import { answerCalibrationTrial, generateCalibrationTrial } from '$lib/server/style-analysis/calibration';
-import { styleProfileForClient } from '$lib/server/style-analysis/profile-store';
+import { publicCalibrationTrial, styleProfileForClient } from '$lib/server/style-analysis/profile-store';
 
 const PROVIDERS = new Set<ProviderId>(['claude', 'openai', 'codex', 'cursor', 'pi']);
 const CHOICES = new Set<CalibrationChoice>(['a', 'b', 'same', 'neither', 'skip']);
@@ -22,8 +22,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
 			model: typeof body.model === 'string' && body.model ? body.model : undefined,
 			contentBrief: typeof body.contentBrief === 'string' ? body.contentBrief : undefined
 		});
-		const { targetCandidate: _targetCandidate, ...publicTrial } = trial;
-		return json({ trial: publicTrial });
+		return json({ trial: publicCalibrationTrial(trial) });
 	} catch (cause) {
 		throw error(400, cause instanceof Error ? cause.message : String(cause));
 	}
@@ -40,8 +39,10 @@ export const PUT: RequestHandler = async ({ params, request }) => {
 			provider: providerFrom(body.provider),
 			model: typeof body.model === 'string' && body.model ? body.model : undefined
 		});
-		const { targetCandidate: _targetCandidate, ...publicTrial } = result.trial;
-		return json({ profile: styleProfileForClient(result.profile), trial: publicTrial });
+		return json({
+			profile: styleProfileForClient(result.profile),
+			trial: publicCalibrationTrial(result.trial)
+		});
 	} catch (cause) {
 		throw error(400, cause instanceof Error ? cause.message : String(cause));
 	}

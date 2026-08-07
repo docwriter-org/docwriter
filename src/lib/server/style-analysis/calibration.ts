@@ -1,9 +1,13 @@
 import type { CalibrationChoice, CalibrationTrial, StyleAnalysisReport, StyleProfile, StyleProposition } from '$lib/style-profile';
-import { isActiveProposition } from '$lib/style-profile';
 import type { ProviderId } from '$lib/server/providers/types';
 import { compileAuthorStyleSkill } from './skill-compiler';
 import { CalibrationRevisionSchema } from './schemas';
-import { readStyleProfile, readStyleReport, writeStyleProfile } from './profile-store';
+import {
+	persistProfileAfterPropositionChange,
+	readStyleProfile,
+	readStyleReport,
+	writeStyleProfile
+} from './profile-store';
 import { runStructuredStyleAgent } from './run-manager';
 import { appendStyleStudyEvent } from './study-log';
 import { STYLE_FEATURE_REGISTRY } from './feature-registry';
@@ -241,15 +245,7 @@ export async function answerCalibrationTrial(input: {
 	};
 	profile.propositions = profile.propositions.map((candidate) => candidate.id === proposition.id ? nextProposition : candidate);
 	profile.calibrations = profile.calibrations.map((candidate) => candidate.id === trial.id ? nextTrial : candidate);
-	const unresolved = profile.propositions.filter((candidate) => candidate.status === 'pending').length;
-	const active = profile.propositions.filter(isActiveProposition);
-	profile.status = unresolved ? 'needs-calibration' : active.length ? 'active' : 'ready-to-analyze';
-	if (active.length) {
-		const skill = compileAuthorStyleSkill(profile, report);
-		profile.skillId = skill.skillId;
-		profile.skillPath = skill.skillPath;
-	}
-	profile = writeStyleProfile(profile);
+	profile = persistProfileAfterPropositionChange(profile, report, compileAuthorStyleSkill);
 	appendStyleStudyEvent('calibration_answered', {
 		calibrationId: trial.id,
 		propositionId: proposition.id,

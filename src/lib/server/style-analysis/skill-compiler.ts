@@ -5,7 +5,7 @@ import { isActiveProposition } from '$lib/style-profile';
 import { DOCWRITER_DIR } from '$lib/server/document-files';
 import { readSkillsConfig, upsertManagedSkill } from '$lib/server/skills-config';
 import { writeJsonAtomic, writeTextAtomic } from '$lib/server/file-utils';
-import { listStyleReferences, REFERENCES_CACHE_DIR } from '$lib/server/references';
+import { isSelected, listStyleReferences, REFERENCES_CACHE_DIR } from '$lib/server/references';
 import { skillVersionFor, snapshotSkillVersion } from './skill-versions';
 import { normalizeForMatch } from './profile-store';
 import analyzerScript from './analyze-style.mjs?raw';
@@ -54,10 +54,10 @@ function activePropositions(profile: StyleProfile): StyleProposition[] {
 	return profile.propositions.filter(isActiveProposition);
 }
 
-/** The author's sources as one blob, for widening quoted examples. */
+/** The author's selected sources as one blob, for widening quoted examples. */
 function sourceCorpus(): string {
 	const texts: string[] = [];
-	for (const reference of listStyleReferences()) {
+	for (const reference of listStyleReferences().filter(isSelected)) {
 		const path = join(REFERENCES_CACHE_DIR, `${reference.id}.txt`);
 		if (!existsSync(path)) continue;
 		try {

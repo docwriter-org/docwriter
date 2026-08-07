@@ -5,6 +5,7 @@
 	import ModelPicker from '$lib/components/ModelPicker.svelte';
 	import ReferenceStatusPill from '$lib/components/ReferenceStatusPill.svelte';
 	import ReferenceCalibrationDialog from '$lib/components/ReferenceCalibrationDialog.svelte';
+	import { isActiveProposition } from '$lib/style-profile';
 	import OutlinePane from '$lib/components/OutlinePane.svelte';
 	import FileTree from '$lib/components/FileTree.svelte';
 	import type { FileEntry } from '$lib/components/FileTree.svelte';
@@ -2205,7 +2206,7 @@
 			if (!response.ok) return null;
 			const summary = await response.json();
 			const active = (summary?.profile?.propositions ?? [])
-				.filter((p: { status: string }) => p.status === 'active' || p.status === 'confirmed')
+				.filter(isActiveProposition)
 				.map((p: { id: string; instruction: string }) => `${p.id}:${p.instruction}`)
 				.sort();
 			return JSON.stringify(active);

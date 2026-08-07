@@ -46,13 +46,6 @@ export const SynthesisSubmissionSchema = z.object({
 	summary: z.string().trim().min(1).max(6000).default('Generated author style profile')
 });
 
-export const CalibrationCandidatesSchema = z.object({
-	candidateA: z.string().trim().min(20).max(4000),
-	candidateB: z.string().trim().min(20).max(4000),
-	supportsProposition: z.enum(['a', 'b']),
-	targetExplanation: z.string().trim().min(1).max(1000)
-});
-
 export const CalibrationRevisionSchema = z.object({
 	statement: z.string().trim().min(1).max(1000),
 	instruction: z.string().trim().min(1).max(1000),
@@ -162,4 +155,3 @@ export const StyleProfileSchema = z.object({
 export type PropositionDraft = z.infer<typeof PropositionDraftSchema>;
 export type SpecialistSubmission = z.infer<typeof SpecialistSubmissionSchema>;
 export type SynthesisSubmission = z.infer<typeof SynthesisSubmissionSchema>;
-export type CalibrationCandidates = z.infer<typeof CalibrationCandidatesSchema>;

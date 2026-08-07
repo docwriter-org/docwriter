@@ -176,6 +176,17 @@ export function isActiveProposition(proposition: { status: PropositionStatus }):
 	return proposition.status === 'active' || proposition.status === 'confirmed';
 }
 
+/** Profile status from the current proposition set (pending beats active). */
+export function deriveStyleProfileStatus(
+	propositions: Array<{ status: PropositionStatus }>
+): Exclude<StyleProfileStatus, 'empty' | 'analyzing' | 'stale' | 'error'> {
+	if (propositions.some((proposition) => proposition.status === 'pending')) {
+		return 'needs-calibration';
+	}
+	if (propositions.some(isActiveProposition)) return 'active';
+	return 'ready-to-analyze';
+}
+
 export type CalibrationChoice = 'a' | 'b' | 'same' | 'neither' | 'skip';
 
 export interface CalibrationTrial {

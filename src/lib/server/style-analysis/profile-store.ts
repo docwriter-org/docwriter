@@ -2,19 +2,23 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type {
-	FeatureMeasurement,
+	CalibrationTrial,
 	StyleAnalysisReport,
 	StyleProfile,
 	StyleProfileSummary,
 	StyleProposition
 } from '$lib/style-profile';
-import { isActiveProposition, STYLE_ANALYZER_VERSION, STYLE_PROFILE_SCHEMA_VERSION } from '$lib/style-profile';
+import {
+	deriveStyleProfileStatus,
+	isActiveProposition,
+	STYLE_ANALYZER_VERSION,
+	STYLE_PROFILE_SCHEMA_VERSION
+} from '$lib/style-profile';
 import { DOCWRITER_DIR, ensureDocWriterDir } from '$lib/server/document-files';
 import { writeJsonAtomic } from '$lib/server/file-utils';
-import { listStyleReferences } from '$lib/server/references';
+import { isSelected, listStyleReferences } from '$lib/server/references';
 import { referenceIsStale } from './materialize';
 import type { PropositionDraft } from './schemas';
-import { propositionTypeIsAllowed } from './feature-registry';
 import { StyleAnalysisReportSchema, StyleProfileSchema } from './schemas';
 
 export const STYLE_PROFILE_FILE = join(DOCWRITER_DIR, 'style-profile.json');
@@ -44,11 +48,26 @@ export function writeStyleProfile(profile: StyleProfile): StyleProfile {
 	return next;
 }
 
+/** Strip the answer key before any calibration trial leaves the server. */
+export function publicCalibrationTrial(trial: CalibrationTrial): Omit<CalibrationTrial, 'targetCandidate'> {
+	const { targetCandidate: _targetCandidate, ...publicTrial } = trial;
+	return publicTrial;
+}
+
 export function styleProfileForClient(profile: StyleProfile): StyleProfile {
 	return {
 		...profile,
-		calibrations: profile.calibrations.map(({ targetCandidate: _targetCandidate, ...trial }) => trial)
+		calibrations: profile.calibrations.map((trial) => publicCalibrationTrial(trial))
 	};
+}
+
+/** Hash of the selected sources that feed analysis — must match analyzeDocuments. */
+export function referencesSnapshotHash(
+	references: Array<{ id: string; role: string; contentHash?: string }>
+): string {
+	return createHash('sha256')
+		.update(references.map((reference) => `${reference.id}:${reference.role}:${reference.contentHash ?? ''}`).sort().join('|'))
+		.digest('hex');
 }
 
 export function createStyleProfile(sourceSnapshotHash: string): StyleProfile {
@@ -79,23 +98,6 @@ export function writeStyleReport(report: StyleAnalysisReport): StyleAnalysisRepo
 	const validated = StyleAnalysisReportSchema.parse(report) as StyleAnalysisReport;
 	writeJsonAtomic(STYLE_REPORT_FILE, validated);
 	return validated;
-}
-
-function average(values: number[]): number {
-	return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
-}
-
-function agreementForMeasurement(measurement: FeatureMeasurement): number {
-	const median = Math.abs(measurement.distribution?.median ?? measurement.value);
-	const mad = measurement.distribution?.mad ?? 0;
-	return Math.max(0, 1 - Math.min(1, mad / Math.max(0.01, median)));
-}
-
-function roleAgreement(measurement: FeatureMeasurement): number {
-	const authored = measurement.roleValues.authored;
-	const inspiration = measurement.roleValues.inspiration;
-	if (authored === undefined || inspiration === undefined) return 1;
-	return Math.max(0, 1 - Math.min(1, Math.abs(authored - inspiration) / Math.max(0.01, Math.abs(authored) + Math.abs(inspiration))));
 }
 
 /** Quotes drift in punctuation and spacing; match on the shape of the words.
@@ -194,7 +196,7 @@ export function propositionFromDraft(
 }
 
 export function styleProfileSummary(): StyleProfileSummary {
-	const references = listStyleReferences();
+	const references = listStyleReferences().filter(isSelected);
 	const profile = readStyleProfile();
 	if (!references.length) {
 		return { status: 'empty', referenceCount: 0, activeCount: 0, unresolvedCount: 0, stale: false, profile: profile ? styleProfileForClient(profile) : null };
@@ -204,11 +206,24 @@ export function styleProfileSummary(): StyleProfileSummary {
 	}
 	const stale = references.some(referenceIsStale)
 		|| references.some((reference) => reference.materializationStatus !== 'ready')
-		|| createHash('sha256')
-			.update(references.map((reference) => `${reference.id}:${reference.role}:${reference.contentHash ?? ''}`).sort().join('|'))
-			.digest('hex') !== profile.sourceSnapshotHash;
+		|| referencesSnapshotHash(references) !== profile.sourceSnapshotHash;
 	const activeCount = profile.propositions.filter(isActiveProposition).length;
 	const unresolvedCount = profile.propositions.filter((proposition) => proposition.status === 'pending').length;
 	const status = stale && profile.status !== 'analyzing' ? 'stale' : profile.status;
 	return { status, referenceCount: references.length, activeCount, unresolvedCount, stale, profile: styleProfileForClient({ ...profile, status }) };
+}
+
+/** Recompute status, compile the skill when anything is active, and persist. */
+export function persistProfileAfterPropositionChange(
+	profile: StyleProfile,
+	report: StyleAnalysisReport,
+	compile: (profile: StyleProfile, report: StyleAnalysisReport) => { skillId: string; skillPath: string }
+): StyleProfile {
+	profile.status = deriveStyleProfileStatus(profile.propositions);
+	if (profile.propositions.some(isActiveProposition)) {
+		const skill = compile(profile, report);
+		profile.skillId = skill.skillId;
+		profile.skillPath = skill.skillPath;
+	}
+	return writeStyleProfile(profile);
 }

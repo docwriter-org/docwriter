@@ -9,7 +9,7 @@ import type {
 	StyleProfile,
 	StyleProposition
 } from '$lib/style-profile';
-import { isActiveProposition } from '$lib/style-profile';
+import { deriveStyleProfileStatus, isActiveProposition } from '$lib/style-profile';
 import type { ProviderEvent, ProviderId, ToolDefinition } from '$lib/server/providers/types';
 import { getProvider } from '$lib/server/providers';
 import { analyzeDocuments } from './analyze-style.mjs';
@@ -36,7 +36,7 @@ import { compileAuthorStyleSkill } from './skill-compiler';
 import { appendStyleStudyEvent } from './study-log';
 import { appendRunLog } from './run-log-store';
 import { STYLE_FEATURE_REGISTRY } from './feature-registry';
-import { listStyleReferences } from '$lib/server/references';
+import { isSelected, listStyleReferences } from '$lib/server/references';
 
 /** One line of a specialist's working trace, streamed as it happens. */
 export interface SpecialistLogEntry {
@@ -92,11 +92,16 @@ function publicRun(run: ManagedRun): StyleAnalysisRun {
 
 function emit(run: ManagedRun, type: StyleRunEvent['type'], message?: string) {
 	run.state.updatedAt = now();
+	const snapshot = publicRun(run);
 	if (run.profile) {
-		run.profile.lastRun = publicRun(run);
-		run.profile = writeStyleProfile(run.profile);
+		run.profile.lastRun = snapshot;
+		// Progress ticks are frequent; persist durable outcomes and specialist
+		// transitions so a reload mid-run is accurate without rewriting on every tick.
+		if (type !== 'progress') {
+			run.profile = writeStyleProfile(run.profile);
+		}
 	}
-	run.emitter.emit('event', { type, run: publicRun(run), message } satisfies StyleRunEvent);
+	run.emitter.emit('event', { type, run: snapshot, message } satisfies StyleRunEvent);
 }
 
 /** Trace lines are high-volume, so they skip the profile write that emit() does. */
@@ -610,7 +615,8 @@ async function executeRun(run: ManagedRun, force: boolean) {
 			propositionId: proposition.id,
 			status: 'pending'
 		}));
-		run.profile.status = pending.length ? 'needs-calibration' : active.length ? 'active' : 'error';
+		// Nothing grounded at all is a failed analysis; otherwise derive from the set.
+		run.profile.status = propositions.length ? deriveStyleProfileStatus(propositions) : 'error';
 
 		run.state.phase = 'compiling';
 		run.state.progress = 90;
@@ -669,7 +675,9 @@ async function executeRun(run: ManagedRun, force: boolean) {
 }
 
 export function startStyleAnalysisRun(input: { provider: ProviderId; model?: string; force?: boolean }): StyleAnalysisRun {
-	if (listStyleReferences().length === 0) throw new Error('Add at least one writing reference before analysis');
+	if (!listStyleReferences().some(isSelected)) {
+		throw new Error('Add at least one writing reference before analysis');
+	}
 	if (activeRunId) {
 		const active = jobs.get(activeRunId);
 		if (active && ['queued', 'running'].includes(active.state.status)) throw new Error('A style analysis is already running');

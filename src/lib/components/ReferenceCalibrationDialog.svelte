@@ -23,23 +23,25 @@
 	import type {
 		CalibrationChoice,
 		CalibrationTrial,
+		MaterializationStatus,
+		PropositionStatus,
 		SpecialistRunState,
 		StyleAnalysisRun,
 		StyleProfileSummary,
 		StyleProposition,
 		StyleReferenceRole
 	} from '$lib/style-profile';
+	import { isActiveProposition } from '$lib/style-profile';
 
-	type ReferenceType = 'workspace-file' | 'stored-sample' | 'url';
 	interface ReferenceItem {
 		id: string;
 		label: string;
-		type: ReferenceType;
+		type: 'stored-sample';
 		target: string;
 		role: StyleReferenceRole;
 		format?: string;
 		contentHash?: string;
-		materializationStatus: 'pending' | 'ready' | 'stale' | 'error';
+		materializationStatus: MaterializationStatus;
 		extractedAt?: number;
 		error?: string;
 		description?: string;
@@ -93,19 +95,17 @@
 
 	const pendingTrials = $derived((summary?.profile?.calibrations ?? [])
 		.filter((trial) => calibrationSessionIds.includes(trial.id) && ['pending', 'generated', 'error'].includes(trial.status)));
-	const activePropositions = $derived((summary?.profile?.propositions ?? [])
-		.filter((proposition) => ['active', 'confirmed'].includes(proposition.status)));
+	const activePropositions = $derived((summary?.profile?.propositions ?? []).filter(isActiveProposition));
 	const allPropositions = $derived(summary?.profile?.propositions ?? []);
-	const inactivePropositions = $derived(allPropositions
-		.filter((proposition) => !['active', 'confirmed'].includes(proposition.status)));
+	const inactivePropositions = $derived(allPropositions.filter((proposition) => !isActiveProposition(proposition)));
 
 	/** Why a proposition is not in the skill, in the reader's terms rather than
 	 *  the status name stored on it. */
-	function inactiveReason(status: string): string {
+	function inactiveReason(status: PropositionStatus): string {
 		if (status === 'pending') return 'Waiting on your pick';
 		if (status === 'disabled') return 'You removed it';
 		if (status === 'not-actionable') return 'Too vague to act on';
-		if (status === 'rejected') return 'You rejected it';
+		if (status === 'skipped') return 'You skipped it';
 		return titleCase(status);
 	}
 	const analysisRunning = $derived(Boolean(run && ['queued', 'running'].includes(run.status)));
@@ -257,30 +257,8 @@
 	const canAddSample = $derived(
 		!addingSample && sampleDescription.trim().length > 0 && sampleText.trim().length > 0
 	);
-	const selectedCount = $derived(references.length);
+	const selectedCount = $derived(references.filter((reference) => reference.selected !== false).length);
 	const previewReference = $derived(references.find((item) => item.id === previewId) ?? null);
-
-	async function setSelected(reference: ReferenceItem, selected: boolean) {
-		busyId = reference.id;
-		// Reflect the choice straight away; the reload confirms it.
-		references = references.map((item) =>
-			item.id === reference.id ? { ...item, selected } : item
-		);
-		try {
-			await requestJson(`/api/references/${encodeURIComponent(reference.id)}`, {
-				method: 'PATCH',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ selected })
-			});
-			await loadAll();
-			onChanged?.();
-		} catch (cause) {
-			errorMessage = cause instanceof Error ? cause.message : 'Could not update the source.';
-			await loadAll();
-		} finally {
-			busyId = null;
-		}
-	}
 
 	/** One pasted passage plus the writer's description of what it is. */
 	async function addSample() {
@@ -609,10 +587,7 @@
 	}
 
 	function sourceKindLabel(reference: ReferenceItem): string {
-		const kind = reference.type === 'workspace-file' ? 'Workspace file'
-			: reference.type === 'stored-sample' ? 'Pasted sample'
-			: 'Link';
-		return reference.format ? `${kind} · ${reference.format}` : kind;
+		return reference.format ? `Pasted sample · ${reference.format}` : 'Pasted sample';
 	}
 
 	function closeOnBackdrop(event: MouseEvent) {

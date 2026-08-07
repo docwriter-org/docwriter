@@ -1,8 +1,12 @@
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { compileAuthorStyleSkill } from '$lib/server/style-analysis/skill-compiler';
-import { readStyleProfile, readStyleReport, styleProfileForClient, writeStyleProfile } from '$lib/server/style-analysis/profile-store';
-import { isActiveProposition } from '$lib/style-profile';
+import {
+	persistProfileAfterPropositionChange,
+	readStyleProfile,
+	readStyleReport,
+	styleProfileForClient
+} from '$lib/server/style-analysis/profile-store';
 
 export const PATCH: RequestHandler = async ({ params, request }) => {
 	let profile = readStyleProfile();
@@ -23,12 +27,6 @@ export const PATCH: RequestHandler = async ({ params, request }) => {
 		updatedAt: Date.now()
 	};
 	profile.propositions = profile.propositions.map((proposition) => proposition.id === params.id ? next : proposition);
-	const unresolved = profile.propositions.some((proposition) => proposition.status === 'pending');
-	const hasActive = profile.propositions.some(isActiveProposition);
-	profile.status = unresolved ? 'needs-calibration' : hasActive ? 'active' : 'ready-to-analyze';
-	const skill = compileAuthorStyleSkill(profile, report);
-	profile.skillId = skill.skillId;
-	profile.skillPath = skill.skillPath;
-	profile = writeStyleProfile(profile);
+	profile = persistProfileAfterPropositionChange(profile, report, compileAuthorStyleSkill);
 	return json({ profile: styleProfileForClient(profile), proposition: next });
 };
