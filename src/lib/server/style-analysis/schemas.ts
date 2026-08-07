@@ -48,8 +48,7 @@ export const SynthesisSubmissionSchema = z.object({
 
 export const CalibrationRevisionSchema = z.object({
 	statement: z.string().trim().min(1).max(1000),
-	instruction: z.string().trim().min(1).max(1000),
-	scope: z.array(z.string().trim().min(1).max(160)).max(12).default([])
+	instruction: z.string().trim().min(1).max(1000)
 });
 
 export const FeatureMeasurementSchema = z.object({

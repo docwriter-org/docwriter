@@ -286,12 +286,6 @@
 		}
 	}
 
-	function formatToolInput(input: Record<string, unknown>): string {
-		return Object.entries(input)
-			.map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`)
-			.join('\n');
-	}
-
 	function onComposerKeydown(event: KeyboardEvent) {
 		if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
 			event.preventDefault();

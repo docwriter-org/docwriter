@@ -19,8 +19,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
 		const trial = await generateCalibrationTrial({
 			id: params.id,
 			provider: providerFrom(body.provider),
-			model: typeof body.model === 'string' && body.model ? body.model : undefined,
-			contentBrief: typeof body.contentBrief === 'string' ? body.contentBrief : undefined
+			model: typeof body.model === 'string' && body.model ? body.model : undefined
 		});
 		return json({ trial: publicCalibrationTrial(trial) });
 	} catch (cause) {

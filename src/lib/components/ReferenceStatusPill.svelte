@@ -15,11 +15,11 @@
 	const label = $derived.by(() => {
 		if (loading && !summary) return 'Checking references';
 		if (!summary || summary.status === 'empty') return 'References not provided';
-		if (summary.status === 'ready-to-analyze') return 'Calibrate references';
+		if (summary.status === 'ready-to-analyze') return 'Analyze references';
 		if (summary.status === 'analyzing') return 'Analyzing references';
 		if (summary.status === 'stale') return 'Update style';
 		if (summary.status === 'error') return 'Analysis failed';
-		if (summary.activeCount === 0 && summary.unresolvedCount > 0) return 'Calibrate references';
+		if (summary.status === 'needs-calibration' || summary.unresolvedCount > 0) return 'Calibrate references';
 		// Outstanding choices are the dialog's business; the pill only reports
 		// that a style is in force.
 		return 'Style uploaded';
@@ -28,7 +28,9 @@
 	const tone = $derived.by(() => {
 		if (!summary || ['empty', 'ready-to-analyze'].includes(summary.status)) return 'warning';
 		if (summary.status === 'error') return 'error';
-		if (summary.status === 'stale' || summary.unresolvedCount > 0) return 'pending';
+		if (summary.status === 'stale' || summary.status === 'needs-calibration' || summary.unresolvedCount > 0) {
+			return 'pending';
+		}
 		if (summary.status === 'analyzing') return 'working';
 		return 'active';
 	});
@@ -43,6 +45,9 @@
 		if (summary.status === 'analyzing') return 'Measuring your references and drafting style guidance.';
 		if (summary.status === 'error') return 'The last style analysis failed.\nClick to see what went wrong.';
 		if (summary.status === 'stale') return 'Your references changed since the last analysis.\nClick to re-run it.';
+		if (summary.status === 'needs-calibration' || summary.unresolvedCount > 0) {
+			return 'A few style habits still need your pick between close passages.\nClick to finish calibrating.';
+		}
 		return 'Your author style is active and guiding the writing agent.';
 	});
 

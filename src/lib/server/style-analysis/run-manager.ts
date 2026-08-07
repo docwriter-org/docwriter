@@ -104,11 +104,11 @@ function emit(run: ManagedRun, type: StyleRunEvent['type'], message?: string) {
 	run.emitter.emit('event', { type, run: snapshot, message } satisfies StyleRunEvent);
 }
 
-/** Trace lines are high-volume, so they skip the profile write that emit() does. */
+/** Trace lines are high-volume: skip profile writes and deep-clones. */
 function emitLog(run: ManagedRun, log: SpecialistLogEntry) {
 	run.emitter.emit('event', {
 		type: 'specialist_log',
-		run: publicRun(run),
+		run: run.state,
 		log
 	} satisfies StyleRunEvent);
 }
@@ -352,7 +352,8 @@ export async function runStructuredStyleAgent<T>(input: {
 	toolDescription: string;
 	inputSchema: Record<string, unknown>;
 	parse: (value: unknown) => T;
-	abortSignal: AbortSignal;
+	/** Optional — calibration calls are uncancellable today. */
+	abortSignal?: AbortSignal;
 	/** Observe the agent's working trace. Purely for display. */
 	onEvent?: (event: ProviderEvent) => void;
 }): Promise<T> {
@@ -384,7 +385,7 @@ export async function runStructuredStyleAgent<T>(input: {
 		input.onEvent?.(event);
 		if (event.type === 'error') providerError = event.error;
 	}
-	if (input.abortSignal.aborted) throw new Error('Style analysis was cancelled');
+	if (input.abortSignal?.aborted) throw new Error('Style analysis was cancelled');
 	if (!submission) throw new Error(providerError || `Agent did not call ${input.toolName}`);
 	return submission;
 }
@@ -492,7 +493,9 @@ async function runSpecialist(
 		let result: SpecialistSubmission;
 		try {
 			result = await execute();
-		} catch {
+		} catch (error) {
+			// One retry for transient provider failures — never after cancel.
+			if (run.abortController.signal.aborted) throw error;
 			result = await execute();
 		}
 		updateSpecialist(run, specialist.id, { status: 'completed', completedAt: now() });
@@ -567,6 +570,7 @@ async function executeRun(run: ManagedRun, force: boolean) {
 		run.state.progress = 5;
 		emit(run, 'progress', 'Reading reference sources');
 		const materialized = await materializeAllReferences(force);
+		if (!materialized.length) throw new Error('Add at least one writing reference before analysis');
 		if (run.abortController.signal.aborted) throw new Error('Style analysis was cancelled');
 
 		run.state.phase = 'measuring';
@@ -578,8 +582,15 @@ async function executeRun(run: ManagedRun, force: boolean) {
 			materialized.map((item) => [item.reference.id, item.reference.description ?? item.reference.label])
 		);
 		const report = writeStyleReport(analyzeDocuments(documents) as StyleAnalysisReport);
-		run.profile = createStyleProfile(report.sourceSnapshotHash);
-		run.profile.lastRun = publicRun(run);
+		// Keep prior propositions on disk until synthesis finishes so a crash
+		// mid-run does not wipe confirmed guidance.
+		const base = run.profile ?? createStyleProfile(report.sourceSnapshotHash);
+		run.profile = {
+			...base,
+			status: 'analyzing',
+			sourceSnapshotHash: report.sourceSnapshotHash,
+			lastRun: publicRun(run)
+		};
 		writeStyleProfile(run.profile);
 
 		run.state.phase = 'reflecting';
@@ -597,16 +608,24 @@ async function executeRun(run: ManagedRun, force: boolean) {
 		const synthesized = drafts.length ? await runSynthesis(run, corpusText(documents), drafts) : [];
 		const corpus = corpusText(documents);
 		const grounded: StyleProposition[] = [];
+		let droppedUngrounded = 0;
 		synthesized.forEach((draft, index) => {
 			// A proposition whose examples are not in the sources is dropped, not
 			// surfaced — the writer should never be shown invented evidence.
 			try {
 				grounded.push(propositionFromDraft(draft, corpus, index));
 			} catch {
-				// Skip it.
+				droppedUngrounded += 1;
 			}
 		});
 		const propositions = carryConfirmed(previous, grounded);
+		if (!propositions.length) {
+			throw new Error(
+				droppedUngrounded
+					? `Style analysis produced no grounded propositions (${droppedUngrounded} dropped: examples not in sources)`
+					: 'Style analysis produced no grounded propositions'
+			);
+		}
 		const pending = propositions.filter((proposition) => proposition.status === 'pending');
 		const active = propositions.filter(isActiveProposition);
 		run.profile.propositions = propositions;
@@ -615,8 +634,7 @@ async function executeRun(run: ManagedRun, force: boolean) {
 			propositionId: proposition.id,
 			status: 'pending'
 		}));
-		// Nothing grounded at all is a failed analysis; otherwise derive from the set.
-		run.profile.status = propositions.length ? deriveStyleProfileStatus(propositions) : 'error';
+		run.profile.status = deriveStyleProfileStatus(propositions);
 
 		run.state.phase = 'compiling';
 		run.state.progress = 90;
@@ -639,6 +657,7 @@ async function executeRun(run: ManagedRun, force: boolean) {
 			model: run.state.model,
 			activeCount: active.length,
 			pendingCount: pending.length,
+			droppedUngrounded,
 			referenceCount: report.documents.length,
 			authoredReferenceCount: report.documents.filter((document) => document.role === 'authored').length,
 			inspirationReferenceCount: report.documents.filter((document) => document.role === 'inspiration').length,

@@ -31,11 +31,10 @@ const VARIANT_SCHEMA = {
 const REVISION_SCHEMA = {
 	type: 'object',
 	additionalProperties: false,
-	required: ['statement', 'instruction', 'scope'],
+	required: ['statement', 'instruction'],
 	properties: {
 		statement: { type: 'string' },
-		instruction: { type: 'string' },
-		scope: { type: 'array', items: { type: 'string' } }
+		instruction: { type: 'string' }
 	}
 };
 
@@ -98,7 +97,6 @@ export async function generateCalibrationTrial(input: {
 	id: string;
 	provider: ProviderId;
 	model?: string;
-	contentBrief?: string;
 }): Promise<CalibrationTrial> {
 	let profile = readStyleProfile();
 	const report = readStyleReport();
@@ -138,8 +136,7 @@ Call submit_style_variant once.`,
 					variant: rewritten,
 					targetExplanation: typeof parsed.targetExplanation === 'string' ? parsed.targetExplanation : ''
 				};
-			},
-			abortSignal: new AbortController().signal
+			}
 		});
 		original = fallbackPassage;
 		variant = generated.variant;
@@ -178,7 +175,7 @@ async function reviseFromChoice(input: {
 	proposition: StyleProposition;
 	chosenText: string;
 	reason: string;
-}): Promise<{ statement: string; instruction: string; scope: string[] }> {
+}): Promise<{ statement: string; instruction: string }> {
 	return runStructuredStyleAgent({
 		providerId: input.provider,
 		model: input.model,
@@ -187,8 +184,7 @@ async function reviseFromChoice(input: {
 		toolName: 'submit_calibration_revision',
 		toolDescription: 'Submit the revised user confirmed style proposition.',
 		inputSchema: REVISION_SCHEMA,
-		parse: (value) => CalibrationRevisionSchema.parse(value),
-		abortSignal: new AbortController().signal
+		parse: (value) => CalibrationRevisionSchema.parse(value)
 	});
 }
 
@@ -229,7 +225,11 @@ export async function answerCalibrationTrial(input: {
 				chosenText,
 				reason: input.choice === 'neither' ? 'The user rejected both generated passages and wrote an acceptable version.' : 'The user preferred the close variant that did not support the previous proposition.'
 			});
-			nextProposition = { ...nextProposition, ...revision };
+			nextProposition = {
+				...nextProposition,
+				statement: revision.statement,
+				instruction: revision.instruction
+			};
 		}
 		nextProposition.status = 'confirmed';
 		nextProposition.confidence = 1;

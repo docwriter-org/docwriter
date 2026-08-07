@@ -22,7 +22,6 @@ export const PATCH: RequestHandler = async ({ params, request }) => {
 		...existing,
 		...(typeof body.instruction === 'string' && body.instruction.trim() ? { instruction: body.instruction.trim() } : {}),
 		...(typeof body.statement === 'string' && body.statement.trim() ? { statement: body.statement.trim() } : {}),
-		...(Array.isArray(body.scope) ? { scope: body.scope.filter((item: unknown): item is string => typeof item === 'string' && Boolean(item.trim())).map((item: string) => item.trim()) } : {}),
 		...(body.status ? { status: body.status } : {}),
 		updatedAt: Date.now()
 	};

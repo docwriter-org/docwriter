@@ -8,8 +8,7 @@ import { analyzeDocuments, normalizeText } from './analyze-style.mjs';
 vi.mock('./run-manager', () => ({
 	runStructuredStyleAgent: vi.fn(async () => ({
 		statement: 'The user confirmed the revised direction.',
-		instruction: 'Use the user confirmed form.',
-		scope: ['prose']
+		instruction: 'Use the user confirmed form.'
 	}))
 }));
 
