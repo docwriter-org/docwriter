@@ -131,9 +131,12 @@ function draftJsonSchema() {
 						family: { type: 'string' },
 						statement: {
 							type: 'string',
-							description: 'The pattern, phrased as something you could tell a ghostwriter.'
+							description: 'The habit in plain language, as you would tell a ghostwriter out loud. No writing-theory jargon.'
 						},
-						instruction: { type: 'string', description: 'What to do when writing.' },
+						instruction: {
+							type: 'string',
+							description: 'What to do when writing, in plain imperative language.'
+						},
 						examples: {
 							type: 'array',
 							description: 'Three or more passages quoted verbatim from the sources that show this proposition in action.',
@@ -187,27 +190,26 @@ function reportSlice(report: StyleAnalysisReport, families: StyleFamily[]) {
 }
 
 function specialistSystemPrompt(families: StyleFamily[]): string {
-	return `You analyze writing style by reading the author's actual writing. Work only on these families: ${families.join(', ')}.
+	return `You are briefing a ghostwriter who will imitate this author's prose. Work only on these families: ${families.join(', ')}.
 
-You are given the measurements that fired, the author's characteristic vocabulary, and then the source texts themselves. The measurements tell you where to look; the writing tells you what is actually going on. Read the writing before you conclude anything.
+You get measurements that fired, the author's common words, and the source texts. The measurements are a hint for where to look — read the writing itself before you decide anything.
 
-Create actionable style propositions. Every one must carry at least three examples: passages quoted verbatim from the sources that show the proposition in action. Copy them exactly — an example that does not appear in the sources word for word is discarded, and the proposition with it. Quote whole sentences, not fragments. Do not supply counter-examples.
+Write style propositions the ghostwriter can follow while drafting. Each one needs at least three examples: sentences copied word for word from the sources that show the habit. Invented quotes are discarded with the proposition. Quote whole sentences. Do not invent counter-examples.
 
-What makes a proposition worth emitting:
-- It describes a choice another writer could imitate or violate — sentence shape, how evidence is introduced, how a point is landed, what register is held.
-- It would change how a draft reads if applied.
-- A reader could disagree with it. If nobody could plausibly write the opposite way, it is not a style choice.
+A good proposition:
+- Sounds like advice you'd say out loud: "Open with the hard problem, then name your system." Not like a paper about writing.
+- Names a real choice (someone could write the opposite and still be competent).
+- Changes how the next draft would read if followed.
+- Uses plain words. Avoid jargon about writing itself — no "register," "rhetorical move," "discourse," "cadence," "funnel," "landing," "hedging," "modality," or similar. Say what to do in the sentence.
 
-What to leave out:
-- Anything about a feature the author does not use. Only measured, non-zero behavior appears in the report; do not write propositions about what is absent.
-- Corpus statistics. Medians, ranges, counts, and distributions across the sources are not style choices. "Document lengths range from 13 to 26,000 words (median 2,158)" and "paragraph count closely tracks block count" describe the sample, not how to write. Never put a number from the report into a statement.
-- Observations that hold for the corpus but cannot guide a single sentence or paragraph the author is about to write.
-- Restatements of a metric. "Heading density is 0" is a measurement, not a style proposition.
-- Facts about the reference topics or the author's biography.
+Leave out:
+- Things the author never does (only non-zero measurements are shown; don't invent absences).
+- Stats and ranges from the measurements. Never put a report number into a statement.
+- Restatements of a metric ("heading density is low").
+- Facts about the topic or the author's biography.
+- Advice so vague that every decent writer already does it.
 
-Write each statement as something you could tell a ghostwriter. If a statement only makes sense while looking at a spreadsheet of the sources, it does not belong.
-
-Prefer fewer, sharper propositions over many mechanical ones. Do not call any tool except submit_style_families. Call that tool once with the complete result.`;
+statement = the habit in one plain sentence. instruction = what to do when writing. Prefer fewer sharp ones. Call submit_style_families once with everything.`;
 }
 
 /** Every kept source as one blob, for checking quoted examples against. */
@@ -258,29 +260,32 @@ function specialistPrompt(
 ): string {
 	const vocabulary = characteristicVocabulary(documents);
 	return [
-		'Measurements that fired for your families (zero-valued metrics are already removed):',
+		'Measurements that fired for your families (zeros already removed — treat these as hints, not the answer):',
 		JSON.stringify(reportSlice(report, families)),
 		'',
-		`Characteristic vocabulary: ${vocabulary.join(', ')}`,
+		`Words this author reuses: ${vocabulary.join(', ')}`,
 		'',
-		'The writing itself, with the writer telling you what each passage is. Read it',
-		'before concluding anything, and let what a passage is inform what you make of it:',
+		'The writing. Each source is labeled with what the author says it is.',
+		'Read it, then write ghostwriter instructions in plain language:',
 		'',
 		sourceExcerpts(documents, descriptions)
 	].join('\n');
 }
 
 function synthesisSystemPrompt(): string {
-	return `You synthesize writing style propositions from three specialists into the guidance a writer will actually see. Preserve metric IDs and evidence IDs exactly, and do not invent evidence.
+	return `Merge style propositions into the brief a ghostwriter will read.
 
-Merge hard. Two propositions that would lead a writer to make the same edit are the same proposition, even when they are worded differently, cite different metrics, or came from different specialists — combine them and keep the sharpest wording. Only keep them separate when following one would produce a visibly different sentence than following the other.
+Merge hard. If two propositions would make the ghostwriter change a sentence the same way, keep one — the plainer wording. Split them only when following each would produce a visibly different sentence.
+
+Rewrite anything that sounds like writing theory into plain advice. Prefer "Put the claim first, then the example" over "Use a claim-warrant paragraph structure." Strip jargon about writing.
 
 Drop propositions that:
-- restate a measurement instead of directing a choice,
+- restate a measurement,
 - describe something the author does not do,
-- are so general that no competent writer would do otherwise.
+- are so general every competent writer already does them,
+- lean on literary or linguistics jargon the ghostwriter does not need.
 
-Keep authored behavior descriptive and inspiration preferences aspirational when they differ. Aim for the smallest set that fully captures this writer's voice — a focused profile beats an exhaustive one. Call submit_style_profile exactly once.`;
+Keep authored habits as "this is how they write" and inspiration preferences as "aim for this" when those differ. Smallest useful set wins. Call submit_style_profile exactly once.`;
 }
 
 export async function runStructuredStyleAgent<T>(input: {
