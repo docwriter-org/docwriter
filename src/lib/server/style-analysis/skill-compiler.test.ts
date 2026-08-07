@@ -53,8 +53,13 @@ describe('author style skill compiler', () => {
 			'scripts/analyze-style.mjs'
 		];
 		for (const path of required) expect(existsSync(join(compiled.skillPath, path))).toBe(true);
-		const frontmatter = readFileSync(join(compiled.skillPath, 'SKILL.md'), 'utf8').match(/^---\n([\s\S]*?)\n---/)?.[1] ?? '';
+		const skillMd = readFileSync(join(compiled.skillPath, 'SKILL.md'), 'utf8');
+		const frontmatter = skillMd.match(/^---\n([\s\S]*?)\n---/)?.[1] ?? '';
 		expect(frontmatter.split('\n').map((line) => line.split(':')[0])).toEqual(['name', 'description']);
+		expect(skillMd).toContain('# Learned style profile');
+		expect(skillMd).toContain('Use concise sentences.');
+		expect(skillMd).not.toContain('analyze-style.mjs');
+		expect(skillMd).not.toContain('Read `references/style-profile.md`');
 		const contents = readdirSync(join(compiled.skillPath, 'references'))
 			.map((name) => readFileSync(join(compiled.skillPath, 'references', name), 'utf8'))
 			.join('\n');
