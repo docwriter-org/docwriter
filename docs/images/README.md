@@ -47,6 +47,11 @@ The standard viewport is 1400 by 900 pixels. The introduction recording uses 120
 | `sessions-browser.png` | Sessions | Session search and switch dialog | None |
 | `writing-rules-panel.png` | Writing rules | Rules toolbar popover | None |
 | `writing-references-panel.png` | Writing references | References settings | None |
+| `style-guidance-sources.png` | Writing references | Three pasted sources ready to analyze | None |
+| `style-guidance-specialists.png` | Writing references | Lexis / Grammar / Discourse specialists mid-run | Provider credential |
+| `style-guidance-preference.png` | Writing references | Preference A vs B calibration card | Provider credential |
+| `style-guidance-skill.png` | Writing references | Style draft / active skill propositions | Provider credential |
+| `style-guidance-editor-edit.png` | Writing references | Expanded pending edit after sounding-like-me directive | Provider credential |
 | `intended-audience-panel.png` | Customize the agent | Audience settings | None |
 | `skills-panel.png` | Customize the agent | Skills settings | None |
 | `hooks-panel.png` | Hooks | Hook settings | None |
@@ -77,6 +82,18 @@ Run credentialed agent screenshots:
 
 ```sh
 npm run docs:assets:agent
+```
+
+Capture the Writing references walkthrough (sources → specialists → preference → skill → editor edit). Needs a provider credential and several minutes for analysis:
+
+```sh
+node docs/capture-style-guidance.mjs
+```
+
+If analysis already finished in a kept workspace, resume the last two shots with:
+
+```sh
+DOCWRITER_ROOT=/path/to/workspace node docs/capture-style-guidance-finish.mjs
 ```
 
 Run the introduction recording:

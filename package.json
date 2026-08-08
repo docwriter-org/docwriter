@@ -36,6 +36,7 @@
 		"docs:assets": "SKIP_GIF=1 node docs/capture-screenshots.mjs && node docs/capture-workflow-videos.mjs",
 		"docs:assets:structural": "SKIP_AGENT=1 SKIP_LATEX=1 SKIP_GIF=1 node docs/capture-screenshots.mjs",
 		"docs:assets:agent": "SKIP_BLOG=1 SKIP_LATEX=1 SKIP_GIF=1 node docs/capture-screenshots.mjs",
+		"docs:assets:style": "node docs/capture-style-guidance.mjs",
 		"docs:assets:videos": "node docs/capture-workflow-videos.mjs",
 		"docs:assets:verify": "node docs/verify-assets.mjs",
 		"docs:screenshots": "npm run docs:assets",

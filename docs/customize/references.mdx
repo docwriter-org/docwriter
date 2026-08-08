@@ -2,40 +2,88 @@
 title: "Writing references"
 ---
 
-Give DocWriter a few passages you have written and it learns how you write, then applies that style to later work. This is for voice, not facts: use a [writing rule](/customize/rules) for a standing instruction and an [intended audience](/agent/customize#set-the-intended-audience) to name the reader.
+Paste a few passages of your writing and DocWriter works out how you write. The writing agent then follows that style.
 
-## Add your writing
+This page walks through the full loop: add three sources, wait while specialist agents read them, pick between close passages, finalize the skill, then ask for an edit that sounds like you.
 
-Use the references control beside the model picker, or open **Settings**, then **Writing references**.
+For the screenshots below, the three sources are public-domain passages from [Alice Meynell](https://www.gutenberg.org/ebooks/1276) (1847–1922)—an essayist with a careful, slightly Latinate voice that most models will not immediately recognize as a famous style. Use your own writing when you set this up for real work. Writing references teach voice, not facts: use a [writing rule](/customize/rules) for a standing instruction and an [intended audience](/agent/customize#set-the-intended-audience) to name the reader.
 
-Paste a passage, say what it is, and choose **Add source**. Repeat until you have three to five. That range is the useful one: fewer gives the analysis little to go on, more averages your voice away.
+## 1. Add three sources
 
-Describe each passage in your own words — "introduction of a paper", "related work section", "a post I like the tone of". The description is not just a label. The specialists read it alongside the passage, so an introduction is read as an introduction rather than as prose in general.
+Click the references pill in the header (it says **References not provided** until you add some), or open **Settings**, then **Writing references**.
 
-**Read** shows the stored text if you want to correct something before it is measured. Once you have three sources, **Analyze my style** moves you to the analysis.
+Paste a passage, say what it is, and choose **Add source**. Do this **three** times. Three to five sources is the useful range: fewer gives the analysis little to go on, more averages your voice away.
 
-## What the analysis does
+Describe each passage in your own words — "introduction of a paper", "related work section", "a post I like the tone of". The specialists read the description beside the passage, so an introduction is read as an introduction rather than as prose in general.
 
-The analysis follows the Leech and Short style checklist at three zoom levels. It measures lexis (words and short phrases), grammar (sentences, clauses, and punctuation), and discourse (figures, cohesion, reader relationship, and other voices). Layout features such as headings, lists, tables, and section balance are retained separately as document conventions. Metrics that measured zero are discarded — a passage with no citations says nothing about how you use citations.
+To follow the walkthrough with the same material used in these screenshots, paste three Meynell passages and label them:
 
-Three specialist agents then read your passages themselves. The lexis specialist looks at words, the grammar specialist looks at sentences, and the discourse specialist looks at passages. They see the relevant measurements and recurring signature phrases, then write style propositions. Select any specialist to watch its reasoning, or **Measurements computed** to see every metric and convention that fired.
+1. **Opening of an essay on recurrence** — the opening of *The Rhythm of Life*
+2. **Character sketch of a reserved man** — from *A Remembrance*
+3. **Essay on Latinate composure in English** — from *Composure*
 
-Each proposition carries passages quoted verbatim from your writing. A proposition whose examples do not appear in your sources is discarded rather than shown to you.
+Use a few hundred words for each. Longer is fine; a sentence or two is not enough.
 
-## Review and finalize the draft
+<Frame caption="Step 1 — three sources on the right, ready to analyze.">
+  ![The Calibrate your style dialog on the Sources step with three pasted passages listed](/images/style-guidance-sources.png)
+</Frame>
 
-DocWriter keeps every proposition in the workspace database while the analysis runs. Refreshing the page does not discard completed specialist or synthesis results. Reliable propositions enter the draft without a comparison. For the rest, the review shows a passage you actually wrote next to the same passage with one habit changed, and asks which you would rather have written.
+Once you have three sources, open the **Analyze** step.
 
-Choose either one, say they feel the same, or edit one when neither works. Your choice settles the proposition.
+## 2. Run the analysis and wait
 
-When no choices remain, select **Finalize style**. Finalization replaces the generated skill files and tells the main writing agent to read the updated skill. Closing the dialog does not publish the draft.
+Choose **Run analysis**. DocWriter measures the passages, then three specialist agents read them and draft style guidance. A fourth pass combines the drafts.
 
-**Start over** discards the current draft and its measurements while leaving your sources and finalized skill in place.
+Plan on about **ten minutes**. You can keep writing elsewhere while it runs. The left column shows progress: sources prepared, measurements computed, then the Lexis, Grammar, and Discourse specialists, then **Guidance combined**.
 
-## The generated skill
+Select any specialist to watch its reasoning, or **Measurements computed** to see every metric that fired. Each proposition has to quote your writing or it is discarded.
 
-DocWriter saves the finalized result as a skill under `.docwriter/skills/author-style/` and enables it for the workspace. If that name already belongs to a skill you installed, DocWriter uses a reserved fallback name and leaves your skill unchanged.
+<Frame caption="Step 2 — specialist agents working through the analysis. Expect roughly ten minutes.">
+  ![The Analyze step showing Lexis, Grammar, and Discourse specialists in progress](/images/style-guidance-specialists.png)
+</Frame>
 
-From the same dialog you can inspect instructions, disable or rewrite one, finalize the draft, download the skill bundle, and export local study data. The current skill stays active while you analyze or review a new draft. It changes only when you finalize the draft.
+## 3. Pick which passage sounds more like you
 
-The local study export includes setup time, calibration choices, confidence bands, skipped choices, and time per choice. A study harness can also record the assigned condition, editing rounds, accepted and rejected edits, edit distance, final correction size, and a blind preference through `/api/style-study`. The event schema rejects prose fields, and the exporter removes raw references, prompts, generated passages, and edited text.
+As propositions arrive, the right column asks **Which piece of writing sounds more like you?** One side is a passage from your sources; the other is the same passage with one habit changed.
+
+Choose **A** or **B**. If both feel fine, choose **Both are the same to me**. If neither works, choose **Neither is good** and edit one into something you would actually write. Use **Skip proposition** only when the habit does not matter to you.
+
+<Frame caption="Step 3 — preference cards. Pick the side that sounds more like you.">
+  ![Preference cards with passage A and passage B for style propositions](/images/style-guidance-preference.png)
+</Frame>
+
+Work through the cards until none remain. Reliable propositions can enter the draft without a comparison; the rest wait on your pick.
+
+## 4. Review the style draft and finalize
+
+Open the **Style draft** (or **Active skill**) step. You will see the instructions the writing agent will follow, with short quoted examples from your sources.
+
+Choose **Finalize style** when you are ready. Finalization writes the skill under `.docwriter/skills/author-style/` and tells the writing agent to read it. Closing the dialog does not publish the draft. **Start over** on the Analyze step discards the current draft and its measurements while leaving your sources and any already-finalized skill in place.
+
+<Frame caption="Step 4 — the draft instructions, ready to finalize for the writing agent.">
+  ![The Active skill step listing style propositions with example passages](/images/style-guidance-skill.png)
+</Frame>
+
+From the same dialog you can download the skill bundle, restore an earlier version, or remove an instruction you do not want. The header pill reads **Style uploaded** once the skill is active.
+
+## 5. Ask for an edit that sounds like you
+
+With the skill finalized, write in the editor as usual. Put the request in a directive so the agent knows what to do. For this walkthrough the draft used a late train in the rain:
+
+```text
+[[ Write two short paragraphs about waiting beside a late train in the rain, sounding like me. Keep the scene ordinary. Replace this directive. ]]
+```
+
+Wake the agent (or let the idle timer fire). The proposed edit appears as tracked changes with an Accept / Reject / Retry card in the comment gutter. Expand the card to read the full proposal before you accept.
+
+<Frame caption="Step 5 — an expanded pending edit written to match the learned style.">
+  ![The editor with an expanded review card for a style-matched rewrite about a late train](/images/style-guidance-editor-edit.png)
+</Frame>
+
+Accept when the wording sounds like you. Reject and retry when it drifts toward generic model prose. The skill stays active for later turns until you analyze again and finalize a new draft.
+
+## What the analysis is doing
+
+The analysis follows the Leech and Short style checklist at three zoom levels: lexis (words and short phrases), grammar (sentences, clauses, and punctuation), and discourse (figures, cohesion, reader relationship, and other voices). Layout features such as headings and lists are kept separately as document conventions. Metrics that measured zero are discarded — a passage with no citations says nothing about how you use citations.
+
+The local study export (setup time, calibration choices, confidence bands, and timing) lives under `.docwriter/style-study/` and does not include your reference text or generated passages. See [Storage and backups](/help/storage-and-backups) and [Privacy and safety](/help/privacy-and-safety) for where the files sit on disk.
