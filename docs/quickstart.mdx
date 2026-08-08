@@ -2,7 +2,7 @@
 title: "Your first writing workflow"
 ---
 
-Use this walkthrough for a complete writing project. You will give the agent examples before you write, improve a draft while teaching it your preferences, and ask several reviewer agents to critique the finished draft.
+Use this walkthrough for a complete writing project. You will give the agent examples before you write, leave instructions in the draft while you keep typing, give feedback on highlighted passages, discuss those threads in place, and ask several reviewer agents to critique the finished draft.
 
 ## Connect a provider
 
@@ -38,19 +38,41 @@ Open an existing Markdown file or choose **New file** in the file tree. Write th
   ![A new draft open in the DocWriter source editor](/images/quickstart-essay-open.png)
 </Frame>
 
-## Ask for an edit while you write
+The agent reads the open draft as you work. After you stop typing for a few seconds, it can wake on its own and check what changed. You can also click the sleeping agent pill, or press **Command or Control and Enter**, to wake it sooner.
 
-Select the opening paragraph and type:
+## Leave a directive in the draft
+
+When you want help without leaving the keyboard, write the request in the draft itself. Put the instruction inside `[[` and `]]`, `((` and `))`, or `<<` and `>>`:
+
+```md
+The launch felt rushed.
+
+[[ Tighten this paragraph. Keep the claim, cut the filler. ]]
+```
+
+Keep writing elsewhere. The next time the agent wakes, it finds the directive, treats it as an explicit request, and proposes an edit that handles the request and removes the directive text. Review that proposal the same way you review any other suggested change.
+
+<Frame>
+  ![An inline directive written directly in the source document](/images/inline-directives-in-doc.png)
+</Frame>
+
+Directives are ordinary document text until an accepted edit removes them, so you can revise the wording of the request before the agent runs.
+
+## Give feedback in place
+
+Highlight a passage in the draft to open the feedback popup beside the text. Type what you want changed, for example:
 
 ```text
 Rewrite this opening in fewer words. Keep my point and match "Published posts in my voice."
 ```
 
-Choose **Direct edit** when you want proposed wording, or **Plan first** when you want to review the approach before the agent changes anything. You can continue writing elsewhere while the agent works.
+Choose **Direct edit** when you want proposed wording, or **Plan first** when you want to review the approach before the agent changes anything. Press **Enter** or click **Go** to send. You can continue writing elsewhere while the agent works.
 
 <Frame caption="Select a passage to give the agent feedback beside the text.">
   ![The feedback popup attached to selected text](/images/inline-feedback-popup.png)
 </Frame>
+
+Sending feedback opens a comment thread on that passage. The agent replies and proposes edits in that thread, so the discussion stays next to the text it is about.
 
 ## Review the proposed change
 
@@ -61,6 +83,23 @@ You will see the proposed wording in the editor and a review card in the comment
 </Frame>
 
 If you change the same passage before reviewing a suggestion, the suggestion may become stale. Reject it and ask the agent for a new edit based on the current text.
+
+## Open the thread and keep commenting
+
+An unresolved passage shows an underline and a small message count pill in the editor. Click either marker to open the gutter card for that thread.
+
+From the open thread you can:
+
+- Read the agent's reply and any linked proposed edit
+- Type a reply to continue the discussion on the same passage
+- Accept a linked edit when the wording improves the draft, or reject it when it does not
+- Choose **Resolve** when the discussion is done
+
+When you reply, the agent wakes with the thread transcript and can answer or revise under the same thread. Use this when one highlight is not enough and you want a short back-and-forth before you accept a change.
+
+<Frame>
+  ![A comment thread beside the passage it discusses](/images/comment-thread.png)
+</Frame>
 
 ## Turn feedback into rules
 
@@ -94,4 +133,4 @@ Reply when a finding needs discussion. Accept a linked edit when the wording imp
 
 Open the project file in another editor to confirm that the accepted text is plain Markdown. Your comments and pending suggestions stay in DocWriter until you resolve the comments and accept or reject the suggestions.
 
-Read [Writing references](/customize/references), [Intended audience](/agent/customize#set-the-intended-audience), [Writing rules](/customize/rules), and [Comments and critique](/agent/comments-and-critique) for the full controls. Read [Recovery](/help/recovery) if the editor, provider, or proposal does not behave as described.
+Read [Writing references](/customize/references), [Selected text and directives](/agent/selected-text-and-directives), [Intended audience](/agent/customize#set-the-intended-audience), [Writing rules](/customize/rules), and [Comments and critique](/agent/comments-and-critique) for the full controls. Read [Recovery](/help/recovery) if the editor, provider, or proposal does not behave as described.
