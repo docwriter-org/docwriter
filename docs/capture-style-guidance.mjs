@@ -28,6 +28,7 @@ const ANALYSIS_TIMEOUT_MS = Number(process.env.STYLE_ANALYSIS_TIMEOUT_MS ?? 25 *
 const AGENT_TIMEOUT_MS = Number(process.env.AGENT_TIMEOUT_MS ?? 180_000);
 const PROVIDER = process.env.DOCWRITER_PROVIDER ?? 'claude';
 const MODEL = process.env.DOCWRITER_MODEL ?? 'claude-sonnet-4-6';
+const SOURCES_ONLY = process.env.STYLE_CAPTURE_SOURCES_ONLY === '1';
 
 const SOURCES = JSON.parse(
 	await readFile(join(REPO_ROOT, 'scripts', 'style-guidance-meynell-sources.json'), 'utf8')
@@ -152,7 +153,7 @@ async function addSource(page, description, text) {
 }
 
 async function main() {
-	if (!process.env.ANTHROPIC_API_KEY && !process.env.CLAUDE_API_KEY) {
+	if (!SOURCES_ONLY && !process.env.ANTHROPIC_API_KEY && !process.env.CLAUDE_API_KEY) {
 		console.warn('Warning: no ANTHROPIC_API_KEY visible; Claude analysis may fail.');
 	}
 
@@ -180,8 +181,25 @@ async function main() {
 		for (const source of SOURCES) {
 			await addSource(page, source.description, source.text);
 		}
+		const sourceToShow = SOURCES[0];
+		const sourceCard = page.locator('.source-card', { hasText: sourceToShow.description });
+		await sourceCard.locator('button.source-open').click();
+		await page.getByLabel('Stored text').waitFor({ state: 'visible', timeout: 20_000 });
+		await page.waitForFunction(
+			({ description, excerpt }) => {
+				const title = document.querySelector('.source-canvas .canvas-title')?.textContent?.trim();
+				const text = document.querySelector('.source-canvas textarea')?.value ?? '';
+				return title === description && text.startsWith(excerpt);
+			},
+			{ description: sourceToShow.description, excerpt: sourceToShow.text.slice(0, 80) },
+			{ timeout: 20_000 }
+		);
+		await page.getByLabel('Stored text').evaluate((element) => {
+			element.scrollTop = 0;
+		});
 		await sleep(500);
 		await shot(page, 'style-guidance-sources.png');
+		if (SOURCES_ONLY) return;
 
 		// ---- 2. Analyze pane: start run, capture specialists mid-flight ----
 		console.log('starting analysis...');

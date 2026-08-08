@@ -143,7 +143,7 @@ const pageFeatures = {
 		['Customize', 'Accept proposed writing rules from messages', C, 'Writing rules'],
 		['Customize', 'Wake the agent after adding a rule', M, 'No page']
 	],
-	'customize/references': [
+	'customize/style': [
 		['Customize', 'Add writing references', C, 'References'],
 		['Customize', 'Add the current file, pasted prose, or a URL as a reference', C, 'References'],
 		['Customize', 'Wake the agent after adding a reference', M, 'No page']

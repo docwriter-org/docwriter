@@ -61,7 +61,7 @@
 				"pages": [
 					"agent/customize",
 					"customize/rules",
-					"customize/references",
+					"customize/style",
 					"customize/skills",
 					"customize/hooks",
 					"customize/generated-previews"
@@ -113,6 +113,7 @@
 		]
 	},
 	"redirects": [
+		{ "source": "/customize/references", "destination": "/customize/style" },
 		{ "source": "/tour/editor", "destination": "/write/editor" },
 		{ "source": "/tour/tabs", "destination": "/write/files-and-tabs" },
 		{ "source": "/agent/steering-the-agent", "destination": "/agent/ask-and-steer" },
