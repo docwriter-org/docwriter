@@ -146,6 +146,83 @@ const MIGRATIONS: Array<{ version: number; sql: string }> = [
 				created_at INTEGER NOT NULL
 			);
 		`
+	},
+	{
+		version: 9,
+		// What each style specialist thought on its way to a proposition.
+		// These used to exist only as SSE frames, so closing the dialog threw
+		// them away and a finished run had nothing to show.
+		sql: `
+			CREATE TABLE IF NOT EXISTS style_run_logs (
+				id            INTEGER PRIMARY KEY AUTOINCREMENT,
+				run_id        TEXT NOT NULL,
+				specialist_id TEXT NOT NULL,
+				kind          TEXT NOT NULL,
+				text          TEXT,
+				tool_name     TEXT,
+				created       INTEGER NOT NULL
+			);
+			CREATE INDEX IF NOT EXISTS style_run_logs_run
+				ON style_run_logs(run_id, specialist_id, id);
+		`
+	},
+	{
+		version: 10,
+		// Study telemetry, moved out of .docwriter/style-study/events.jsonl.
+		// It is runtime state rather than an artifact anyone opens, so it belongs
+		// with rules, hooks and reviewers. An existing JSONL file is imported once
+		// on first read.
+		//
+		// No index: the log is only ever read whole, at export time. An index on
+		// timestamp would cost a write on every append and be used by nothing.
+		sql: `
+			CREATE TABLE IF NOT EXISTS style_study_events (
+				id        INTEGER PRIMARY KEY AUTOINCREMENT,
+				type      TEXT NOT NULL,
+				timestamp INTEGER NOT NULL,
+				data      TEXT NOT NULL
+			);
+		`
+	},
+	{
+		version: 11,
+		// Sessions are looked up by id without the project key: the project key
+		// is derived from the working directory, so it changes when that does,
+		// and this database already belongs to a single workspace. Both existing
+		// indexes lead with project_key, so that lookup was a full scan plus a
+		// temp b-tree sort on a path the user waits for.
+		sql: `
+			CREATE INDEX IF NOT EXISTS provider_session_entries_session
+				ON provider_session_entries(provider, session_id, subpath, id);
+		`
+	},
+	{
+		version: 12,
+		// The working author style belongs in SQLite while agents and the writer
+		// are still changing it. The live skill files are a published artifact and
+		// are written only when the writer explicitly finalizes the draft.
+		sql: `
+			CREATE TABLE IF NOT EXISTS style_profile_state (
+				id           INTEGER PRIMARY KEY CHECK (id = 1),
+				profile_json TEXT NOT NULL,
+				updated      INTEGER NOT NULL
+			);
+
+			CREATE TABLE IF NOT EXISTS style_proposition_snapshots (
+				id               INTEGER PRIMARY KEY AUTOINCREMENT,
+				run_id           TEXT NOT NULL,
+				stage            TEXT NOT NULL,
+				agent_id         TEXT NOT NULL,
+				position         INTEGER NOT NULL,
+				proposition_id   TEXT NOT NULL,
+				proposition_json TEXT NOT NULL,
+				created          INTEGER NOT NULL,
+				updated          INTEGER NOT NULL,
+				UNIQUE (run_id, stage, agent_id, position)
+			);
+			CREATE INDEX IF NOT EXISTS style_proposition_snapshots_run
+				ON style_proposition_snapshots(run_id, stage, agent_id, position);
+		`
 	}
 ];
 

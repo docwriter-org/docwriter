@@ -83,6 +83,9 @@ export interface ProviderQueryOptions {
 	images?: Array<{ mediaType: string; data: string }>;
 	effort?: 'low' | 'medium' | 'high';
 	hooks?: Record<string, unknown>;
+	/** Expose only the provider-neutral tools passed to query(). Used by
+	 * background analysis agents that must not see workspace mutation tools. */
+	isolatedTools?: boolean;
 }
 
 // ── Provider interface ──────────────────────────────────────────────────────

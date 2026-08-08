@@ -26,6 +26,8 @@ import { replayUpdatesInto } from '$lib/server/ydoc-persistence';
 import { registerPendingAskUser } from '$lib/server/ask-user-state';
 import { unifiedLineDiff } from '$lib/diff';
 import { listStyleReferences } from '$lib/server/references';
+import { readStyleProfile } from '$lib/server/style-analysis/profile-store';
+import { publishedStylePropositions, type StyleProfile } from '$lib/style-profile';
 import { buildSkillsPromptBlock } from '$lib/server/skills-config';
 import { lastSeenKey, readTabMarkdownForAgent } from '$lib/server/last-seen';
 import {
@@ -331,6 +333,7 @@ Every edit proposal needs a comment thread that says what is about to happen, so
 Each turn may contain these blocks, in this order.
 
 - <workspace_state>: the open tabs, a diff of what changed in each since your last turn, and open comment threads as one-line stubs. Unchanged tabs say "Unchanged". Tab content is never inlined. Call read_doc(file_path) when you need it. Calls are cheap because the server holds the document in memory, so read what you need, not every tab.
+- <author_style>: how the user writes, learned from their own writing. Present on every turn once a style has been learned. Follow it whenever you draft or revise prose, unless the user asks for something different this turn.
 - <session_state>: rules, style references, the agency level, and the intended audience. Sent in full on the first turn, then only when something changed. If the block is absent, nothing changed.
 - <mode>: present only in special modes, such as plan-first.
 - <user_message>: the user's words, verbatim.
@@ -394,7 +397,19 @@ The agency level arrives in session_state when it changes.
 
 ## Intended audience
 
-When set, the intended reader arrives in session_state. Write for that audience: assume their background, match their jargon, and do not explain what they already know. If the block is absent, the audience is unchanged. If cleared, stop targeting a specific audience.`;
+When set, the intended reader arrives in session_state. Write for that audience: assume their background, match their jargon, and do not explain what they already know. If the block is absent, the audience is unchanged. If cleared, stop targeting a specific audience.
+
+## What wins when guidance conflicts
+
+Several things tell you how to write, and they will sometimes disagree. Resolve it in this order, highest first.
+
+1. **What the user asked for this turn**, in user_message or user_feedback. An explicit request beats everything below it, for this turn only.
+2. **The rules in "Rules to obey".** These are the user's standing hard constraints, written by them and confirmed by them. They are the most important standing context you have. A rule beats the learned style, the intended audience, and your own judgement every time. If the author style suggests a construction a rule forbids, the rule wins and you write it another way.
+3. **The intended audience.** Who the piece is for shapes vocabulary and how much you explain.
+4. **The author style in author_style.** How the user tends to write, inferred from a small sample. Follow it where it fits; it never overrides a rule or an explicit request.
+5. **Your own judgement**, for everything the above leaves open.
+
+Do not narrate this ordering or announce that a conflict occurred. Just write the sentence the highest applicable guidance calls for.`;
 }
 
 /** Build the per-render user prompt. Only the DYNAMIC content goes here —
@@ -443,9 +458,10 @@ function snapshotRules(rules: { text: string }[]): string {
 
 /** Snapshot of the active style references (URL list, workspace paths, saved
  * sample paths). Sorted so cosmetic re-ordering doesn't trip the change detector. */
-function snapshotRefs(): string {
+function snapshotRefs(profile: StyleProfile | null): string {
 	const refs = listStyleReferences().map((r) => `${r.type}::${r.target}`);
-	return JSON.stringify(refs.sort());
+	const active = publishedStylePropositions(profile).length;
+	return JSON.stringify({ refs: refs.sort(), active, profileUpdatedAt: profile?.updatedAt ?? 0 });
 }
 
 /** Build the diff line block for rules vs. the prior snapshot. Returns null
@@ -482,20 +498,40 @@ function buildRulesDelta(
 }
 
 /** Build the active style-reference list as a small bullet block. Returned
- * only when the list has changed since the prior render. */
-function buildRefsBlock(): string | null {
+ * only when the list has changed since the prior render. A learned profile is
+ * handled by buildStyleBlock instead, which is not delta-gated. */
+function buildRefsBlock(profile: StyleProfile | null): string | null {
+	if (publishedStylePropositions(profile).length > 0) return null;
 	const refs = listStyleReferences().slice(0, 6);
 	if (refs.length === 0) return null;
 	const lines = ['Style references:'];
-	for (const ref of refs) {
-		if (ref.type === 'url') {
-			lines.push(`- URL: ${ref.target}${ref.label !== ref.target ? ` (${ref.label})` : ''}`);
-		} else {
-			const kind = ref.type === 'stored-sample' ? 'Saved sample' : 'Workspace path';
-			lines.push(`- ${kind}: ${ref.target}`);
-		}
-	}
+	for (const ref of refs) lines.push(`- ${ref.description || ref.label}`);
 	return lines.join('\n');
+}
+
+/**
+ * The learned author style, sent with every turn.
+ *
+ * This was one line in the session-state delta, which emits only on the render
+ * where the profile changed, so every turn after that ran with nothing saying a
+ * style existed — and on the claude provider that was the only mention at all,
+ * since the skills block is skipped there. It lives in the turn prompt rather
+ * than the system prompt because almost every render resumes a session, and the
+ * SDK does not promise a new system prompt is reapplied when it does. The
+ * instructions are short enough to inline; the skill keeps the passages.
+ */
+function buildStyleBlock(profile: StyleProfile | null): string | null {
+	const active = publishedStylePropositions(profile);
+	if (active.length === 0) return null;
+	return [
+		"How the user writes, learned from a handful of pieces they wrote. Follow this whenever you draft or revise prose here, unless they ask for something different this turn.",
+		'',
+		...active.map((proposition) => `- ${proposition.instruction}`),
+		'',
+'These are tendencies, not rules. Follow the ones that fit and skip the rest. They govern how you write, not what about: take no facts or subject matter from the references. The user\'s rules come first.',
+		'',
+		`Read the \`${profile?.skillId ?? 'author-style'}\` skill before you write. It holds the passages behind each instruction.`
+	].join('\n');
 }
 
 function buildMultiTabPrompt(
@@ -517,7 +553,10 @@ function buildMultiTabPrompt(
 	const priorAudience = kvGet(KV_LAST_AUDIENCE);
 
 	const currentRulesJson = snapshotRules(meta.rules);
-	const currentRefsJson = snapshotRefs();
+	// Read once: three blocks below all describe the same profile, and parsing
+	// it is a few milliseconds of Zod validation each time.
+	const styleProfile = readStyleProfile();
+	const currentRefsJson = snapshotRefs(styleProfile);
 
 	const tabSections = tabs.length === 0
 		? 'No files are open as tabs. Use Read / Glob / Grep to explore the workspace; use edit_doc({ path, ... }) to edit, or write_doc({ path, ... }) to create a file (the path argument is the workspace-relative path).'
@@ -545,11 +584,16 @@ function buildMultiTabPrompt(
 	// words last. session_state is omitted entirely when nothing changed.
 	const sections: string[] = [`<workspace_state>\n${tabSections}\n</workspace_state>`];
 
+	// Not delta-gated: the style is the point of the feature, so it goes in
+	// every turn rather than only the one where it changed.
+	const styleBlock = buildStyleBlock(styleProfile);
+	if (styleBlock) sections.push(`<author_style>\n${styleBlock}\n</author_style>`);
+
 	const sessionParts: string[] = [];
 	const rulesDelta = buildRulesDelta(currentRuleTexts, priorRulesJson);
 	if (rulesDelta) sessionParts.push(rulesDelta);
 	if (currentRefsJson !== priorRefsJson) {
-		const refsBlock = buildRefsBlock();
+		const refsBlock = buildRefsBlock(styleProfile);
 		if (refsBlock) sessionParts.push(refsBlock);
 	}
 	if (currentAgency !== priorAgency) {
@@ -800,7 +844,7 @@ export const POST: RequestHandler = async ({ request }) => {
 				planModeInstruction;
 		const baseSystemPromptBlock = warmup ? undefined : buildSystemPrompt();
 		const skillsPromptBlock =
-			!warmup && (providerId === 'openai' || providerId === 'cursor')
+			!warmup && providerId !== 'claude'
 				? buildSkillsPromptBlock()
 				: null;
 		const systemPromptBlock = [baseSystemPromptBlock, skillsPromptBlock]

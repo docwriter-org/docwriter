@@ -3,6 +3,8 @@
 	import type * as Y from 'yjs';
 	import MenuBar, { type MenuSpec } from '$lib/components/MenuBar.svelte';
 	import ModelPicker from '$lib/components/ModelPicker.svelte';
+	import ReferenceStatusPill from '$lib/components/ReferenceStatusPill.svelte';
+	import ReferenceCalibrationDialog from '$lib/components/ReferenceCalibrationDialog.svelte';
 	import OutlinePane from '$lib/components/OutlinePane.svelte';
 	import FileTree from '$lib/components/FileTree.svelte';
 	import type { FileEntry } from '$lib/components/FileTree.svelte';
@@ -14,7 +16,6 @@
 	import { pushToast, dismissToast, toastQueue, type ToastSpec } from '$lib/toasts';
 	import RulesPanel from '$lib/components/RulesPanel.svelte';
 	import RulesPillBar from '$lib/components/RulesPillBar.svelte';
-	import ReferencesPanel from '$lib/components/ReferencesPanel.svelte';
 	import PanelResizer from '$lib/components/PanelResizer.svelte';
 	import HorizontalPanelResizer from '$lib/components/HorizontalPanelResizer.svelte';
 	import AgentDock from '$lib/components/AgentDock.svelte';
@@ -1034,6 +1035,21 @@
 		// With no open tabs, only typed-message sends make sense; Wake Up /
 		// implicit triggers have nothing to anchor to.
 		if (!getCurrentActiveTab() && !trigger) return;
+		if (trigger?.trim() && typeof sessionStorage !== 'undefined' && !sessionStorage.getItem('docwriter-reference-nudge')) {
+			sessionStorage.setItem('docwriter-reference-nudge', '1');
+			void fetch('/api/style-profile')
+				.then((response) => response.ok ? response.json() : null)
+				.then((style) => {
+					if (style?.status !== 'empty') return;
+					pushHistory({
+						type: 'notification',
+						timestamp: Date.now(),
+						text: 'No writing references are active. Add examples from the header if you want the agent to learn a specific style.',
+						priority: 'low'
+					});
+				})
+				.catch(() => {});
+		}
 		submitInFlight = true;
 
 		// Diff composition: if there's an existing pending review, we do NOT
@@ -2173,6 +2189,15 @@
 	 */
 	// ── Critique passes (reviewer agents) ────────────────────────────────
 	let reviewerDialogOpen = $state(false);
+	let styleDialogOpen = $state(false);
+	/** Finalization is the publication boundary. Closing the modal or changing a
+	 * draft does not wake the agent or put unfinished guidance into its prompt. */
+	function notifyAgentOfFinalizedStyle(skillId: string) {
+		void submit(
+			`The writer finalized the author style. Re-read the \`${skillId}\` skill now and use it for future drafts and revisions. Do not revise anything already written unless asked.`
+		);
+	}
+	let styleRefreshToken = $state(0);
 
 	async function loadReviewers() {
 		try {
@@ -2251,7 +2276,18 @@
 					checked: lineNumbersOn,
 					onClick: () => editorLineNumbers.update((v) => !v)
 				},
-				{ kind: 'panel', label: 'Writing references', panelKey: 'references' },
+				{
+					kind: 'action',
+					label: 'Calibrate your style',
+					onClick: () => (styleDialogOpen = true)
+				},
+				{
+					kind: 'action',
+					label: 'Export study data',
+					onClick: () => {
+						window.location.href = '/api/style-study/export';
+					}
+				},
 				{ kind: 'panel', label: 'Intended audience', panelKey: 'audience' },
 				{ kind: 'panel', label: 'Skills', panelKey: 'skills' },
 				{ kind: 'panel', label: 'Hooks', panelKey: 'hooks' },
@@ -3016,7 +3052,6 @@
 			<MenuBar
 				{menus}
 				panels={{
-					references: referencesPanelSnippet,
 					rules: rulesPanelSnippet,
 					agentSettings: agentSettingsSnippet,
 					audience: audiencePanelSnippet,
@@ -3034,18 +3069,35 @@
 				onSelectModel={(id) => setSelectedModel(id)}
 				onCustomModel={() => (customModelOpen = true)}
 			/>
+			<ReferenceStatusPill
+				onOpen={() => (styleDialogOpen = true)}
+				refreshToken={styleRefreshToken}
+				onAnalysisFinished={(unresolvedCount) => {
+					pushHistory({
+						type: 'notification',
+						timestamp: Date.now(),
+						text:
+							unresolvedCount > 0
+								? `Your style analysis finished. ${unresolvedCount} propositions are waiting. Open "Calibrate your style" to review them.`
+								: 'Your style analysis finished. Open "Calibrate your style" to see the new guidance.',
+						priority: 'high'
+					});
+				}}
+			/>
 		</div>
 	</header>
 
+	<ReferenceCalibrationDialog
+		open={styleDialogOpen}
+		provider={currentProvider}
+		{model}
+		onClose={() => (styleDialogOpen = false)}
+		onChanged={() => (styleRefreshToken += 1)}
+		onFinalized={notifyAgentOfFinalizedStyle}
+	/>
+
 	{#snippet rulesPanelSnippet()}
 		<RulesPanel onSubmit={(trigger) => void submit(trigger)} />
-	{/snippet}
-
-	{#snippet referencesPanelSnippet()}
-		<ReferencesPanel
-			activeTabId={currentActiveTabId}
-			onSubmit={(trigger) => void submit(trigger)}
-		/>
 	{/snippet}
 
 	{#snippet agentSettingsSnippet()}

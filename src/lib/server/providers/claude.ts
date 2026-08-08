@@ -15,9 +15,10 @@ import type {
 	ProviderEvent,
 	ProviderModelOption,
 	ProviderQueryOptions,
-	CanUseToolFn
+	CanUseToolFn,
+	ToolDefinition
 } from './types';
-import { emitProposalEvents } from './shared';
+import { emitProposalEvents, wrapToolsForProvider } from './shared';
 import {
 	docToolsMcp,
 	EDIT_DOC_TOOL_NAME,
@@ -33,6 +34,7 @@ import {
 } from '$lib/server/hooks-config';
 import { runHookCommand, type HookRunEmitter } from '$lib/server/hook-runner';
 import { addCustomSkill } from '$lib/server/skills-config';
+import { getEffectiveRoot } from '$lib/server/document-files';
 import { executeReviewAction } from './tool-handlers';
 import {
 	formatClaudeModelLabel,
@@ -128,6 +130,74 @@ function buildDocwriterMcp() {
 	});
 }
 
+function zodForJsonSchema(value: unknown): z.ZodTypeAny {
+	const schema = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+	if (Array.isArray(schema.enum) && schema.enum.length) {
+		const literals = schema.enum.map((item) => z.literal(item as string | number | boolean));
+		return literals.length === 1 ? literals[0] : z.union(literals as [z.ZodLiteral, z.ZodLiteral, ...z.ZodLiteral[]]);
+	}
+	if (schema.type === 'object') {
+		const properties = schema.properties && typeof schema.properties === 'object'
+			? schema.properties as Record<string, unknown>
+			: {};
+		const required = new Set(Array.isArray(schema.required) ? schema.required.filter((key): key is string => typeof key === 'string') : []);
+		const shape = Object.fromEntries(Object.entries(properties).map(([key, child]) => {
+			const parsed = zodForJsonSchema(child);
+			return [key, required.has(key) ? parsed : parsed.optional()];
+		}));
+		return schema.additionalProperties === false ? z.object(shape).strict() : z.object(shape).passthrough();
+	}
+	if (schema.type === 'array') {
+		let parsed = z.array(zodForJsonSchema(schema.items));
+		if (typeof schema.minItems === 'number') parsed = parsed.min(schema.minItems);
+		if (typeof schema.maxItems === 'number') parsed = parsed.max(schema.maxItems);
+		return parsed;
+	}
+	if (schema.type === 'string') {
+		let parsed = z.string();
+		if (typeof schema.minLength === 'number') parsed = parsed.min(schema.minLength);
+		if (typeof schema.maxLength === 'number') parsed = parsed.max(schema.maxLength);
+		return parsed;
+	}
+	if (schema.type === 'number' || schema.type === 'integer') {
+		let parsed = schema.type === 'integer' ? z.number().int() : z.number();
+		if (typeof schema.minimum === 'number') parsed = parsed.min(schema.minimum);
+		if (typeof schema.maximum === 'number') parsed = parsed.max(schema.maximum);
+		return parsed;
+	}
+	if (schema.type === 'boolean') return z.boolean();
+	return z.unknown();
+}
+
+function zodShapeForTool(definition: ToolDefinition): Record<string, z.ZodTypeAny> {
+	const root = definition.inputSchema as { properties?: Record<string, unknown>; required?: string[] };
+	const required = new Set(root.required ?? []);
+	return Object.fromEntries(Object.entries(root.properties ?? {}).map(([key, schema]) => {
+		const parsed = zodForJsonSchema(schema);
+		return [key, required.has(key) ? parsed : parsed.optional()];
+	}));
+}
+
+function buildCustomMcp(definitions: ToolDefinition[], options: ProviderQueryOptions) {
+	const allowed = wrapToolsForProvider(definitions, options);
+	return createSdkMcpServer({
+		name: 'docwriter-style',
+		version: '0.0.1',
+		tools: allowed.map((definition) => tool(
+			definition.name,
+			definition.description,
+			zodShapeForTool(definition),
+			async (input) => {
+				const result = await definition.execute(input as Record<string, unknown>);
+				return {
+					content: result.content.map((item) => ({ type: 'text' as const, text: item.text })),
+					...(result.isError ? { isError: true } : {})
+				};
+			}
+		))
+	});
+}
+
 async function* buildImagePrompt(
 	textPrompt: string,
 	images: Array<{ mediaType: string; data: string }>
@@ -151,9 +221,11 @@ export class ClaudeProvider implements AgentProvider {
 
 	async *query(
 		options: ProviderQueryOptions,
-		_tools: any[]
+		_tools: ToolDefinition[]
 	): AsyncIterable<ProviderEvent> {
-		const docwriterMcp = buildDocwriterMcp();
+		const isolated = options.isolatedTools === true;
+		const docwriterMcp = isolated ? null : buildDocwriterMcp();
+		const customMcp = isolated ? buildCustomMcp(_tools, options) : null;
 
 		const canUseToolCb = options.canUseTool;
 
@@ -166,9 +238,19 @@ export class ClaudeProvider implements AgentProvider {
 		const effort = options.effort || 'low';
 
 		const queryOptions: any = {
-			allowedTools: options.allowedTools,
-			mcpServers: { docwriter: docwriterMcp, 'docwriter-doc': docToolsMcp },
-			settingSources: ['user', 'project'],
+			allowedTools: isolated
+				? _tools.map((definition) => `mcp__docwriter-style__${definition.name}`)
+				: options.allowedTools,
+			mcpServers: isolated
+				? { 'docwriter-style': customMcp }
+				: { docwriter: docwriterMcp, 'docwriter-doc': docToolsMcp },
+			settingSources: isolated ? [] : ['user', 'project'],
+			// The server process runs from the docwriter package, not the
+			// workspace, so without this the SDK discovers project skills and
+			// settings from the package's own .claude directory. That is why the
+			// compiled author-style skill came back as "Unknown skill": it is
+			// installed into the workspace, which the SDK was never looking at.
+			cwd: getEffectiveRoot(),
 			permissionMode: options.planMode ? 'plan' : 'acceptEdits',
 			includePartialMessages: true,
 			agentProgressSummaries: true,

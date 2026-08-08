@@ -12,6 +12,7 @@ import { installBundledSkills } from '$lib/server/skills-install';
 import { createWsServer } from '$lib/server/ws-server';
 import { loadGlobalKeys, loadRepoEnv } from '$lib/server/api-keys';
 import { IS_HOSTED_LANDING } from '$lib/server/deploy-mode';
+import { failInterruptedStyleRun } from '$lib/server/style-analysis/interrupted-run';
 
 // Load repo .env, then ~/.docwriter/keys.env into process.env so provider API
 // keys are available before any render path reads process.env.<KEY>. The
@@ -32,6 +33,12 @@ const SERVER_INSTANCE_ID_KEY = '__docwriterServerInstanceId';
 const globalAny = globalThis as unknown as Record<string, string | undefined>;
 if (!IS_HOSTED_LANDING && !globalAny[SERVER_INSTANCE_ID_KEY]) {
 	globalAny[SERVER_INSTANCE_ID_KEY] = randomUUID();
+	// A style pass only exists in memory, so one that was running when the
+	// process stopped can never finish. Mark it failed before anything reads
+	// the profile, or the status pill sits on "Analyzing references" for good.
+	// Inside this guard so Vite HMR re-executions never re-run it: mid-session
+	// there may be a genuinely live pass this must not touch.
+	failInterruptedStyleRun();
 }
 
 if (!IS_HOSTED_LANDING) {

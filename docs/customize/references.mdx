@@ -2,34 +2,99 @@
 title: "Writing references"
 ---
 
-Use a writing reference when the agent needs an example or source to complete a request. A published article can show the voice you want, while a source file or URL can provide facts and preferred terms for a project.
+Here, we will walk through how to calibrate your writing agent with your style. You paste a few passages of your own writing, DocWriter works out how you write, and the agent follows that voice when you ask it to help. Expect this to take about **ten minutes**.
 
-## Add a reference
+In this example, the screenshots use public-domain passages from [Alice Meynell](https://en.wikipedia.org/wiki/Alice_Meynell) (1847–1922), taken from [*The Rhythm of Life and Other Essays*](https://www.gutenberg.org/ebooks/1276) on Project Gutenberg ([HTML text](https://www.gutenberg.org/files/1276/1276-h/1276-h.htm)), so you can see a real analysis end to end. When you set this up for your own work, you should paste your writing, not hers. Writing references teach voice, not facts: you can use a [writing rule](/customize/rules) for a standing instruction and an [intended audience](/agent/customize#set-the-intended-audience) to name the reader.
 
-Open **Settings**, then **Writing references**. Add a reference in one of these ways:
+## 1. Add three sources
 
-- Use the current file.
-- Paste a writing sample.
-- Save a URL.
+You should start from the references pill in the header (it says **References not provided** until you add some), or open **Settings**, then **Writing references**.
 
-Give the reference a name that explains why the agent should use it. For example, name a sample "Published posts in my voice" instead of "Sample 1."
+Paste a passage of your writing, say what it is, and choose **Add source**. Do this **three** times. You want three to five sources: fewer gives the analysis little to go on, and more averages your voice away.
 
-<Frame>
-  ![Writing references in Settings](/images/writing-references-panel.png)
+Describe each passage in your own words — e.g., "introduction of a paper", "related work section", "a post I like the tone of". The specialists read your description beside the passage, so you should label an introduction as an introduction rather than leaving it as unlabeled prose.
+
+In this example, we pasted three passages from that volume and labeled them:
+
+1. **Opening of an essay on recurrence** — from ["The Rhythm of Life"](https://www.gutenberg.org/files/1276/1276-h/1276-h.htm) (also on [Quotidiana](https://essays.quotidiana.org/meynell/rhythm_of_life/))
+2. **Character sketch of a reserved man** — from ["A Remembrance"](https://www.gutenberg.org/files/1276/1276-h/1276-h.htm) in the same Gutenberg text
+3. **Essay on Latinate composure in English** — from ["Composure"](https://www.gutenberg.org/files/1276/1276-h/1276-h.htm) (also on [Quotidiana](https://essays.quotidiana.org/meynell/composure/))
+
+You should use a few hundred words for each of your own passages. Longer is fine; a sentence or two is not enough.
+
+<Frame caption="Step 1 — you have three sources on the right, ready to analyze.">
+  ![The Calibrate your style dialog on the Sources step with three pasted passages listed](/images/style-guidance-sources.png)
 </Frame>
 
-## Control when a reference is available
+Once you have three sources, open the **Analyze** step.
 
-Enable a reference when the agent may use it in new requests. Disable it when the source is unrelated to your current work and you want to keep it saved for later. Removing a reference does not change the original file or URL.
+## 2. Run the analysis and wait
 
-When you add a reference, the agent wakes and considers the new material during the next pass. The saved name helps you tell the agent which reference matters for a later request.
+Choose **Run analysis**. DocWriter measures your passages, then three specialist agents read them and draft style guidance. A fourth pass combines the drafts. The specialists work from [Leech and Short](https://en.wikipedia.org/wiki/Geoffrey_Leech)’s style checklists (lexis, grammar, and discourse — words, sentences, and how the passage holds together), and they use the **model you currently have selected in the DocWriter header** — whatever provider and model you picked for writing.
 
-## Tell the agent what to use
+You can keep writing elsewhere while it runs. On the left, you will see progress: sources prepared, measurements computed, then the Lexis, Grammar, and Discourse specialists, then **Guidance combined**.
 
-Name the reference in your request when one source is especially important:
+You can select any specialist to watch its reasoning, or open **Measurements computed** to see every metric that fired. Each proposition has to quote your writing or it is discarded. Metrics that measured zero are discarded too — e.g., if your passage has no citations, that says nothing about how you use citations.
+
+<Frame caption="Step 2 — you wait while the specialist agents work. Expect roughly ten minutes.">
+  ![The Analyze step showing Lexis, Grammar, and Discourse specialists in progress](/images/style-guidance-specialists.png)
+</Frame>
+
+## 3. Pick which passage sounds more like you
+
+As propositions arrive, the right column asks **Which piece of writing sounds more like you?** One side is a passage from your sources; the other is the same passage with one habit changed. You react to the two versions so you can keep the habits that sound like you.
+
+You should choose **A** or **B**. If both feel fine, choose **Both are the same to me**. If neither works, choose **Neither is good** and edit one into something you would actually write. You can **Skip proposition** when the habit does not matter to you.
+
+<Frame caption="Step 3 — you pick the side that sounds more like you.">
+  ![Preference cards with passage A and passage B for style propositions](/images/style-guidance-preference.png)
+</Frame>
+
+Work through the cards until none remain. Reliable propositions can enter your draft without a comparison; the rest wait on your pick.
+
+## 4. Review the style draft and finalize
+
+Open the **Style draft** (or **Active skill**) step. You will see the instructions the writing agent will follow, with short quoted examples from your sources.
+
+Choose **Finalize style** when you are ready. That writes the skill under `.docwriter/skills/author-style/` and tells the writing agent to read it. If you close the dialog without finalizing, your draft stays unpublished. On the Analyze step, **Start over** discards the current draft and its measurements while leaving your sources and any already-finalized skill in place.
+
+<Frame caption="Step 4 — you review the draft instructions, then finalize them for the writing agent.">
+  ![The Active skill step listing style propositions with example passages](/images/style-guidance-skill.png)
+</Frame>
+
+From the same dialog you can download the skill bundle, restore an earlier version, or remove an instruction you do not want. Once the skill is active, your header pill reads **Style uploaded**.
+
+## 5. Ask for an edit that sounds like you
+
+With the skill finalized, write in the editor as usual. You should put the request in a directive so the agent knows what to do. In this example, we asked for a late train in the rain:
 
 ```text
-Revise the opening to match the tone of "Published posts in my voice."
+[[ Write two short paragraphs about waiting beside a late train in the rain, sounding like me. Keep the scene ordinary. Replace this directive. ]]
 ```
 
-After you send the request, the agent can consult the named material while it works and propose edits based on it. A reference supplies material for the request. Use a [writing rule](/customize/rules) when the same instruction should apply to later requests. Use an [intended audience](/agent/customize#set-the-intended-audience) when you want to name the reader rather than point at an example.
+Wake the agent, or let the idle timer fire. You will see the proposed edit as tracked changes, with an Accept / Reject / Retry card in the comment gutter. Expand the card so you can read the full proposal before you accept.
+
+<Frame caption="Step 5 — you expand the pending edit and decide whether it sounds like you.">
+  ![The editor with an expanded review card for a style-matched rewrite about a late train](/images/style-guidance-editor-edit.png)
+</Frame>
+
+Accept when the wording sounds like you. Reject and retry when it drifts toward generic model prose. Your skill stays active for later turns until you analyze again and finalize a new draft.
+
+## How it works
+
+We designed DocWriter’s style calibration feature around four properties:
+
+1. **Specific to your writing.** The guidance should describe patterns in your writing, rather than generic advice about good writing.
+2. **Important to you.** The guidance should include only the patterns you want the agent to preserve.
+3. **Easy for you to confirm.** You should be able to make decisions without reviewing a long list of abstract claims.
+4. **Portable across agents.** The guidance should work with writing agents outside DocWriter.
+
+We discuss each property in turn.
+
+**Specific to your writing.** We base the analysis on the linguistic checklist from Leech and Short’s [*Style in Fiction*](https://www.routledge.com/Style-in-Fiction-A-Linguistic-Introduction-to-English-Fictional-Prose/Short-Leech/p/book/9780582784093). The specialist agents examine words and short phrases, sentences and punctuation, and how ideas connect across a passage. They analyze headings, lists, and other layout choices separately. An agent proposes a pattern only when it can quote an example from your sources. We also discard measurements that provide no evidence. For example, a passage with no citations says nothing about how you use citations.
+
+**Important to you.** We build on Shaikh et al.’s [*Creating General User Models from Computer Use*](https://arxiv.org/abs/2505.10831), where knowledge and preferences about a user are stored as structured propositions with confidence scores. We adapt the proposition format to writing and tie every proposition to quoted examples. A pattern found in your sources may not be one you want the agent to follow, so you confirm each proposition before it becomes part of your writing guidance.
+
+**Easy for you to confirm.** The most direct way to confirm a proposition would be for DocWriter to show you the proposition and ask whether you agree. However, a long list of abstract claims is hard to evaluate, especially when you cannot see how each claim changes the writing. Instead, DocWriter shows you a passage from your sources next to a version where one proposed pattern has changed. You choose the version that sounds more like you. If neither version sounds right, you can edit one or skip the proposition.
+
+**Portable across agents.** After you finish, the propositions you approved are packaged as an `author-style` skill under `.docwriter/skills/author-style/`. You can download the skill bundle and use it with other agents that load and use skills, to then follow the same guidance and examples.
