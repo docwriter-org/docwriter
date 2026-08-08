@@ -108,6 +108,7 @@ export function profileFromSkillFolder(skillDir: string): StyleProfile {
 	const propositions: StyleProposition[] = result.data.propositions.map((imported, index) => ({
 		id: imported.id ?? propositionId(imported.family, imported.instruction, index),
 		family: imported.family,
+		...(imported.propositionType ? { propositionType: imported.propositionType } : {}),
 		statement: imported.statement,
 		instruction: imported.instruction,
 		examples: imported.examples,

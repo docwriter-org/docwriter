@@ -17,28 +17,32 @@ describe('author style skill compiler', () => {
 		process.env.DOCWRITER_ROOT = testRoot;
 		const { compileAuthorStyleSkill } = await import('./skill-compiler');
 		const report = {
-			schemaVersion: 1,
-			analyzerVersion: '1.0.0',
+			schemaVersion: 2,
+			analyzerVersion: '2.0.0',
 			createdAt: Date.now(),
 			sourceSnapshotHash: 'snapshot',
 			documents: [{ sourceId: 'source-1', role: 'authored' as const, format: 'text', contentHash: 'hash', wordCount: 20 }],
 			measurements: [{
-				id: 'sentence-rhythm.words', family: 'sentence-rhythm' as const, label: 'Sentence words', unit: 'words' as const,
+				id: 'grammatical.b2.words-mean', family: 'grammatical' as const, label: 'Sentence words', unit: 'words' as const,
 				value: 12, count: 3, sourceCount: 1, roleValues: { authored: 12 }, reliability: 0.9, occurrenceIds: []
 			}],
+			conventions: [{
+				id: 'formatting.heading-density', family: 'conventions' as const, label: 'Formatting: heading density', unit: 'ratio' as const,
+				value: 0.2, count: 0, sourceCount: 1, roleValues: { authored: 0.2 }, reliability: 0.95, occurrenceIds: []
+			}],
 			occurrences: [],
-			examples: [{ id: 'example-1', sourceId: 'source-1', start: 0, end: 24, text: 'A short grounded example.', kind: 'sentence-rhythm' }]
+			examples: [{ id: 'example-1', sourceId: 'source-1', start: 0, end: 24, text: 'A short grounded example.', kind: 'grammatical' }]
 		};
 		const profile = {
-			schemaVersion: 1,
-			analyzerVersion: '1.0.0',
+			schemaVersion: 2,
+			analyzerVersion: '2.0.0',
 			status: 'active' as const,
 			createdAt: Date.now(),
 			updatedAt: Date.now(),
 			sourceSnapshotHash: 'snapshot',
 			calibrations: [],
 			propositions: [{
-				id: 'style-1', family: 'sentence-rhythm' as const,
+				id: 'style-1', family: 'grammatical' as const,
 				statement: 'The author uses concise sentences.', instruction: 'Use concise sentences.',
 				examples: ['A short grounded example.'], confidence: 1,
 				status: 'active' as const, createdAt: Date.now(), updatedAt: Date.now()
@@ -50,7 +54,8 @@ describe('author style skill compiler', () => {
 		const required = [
 			'SKILL.md', 'agents/openai.yaml', 'references/style-profile.md', 'references/metrics.json',
 			'references/propositions.json', 'references/examples.md', 'references/source-manifest.json',
-			'scripts/analyze-style.mjs'
+			'scripts/analyze-style.mjs', 'scripts/style-metrics.mjs', 'scripts/style-metric-registry.mjs',
+			'scripts/style-data.json'
 		];
 		for (const path of required) expect(existsSync(join(compiled.skillPath, path))).toBe(true);
 		const skillMd = readFileSync(join(compiled.skillPath, 'SKILL.md'), 'utf8');
@@ -58,8 +63,16 @@ describe('author style skill compiler', () => {
 		expect(frontmatter.split('\n').map((line) => line.split(':')[0])).toEqual(['name', 'description']);
 		expect(skillMd).toContain('# Learned style profile');
 		expect(skillMd).toContain('Use concise sentences.');
+		expect(skillMd).toContain('## Document conventions');
 		expect(skillMd).not.toContain('analyze-style.mjs');
 		expect(skillMd).not.toContain('Read `references/style-profile.md`');
+		const portableInput = join(testRoot, 'portable-input.txt');
+		writeFileSync(portableInput, 'However, we carefully test the useful system. This result is clear.', 'utf8');
+		const portableReport = JSON.parse(execFileSync(process.execPath, [
+			join(compiled.skillPath, 'scripts', 'analyze-style.mjs'), '--input', portableInput
+		], { encoding: 'utf8' }));
+		expect(portableReport.measurements.some((item: { id: string }) => item.id === 'lexical.a3.adjective-rate')).toBe(true);
+		expect(portableReport.conventions).toBeInstanceOf(Array);
 		const contents = readdirSync(join(compiled.skillPath, 'references'))
 			.map((name) => readFileSync(join(compiled.skillPath, 'references', name), 'utf8'))
 			.join('\n');

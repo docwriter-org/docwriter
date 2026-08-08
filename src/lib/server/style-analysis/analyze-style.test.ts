@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { analyzeDocuments, analyzeText, normalizeText } from './analyze-style.mjs';
+import { getPosTagRunCount, resetPosTagRunCount } from './style-metrics.mjs';
 import { styleProfileForClient, verifiedExamples } from './profile-store';
 import type { StyleAnalysisReport } from '$lib/style-profile';
 
@@ -16,11 +17,11 @@ describe('style analyzer punctuation', () => {
 			text: 'Plan: write carefully; then revise -- and finish. Really?! Visit https://example.com at 10:30. The value is 3.14.'
 		});
 
-		expect(metric(report, 'punctuation.boundary.colon')?.count).toBe(1);
-		expect(metric(report, 'punctuation.boundary.semicolon')?.count).toBe(1);
-		expect(metric(report, 'punctuation.boundary.double-hyphen')?.count).toBe(1);
-		expect(metric(report, 'punctuation.sequence.mixed-question-exclamation')?.count).toBe(1);
-		const falseColons = report.occurrences.filter((occurrence: { metricId: string }) => occurrence.metricId === 'punctuation.boundary.colon');
+		expect(metric(report, 'grammatical.punct.boundary.colon')?.count).toBe(1);
+		expect(metric(report, 'grammatical.punct.boundary.semicolon')?.count).toBe(1);
+		expect(metric(report, 'grammatical.punct.boundary.double-hyphen')?.count).toBe(1);
+		expect(metric(report, 'grammatical.punct.sequence.mixed-question-exclamation')?.count).toBe(1);
+		const falseColons = report.occurrences.filter((occurrence: { metricId: string }) => occurrence.metricId === 'grammatical.punct.boundary.colon');
 		expect(falseColons).toHaveLength(1);
 	});
 
@@ -31,8 +32,8 @@ describe('style analyzer punctuation', () => {
 			format: 'text',
 			text: 'The first result was stable, but the second result changed and the team reran it.'
 		});
-		const comma = report.occurrences.find((occurrence: { metricId: string }) => occurrence.metricId === 'punctuation.boundary.comma');
-		const conjunction = report.occurrences.find((occurrence: { metricId: string }) => occurrence.metricId === 'punctuation.boundary.conjunction.and');
+		const comma = report.occurrences.find((occurrence: { metricId: string }) => occurrence.metricId === 'grammatical.punct.boundary.comma');
+		const conjunction = report.occurrences.find((occurrence: { metricId: string }) => occurrence.metricId === 'grammatical.punct.boundary.conjunction.and');
 		expect(comma?.context?.leftClauseWords).toBeGreaterThan(0);
 		expect(comma?.context?.rightClauseWords).toBeGreaterThan(0);
 		expect(conjunction?.context?.likelyFunction).toBe('coordination-or-subordination');
@@ -45,8 +46,8 @@ describe('style analyzer punctuation', () => {
 			format: 'text',
 			text: 'Dr. Chen used version 2.1 from https://example.com/a. The prior result (Smith et al., 2024) was stable.'
 		});
-		const periods = report.occurrences.filter((occurrence: { metricId: string }) => occurrence.metricId === 'punctuation.terminal.period');
-		const commas = report.occurrences.filter((occurrence: { metricId: string }) => occurrence.metricId === 'punctuation.boundary.comma');
+		const periods = report.occurrences.filter((occurrence: { metricId: string }) => occurrence.metricId === 'grammatical.punct.terminal.period');
+		const commas = report.occurrences.filter((occurrence: { metricId: string }) => occurrence.metricId === 'grammatical.punct.boundary.comma');
 		expect(periods).toHaveLength(2);
 		expect(commas).toHaveLength(0);
 	});
@@ -55,13 +56,13 @@ describe('style analyzer punctuation', () => {
 		const text = 'One, two; three: four — five – six -- seven. Why? Yes! Wait... Really?! (note) [aside] “quote”';
 		const report = analyzeText({ sourceId: 'inventory', role: 'authored', format: 'text', text });
 		const expectedCounts: Record<string, number> = {
-			'punctuation.boundary.comma': 1, 'punctuation.boundary.semicolon': 1, 'punctuation.boundary.colon': 1,
-			'punctuation.boundary.em-dash': 1, 'punctuation.boundary.en-dash': 1, 'punctuation.boundary.double-hyphen': 1,
-			'punctuation.terminal.period': 1, 'punctuation.terminal.question': 1, 'punctuation.terminal.exclamation': 1,
-			'punctuation.terminal.ellipsis': 1, 'punctuation.sequence.repeated-period': 1, 'punctuation.sequence.mixed-question-exclamation': 1,
-			'punctuation.enclosure.parenthesis-open': 1, 'punctuation.enclosure.parenthesis-close': 1,
-			'punctuation.enclosure.bracket-open': 1, 'punctuation.enclosure.bracket-close': 1,
-			'punctuation.enclosure.double-quote': 2
+			'grammatical.punct.boundary.comma': 1, 'grammatical.punct.boundary.semicolon': 1, 'grammatical.punct.boundary.colon': 1,
+			'grammatical.punct.boundary.em-dash': 1, 'grammatical.punct.boundary.en-dash': 1, 'grammatical.punct.boundary.double-hyphen': 1,
+			'grammatical.punct.terminal.period': 1, 'grammatical.punct.terminal.question': 1, 'grammatical.punct.terminal.exclamation': 1,
+			'grammatical.punct.terminal.ellipsis': 1, 'grammatical.punct.sequence.repeated-period': 1, 'grammatical.punct.sequence.mixed-question-exclamation': 1,
+			'grammatical.punct.enclosure.parenthesis-open': 1, 'grammatical.punct.enclosure.parenthesis-close': 1,
+			'grammatical.punct.enclosure.bracket-open': 1, 'grammatical.punct.enclosure.bracket-close': 1,
+			'grammatical.punct.enclosure.double-quote': 2
 		};
 		for (const [id, expected] of Object.entries(expectedCounts)) {
 			const occurrences = report.occurrences.filter((occurrence: { metricId: string }) => occurrence.metricId === id);
@@ -77,12 +78,23 @@ describe('style analyzer punctuation', () => {
 			format: 'text',
 			text: 'The result (including the second check [run twice; then reviewed]) was stable.'
 		});
-		const semicolon = report.occurrences.find((occurrence: { metricId: string }) => occurrence.metricId === 'punctuation.boundary.semicolon');
+		const semicolon = report.occurrences.find((occurrence: { metricId: string }) => occurrence.metricId === 'grammatical.punct.boundary.semicolon');
 		expect(semicolon?.context?.nestingDepth).toBe(2);
 	});
 });
 
 describe('style analyzer structure', () => {
+	it('runs the POS tagger once per source and shares it across T2 metrics', () => {
+		resetPosTagRunCount();
+		const report = analyzeText({
+			sourceId: 'pos', role: 'authored', format: 'text',
+			text: 'Shreya writes useful technical papers and carefully tests robust systems.'
+		});
+		expect(getPosTagRunCount()).toBe(1);
+		expect(metric(report, 'lexical.a3.adjective-rate')?.value).toBeGreaterThan(0);
+		expect(metric(report, 'grammatical.b5.np-weight')?.value).toBeGreaterThan(0);
+	});
+
 	it('normalizes spans for headings, paragraphs, sentences, clauses, and tokens', () => {
 		const document = normalizeText({
 			sourceId: 'sample',
@@ -99,7 +111,7 @@ describe('style analyzer structure', () => {
 		}
 	});
 
-	it('reports all ten feature families', () => {
+	it('reports the four prose families and keeps layout as conventions', () => {
 		const report = analyzeText({
 			sourceId: 'sample',
 			role: 'authored',
@@ -107,19 +119,17 @@ describe('style analyzer structure', () => {
 			text: '# Method\n\nHowever, we measured the draft carefully; the result improved (Smith, 2024).\n\n* First item\n* Second item'
 		});
 		const families = new Set(report.measurements.map((measurement: { family: string }) => measurement.family));
-		expect(families).toEqual(new Set([
-			'document-organization', 'section-structure', 'paragraph-structure',
-			'sentence-rhythm', 'grammar-voice', 'vocabulary-register', 'punctuation',
-			'rhetorical-structure', 'evidence-citations', 'formatting'
-		]));
-		expect(report.measurements.length).toBeGreaterThanOrEqual(90);
+		expect(families).toEqual(new Set(['lexical', 'grammatical', 'figures', 'cohesion-context']));
+		expect(report.measurements.length).toBeGreaterThanOrEqual(140);
+		expect(report.conventions.length).toBeGreaterThanOrEqual(20);
 		for (const id of [
-			'document-organization.opening-share', 'section-structure.opening-block-words',
-			'paragraph-structure.sentence-length-slope', 'sentence-rhythm.words-p90',
-			'grammar-voice.past-tense-proxy-per-1000', 'vocabulary-register.syllables-per-word',
-			'rhetorical-structure.claim-position', 'evidence-citations.citation-position',
-			'formatting.heading-title-case-rate'
+			'lexical.a1.morphological-complexity', 'lexical.a3.adjective-rate',
+			'grammatical.b2.words-p90', 'grammatical.b4.opener-subordinator',
+			'grammatical.b6.passive-rate', 'figures.c1.anaphora-rate',
+			'figures.c3.analogy-marker-per-1000', 'cohesion.d1.causal-per-1000',
+			'cohesion.d2.citation-position'
 		]) expect(metric(report, id), id).toBeDefined();
+		expect(report.conventions.some((item: { id: string }) => item.id === 'formatting.heading-title-case-rate')).toBe(true);
 	});
 });
 
@@ -141,8 +151,8 @@ describe('proposition grounding', () => {
 
 	it('does not expose the hidden calibration direction to clients', () => {
 		const profile = styleProfileForClient({
-			schemaVersion: 1,
-			analyzerVersion: '1.0.0',
+			schemaVersion: 2,
+			analyzerVersion: '2.0.0',
 			status: 'needs-calibration',
 			createdAt: 1,
 			updatedAt: 1,

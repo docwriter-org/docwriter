@@ -133,24 +133,24 @@
 			{
 				id: 'measurements',
 				title: 'Measurements computed',
-				description: 'Measuring structure, rhythm, voice, punctuation, citations, and formatting.',
+				description: 'Measuring words, sentences, figures, cohesion, context, and document conventions.',
 				status: thresholdStatus(35, 12),
 				icon: 'measurements'
 			}
 		];
 
 		const specialistCopy: Record<SpecialistRunState['id'], { title: string; description: string }> = {
-			organization: {
-				title: 'Organization specialist',
-				description: 'Reviewing document, section, paragraph, and formatting measurements.'
+			lexis: {
+				title: 'Lexis specialist',
+				description: 'Reviewing word choice, register, vocabulary texture, and signature phrasing.'
 			},
-			language: {
-				title: 'Language specialist',
-				description: 'Reviewing sentences, voice, vocabulary, and punctuation.'
+			grammar: {
+				title: 'Grammar specialist',
+				description: 'Reviewing sentences, clauses, phrase structure, voice, and punctuation.'
 			},
 			discourse: {
 				title: 'Discourse specialist',
-				description: 'Reviewing rhetoric, evidence, citations, and context.'
+				description: 'Reviewing figures, cohesion, reader relationship, evidence, and other voices.'
 			},
 			synthesis: {
 				title: 'Guidance combined',

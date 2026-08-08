@@ -42,7 +42,7 @@ test('reference status opens the large author style review workflow', async ({ p
 });
 
 test('analysis is rendered as a clear activity list beside close calls', async ({ page }) => {
-	const completedSpecialist = (id: 'organization' | 'language' | 'discourse' | 'synthesis') => ({
+	const completedSpecialist = (id: 'lexis' | 'grammar' | 'discourse' | 'synthesis') => ({
 		id,
 		status: 'completed',
 		families: [],
@@ -60,7 +60,7 @@ test('analysis is rendered as a clear activity list beside close calls', async (
 				unresolvedCount: 1,
 				stale: false,
 				profile: {
-					schemaVersion: 1,
+					schemaVersion: 2,
 					analyzerVersion: 'test',
 					status: 'needs-calibration',
 					createdAt: 1,
@@ -68,7 +68,7 @@ test('analysis is rendered as a clear activity list beside close calls', async (
 					sourceSnapshotHash: 'source-hash',
 					propositions: [{
 						id: 'punctuation-colon',
-						family: 'punctuation',
+						family: 'grammatical',
 						type: 'clause-boundary',
 						statement: 'Use colons to introduce concise explanations.',
 						instruction: 'Use a colon when the next clause directly explains the first.',
@@ -102,8 +102,8 @@ test('analysis is rendered as a clear activity list beside close calls', async (
 						updatedAt: 2,
 						completedAt: 2,
 						specialists: [
-							completedSpecialist('organization'),
-							{ ...completedSpecialist('language'), status: 'error', error: 'RAW PROVIDER STACK TRACE' },
+							completedSpecialist('lexis'),
+							{ ...completedSpecialist('grammar'), status: 'error', error: 'RAW PROVIDER STACK TRACE' },
 							completedSpecialist('discourse'),
 							completedSpecialist('synthesis')
 						]
@@ -125,8 +125,8 @@ test('analysis is rendered as a clear activity list beside close calls', async (
 	await page.getByRole('button', { name: 'Analyze', exact: true }).click();
 	const activityList = page.getByRole('list', { name: 'Analysis progress' });
 	await expect(activityList.getByRole('listitem')).toHaveCount(7);
-	await expect(activityList.getByText('Organization specialist')).toBeVisible();
-	await expect(activityList.getByText('Language specialist')).toBeVisible();
+	await expect(activityList.getByText('Lexis specialist')).toBeVisible();
+	await expect(activityList.getByText('Grammar specialist')).toBeVisible();
 	await expect(activityList.getByText('Needs attention')).toBeVisible();
 	await expect(page.getByText('RAW PROVIDER STACK TRACE')).toHaveCount(0);
 	await expect(page.getByRole('button', { name: /The result is clear: the shorter opening/ })).toBeVisible();

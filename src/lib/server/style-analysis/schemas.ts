@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { STYLE_FAMILIES } from '$lib/style-profile';
+import { normalizeStyleFamily, STYLE_FAMILIES } from '$lib/style-profile';
+
+const StyleFamilySchema = z.preprocess(
+	(value) => normalizeStyleFamily(value) ?? value,
+	z.enum(STYLE_FAMILIES)
+);
 
 /**
  * What the writing agent actually needs: the pattern, what to do about it, and
@@ -8,7 +13,8 @@ import { STYLE_FAMILIES } from '$lib/style-profile';
  * it better — an example either appears in the sources or it does not.
  */
 export const PropositionDraftSchema = z.object({
-	family: z.enum(STYLE_FAMILIES),
+	family: StyleFamilySchema,
+	propositionType: z.string().trim().min(1).max(100).optional(),
 	statement: z.string().trim().min(1).max(1000),
 	instruction: z.string().trim().min(1).max(1000),
 	examples: z.array(z.string().trim().min(1).max(2000)).min(1).max(8),
@@ -53,7 +59,7 @@ export const CalibrationRevisionSchema = z.object({
 
 export const FeatureMeasurementSchema = z.object({
 	id: z.string().min(1),
-	family: z.enum(STYLE_FAMILIES),
+	family: StyleFamilySchema,
 	label: z.string().min(1),
 	unit: z.enum(['count', 'ratio', 'per-1000-words', 'words', 'sentences', 'score']),
 	value: z.number(),
@@ -73,7 +79,7 @@ const SourceSpanSchema = z.object({
 });
 
 const FeatureOccurrenceSchema = z.object({
-	id: z.string().min(1), metricId: z.string().min(1), family: z.enum(STYLE_FAMILIES), sourceId: z.string().min(1),
+	id: z.string().min(1), metricId: z.string().min(1), family: StyleFamilySchema, sourceId: z.string().min(1),
 	start: z.number().int().nonnegative(), end: z.number().int().nonnegative(), text: z.string(),
 	value: z.union([z.number(), z.string(), z.boolean()]).optional(),
 	context: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])).optional()
@@ -89,6 +95,9 @@ export const StyleAnalysisReportSchema = z.object({
 		contentHash: z.string().min(1), wordCount: z.number().int().nonnegative()
 	})),
 	measurements: z.array(FeatureMeasurementSchema),
+	conventions: z.array(FeatureMeasurementSchema.omit({ family: true }).extend({
+		family: z.literal('conventions')
+	})).default([]),
 	occurrences: z.array(FeatureOccurrenceSchema),
 	examples: z.array(SourceSpanSchema)
 });
@@ -115,9 +124,12 @@ export const CalibrationTrialSchema = z.object({
 });
 
 const SpecialistRunStateSchema = z.object({
-	id: z.enum(['organization', 'language', 'discourse', 'synthesis']),
+	id: z.preprocess(
+		(value) => value === 'organization' ? 'grammar' : value === 'language' ? 'lexis' : value,
+		z.enum(['lexis', 'grammar', 'discourse', 'synthesis'])
+	),
 	status: z.enum(['pending', 'running', 'completed', 'error', 'cancelled']),
-	families: z.array(z.enum(STYLE_FAMILIES)),
+	families: z.array(StyleFamilySchema),
 	error: z.string().optional(),
 	startedAt: z.number().int().nonnegative().optional(),
 	completedAt: z.number().int().nonnegative().optional()

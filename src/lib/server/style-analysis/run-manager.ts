@@ -17,6 +17,7 @@ import {
 import type { ProviderEvent, ProviderId, ToolDefinition } from '$lib/server/providers/types';
 import { getProvider } from '$lib/server/providers';
 import { analyzeDocuments } from './analyze-style.mjs';
+import { rankSignatureNgrams } from './style-metrics.mjs';
 import {
 	materializeAllReferences,
 	normalizedDocumentFromMaterialized
@@ -39,7 +40,7 @@ import {
 import { compileAuthorStyleSkill } from './skill-compiler';
 import { appendStyleStudyEvent } from './study-log';
 import { appendRunLog } from './run-log-store';
-import { STYLE_FEATURE_REGISTRY } from './feature-registry';
+import { propositionTypeIsAllowed, STYLE_FEATURE_REGISTRY } from './feature-registry';
 import { isSelected, listStyleReferences } from '$lib/server/references';
 
 /** One line of a specialist's working trace, streamed as it happens. */
@@ -71,19 +72,19 @@ let activeRunId: string | null = null;
 
 const SPECIALISTS: Array<{ id: SpecialistRunState['id']; families: StyleFamily[]; label: string }> = [
 	{
-		id: 'organization',
-		label: 'organization specialist',
-		families: ['document-organization', 'section-structure', 'paragraph-structure', 'formatting']
+		id: 'lexis',
+		label: 'lexis specialist',
+		families: ['lexical']
 	},
 	{
-		id: 'language',
-		label: 'language specialist',
-		families: ['sentence-rhythm', 'grammar-voice', 'vocabulary-register', 'punctuation']
+		id: 'grammar',
+		label: 'grammar specialist',
+		families: ['grammatical']
 	},
 	{
 		id: 'discourse',
 		label: 'discourse specialist',
-		families: ['rhetorical-structure', 'evidence-citations']
+		families: ['figures', 'cohesion-context']
 	}
 ];
 
@@ -171,9 +172,13 @@ function draftJsonSchema() {
 				items: {
 					type: 'object',
 					additionalProperties: false,
-					required: ['family', 'statement', 'instruction', 'examples', 'contrast', 'confidence'],
+					required: ['family', 'propositionType', 'statement', 'instruction', 'examples', 'contrast', 'confidence'],
 					properties: {
 						family: { type: 'string' },
+						propositionType: {
+							type: 'string',
+							description: 'One allowed propositionTypes entry from the assigned family definition; use the checklist section when it fits.'
+						},
 						statement: {
 							type: 'string',
 							description: 'The habit in plain language, as you would tell a ghostwriter out loud. No writing-theory jargon.'
@@ -267,8 +272,15 @@ function reportSlice(report: StyleAnalysisReport, families: StyleFamily[]) {
 	};
 }
 
-function specialistSystemPrompt(families: StyleFamily[]): string {
-	return `You are briefing a ghostwriter who will imitate this author's prose. Work only on these families: ${families.join(', ')}.
+function specialistSystemPrompt(specialist: (typeof SPECIALISTS)[number]): string {
+	const assignment = specialist.id === 'lexis'
+		? `Your unit of analysis is the word and short phrase. Ask what words this person reaches for: plain or complex, formal or conversational, concrete or abstract, neutral or judgmental, common or specialized. Look for contractions, nominalizations, idioms, signature phrases, adjective and verb choices, hedges, boosters, and stance words. Do not make claims about sentence construction, punctuation, or paragraph linkage.`
+		: specialist.id === 'grammar'
+			? `Your unit of analysis is the sentence and clause. Ask how this person builds sentences: length and variation, coordination or subordination, openers, clause and phrase shape, tense, aspect, voice, function words, lists, parentheticals, and punctuation rhythm. Do not make claims about vocabulary as such or about links across paragraphs.`
+			: `Your unit of analysis is the paragraph and passage. Ask how the text hangs together and positions writer, reader, and other voices. Look for repetition and parallelism, sound patterns, simile and analogy, connectives, pronoun reference, lexical chains, reader address, first person, stance, quotation, citation, and reporting verbs. Do not make claims about isolated word choice or sentence-internal clause construction.`;
+	return `You are the ${specialist.label}, briefing a ghostwriter who will imitate this author's prose. Work only on these families: ${specialist.families.join(', ')}.
+
+${assignment}
 
 You get measurements that fired, the author's common words, and the source texts. The measurements are a hint for where to look — read the writing itself before you decide anything.
 
@@ -309,22 +321,9 @@ export function corpusText(documents: NormalizedDocument[]): string {
 	return documents.map((document) => document.text).join('\n\n');
 }
 
-/** Vocabulary carries voice, so specialists see the author's words up front. */
+/** Recurring phrases ranked against the vendored Brown Corpus background table. */
 function characteristicVocabulary(documents: NormalizedDocument[], limit = 60): string[] {
-	const counts = new Map<string, number>();
-	for (const document of documents) {
-		for (const token of document.tokens) {
-			if (token.kind !== 'word') continue;
-			const word = token.normalized.toLowerCase();
-			if (word.length < 5) continue;
-			counts.set(word, (counts.get(word) ?? 0) + 1);
-		}
-	}
-	return [...counts.entries()]
-		.filter(([, count]) => count > 1)
-		.sort((a, b) => b[1] - a[1])
-		.slice(0, limit)
-		.map(([word]) => word);
+	return rankSignatureNgrams(documents, limit).map(({ phrase }: { phrase: string }) => phrase);
 }
 
 /** Enough of each source to judge how it is written, without flooding context.
@@ -354,7 +353,7 @@ function specialistPrompt(
 		'Measurements that fired for your families (zeros already removed — treat these as hints, not the answer):',
 		JSON.stringify(reportSlice(report, families)),
 		'',
-		`Words this author reuses: ${vocabulary.join(', ')}`,
+		`Signature phrases this author reuses (2–4 grams ranked against background prose): ${vocabulary.join(', ')}`,
 		'',
 		'The writing. Each source is labeled with what the author says it is.',
 		'Scan for habits in your families. Do not summarize the sources back. Submit propositions:',
@@ -521,7 +520,7 @@ async function runSpecialist(
 	const execute = async () => runStructuredStyleAgent<SpecialistSubmission>({
 		providerId: run.state.provider as ProviderId,
 		model: run.state.model,
-		systemPrompt: specialistSystemPrompt(specialist.families),
+		systemPrompt: specialistSystemPrompt(specialist),
 		prompt: specialistPrompt(report, specialist.families, vocabulary, excerpts),
 		toolName: 'submit_style_families',
 		toolDescription: 'Submit all grounded style propositions for the assigned feature families.',
@@ -532,6 +531,9 @@ async function runSpecialist(
 			const parsed = SpecialistSubmissionSchema.parse(value);
 			for (const draft of parsed.propositions) {
 				if (!specialist.families.includes(draft.family)) throw new Error(`Family ${draft.family} is outside this specialist assignment`);
+				if (draft.propositionType && !propositionTypeIsAllowed(draft.family, draft.propositionType)) {
+					throw new Error(`Proposition type ${draft.propositionType} is outside family ${draft.family}`);
+				}
 				validateDraftGrounding(draft, corpus);
 			}
 			return parsed;
@@ -582,7 +584,12 @@ async function runSynthesis(
 			onEvent: (event) => forwardSpecialistEvent(run, 'synthesis', event),
 			parse: (value) => {
 				const parsed = SynthesisSubmissionSchema.parse(value);
-				for (const draft of parsed.propositions) validateDraftGrounding(draft, corpus);
+				for (const draft of parsed.propositions) {
+					if (draft.propositionType && !propositionTypeIsAllowed(draft.family, draft.propositionType)) {
+						throw new Error(`Proposition type ${draft.propositionType} is outside family ${draft.family}`);
+					}
+					validateDraftGrounding(draft, corpus);
+				}
 				return parsed;
 			},
 			abortSignal: run.abortController.signal

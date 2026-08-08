@@ -18,29 +18,30 @@ let writeStyleProfile: typeof import('./profile-store').writeStyleProfile;
 let writeStyleReport: typeof import('./profile-store').writeStyleReport;
 
 const report: StyleAnalysisReport = {
-	schemaVersion: 1,
-	analyzerVersion: '1.0.0',
+	schemaVersion: 2,
+	analyzerVersion: '2.0.0',
 	createdAt: 1,
 	sourceSnapshotHash: 'snapshot',
 	documents: [{ sourceId: 'source', role: 'authored', format: 'text', contentHash: 'hash', wordCount: 20 }],
 	measurements: [{
-		id: 'sentence-rhythm.words', family: 'sentence-rhythm', label: 'Sentence words', unit: 'words', value: 10,
+		id: 'grammatical.b2.words-mean', family: 'grammatical', label: 'Sentence words', unit: 'words', value: 10,
 		count: 4, sourceCount: 1, roleValues: { authored: 10 }, reliability: 0.9, occurrenceIds: []
 	}],
+	conventions: [],
 	occurrences: [],
-	examples: [{ id: 'example', sourceId: 'source', start: 0, end: 12, text: 'Example text.', kind: 'sentence-rhythm' }]
+	examples: [{ id: 'example', sourceId: 'source', start: 0, end: 12, text: 'Example text.', kind: 'grammatical' }]
 };
 
 function baseProfile(): StyleProfile {
 	return {
-		schemaVersion: 1,
-		analyzerVersion: '1.0.0',
+		schemaVersion: 2,
+		analyzerVersion: '2.0.0',
 		status: 'needs-calibration',
 		createdAt: 1,
 		updatedAt: 1,
 		sourceSnapshotHash: 'snapshot',
 		propositions: [{
-			id: 'proposition', family: 'sentence-rhythm', statement: 'The author uses a measured range.',
+			id: 'proposition', family: 'grammatical', statement: 'The author uses a measured range.',
 			instruction: 'Use the measured sentence range.', examples: ['A grounded example sentence.'],
 			confidence: 0.7, status: 'pending', createdAt: 1, updatedAt: 1
 		}],

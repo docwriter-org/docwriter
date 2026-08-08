@@ -26,6 +26,21 @@ export const STYLE_PROFILE_FILE = join(DOCWRITER_DIR, 'style-profile.json');
 export const STYLE_ANALYSIS_DIR = join(DOCWRITER_DIR, 'style-analysis');
 export const STYLE_REPORT_FILE = join(STYLE_ANALYSIS_DIR, 'report.json');
 
+function migrateStoredProfile(value: unknown): unknown {
+	if (!value || typeof value !== 'object') return value;
+	const profile = structuredClone(value) as Record<string, any>;
+	if (profile.schemaVersion !== 1) return profile;
+	profile.schemaVersion = STYLE_PROFILE_SCHEMA_VERSION;
+	profile.analyzerVersion = STYLE_ANALYZER_VERSION;
+	if (profile.lastRun?.specialists) {
+		profile.lastRun.specialists = profile.lastRun.specialists.map((specialist: Record<string, any>) => ({
+			...specialist,
+			id: specialist.id === 'organization' ? 'grammar' : specialist.id === 'language' ? 'lexis' : specialist.id
+		}));
+	}
+	return profile;
+}
+
 function ensureStyleAnalysisDir() {
 	ensureDocWriterDir();
 	if (!existsSync(STYLE_ANALYSIS_DIR)) mkdirSync(STYLE_ANALYSIS_DIR, { recursive: true });
@@ -34,7 +49,7 @@ function ensureStyleAnalysisDir() {
 export function readStyleProfile(): StyleProfile | null {
 	if (!existsSync(STYLE_PROFILE_FILE)) return null;
 	try {
-		const value = StyleProfileSchema.parse(JSON.parse(readFileSync(STYLE_PROFILE_FILE, 'utf8')));
+		const value = StyleProfileSchema.parse(migrateStoredProfile(JSON.parse(readFileSync(STYLE_PROFILE_FILE, 'utf8'))));
 		if (value.schemaVersion !== STYLE_PROFILE_SCHEMA_VERSION) return null;
 		return value as StyleProfile;
 	} catch {
@@ -184,6 +199,7 @@ export function propositionFromDraft(
 	return {
 		id: propositionId(draft.family, draft.instruction, index),
 		family: draft.family,
+		...(draft.propositionType ? { propositionType: draft.propositionType } : {}),
 		statement: draft.statement,
 		instruction: draft.instruction,
 		examples,

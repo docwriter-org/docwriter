@@ -1,20 +1,29 @@
-export const STYLE_PROFILE_SCHEMA_VERSION = 1;
-export const STYLE_ANALYZER_VERSION = '1.0.0';
+export const STYLE_PROFILE_SCHEMA_VERSION = 2;
+export const STYLE_ANALYZER_VERSION = '2.0.0';
 
 export const STYLE_FAMILIES = [
-	'document-organization',
-	'section-structure',
-	'paragraph-structure',
-	'sentence-rhythm',
-	'grammar-voice',
-	'vocabulary-register',
-	'punctuation',
-	'rhetorical-structure',
-	'evidence-citations',
-	'formatting'
+	'lexical',
+	'grammatical',
+	'figures',
+	'cohesion-context'
 ] as const;
 
 export type StyleFamily = (typeof STYLE_FAMILIES)[number];
+
+/** Translate profiles compiled by the first author-style implementation. */
+export function normalizeStyleFamily(value: unknown): StyleFamily | null {
+	if (STYLE_FAMILIES.includes(value as StyleFamily)) return value as StyleFamily;
+	if (value === 'vocabulary-register') return 'lexical';
+	if (['sentence-rhythm', 'grammar-voice', 'punctuation'].includes(String(value))) return 'grammatical';
+	if (value === 'rhetorical-structure') return 'figures';
+	if (value === 'evidence-citations') return 'cohesion-context';
+	// The old organization families were layout guidance. Old imported
+	// propositions remain readable, but new runs measure them as conventions.
+	if (['document-organization', 'section-structure', 'paragraph-structure', 'formatting'].includes(String(value))) {
+		return 'grammatical';
+	}
+	return null;
+}
 export type StyleReferenceRole = 'authored' | 'inspiration';
 export type MaterializationStatus = 'pending' | 'ready' | 'stale' | 'error';
 export type StyleProfileStatus =
@@ -118,6 +127,10 @@ export interface FeatureMeasurement {
 	occurrenceIds: string[];
 }
 
+export interface ConventionMeasurement extends Omit<FeatureMeasurement, 'family'> {
+	family: 'conventions';
+}
+
 export interface StyleAnalysisReport {
 	schemaVersion: number;
 	analyzerVersion: string;
@@ -131,6 +144,8 @@ export interface StyleAnalysisReport {
 		wordCount: number;
 	}>;
 	measurements: FeatureMeasurement[];
+	/** Layout/venue measurements retained for the compiled skill, never sent to specialists. */
+	conventions: ConventionMeasurement[];
 	occurrences: FeatureOccurrence[];
 	examples: SourceSpan[];
 }
@@ -146,6 +161,8 @@ export type PropositionStatus =
 export interface StyleProposition {
 	id: string;
 	family: StyleFamily;
+	/** Leech & Short checklist section or a narrower allowed registry type. */
+	propositionType?: string;
 	/** The habit in plain language, as you'd tell a ghostwriter out loud. */
 	statement: string;
 	/** What to do when writing, as a plain imperative. */
@@ -210,7 +227,7 @@ export interface CalibrationTrial {
 }
 
 export interface SpecialistRunState {
-	id: 'organization' | 'language' | 'discourse' | 'synthesis';
+	id: 'lexis' | 'grammar' | 'discourse' | 'synthesis';
 	status: 'pending' | 'running' | 'completed' | 'error' | 'cancelled';
 	families: StyleFamily[];
 	error?: string;

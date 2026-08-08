@@ -9,6 +9,9 @@ import { isSelected, listStyleReferences, REFERENCES_CACHE_DIR } from '$lib/serv
 import { skillVersionFor, snapshotSkillVersion } from './skill-versions';
 import { normalizeForMatch } from './profile-store';
 import analyzerScript from './analyze-style.mjs?raw';
+import styleMetricsScript from './style-metrics.mjs?raw';
+import styleMetricRegistryScript from './style-metric-registry.mjs?raw';
+import styleData from './style-data.json?raw';
 
 export const AUTHOR_STYLE_SKILL_DIR = join(DOCWRITER_DIR, 'skills', 'author-style');
 const MANAGED_BY = 'docwriter-style-profile';
@@ -176,6 +179,22 @@ function profileMarkdown(profile: StyleProfile, sentenceIndex = makeSentenceInde
 	return `${lines.join('\n').trim()}\n`;
 }
 
+function conventionsMarkdown(report: StyleAnalysisReport): string {
+	const conventions = report.conventions.filter((item) => item.sourceCount > 0);
+	if (!conventions.length) return '';
+	const lines = [
+		'## Document conventions',
+		'',
+		'These describe layout and venue habits rather than the author’s prose voice. Match them when the current document uses the same kind of format.',
+		''
+	];
+	for (const item of conventions) {
+		const value = Number.isInteger(item.value) ? String(item.value) : item.value.toFixed(2).replace(/\.00$/, '');
+		lines.push(`* ${item.label}: ${value}`, '');
+	}
+	return `${lines.join('\n').trim()}\n`;
+}
+
 function examplesMarkdown(profile: StyleProfile, sentenceIndex = makeSentenceIndex()): string {
 	const lines = [
 		'# Grounded examples',
@@ -269,7 +288,10 @@ function assertValidSkill(skillDir: string) {
 		'references/propositions.json',
 		'references/examples.md',
 		'references/source-manifest.json',
-		'scripts/analyze-style.mjs'
+		'scripts/analyze-style.mjs',
+		'scripts/style-metrics.mjs',
+		'scripts/style-metric-registry.mjs',
+		'scripts/style-data.json'
 	]) {
 		if (!existsSync(join(skillDir, required))) throw new Error(`Generated author skill is missing ${required}`);
 	}
@@ -318,7 +340,7 @@ export function compileAuthorStyleSkill(
 	// One index and one rendered body for the whole compile: SKILL.md and
 	// references/style-profile.md carry the same text.
 	const sentenceIndex = makeSentenceIndex();
-	const profileBody = profileMarkdown(profile, sentenceIndex);
+	const profileBody = `${profileMarkdown(profile, sentenceIndex).trim()}\n\n${conventionsMarkdown(report)}`.trim();
 	try {
 		writeTextAtomic(join(staging, 'SKILL.md'), skillMarkdown(target.id, profileBody.trim(), skillVersion));
 		writeTextAtomic(join(staging, 'agents', 'openai.yaml'), openAiYaml(target.id));
@@ -327,7 +349,8 @@ export function compileAuthorStyleSkill(
 		writeJsonAtomic(join(staging, 'references', 'metrics.json'), {
 			schemaVersion: report.schemaVersion,
 			analyzerVersion: report.analyzerVersion,
-			measurements: report.measurements
+			measurements: report.measurements,
+			conventions: report.conventions
 		});
 		writeJsonAtomic(join(staging, 'references', 'propositions.json'), {
 			schemaVersion: profile.schemaVersion,
@@ -336,6 +359,9 @@ export function compileAuthorStyleSkill(
 		writeTextAtomic(join(staging, 'references', 'examples.md'), examplesMarkdown(profile, sentenceIndex));
 		writeJsonAtomic(join(staging, 'references', 'source-manifest.json'), sourceManifest(report, skillVersion));
 		writeFileSync(join(staging, 'scripts', 'analyze-style.mjs'), analyzerScript, 'utf8');
+		writeFileSync(join(staging, 'scripts', 'style-metrics.mjs'), styleMetricsScript, 'utf8');
+		writeFileSync(join(staging, 'scripts', 'style-metric-registry.mjs'), styleMetricRegistryScript, 'utf8');
+		writeFileSync(join(staging, 'scripts', 'style-data.json'), styleData, 'utf8');
 		assertValidSkill(staging);
 		swapStagedSkillIntoPlace(staging, skillDir);
 	} catch (error) {

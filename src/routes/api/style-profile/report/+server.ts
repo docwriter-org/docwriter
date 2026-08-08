@@ -11,8 +11,11 @@ import { isMeasured } from '$lib/server/style-analysis/run-manager';
 export const GET: RequestHandler = async () => {
 	const report = readStyleReport();
 	if (!report) return json({ measurements: [] });
+	const conventions = report.conventions.filter(
+		(measurement) => measurement.sourceCount > 0 && measurement.value !== 0
+	);
 	return json({
-		measurements: report.measurements.filter(isMeasured).map((measurement) => ({
+		measurements: [...report.measurements.filter(isMeasured), ...conventions].map((measurement) => ({
 			id: measurement.id,
 			family: measurement.family,
 			label: measurement.label,

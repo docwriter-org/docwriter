@@ -34,14 +34,13 @@ describe('isMeasured', () => {
 
 		// The bug this guards: `count` is only ever set for punctuation, so
 		// testing it for every family left punctuation as the only survivor and
-		// briefed the organization and discourse specialists on nothing.
+		// briefed two specialists on nothing.
 		expect(families.size).toBeGreaterThan(1);
 		for (const family of [
-			'document-organization',
-			'sentence-rhythm',
-			'grammar-voice',
-			'vocabulary-register',
-			'punctuation'
+			'lexical',
+			'grammatical',
+			'figures',
+			'cohesion-context'
 		]) {
 			expect(families).toContain(family);
 		}
@@ -54,14 +53,14 @@ describe('isMeasured', () => {
 			expect(measurement.value).not.toBe(0);
 		}
 		// Nothing in the sample is a table, so that metric must not survive.
-		const tables = report.measurements.find((m) => m.id === 'formatting.table-density');
-		expect(tables && isMeasured(tables)).toBe(false);
+		const tables = report.conventions.find((m) => m.id === 'formatting.table-density');
+		expect(tables?.sourceCount).toBe(0);
 	});
 
 	it('counts author-year citations so the discourse specialist has evidence', () => {
 		const report = reportFor(SAMPLE);
 		const citations = report.measurements.find(
-			(measurement) => measurement.id === 'evidence-citations.citation-per-1000'
+			(measurement) => measurement.id === 'cohesion.d2.citation-per-1000'
 		);
 		expect(citations && isMeasured(citations)).toBe(true);
 	});

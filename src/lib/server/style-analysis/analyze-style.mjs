@@ -1,25 +1,13 @@
 // @ts-nocheck
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
+import { computeCorpusStyleMetrics, computeStyleMetrics } from './style-metrics.mjs';
 
-export const ANALYZER_VERSION = '1.0.0';
+export const ANALYZER_VERSION = '2.0.0';
 
 const WORD_RE = /[\p{L}\p{M}]+(?:['’][\p{L}\p{M}]+)*|\d+(?:[.,]\d+)*/gu;
 const TOKEN_RE = /[\p{L}\p{M}]+(?:['’][\p{L}\p{M}]+)*|\d+(?:[.,]\d+)*|[^\s]/gu;
-const TRANSITIONS = /^(however|therefore|moreover|furthermore|instead|for example|for instance|in contrast|in addition|finally|first|second|overall|in sum)\b/i;
 const CONJUNCTIONS = new Set(['and', 'but', 'or', 'yet', 'so', 'because', 'although', 'while', 'whereas']);
-const HEDGES = new Set(['perhaps', 'possibly', 'probably', 'likely', 'roughly', 'approximately', 'generally', 'usually', 'often', 'sometimes', 'seems', 'appears']);
-const MODALS = new Set(['can', 'could', 'may', 'might', 'must', 'shall', 'should', 'will', 'would']);
-const ATTRIBUTION = new Set(['argues', 'claims', 'finds', 'found', 'shows', 'showed', 'reports', 'reported', 'notes', 'noted', 'states', 'stated', 'suggests', 'suggested']);
-const RHETORIC = {
-	contrast: ['however', 'but', 'yet', 'whereas', 'in contrast', 'on the other hand'],
-	cause: ['because', 'therefore', 'thus', 'consequently', 'as a result'],
-	concession: ['although', 'though', 'even though', 'despite', 'nevertheless'],
-	example: ['for example', 'for instance', 'e.g.', 'such as'],
-	summary: ['overall', 'in sum', 'to summarize', 'in conclusion'],
-	addition: ['moreover', 'furthermore', 'in addition', 'also'],
-	claim: ['we argue', 'we show', 'this shows', 'this suggests', 'the result', 'the evidence']
-};
 
 const FUNCTION_WORDS = new Set([
 	'a', 'an', 'and', 'are', 'as', 'at', 'be', 'because', 'been', 'but', 'by', 'for', 'from', 'had', 'has',
@@ -107,13 +95,6 @@ function correlationWithPosition(values) {
 		* positions.reduce((sum, value) => sum + (value - meanPosition) ** 2, 0)
 	);
 	return denominator ? numerator / denominator : 0;
-}
-
-function estimatedSyllables(word) {
-	const normalized = word.toLocaleLowerCase().replace(/[^a-z]/g, '');
-	if (!normalized) return 0;
-	const groups = normalized.replace(/e$/, '').match(/[aeiouy]+/g)?.length ?? 0;
-	return Math.max(1, groups);
 }
 
 function titleCaseShare(text) {
@@ -565,15 +546,6 @@ function countMatches(text, regex) {
 	return [...text.matchAll(regex)].length;
 }
 
-/**
- * Numeric ([12]), author-year ((Shankar et al., 2024)) and LaTeX (\cite{...})
- * citations. The name after "et al." / "and" is optional — requiring it meant
- * the commonest form of all, "(Author et al., 2024)", never matched, so every
- * evidence-citations metric read as zero.
- */
-const CITATION_PATTERN =
-	/\[[0-9,;\s-]+\]|\([A-Z][A-Za-z'’.-]+(?:\s+(?:et al\.|and)(?:\s+[A-Z][A-Za-z'’.-]+)?)?,?\s+\d{4}[a-z]?\)|\\cite\w*\{[^}]+\}/g;
-
 function movingTypeTokenRatio(tokens, window = 50) {
 	if (!tokens.length) return 0;
 	if (tokens.length <= window) return new Set(tokens).size / tokens.length;
@@ -586,7 +558,7 @@ function movingTypeTokenRatio(tokens, window = 50) {
 	return windows ? total / windows : 0;
 }
 
-function metricSpecForDocument(document, punctuation) {
+function supportingMetricsForDocument(document, punctuation) {
 	const wordTokens = document.tokens.filter((token) => token.kind === 'word');
 	const normalizedWords = wordTokens.map((token) => token.normalized);
 	const wordCount = normalizedWords.length;
@@ -595,29 +567,43 @@ function metricSpecForDocument(document, punctuation) {
 	const sentences = document.sentences;
 	const sentenceLengths = sentences.map((sentence) => sentence.wordCount);
 	const paragraphLengths = paragraphs.map((paragraph) => paragraph.wordCount);
+	const paragraphCount = Math.max(1, paragraphs.length);
+	const paragraphSentenceLengths = paragraphs.map((paragraph) => paragraph.sentenceIds
+		.map((sentenceId) => sentences.find((sentence) => sentence.id === sentenceId)?.wordCount ?? 0)
+		.filter(Boolean));
+	const punctuationRates = {};
+	for (const occurrence of punctuation) {
+		punctuationRates[occurrence.metricId] = (punctuationRates[occurrence.metricId] ?? 0) + per1000(1);
+	}
+
+	const styleSupport = {
+		mattr: movingTypeTokenRatio(normalizedWords),
+		abbreviationPer1000: per1000(countMatches(document.text, /\b(?:[A-Z]{2,}|(?:[A-Z]\.){2,})\b/g)),
+		sentenceWords: {
+			p10: percentile(sentenceLengths, 0.1),
+			median: percentile(sentenceLengths, 0.5),
+			p90: percentile(sentenceLengths, 0.9)
+		},
+		paragraphs: {
+			'paragraph-words': mean(paragraphLengths),
+			'paragraph-sentences': mean(paragraphs.map((paragraph) => paragraph.sentenceIds.length)),
+			'paragraph-clauses': mean(paragraphs.map((paragraph) => paragraph.sentenceIds.reduce(
+				(sum, sentenceId) => sum + (sentences.find((sentence) => sentence.id === sentenceId)?.clauseIds.length ?? 0),
+				0
+			))),
+			'paragraph-opening-words': mean(paragraphSentenceLengths.map((lengths) => lengths[0] ?? 0)),
+			'paragraph-closing-words': mean(paragraphSentenceLengths.map((lengths) => lengths.at(-1) ?? 0)),
+			'paragraph-length-slope': mean(paragraphSentenceLengths.map(slope)),
+			'paragraph-position-correlation': correlationWithPosition(paragraphLengths),
+			'short-paragraph-rate': paragraphLengths.filter((value) => value <= 40).length / paragraphCount
+		},
+		punctuationRates
+	};
+
 	const headingBlocks = document.blocks.filter((block) => block.kind === 'heading');
 	const listBlocks = document.blocks.filter((block) => block.kind === 'list-item');
 	const tableBlocks = document.blocks.filter((block) => block.kind === 'table');
 	const blockCount = Math.max(1, document.blocks.length);
-	const sentenceCount = Math.max(1, sentences.length);
-	const paragraphCount = Math.max(1, paragraphs.length);
-	const counts = (set) => normalizedWords.filter((word) => set.has(word)).length;
-	const firstPerson = new Set(['i', 'me', 'my', 'mine', 'we', 'us', 'our', 'ours']);
-	const secondPerson = new Set(['you', 'your', 'yours']);
-	const thirdPerson = new Set(['he', 'she', 'they', 'him', 'her', 'them', 'his', 'their', 'theirs']);
-	const contractionCount = wordTokens.filter((token) => /['’]/.test(token.text)).length;
-	const passiveCount = countMatches(document.text, /\b(?:am|is|are|was|were|be|been|being)\s+(?:\w+ly\s+)?\w+(?:ed|en)\b/giu);
-	const nominalizationCount = normalizedWords.filter((word) => /(?:tion|sion|ment|ness|ity|ance|ence)$/.test(word)).length;
-	const abbreviationCount = countMatches(document.text, /\b(?:[A-Z]{2,}|(?:[A-Z]\.){2,})\b/g);
-	const transitionCount = paragraphs.filter((paragraph) => TRANSITIONS.test(paragraph.text)).length;
-	const emphasisCount = countMatches(document.text, /(?:\*\*|__)[^\n]+?(?:\*\*|__)/g);
-	const inlineCodeCount = countMatches(document.text, /`[^`\n]+`/g);
-	const linkCount = countMatches(document.text, /\[[^\]]+\]\([^)]+\)|https?:\/\/\S+/g);
-	const citationCount = countMatches(document.text, CITATION_PATTERN);
-	const footnoteCount = countMatches(document.text, /\[\^[^\]]+\]|\\footnote\{/g);
-	const quoteCount = countMatches(document.text, /(?:"[^"\n]+"|“[^”\n]+”)/g);
-	const attributionCount = counts(ATTRIBUTION);
-	const clausesPerSentence = sentences.map((sentence) => sentence.clauseIds.length);
 	const sectionWordCounts = document.sections.map((section) => words(section.text).length);
 	const firstSectionWords = sectionWordCounts[0] ?? paragraphLengths[0] ?? 0;
 	const lastSectionWords = sectionWordCounts.at(-1) ?? paragraphLengths.at(-1) ?? 0;
@@ -630,31 +616,11 @@ function metricSpecForDocument(document, punctuation) {
 			closing: words(blocks.at(-1)?.text ?? '').length
 		};
 	});
-	const paragraphSentenceLengths = paragraphs.map((paragraph) => paragraph.sentenceIds
-		.map((sentenceId) => sentences.find((sentence) => sentence.id === sentenceId)?.wordCount ?? 0)
-		.filter(Boolean));
-	const consecutiveSentenceDifferences = sentenceLengths.slice(1).map((value, index) => Math.abs(value - sentenceLengths[index]));
-	const alternatingSentenceRate = sentenceLengths.length > 1
-		? sentenceLengths.slice(1).filter((value, index) => (value <= 10) !== (sentenceLengths[index] <= 10)).length / (sentenceLengths.length - 1)
-		: 0;
-	const pastTenseCount = normalizedWords.filter((word) => /ed$/.test(word) || ['was', 'were', 'had', 'did'].includes(word)).length;
-	const presentTenseCount = normalizedWords.filter((word) => ['am', 'is', 'are', 'has', 'have', 'do', 'does'].includes(word)).length;
-	const imperativeCount = sentences.filter((sentence) => /^(?:use|write|keep|avoid|choose|add|remove|make|run|check|set|start|end|explain|show|state)\b/i.test(sentence.text)).length;
-	const contentWords = normalizedWords.filter((word) => !FUNCTION_WORDS.has(word) && word.length > 2);
-	const contentFrequencies = new Map();
-	for (const word of contentWords) contentFrequencies.set(word, (contentFrequencies.get(word) ?? 0) + 1);
-	const repeatedContentShare = contentWords.length ? Math.max(0, ...contentFrequencies.values()) / contentWords.length : 0;
-	const discourseMarkerCount = Object.values(RHETORIC).flat().reduce((sum, phrase) =>
-		sum + countMatches(document.text, new RegExp(`\\b${phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'giu')), 0);
-	const citationMatches = [...document.text.matchAll(CITATION_PATTERN)];
-	const citationEndRate = citationMatches.length ? citationMatches.filter((match) => {
-		const sentence = containingSentence(document, match.index ?? 0);
-		return sentence ? ((match.index ?? 0) - sentence.start) / Math.max(1, sentence.text.length) >= 0.55 : false;
-	}).length / citationMatches.length : 0;
 	const titleCaseRates = headingBlocks.map((block) => titleCaseShare(block.text));
-	const sentenceCaseRate = headingBlocks.length ? headingBlocks.filter((block) => /^\p{Lu}[^\n]*$/u.test(block.text) && titleCaseShare(block.text) < 0.8).length / headingBlocks.length : 0;
-	const allCapsCount = wordTokens.filter((token) => token.text.length > 1 && /^\p{Lu}+$/u.test(token.text)).length;
-	const spec = {
+	const sentenceCaseRate = headingBlocks.length
+		? headingBlocks.filter((block) => /^\p{Lu}[^\n]*$/u.test(block.text) && titleCaseShare(block.text) < 0.8).length / headingBlocks.length
+		: 0;
+	const conventionSpec = {
 		'document-organization.section-count': document.sections.length,
 		'document-organization.block-count': document.blocks.length,
 		'document-organization.paragraph-count': paragraphs.length,
@@ -673,97 +639,37 @@ function metricSpecForDocument(document, punctuation) {
 		'section-structure.opening-block-words': mean(sectionEdgeBlocks.map((edge) => edge.opening)),
 		'section-structure.closing-block-words': mean(sectionEdgeBlocks.map((edge) => edge.closing)),
 		'section-structure.paragraphs-per-section': document.sections.length ? paragraphs.length / document.sections.length : paragraphs.length,
-		'section-structure.transition-opening-rate': transitionCount / paragraphCount,
-		'paragraph-structure.words': mean(paragraphLengths),
-		'paragraph-structure.sentences': mean(paragraphs.map((paragraph) => paragraph.sentenceIds.length)),
-		'paragraph-structure.clauses': mean(paragraphs.map((paragraph) => paragraph.sentenceIds.reduce((sum, sentenceId) => sum + (sentences.find((sentence) => sentence.id === sentenceId)?.clauseIds.length ?? 0), 0))),
-		'paragraph-structure.opening-sentence-words': mean(paragraphSentenceLengths.map((lengths) => lengths[0] ?? 0)),
-		'paragraph-structure.closing-sentence-words': mean(paragraphSentenceLengths.map((lengths) => lengths.at(-1) ?? 0)),
-		'paragraph-structure.sentence-length-slope': mean(paragraphSentenceLengths.map(slope)),
-		'paragraph-structure.length-position-correlation': correlationWithPosition(paragraphLengths),
-		'paragraph-structure.short-rate': paragraphLengths.filter((value) => value <= 40).length / paragraphCount,
-		'sentence-rhythm.words': mean(sentenceLengths),
-		'sentence-rhythm.words-p10': percentile(sentenceLengths, 0.1),
-		'sentence-rhythm.words-median': percentile(sentenceLengths, 0.5),
-		'sentence-rhythm.words-p90': percentile(sentenceLengths, 0.9),
-		'sentence-rhythm.length-variation': distribution(sentenceLengths).mad,
-		'sentence-rhythm.consecutive-length-difference': mean(consecutiveSentenceDifferences),
-		'sentence-rhythm.short-long-alternation-rate': alternatingSentenceRate,
-		'sentence-rhythm.clauses': mean(clausesPerSentence),
-		'sentence-rhythm.short-sentence-rate': sentences.filter((sentence) => sentence.wordCount <= 8).length / sentenceCount,
-		'sentence-rhythm.long-sentence-rate': sentences.filter((sentence) => sentence.wordCount >= 25).length / sentenceCount,
-		'sentence-rhythm.question-rate': sentences.filter((sentence) => /\?\s*$/.test(sentence.text)).length / sentenceCount,
-		'sentence-rhythm.fragment-rate': sentences.filter((sentence) => sentence.wordCount <= 4 && !/[.!?]\s*$/.test(sentence.text)).length / sentenceCount,
-		'grammar-voice.first-person-per-1000': per1000(counts(firstPerson)),
-		'grammar-voice.second-person-per-1000': per1000(counts(secondPerson)),
-		'grammar-voice.third-person-per-1000': per1000(counts(thirdPerson)),
-		'grammar-voice.modal-per-1000': per1000(counts(MODALS)),
-		'grammar-voice.hedge-per-1000': per1000(counts(HEDGES)),
-		'grammar-voice.contraction-per-1000': per1000(contractionCount),
-		'grammar-voice.passive-proxy-per-1000': per1000(passiveCount),
-		'grammar-voice.past-tense-proxy-per-1000': per1000(pastTenseCount),
-		'grammar-voice.present-tense-proxy-per-1000': per1000(presentTenseCount),
-		'grammar-voice.future-signal-per-1000': per1000(normalizedWords.filter((word) => word === 'will' || word === 'shall').length),
-		'grammar-voice.imperative-signal-rate': imperativeCount / sentenceCount,
-		'vocabulary-register.mattr': movingTypeTokenRatio(normalizedWords),
-		'vocabulary-register.word-characters': mean(wordTokens.map((token) => token.text.length)),
-		'vocabulary-register.syllables-per-word': mean(wordTokens.map((token) => estimatedSyllables(token.text))),
-		'vocabulary-register.lexical-density': wordCount ? contentWords.length / wordCount : 0,
-		'vocabulary-register.repeated-content-share': repeatedContentShare,
-		'vocabulary-register.long-word-rate': wordTokens.filter((token) => token.text.length >= 10).length / Math.max(1, wordTokens.length),
-		'vocabulary-register.nominalization-per-1000': per1000(nominalizationCount),
-		'vocabulary-register.abbreviation-per-1000': per1000(abbreviationCount),
-		'vocabulary-register.discourse-marker-per-1000': per1000(discourseMarkerCount),
-		'rhetorical-structure.question-per-1000': per1000(sentences.filter((sentence) => /\?\s*$/.test(sentence.text)).length),
-		'evidence-citations.citation-per-1000': per1000(citationCount),
-		'evidence-citations.citation-position': citationMatches.length ? mean(citationMatches.map((match) => (match.index ?? 0) / Math.max(1, document.text.length))) : 0,
-		'evidence-citations.citation-ending-rate': citationEndRate,
-		'evidence-citations.attribution-per-1000': per1000(attributionCount),
-		'evidence-citations.quote-per-1000': per1000(quoteCount),
-		'evidence-citations.link-per-1000': per1000(linkCount),
-		'evidence-citations.footnote-per-1000': per1000(footnoteCount),
 		'formatting.heading-density': headingBlocks.length / blockCount,
 		'formatting.heading-title-case-rate': mean(titleCaseRates),
 		'formatting.heading-sentence-case-rate': sentenceCaseRate,
 		'formatting.list-density': listBlocks.length / blockCount,
 		'formatting.table-density': tableBlocks.length / blockCount,
 		'formatting.code-density': document.blocks.filter((block) => block.kind === 'code').length / blockCount,
-		'formatting.emphasis-per-1000': per1000(emphasisCount),
-		'formatting.inline-code-per-1000': per1000(inlineCodeCount),
+		'formatting.emphasis-per-1000': per1000(countMatches(document.text, /(?:\*\*|__)[^\n]+?(?:\*\*|__)/g)),
+		'formatting.inline-code-per-1000': per1000(countMatches(document.text, /`[^`\n]+`/g)),
 		'formatting.blockquote-density': document.blocks.filter((block) => block.kind === 'blockquote').length / blockCount,
 		'formatting.line-break-per-1000': per1000(countMatches(document.text, /\n/g)),
-		'formatting.all-caps-per-1000': per1000(allCapsCount)
+		'formatting.all-caps-per-1000': per1000(wordTokens.filter((token) => token.text.length > 1 && /^\p{Lu}+$/u.test(token.text)).length)
 	};
-	for (const [category, phrases] of Object.entries(RHETORIC)) {
-		const positions = phrases.flatMap((phrase) => [...document.text.matchAll(new RegExp(`\\b${phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'giu'))].map((match) => (match.index ?? 0) / Math.max(1, document.text.length)));
-		spec[`rhetorical-structure.${category}-per-1000`] = per1000(positions.length);
-		spec[`rhetorical-structure.${category}-position`] = positions.length ? mean(positions) : 0;
-	}
-	for (const occurrence of punctuation) {
-		spec[occurrence.metricId] = (spec[occurrence.metricId] ?? 0) + per1000(1);
-	}
-	return { spec, sentenceLengths, paragraphLengths, wordCount };
+	return { styleSupport, conventionSpec };
 }
 
 const FAMILY_LABELS = {
+	lexical: 'Lexis',
+	grammatical: 'Grammar',
+	figures: 'Figures',
+	cohesion: 'Cohesion and context',
 	'document-organization': 'Document organization',
 	'section-structure': 'Section structure',
-	'paragraph-structure': 'Paragraph structure',
-	'sentence-rhythm': 'Sentence and rhythm',
-	'grammar-voice': 'Grammar and voice',
-	'vocabulary-register': 'Vocabulary and register',
-	punctuation: 'Punctuation',
-	'rhetorical-structure': 'Rhetorical structure',
-	'evidence-citations': 'Evidence and citations',
 	formatting: 'Formatting'
 };
 
 function metricFamily(metricId) {
-	return metricId.split('.')[0];
+	return metricId.startsWith('cohesion.') ? 'cohesion-context' : metricId.split('.')[0];
 }
 
 function metricUnit(metricId) {
-	if (metricId.includes('per-1000') || metricId.startsWith('punctuation.')) return 'per-1000-words';
+	if (metricId.includes('per-1000') || metricId.startsWith('grammatical.punct.')) return 'per-1000-words';
 	if (metricId.includes('words') || metricId.includes('characters')) return 'words';
 	if (metricId.includes('count') || metricId.includes('depth')) return 'count';
 	if (metricId.includes('density') || metricId.includes('rate') || metricId.includes('mattr')) return 'ratio';
@@ -776,10 +682,13 @@ function metricLabel(metricId) {
 }
 
 function metricReliability(metricId) {
-	if (metricId.startsWith('rhetorical-structure.')) return 0.72;
+	if (metricId.startsWith('figures.')) return 0.72;
+	if (metricId === 'lexical.a4.transitive-rate') return 0.72;
+	if (metricId === 'grammatical.b5.heavy-premod-rate') return 0.76;
+	if (metricId === 'lexical.a3.attributive-rate' || metricId === 'grammatical.b6.passive-rate') return 0.82;
 	if (metricId.includes('passive-proxy')) return 0.7;
 	if (metricId.includes('nominalization')) return 0.8;
-	if (metricId.startsWith('punctuation.')) return 0.96;
+	if (metricId.startsWith('grammatical.punct.')) return 0.96;
 	return 0.9;
 }
 
@@ -809,24 +718,18 @@ function representativeExamples(document) {
 			kind: family
 		});
 	};
-	for (const block of document.blocks.filter((item) => item.kind === 'heading').slice(0, 3)) {
-		add('document-organization', block, 'heading');
-		add('section-structure', block, 'heading');
-		add('formatting', block, 'heading');
-	}
 	const paragraphs = document.paragraphs;
 	for (const paragraph of [paragraphs[0], paragraphs[Math.floor(paragraphs.length / 2)], paragraphs.at(-1)]) {
-		add('paragraph-structure', paragraph, 'paragraph');
-		add('rhetorical-structure', paragraph, 'paragraph');
+		add('figures', paragraph, 'paragraph');
+		add('cohesion-context', paragraph, 'paragraph');
 	}
 	const sortedSentences = [...document.sentences].sort((a, b) => a.wordCount - b.wordCount);
 	for (const sentence of [sortedSentences[0], sortedSentences[Math.floor(sortedSentences.length / 2)], sortedSentences.at(-1)]) {
-		add('sentence-rhythm', sentence, 'sentence');
-		add('grammar-voice', sentence, 'sentence');
-		add('vocabulary-register', sentence, 'sentence');
+		add('lexical', sentence, 'sentence');
+		add('grammatical', sentence, 'sentence');
 	}
 	for (const sentence of document.sentences.filter((item) => /\[[^\]]+\]|\([^)]*\d{4}[^)]*\)|\\cite|https?:\/\//.test(item.text)).slice(0, 3)) {
-		add('evidence-citations', sentence, 'evidence');
+		add('cohesion-context', sentence, 'evidence');
 	}
 	return output;
 }
@@ -834,12 +737,17 @@ function representativeExamples(document) {
 export function analyzeDocuments(documents) {
 	const createdAt = Date.now();
 	const sourceSnapshotHash = hash(documents.map((document) => `${document.sourceId}:${document.role}:${document.contentHash}`).sort().join('|'));
+	const corpus = computeCorpusStyleMetrics(documents);
 	const occurrences = [];
 	const examples = [];
 	const perDocument = [];
 
 	for (const document of documents) {
-		const punctuation = punctuationOccurrences(document);
+		const punctuation = punctuationOccurrences(document).map((occurrence) => ({
+			...occurrence,
+			metricId: occurrence.metricId.replace(/^punctuation\./, 'grammatical.punct.'),
+			family: 'grammatical'
+		}));
 		occurrences.push(...punctuation);
 		const seenExamples = new Set();
 		for (const occurrence of punctuation) {
@@ -855,7 +763,13 @@ export function analyzeDocuments(documents) {
 				examples.push(example);
 			}
 		}
-		perDocument.push({ document, punctuation, ...metricSpecForDocument(document, punctuation) });
+		const supporting = supportingMetricsForDocument(document, punctuation);
+		perDocument.push({
+			document,
+			punctuation,
+			...computeStyleMetrics(document, punctuation, { ...supporting.styleSupport, corpus }),
+			conventionSpec: supporting.conventionSpec
+		});
 	}
 
 	const metricIds = new Set(perDocument.flatMap((entry) => Object.keys(entry.spec)));
@@ -882,9 +796,32 @@ export function analyzeDocuments(documents) {
 			occurrenceIds: metricOccurrences.map((occurrence) => occurrence.id)
 		});
 	}
+	const conventionIds = new Set(perDocument.flatMap((entry) => Object.keys(entry.conventionSpec)));
+	const conventions = [];
+	for (const metricId of [...conventionIds].sort()) {
+		const values = perDocument.map((entry) => Number(entry.conventionSpec[metricId] ?? 0));
+		const authoredValues = perDocument.filter((entry) => entry.document.role === 'authored').map((entry) => Number(entry.conventionSpec[metricId] ?? 0));
+		const inspirationValues = perDocument.filter((entry) => entry.document.role === 'inspiration').map((entry) => Number(entry.conventionSpec[metricId] ?? 0));
+		conventions.push({
+			id: metricId,
+			family: 'conventions',
+			label: metricLabel(metricId),
+			unit: metricUnit(metricId),
+			value: round(mean(values)),
+			count: 0,
+			sourceCount: values.filter((value) => value !== 0).length,
+			roleValues: {
+				...(authoredValues.length ? { authored: round(mean(authoredValues)) } : {}),
+				...(inspirationValues.length ? { inspiration: round(mean(inspirationValues)) } : {})
+			},
+			distribution: distribution(values),
+			reliability: 0.95,
+			occurrenceIds: []
+		});
+	}
 
 	return {
-		schemaVersion: 1,
+		schemaVersion: 2,
 		analyzerVersion: ANALYZER_VERSION,
 		createdAt,
 		sourceSnapshotHash,
@@ -896,6 +833,7 @@ export function analyzeDocuments(documents) {
 			wordCount: entry.wordCount
 		})),
 		measurements,
+		conventions,
 		occurrences,
 		examples: examples.slice(0, 500)
 	};
@@ -928,7 +866,7 @@ async function cli() {
 	else process.stdout.write(result);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1]?.endsWith('analyze-style.mjs')) {
 	cli().catch((error) => {
 		process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
 		process.exitCode = 1;
