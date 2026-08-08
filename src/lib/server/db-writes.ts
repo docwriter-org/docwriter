@@ -273,6 +273,14 @@ export function kvSet(key: string, value: string) {
 	}
 }
 
+export function kvDelete(key: string) {
+	try {
+		getDb().prepare('DELETE FROM kv WHERE key = ?').run(key);
+	} catch (err) {
+		logDbError('kvDelete:' + key, err);
+	}
+}
+
 export function dbAppendConversationEvent(
 	session: string,
 	provider: string,

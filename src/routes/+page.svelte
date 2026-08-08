@@ -135,8 +135,11 @@
 		type ActiveReviewerInfo
 	} from '$lib/stores';
 	import ReviewerEditorDialog from '$lib/components/ReviewerEditorDialog.svelte';
+	import FeedbackImportDialog from '$lib/components/FeedbackImportDialog.svelte';
 	import ReviewerMascot from '$lib/components/ReviewerMascot.svelte';
 	import { BUILTIN_REVIEWERS, type Reviewer } from '$lib/shared/reviewers';
+	import { buildFeedbackImportMessage } from '$lib/shared/feedback-import';
+	import type { ImportedComment } from '$lib/types';
 	import TabBar from '$lib/components/TabBar.svelte';
 	import AiProvenanceToggle from '$lib/components/AiProvenanceToggle.svelte';
 	import PreviewButton from '$lib/components/PreviewButton.svelte';
@@ -2189,6 +2192,21 @@
 	 */
 	// ── Critique passes (reviewer agents) ────────────────────────────────
 	let reviewerDialogOpen = $state(false);
+
+	// ── Feedback import ──────────────────────────────────────────────────
+	let feedbackImportDialogOpen = $state(false);
+
+	async function runFeedbackImport(comments: ImportedComment[]) {
+		const tab = $activeTab;
+		if (!tab) return;
+		await fetch('/api/feedback-import', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ comments, tabId: tab, source: 'paste' })
+		});
+		const message = buildFeedbackImportMessage(comments, tab);
+		void submit(message);
+	}
 	let styleDialogOpen = $state(false);
 	/** Finalization is the publication boundary. Closing the modal or changing a
 	 * draft does not wake the agent or put unfinished guidance into its prompt. */
@@ -2243,6 +2261,13 @@
 							}
 						}
 					]
+				},
+				{
+					kind: 'action' as const,
+					label: 'Import feedback…',
+					onClick: () => {
+						feedbackImportDialogOpen = true;
+					}
 				},
 				{
 					kind: 'submenu',
@@ -3288,6 +3313,12 @@
 	open={reviewerDialogOpen}
 	onClose={() => (reviewerDialogOpen = false)}
 	onCreated={(r) => customReviewers.update((list) => [...list, r])}
+/>
+
+<FeedbackImportDialog
+	open={feedbackImportDialogOpen}
+	onClose={() => (feedbackImportDialogOpen = false)}
+	onImport={runFeedbackImport}
 />
 
 <style>

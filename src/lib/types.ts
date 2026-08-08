@@ -185,7 +185,7 @@ interface CommentThreadAnchor {
 	contextAfter?: string;
 }
 
-type CommentAuthor = 'user' | 'agent';
+type CommentAuthor = 'user' | 'agent' | 'external';
 
 export interface CommentMessage {
 	id: string;
@@ -200,6 +200,10 @@ export interface CommentMessage {
 	 * Only meaningful when author is 'agent'; the gutter renders the
 	 * reviewer's mascot and name instead of the default cat. */
 	reviewerId?: string;
+	/** Name of the external commenter (e.g. "Maya"). Only meaningful
+	 * when author is 'external'; the gutter shows this name instead of
+	 * the default user/agent avatar. */
+	externalAuthor?: string;
 }
 
 export interface CommentThread {
@@ -340,3 +344,32 @@ export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
 	paused: false,
 	intendedAudience: ''
 };
+
+// ---------------------------------------------------------------------------
+// Feedback import
+// ---------------------------------------------------------------------------
+
+export interface ImportedComment {
+	id: string;
+	author: string;
+	text: string;
+	originalAnchor?: string;
+}
+
+export type FeedbackDisposition = 'applied' | 'discussed' | 'deferred' | 'untouched';
+
+export interface FeedbackLedgerEntry {
+	importedCommentId: string;
+	threadId?: string;
+	disposition: FeedbackDisposition;
+}
+
+export interface FeedbackImportState {
+	id: string;
+	source: 'paste' | 'docx' | 'gdocs';
+	tabId: string;
+	createdAt: number;
+	comments: ImportedComment[];
+	commentToThread: Record<string, string>;
+	dispositions: Record<string, FeedbackDisposition>;
+}
