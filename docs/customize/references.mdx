@@ -80,24 +80,23 @@ Wake the agent, or let the idle timer fire. You will see the proposed edit as tr
 
 Accept when the wording sounds like you. Reject and retry when it drifts toward generic model prose. Your skill stays active for later turns until you analyze again and finalize a new draft.
 
-<Note>
-You can download the skill bundle from the style dialog and use it outside DocWriter — e.g., with your usual coding agents that load project skills. The same `author-style` skill files travel with the folder, so other tools can follow the voice you curated here.
-</Note>
+## How it works
 
-## Design philosophy
+We designed DocWriter’s style calibration feature around four properties:
 
-A useful writing skill should contain examples that are:
+1. **Specific to your writing.** The guidance should describe patterns in your writing, rather than generic advice about good writing.
+2. **Important to you.** The guidance should include only the patterns you want the agent to preserve.
+3. **Easy for you to confirm.** You should be able to make decisions without reviewing a long list of abstract claims.
+4. **Portable across agents.** The guidance should work with writing agents outside DocWriter.
 
-1. **Unique to your writing** — habits that mark your voice, not generic “good writing”
-2. **Actually important to you** — language you strongly prefer
-3. **Low effort for you to curate** — easy to confirm without reading a long checklist
+We discuss each property in turn.
 
-DocWriter aims at each desideratum in turn.
+**Specific to your writing.** We base the analysis on the linguistic checklist from Leech and Short’s [*Style in Fiction*](https://www.routledge.com/Style-in-Fiction-A-Linguistic-Introduction-to-English-Fictional-Prose/Short-Leech/p/book/9780582784093). The specialist agents examine words and short phrases, sentences and punctuation, and how ideas connect across a passage. They analyze headings, lists, and other layout choices separately. An agent proposes a pattern only when it can quote an example from your sources. We also discard measurements that provide no evidence. For example, a passage with no citations says nothing about how you use citations.
 
-**Unique to your writing.** Style guidance starts from a linguistic checklist rather than from vague voice adjectives. Leech and Short’s [*Style in Fiction*](https://www.routledge.com/Style-in-Fiction-A-Linguistic-Introduction-to-English-Fictional-Prose/Short-Leech/p/book/9780582784093) gives a checklist of linguistic and stylistic categories for describing prose — lexis (words and short phrases), grammar (sentences, clauses, and punctuation), and discourse (figures, cohesion, reader relationship, and other voices). Layout features such as headings and lists are kept separately as document conventions. The checklist fits author-style work well because it asks concrete questions about how a passage is built, so specialist agents can propose habits you can verify in your text. Specialists (using the model you selected in the DocWriter header) draft propositions only when they can quote your sources; metrics that measured zero are discarded — e.g., a passage with no citations says nothing about how you use citations.
+**Important to you.** We build on Shaikh et al.’s [*Creating General User Models from Computer Use*](https://arxiv.org/abs/2505.10831), where knowledge and preferences about a user are stored as structured propositions with confidence scores. We adapt the proposition format to writing and tie every proposition to quoted examples. A pattern found in your sources may not be one you want the agent to follow, so you confirm each proposition before it becomes part of your writing guidance.
 
-**Actually important to you.** Building on Shaikh et al.’s [*Creating General User Models from Computer Use*](https://arxiv.org/abs/2505.10831), DocWriter stores what it learns about you as propositions, adapted for a writing setting: each proposition is highly structured for prose and tied to quoted examples. You then refine the draft through interactive comparisons — a passage from your sources beside the same passage with one habit changed — so you keep the habits you care about when you see them in writing.
+**Easy for you to confirm.** The most direct way to confirm a proposition would be for DocWriter to show you the proposition and ask whether you agree. However, a long list of abstract claims is hard to evaluate, especially when you cannot see how each claim changes the writing. Instead, DocWriter shows you a passage from your sources next to a version where one proposed pattern has changed. You choose the version that sounds more like you. If neither version sounds right, you can edit one or skip the proposition.
 
-**Low effort for you to curate.** Instead of rating abstract claims in a long list, you pick between short side-by-side passages (or skip). What you keep is compiled into a skill under `.docwriter/skills/author-style/` for the writing agent to read.
+**Portable across agents.** After you finish, the propositions you approved are packaged as an `author-style` skill under `.docwriter/skills/author-style/`. You can download the skill bundle and use it with other agents that load and use skills, to then follow the same guidance and examples.
 
 Your local study export (setup time, calibration choices, confidence bands, and timing) lives under `.docwriter/style-study/` and does not include your reference text or generated passages. See [Storage and backups](/help/storage-and-backups) and [Privacy and safety](/help/privacy-and-safety) for where the files sit on disk.
