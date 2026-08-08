@@ -1,0 +1,90 @@
+---
+title: "Teach DocWriter your writing style"
+---
+
+Give DocWriter a few passages of your writing, then choose which patterns you want the agent to follow. The analysis takes about **ten minutes** but can take longer.
+
+The screenshots use public domain passages by [Alice Meynell](https://en.wikipedia.org/wiki/Alice_Meynell) from [*The Rhythm of Life and Other Essays*](https://www.gutenberg.org/ebooks/1276). Use your own writing when you set this up. References describe how you write. Use [writing rules](/customize/rules) to tell the agent what to do, and set an [intended audience](/agent/customize#set-the-intended-audience) to name the reader.
+
+## 1. Add 3 to 5 sources
+
+Open the references pill in the header, or go to **Settings**, then **Writing references**. Add 3 to 5 passages from your writing. For each source:
+
+- Paste a few hundred words. A sentence or two is not enough.
+- Add a short description, such as "paper introduction" or "related work section".
+- Select **Add source**.
+
+<Frame caption="Step 1. Three sources are ready to analyze.">
+  ![The Calibrate your style dialog on the Sources step with three pasted passages listed](/images/style-guidance-sources.png)
+</Frame>
+
+Then select **Analyze**.
+
+## 2. Run the analysis
+
+Select **Run analysis**. DocWriter measures your passages, then three specialist agents study them. A final pass combines their findings into instructions. The analysis uses the model selected in the DocWriter header.
+
+You can keep writing while the analysis runs. Use the left column to follow its progress, and select any step to see its notes or measurements.
+
+<Frame caption="Step 2. You can follow the progress while the analysis runs.">
+  ![The Analyze step showing Lexis, Grammar, and Discourse specialists in progress](/images/style-guidance-specialists.png)
+</Frame>
+
+## 3. Choose the version that sounds like you
+
+Each card compares a passage from your sources with a version that changes one writing choice. Choose:
+
+- **A** or **B** when one version sounds more like you.
+- **Both are the same to me** when you have no preference.
+- **Neither is good** when you want to edit one version.
+- **Skip proposition** when you do not want the agent to follow that choice.
+
+<Frame caption="Step 3. Compare the two versions and choose the one that sounds more like you.">
+  ![Preference cards with passage A and passage B for style propositions](/images/style-guidance-preference.png)
+</Frame>
+
+Answer the cards until none remain. DocWriter may add an instruction without a comparison when your passages provide strong evidence for it.
+
+## 4. Review and save your style instructions
+
+Open **Style draft** and remove any instruction you do not want. Select **Finalize style** when the draft looks right. The writing agent will not use a new or updated draft until you finalize it.
+
+<Frame caption="Step 4. Review the instructions before you finalize them.">
+  ![The Active skill step listing style propositions with example passages](/images/style-guidance-skill.png)
+</Frame>
+
+You can also download the skill or restore an earlier version. To discard the current analysis, return to **Analyze** and select **Start over**. Your sources and last finalized skill will remain.
+
+## 5. Use your style instructions
+
+After you finalize the skill, ask the writing agent to write or edit as usual. You can put the request in a directive inside the document:
+
+```text
+[[ Write two short paragraphs about waiting beside a late train in the rain, sounding like me. Keep the scene ordinary. Replace this directive. ]]
+```
+
+Wake the agent, or wait for the idle timer. The edit appears as a tracked change with an **Accept**, **Reject**, or **Retry** card. Open the card to review the full edit.
+
+<Frame caption="Step 5. Review the agent's edit and decide whether it sounds like you.">
+  ![The editor with an expanded review card for a style-matched rewrite about a late train](/images/style-guidance-editor-edit.png)
+</Frame>
+
+
+## How it works
+
+We designed DocWriter’s style calibration feature around four properties:
+
+1. **Specific to your writing.** The guidance should describe patterns in your writing, rather than generic advice about good writing.
+2. **Important to you.** The guidance should include only the patterns you want the agent to preserve.
+3. **Easy for you to confirm.** You should be able to make decisions without reviewing a long list of abstract claims.
+4. **Portable across agents.** The guidance should work with writing agents outside DocWriter.
+
+We discuss each property in turn.
+
+**Specific to your writing.** We base the analysis on the linguistic checklist from Leech and Short’s [*Style in Fiction*](https://www.routledge.com/Style-in-Fiction-A-Linguistic-Introduction-to-English-Fictional-Prose/Short-Leech/p/book/9780582784093). The specialist agents examine words and short phrases, sentences and punctuation, and how ideas connect across a passage. They analyze headings, lists, and other layout choices separately. An agent proposes a pattern only when it can quote an example from your sources. We also discard measurements that provide no evidence. For example, a passage with no citations says nothing about how you use citations.
+
+**Important to you.** We build on Shaikh et al.’s [*Creating General User Models from Computer Use*](https://arxiv.org/abs/2505.10831), where knowledge and preferences about a user are stored as structured propositions with confidence scores. We adapt the proposition format to writing and tie every proposition to quoted examples. A pattern found in your sources may not be one you want the agent to follow, so you confirm each proposition before it becomes part of your writing guidance.
+
+**Easy for you to confirm.** The most direct way to confirm a proposition would be for DocWriter to show you the proposition and ask whether you agree. However, a long list of abstract claims is hard to evaluate, especially when you cannot see how each claim changes the writing. Instead, DocWriter shows you a passage from your sources next to a version where one proposed pattern has changed. You choose the version that sounds more like you. If neither version sounds right, you can edit one or skip the proposition.
+
+**Portable across agents.** After you finish, the propositions you approved are packaged as an `author-style` skill under `.docwriter/skills/author-style/`. You can download the skill bundle and use it with other agents that load and use skills, to then follow the same guidance and examples.

@@ -609,22 +609,22 @@
       "targetPage": "customize/rules"
     },
     {
-      "id": "customize-references-01",
+      "id": "customize-style-01",
       "area": "Customize",
       "feature": "Add writing references",
-      "targetPage": "customize/references"
+      "targetPage": "customize/style"
     },
     {
-      "id": "customize-references-02",
+      "id": "customize-style-02",
       "area": "Customize",
       "feature": "Add the current file, pasted prose, or a URL as a reference",
-      "targetPage": "customize/references"
+      "targetPage": "customize/style"
     },
     {
-      "id": "customize-references-03",
+      "id": "customize-style-03",
       "area": "Customize",
       "feature": "Wake the agent after adding a reference",
-      "targetPage": "customize/references"
+      "targetPage": "customize/style"
     },
     {
       "id": "agent-customize-01",
