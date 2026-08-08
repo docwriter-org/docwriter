@@ -27,7 +27,7 @@ import { registerPendingAskUser } from '$lib/server/ask-user-state';
 import { unifiedLineDiff } from '$lib/diff';
 import { listStyleReferences } from '$lib/server/references';
 import { readStyleProfile } from '$lib/server/style-analysis/profile-store';
-import { isActiveProposition, type StyleProfile } from '$lib/style-profile';
+import { publishedStylePropositions, type StyleProfile } from '$lib/style-profile';
 import { buildSkillsPromptBlock } from '$lib/server/skills-config';
 import { lastSeenKey, readTabMarkdownForAgent } from '$lib/server/last-seen';
 import {
@@ -460,7 +460,7 @@ function snapshotRules(rules: { text: string }[]): string {
  * sample paths). Sorted so cosmetic re-ordering doesn't trip the change detector. */
 function snapshotRefs(profile: StyleProfile | null): string {
 	const refs = listStyleReferences().map((r) => `${r.type}::${r.target}`);
-	const active = profile?.propositions.filter(isActiveProposition).length ?? 0;
+	const active = publishedStylePropositions(profile).length;
 	return JSON.stringify({ refs: refs.sort(), active, profileUpdatedAt: profile?.updatedAt ?? 0 });
 }
 
@@ -501,7 +501,7 @@ function buildRulesDelta(
  * only when the list has changed since the prior render. A learned profile is
  * handled by buildStyleBlock instead, which is not delta-gated. */
 function buildRefsBlock(profile: StyleProfile | null): string | null {
-	if (profile?.propositions.some(isActiveProposition)) return null;
+	if (publishedStylePropositions(profile).length > 0) return null;
 	const refs = listStyleReferences().slice(0, 6);
 	if (refs.length === 0) return null;
 	const lines = ['Style references:'];
@@ -521,7 +521,7 @@ function buildRefsBlock(profile: StyleProfile | null): string | null {
  * instructions are short enough to inline; the skill keeps the passages.
  */
 function buildStyleBlock(profile: StyleProfile | null): string | null {
-	const active = (profile?.propositions ?? []).filter(isActiveProposition);
+	const active = publishedStylePropositions(profile);
 	if (active.length === 0) return null;
 	return [
 		"How the user writes, learned from a handful of pieces they wrote. Follow this whenever you draft or revise prose here, unless they ask for something different this turn.",
@@ -530,7 +530,7 @@ function buildStyleBlock(profile: StyleProfile | null): string | null {
 		'',
 'These are tendencies, not rules. Follow the ones that fit and skip the rest. They govern how you write, not what about: take no facts or subject matter from the references. The user\'s rules come first.',
 		'',
-		'Read the `author-style` skill before you write. It holds the passages behind each instruction.'
+		`Read the \`${profile?.skillId ?? 'author-style'}\` skill before you write. It holds the passages behind each instruction.`
 	].join('\n');
 }
 

@@ -199,6 +199,34 @@ export function isActiveProposition(proposition: { status: PropositionStatus }):
 	return proposition.status === 'active' || proposition.status === 'confirmed';
 }
 
+/** The propositions the writing agent may use. New profiles keep a published
+ * copy so work in the modal cannot change live guidance before finalization.
+ * Profiles created before that boundary use their compiled profile as before. */
+export function publishedStylePropositions(profile: StyleProfile | null): StyleProposition[] {
+	if (!profile) return [];
+	if (profile.publishedPropositions) return profile.publishedPropositions.filter(isActiveProposition);
+	return profile.skillPath ? profile.propositions.filter(isActiveProposition) : [];
+}
+
+function propositionSetSignature(propositions: StyleProposition[]): string {
+	return JSON.stringify(propositions
+		.filter(isActiveProposition)
+		.map(({ id, family, propositionType, statement, instruction, examples, focus, contrast }) => ({
+			id, family, propositionType, statement, instruction, examples, focus, contrast
+		}))
+		.sort((a, b) => a.id.localeCompare(b.id)));
+}
+
+export function hasUnpublishedStyleChanges(profile: StyleProfile | null): boolean {
+	if (!profile) return false;
+	if (profile.publishedAnalyzerVersion
+		&& profile.publishedAnalyzerVersion !== profile.analyzerVersion) return true;
+	if (profile.publishedSourceSnapshotHash
+		&& profile.publishedSourceSnapshotHash !== profile.sourceSnapshotHash) return true;
+	return propositionSetSignature(profile.propositions)
+		!== propositionSetSignature(publishedStylePropositions(profile));
+}
+
 /** Profile status from the current proposition set (pending beats active). */
 export function deriveStyleProfileStatus(
 	propositions: Array<{ status: PropositionStatus }>
@@ -258,6 +286,10 @@ export interface StyleProfile {
 	sourceSnapshotHash: string;
 	skillId?: string;
 	skillPath?: string;
+	publishedAt?: number;
+	publishedAnalyzerVersion?: string;
+	publishedSourceSnapshotHash?: string;
+	publishedPropositions?: StyleProposition[];
 	propositions: StyleProposition[];
 	calibrations: CalibrationTrial[];
 	lastRun?: StyleAnalysisRun;
@@ -267,7 +299,9 @@ export interface StyleProfileSummary {
 	status: StyleProfileStatus;
 	referenceCount: number;
 	activeCount: number;
+	publishedCount: number;
 	unresolvedCount: number;
+	hasUnpublishedChanges: boolean;
 	stale: boolean;
 	profile: StyleProfile | null;
 }

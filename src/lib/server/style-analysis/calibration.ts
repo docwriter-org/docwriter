@@ -1,6 +1,5 @@
 import type { CalibrationChoice, CalibrationTrial, StyleAnalysisReport, StyleProfile, StyleProposition } from '$lib/style-profile';
 import type { ProviderId } from '$lib/server/providers/types';
-import { compileAuthorStyleSkill } from './skill-compiler';
 import { CalibrationRevisionSchema } from './schemas';
 import {
 	persistProfileAfterPropositionChange,
@@ -11,6 +10,7 @@ import {
 import { runStructuredStyleAgent } from './run-manager';
 import { appendStyleStudyEvent } from './study-log';
 import { STYLE_FEATURE_REGISTRY } from './feature-registry';
+import { replaceStyleAgentPropositions } from './proposition-store';
 
 const VARIANT_SCHEMA = {
 	type: 'object',
@@ -227,6 +227,12 @@ export async function answerCalibrationTrial(input: {
 				chosenText,
 				reason: input.choice === 'neither' ? 'The user rejected both generated passages and wrote an acceptable version.' : 'The user preferred the close variant that did not support the previous proposition.'
 			});
+			replaceStyleAgentPropositions(
+				profile.lastRun?.id ?? 'profile',
+				'revision',
+				`calibration:${trial.id}`,
+				[{ ...proposition, ...revision, updatedAt: Date.now() }]
+			);
 			nextProposition = {
 				...nextProposition,
 				statement: revision.statement,
@@ -247,7 +253,7 @@ export async function answerCalibrationTrial(input: {
 	};
 	profile.propositions = profile.propositions.map((candidate) => candidate.id === proposition.id ? nextProposition : candidate);
 	profile.calibrations = profile.calibrations.map((candidate) => candidate.id === trial.id ? nextTrial : candidate);
-	profile = persistProfileAfterPropositionChange(profile, report, compileAuthorStyleSkill);
+	profile = persistProfileAfterPropositionChange(profile);
 	appendStyleStudyEvent('calibration_answered', {
 		calibrationId: trial.id,
 		propositionId: proposition.id,

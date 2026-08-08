@@ -20,6 +20,7 @@
 		if (summary.status === 'stale') return 'Update style';
 		if (summary.status === 'error') return 'Analysis failed';
 		if (summary.status === 'needs-calibration' || summary.unresolvedCount > 0) return 'Calibrate references';
+		if (summary.hasUnpublishedChanges) return 'Finalize style';
 		// Outstanding choices are the dialog's business; the pill only reports
 		// that a style is in force.
 		return 'Style uploaded';
@@ -31,6 +32,7 @@
 		if (summary.status === 'stale' || summary.status === 'needs-calibration' || summary.unresolvedCount > 0) {
 			return 'pending';
 		}
+		if (summary.hasUnpublishedChanges) return 'pending';
 		if (summary.status === 'analyzing') return 'working';
 		return 'active';
 	});
@@ -47,6 +49,9 @@
 		if (summary.status === 'stale') return 'Your references changed since the last analysis.\nClick to re-run it.';
 		if (summary.status === 'needs-calibration' || summary.unresolvedCount > 0) {
 			return 'A few style habits still need your pick between close passages.\nClick to finish calibrating.';
+		}
+		if (summary.hasUnpublishedChanges) {
+			return 'Your reviewed style is saved as a draft.\nClick to finalize it for the writing agent.';
 		}
 		return 'Your author style is active and guiding the writing agent.';
 	});

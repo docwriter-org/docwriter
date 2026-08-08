@@ -10,7 +10,9 @@ import type {
 } from '$lib/style-profile';
 import {
 	deriveStyleProfileStatus,
+	hasUnpublishedStyleChanges,
 	isActiveProposition,
+	publishedStylePropositions,
 	STYLE_ANALYZER_VERSION,
 	STYLE_AUTO_ACTIVE_CONFIDENCE,
 	STYLE_PROFILE_SCHEMA_VERSION
@@ -21,6 +23,10 @@ import { isSelected, listStyleReferences } from '$lib/server/references';
 import { referenceIsStale } from './materialize';
 import type { PropositionDraft } from './schemas';
 import { StyleAnalysisReportSchema, StyleProfileSchema } from './schemas';
+import {
+	readPersistedStyleProfile,
+	writePersistedStyleProfile
+} from './proposition-store';
 
 export const STYLE_PROFILE_FILE = join(DOCWRITER_DIR, 'style-profile.json');
 export const STYLE_ANALYSIS_DIR = join(DOCWRITER_DIR, 'style-analysis');
@@ -29,14 +35,27 @@ export const STYLE_REPORT_FILE = join(STYLE_ANALYSIS_DIR, 'report.json');
 function migrateStoredProfile(value: unknown): unknown {
 	if (!value || typeof value !== 'object') return value;
 	const profile = structuredClone(value) as Record<string, any>;
-	if (profile.schemaVersion !== 1) return profile;
-	profile.schemaVersion = STYLE_PROFILE_SCHEMA_VERSION;
-	profile.analyzerVersion = STYLE_ANALYZER_VERSION;
+	if (profile.schemaVersion === 1) {
+		profile.schemaVersion = STYLE_PROFILE_SCHEMA_VERSION;
+		profile.analyzerVersion = STYLE_ANALYZER_VERSION;
+	}
 	if (profile.lastRun?.specialists) {
 		profile.lastRun.specialists = profile.lastRun.specialists.map((specialist: Record<string, any>) => ({
 			...specialist,
 			id: specialist.id === 'organization' ? 'grammar' : specialist.id === 'language' ? 'lexis' : specialist.id
 		}));
+	}
+	// Before publication was explicit, a skillPath meant these propositions
+	// had already been written into the live skill.
+	if (profile.skillPath && !Array.isArray(profile.publishedPropositions)) {
+		profile.publishedAt = profile.updatedAt;
+		profile.publishedPropositions = profile.propositions;
+	}
+	if (profile.skillPath && !profile.publishedSourceSnapshotHash) {
+		profile.publishedSourceSnapshotHash = profile.sourceSnapshotHash;
+	}
+	if (profile.skillPath && !profile.publishedAnalyzerVersion) {
+		profile.publishedAnalyzerVersion = profile.analyzerVersion;
 	}
 	return profile;
 }
@@ -47,10 +66,15 @@ function ensureStyleAnalysisDir() {
 }
 
 export function readStyleProfile(): StyleProfile | null {
-	if (!existsSync(STYLE_PROFILE_FILE)) return null;
 	try {
-		const value = StyleProfileSchema.parse(migrateStoredProfile(JSON.parse(readFileSync(STYLE_PROFILE_FILE, 'utf8'))));
+		const persisted = readPersistedStyleProfile();
+		if (persisted === null && !existsSync(STYLE_PROFILE_FILE)) return null;
+		const raw = persisted ?? JSON.parse(readFileSync(STYLE_PROFILE_FILE, 'utf8'));
+		const value = StyleProfileSchema.parse(migrateStoredProfile(raw));
 		if (value.schemaVersion !== STYLE_PROFILE_SCHEMA_VERSION) return null;
+		// Import the old file into SQLite on its first read. Later reads use the
+		// database, while the file remains a portable mirror.
+		if (persisted === null) writePersistedStyleProfile(value);
 		return value as StyleProfile;
 	} catch {
 		return null;
@@ -60,6 +84,7 @@ export function readStyleProfile(): StyleProfile | null {
 export function writeStyleProfile(profile: StyleProfile): StyleProfile {
 	ensureStyleAnalysisDir();
 	const next = StyleProfileSchema.parse({ ...profile, updatedAt: Date.now() }) as StyleProfile;
+	writePersistedStyleProfile(next);
 	writeJsonAtomic(STYLE_PROFILE_FILE, next);
 	return next;
 }
@@ -216,31 +241,47 @@ export function styleProfileSummary(): StyleProfileSummary {
 	const references = listStyleReferences().filter(isSelected);
 	const profile = readStyleProfile();
 	if (!references.length) {
-		return { status: 'empty', referenceCount: 0, activeCount: 0, unresolvedCount: 0, stale: false, profile: profile ? styleProfileForClient(profile) : null };
+		return {
+			status: 'empty', referenceCount: 0, activeCount: 0,
+			publishedCount: publishedStylePropositions(profile).length,
+			unresolvedCount: 0, hasUnpublishedChanges: hasUnpublishedStyleChanges(profile),
+			stale: false, profile: profile ? styleProfileForClient(profile) : null
+		};
 	}
 	if (!profile) {
-		return { status: 'ready-to-analyze', referenceCount: references.length, activeCount: 0, unresolvedCount: 0, stale: false, profile: null };
+		return {
+			status: 'ready-to-analyze', referenceCount: references.length, activeCount: 0,
+			publishedCount: 0, unresolvedCount: 0, hasUnpublishedChanges: false,
+			stale: false, profile: null
+		};
 	}
 	const stale = references.some(referenceIsStale)
 		|| references.some((reference) => reference.materializationStatus !== 'ready')
 		|| referencesSnapshotHash(references) !== profile.sourceSnapshotHash;
 	const activeCount = profile.propositions.filter(isActiveProposition).length;
-	const unresolvedCount = profile.propositions.filter((proposition) => proposition.status === 'pending').length;
+	const publishedCount = publishedStylePropositions(profile).length;
+	const unresolvedIds = new Set([
+		...profile.propositions
+			.filter((proposition) => proposition.status === 'pending')
+			.map((proposition) => proposition.id),
+		...profile.calibrations
+			.filter((trial) => ['pending', 'generated', 'error'].includes(trial.status))
+			.map((trial) => trial.propositionId)
+	]);
+	const unresolvedCount = unresolvedIds.size;
 	const status = stale && profile.status !== 'analyzing' ? 'stale' : profile.status;
-	return { status, referenceCount: references.length, activeCount, unresolvedCount, stale, profile: styleProfileForClient({ ...profile, status }) };
+	return {
+		status, referenceCount: references.length, activeCount, publishedCount,
+		unresolvedCount, hasUnpublishedChanges: hasUnpublishedStyleChanges(profile),
+		stale, profile: styleProfileForClient({ ...profile, status })
+	};
 }
 
-/** Recompute status, compile the skill when anything is active, and persist. */
+/** Recompute the working status and persist it. Publishing is a separate user
+ * action so calibration cannot rewrite the live skill under the main agent. */
 export function persistProfileAfterPropositionChange(
-	profile: StyleProfile,
-	report: StyleAnalysisReport,
-	compile: (profile: StyleProfile, report: StyleAnalysisReport) => { skillId: string; skillPath: string }
+	profile: StyleProfile
 ): StyleProfile {
 	profile.status = deriveStyleProfileStatus(profile.propositions);
-	if (profile.propositions.some(isActiveProposition)) {
-		const skill = compile(profile, report);
-		profile.skillId = skill.skillId;
-		profile.skillPath = skill.skillPath;
-	}
 	return writeStyleProfile(profile);
 }

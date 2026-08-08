@@ -9,7 +9,9 @@ test('reference status opens the large author style review workflow', async ({ p
 				status: 'empty',
 				referenceCount: 0,
 				activeCount: 0,
+				publishedCount: 0,
 				unresolvedCount: 0,
+				hasUnpublishedChanges: false,
 				stale: false,
 				profile: null
 			})
@@ -36,8 +38,8 @@ test('reference status opens the large author style review workflow', async ({ p
 	await expect(page.getByRole('button', { name: 'Analyze', exact: true })).toBeVisible();
 	await expect(page.getByRole('button', { name: 'Active skill' })).toBeVisible();
 	await page.getByRole('button', { name: 'Analyze', exact: true }).click();
-	await expect(page.getByRole('heading', { name: 'Measure first, then interpret' })).toBeVisible();
-	await expect(page.getByRole('heading', { name: 'Pick your poison' })).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'Style analysis' })).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'Which piece of writing sounds more like you?' })).toBeVisible();
 	await expect(page.getByText('No analysis has run yet')).toBeVisible();
 });
 
@@ -57,7 +59,9 @@ test('analysis is rendered as a clear activity list beside close calls', async (
 				status: 'needs-calibration',
 				referenceCount: 1,
 				activeCount: 0,
+				publishedCount: 0,
 				unresolvedCount: 1,
+				hasUnpublishedChanges: true,
 				stale: false,
 				profile: {
 					schemaVersion: 2,

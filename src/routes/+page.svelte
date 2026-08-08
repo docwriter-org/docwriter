@@ -5,7 +5,6 @@
 	import ModelPicker from '$lib/components/ModelPicker.svelte';
 	import ReferenceStatusPill from '$lib/components/ReferenceStatusPill.svelte';
 	import ReferenceCalibrationDialog from '$lib/components/ReferenceCalibrationDialog.svelte';
-	import { isActiveProposition } from '$lib/style-profile';
 	import OutlinePane from '$lib/components/OutlinePane.svelte';
 	import FileTree from '$lib/components/FileTree.svelte';
 	import type { FileEntry } from '$lib/components/FileTree.svelte';
@@ -2191,37 +2190,11 @@
 	// ── Critique passes (reviewer agents) ────────────────────────────────
 	let reviewerDialogOpen = $state(false);
 	let styleDialogOpen = $state(false);
-	/**
-	 * The agent reads the style from every turn's author_style block, but nothing
-	 * prompts a turn when you finish calibrating, so a new style would sit unused
-	 * until you happened to type something. Stamped when the dialog opens and
-	 * compared when it closes, so only a real change to the guidance sends a
-	 * message — not merely adding a source or reading one.
-	 */
-	let styleStampOnOpen: string | null = null;
-
-	async function styleStamp(): Promise<string | null> {
-		try {
-			const response = await fetch('/api/style-profile');
-			if (!response.ok) return null;
-			const summary = await response.json();
-			const active = (summary?.profile?.propositions ?? [])
-				.filter(isActiveProposition)
-				.map((p: { id: string; instruction: string }) => `${p.id}:${p.instruction}`)
-				.sort();
-			return JSON.stringify(active);
-		} catch {
-			return null;
-		}
-	}
-
-	async function notifyAgentOfStyleChange() {
-		const before = styleStampOnOpen;
-		styleStampOnOpen = null;
-		const after = await styleStamp();
-		if (before === null || after === null || before === after) return;
+	/** Finalization is the publication boundary. Closing the modal or changing a
+	 * draft does not wake the agent or put unfinished guidance into its prompt. */
+	function notifyAgentOfFinalizedStyle(skillId: string) {
 		void submit(
-			'The writer changed their author style. The instructions now in force are in the author_style block. Follow them from here on. Do not revise anything already written unless asked.'
+			`The writer finalized the author style. Re-read the \`${skillId}\` skill now and use it for future drafts and revisions. Do not revise anything already written unless asked.`
 		);
 	}
 	let styleRefreshToken = $state(0);
@@ -2306,10 +2279,7 @@
 				{
 					kind: 'action',
 					label: 'Writing references',
-					onClick: () => {
-						styleDialogOpen = true;
-						void styleStamp().then((stamp) => (styleStampOnOpen = stamp));
-					}
+					onClick: () => (styleDialogOpen = true)
 				},
 				{
 					kind: 'action',
@@ -3100,10 +3070,7 @@
 				onCustomModel={() => (customModelOpen = true)}
 			/>
 			<ReferenceStatusPill
-				onOpen={() => {
-				styleDialogOpen = true;
-				void styleStamp().then((stamp) => (styleStampOnOpen = stamp));
-			}}
+				onOpen={() => (styleDialogOpen = true)}
 				refreshToken={styleRefreshToken}
 			/>
 		</div>
@@ -3113,11 +3080,9 @@
 		open={styleDialogOpen}
 		provider={currentProvider}
 		{model}
-		onClose={() => {
-			styleDialogOpen = false;
-			void notifyAgentOfStyleChange();
-		}}
+		onClose={() => (styleDialogOpen = false)}
 		onChanged={() => (styleRefreshToken += 1)}
+		onFinalized={notifyAgentOfFinalizedStyle}
 	/>
 
 	{#snippet rulesPanelSnippet()}

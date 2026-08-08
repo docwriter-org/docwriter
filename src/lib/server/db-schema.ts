@@ -195,6 +195,34 @@ const MIGRATIONS: Array<{ version: number; sql: string }> = [
 			CREATE INDEX IF NOT EXISTS provider_session_entries_session
 				ON provider_session_entries(provider, session_id, subpath, id);
 		`
+	},
+	{
+		version: 12,
+		// The working author style belongs in SQLite while agents and the writer
+		// are still changing it. The live skill files are a published artifact and
+		// are written only when the writer explicitly finalizes the draft.
+		sql: `
+			CREATE TABLE IF NOT EXISTS style_profile_state (
+				id           INTEGER PRIMARY KEY CHECK (id = 1),
+				profile_json TEXT NOT NULL,
+				updated      INTEGER NOT NULL
+			);
+
+			CREATE TABLE IF NOT EXISTS style_proposition_snapshots (
+				id               INTEGER PRIMARY KEY AUTOINCREMENT,
+				run_id           TEXT NOT NULL,
+				stage            TEXT NOT NULL,
+				agent_id         TEXT NOT NULL,
+				position         INTEGER NOT NULL,
+				proposition_id   TEXT NOT NULL,
+				proposition_json TEXT NOT NULL,
+				created          INTEGER NOT NULL,
+				updated          INTEGER NOT NULL,
+				UNIQUE (run_id, stage, agent_id, position)
+			);
+			CREATE INDEX IF NOT EXISTS style_proposition_snapshots_run
+				ON style_proposition_snapshots(run_id, stage, agent_id, position);
+		`
 	}
 ];
 

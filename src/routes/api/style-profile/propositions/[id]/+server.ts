@@ -1,17 +1,14 @@
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { compileAuthorStyleSkill } from '$lib/server/style-analysis/skill-compiler';
 import {
 	persistProfileAfterPropositionChange,
 	readStyleProfile,
-	readStyleReport,
 	styleProfileForClient
 } from '$lib/server/style-analysis/profile-store';
 
 export const PATCH: RequestHandler = async ({ params, request }) => {
 	let profile = readStyleProfile();
-	const report = readStyleReport();
-	if (!profile || !report) throw error(404, 'Style profile not found');
+	if (!profile) throw error(404, 'Style profile not found');
 	const body = await request.json();
 	const existing = profile.propositions.find((proposition) => proposition.id === params.id);
 	if (!existing) throw error(404, 'Style proposition not found');
@@ -26,6 +23,13 @@ export const PATCH: RequestHandler = async ({ params, request }) => {
 		updatedAt: Date.now()
 	};
 	profile.propositions = profile.propositions.map((proposition) => proposition.id === params.id ? next : proposition);
-	profile = persistProfileAfterPropositionChange(profile, report, compileAuthorStyleSkill);
+	if (existing.status === 'pending' && body.status) {
+		profile.calibrations = profile.calibrations.map((trial) =>
+			trial.propositionId === existing.id && ['pending', 'generated', 'error'].includes(trial.status)
+				? { ...trial, status: 'skipped' as const, answeredAt: Date.now() }
+				: trial
+		);
+	}
+	profile = persistProfileAfterPropositionChange(profile);
 	return json({ profile: styleProfileForClient(profile), proposition: next });
 };

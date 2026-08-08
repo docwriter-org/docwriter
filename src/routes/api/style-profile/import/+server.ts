@@ -10,6 +10,7 @@ import { styleProfileForClient, writeStyleProfile } from '$lib/server/style-anal
 import { installSkillFolder, skillFolderVersion } from '$lib/server/style-analysis/skill-compiler';
 import { skillVersionDir } from '$lib/server/style-analysis/skill-versions';
 import { WORKSPACE_ROOT } from '$lib/server/document-files';
+import { replacePublishedStylePropositions } from '$lib/server/style-analysis/proposition-store';
 
 /**
  * Restore an author-style skill instead of running the pass: either a version
@@ -50,7 +51,15 @@ export const POST: RequestHandler = async ({ request }) => {
 		const installed = installSkillFolder(sourceDir, { snapshot: !fromHistory });
 		profile.skillId = installed.skillId;
 		profile.skillPath = installed.skillPath;
+		profile.publishedAt = Date.now();
+		profile.publishedAnalyzerVersion = profile.analyzerVersion;
+		profile.publishedSourceSnapshotHash = profile.sourceSnapshotHash;
+		profile.publishedPropositions = structuredClone(profile.propositions);
 		const written = writeStyleProfile(profile);
+		replacePublishedStylePropositions(
+			written.lastRun?.id ?? 'profile',
+			written.publishedPropositions ?? []
+		);
 		return json({
 			profile: styleProfileForClient(written),
 			imported: written.propositions.length,

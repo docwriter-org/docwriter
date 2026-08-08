@@ -63,9 +63,10 @@
 		model?: string;
 		onClose: () => void;
 		onChanged?: () => void;
+		onFinalized?: (skillId: string) => void;
 	}
 
-	let { open, provider, model, onClose, onChanged }: Props = $props();
+	let { open, provider, model, onClose, onChanged, onFinalized }: Props = $props();
 	let step = $state<'sources' | 'review' | 'active'>('sources');
 	let references = $state<ReferenceItem[]>([]);
 	let summary = $state<StyleProfileSummary | null>(null);
@@ -91,6 +92,7 @@
 	let importOpen = $state(false);
 	let importPath = $state('');
 	let importing = $state(false);
+	let finalizing = $state(false);
 	let skillVersions = $state<Array<{ version: number; createdAt: number; propositionCount: number }>>([]);
 
 	const pendingTrials = $derived((summary?.profile?.calibrations ?? [])
@@ -98,6 +100,13 @@
 	const activePropositions = $derived((summary?.profile?.propositions ?? []).filter(isActiveProposition));
 	const allPropositions = $derived(summary?.profile?.propositions ?? []);
 	const inactivePropositions = $derived(allPropositions.filter((proposition) => !isActiveProposition(proposition)));
+	const analysisRunning = $derived(Boolean(run && ['queued', 'running'].includes(run.status)));
+	const canFinalize = $derived(Boolean(
+		summary?.hasUnpublishedChanges
+		&& !analysisRunning
+		&& summary?.unresolvedCount === 0
+		&& activePropositions.length > 0
+	));
 
 	/** Why a proposition is not in the skill, in the reader's terms rather than
 	 *  the status name stored on it. */
@@ -108,8 +117,6 @@
 		if (status === 'skipped') return 'You skipped it';
 		return titleCase(status);
 	}
-	const analysisRunning = $derived(Boolean(run && ['queued', 'running'].includes(run.status)));
-
 	const analysisActivities = $derived.by((): AnalysisActivity[] => {
 		const currentRun = run;
 		if (!currentRun) return [];
@@ -230,6 +237,7 @@
 			tracesLoadedFor = null;
 			void loadAll().then(() => {
 				if (run?.id) void loadStoredTraces(run.id);
+				if (run?.id && ['queued', 'running'].includes(run.status)) connectRun(run.id);
 			});
 			void loadSkillVersions();
 		}
@@ -408,7 +416,7 @@
 		}
 	}
 
-	/** Throw away every learned proposition so the next pass starts clean. */
+	/** Discard the current analysis draft. A finalized skill stays active. */
 	async function resetAnalysis() {
 		errorMessage = '';
 		try {
@@ -568,6 +576,24 @@
 		}
 	}
 
+	async function finalizeStyle() {
+		if (!canFinalize || finalizing) return;
+		finalizing = true;
+		errorMessage = '';
+		try {
+			const data = await requestJson('/api/style-profile/finalize', { method: 'POST' });
+			await loadAll();
+			await loadSkillVersions();
+			step = 'active';
+			onChanged?.();
+			onFinalized?.(data?.profile?.skillId ?? 'author-style');
+		} catch (cause) {
+			errorMessage = cause instanceof Error ? cause.message : 'Could not finalize the style.';
+		} finally {
+			finalizing = false;
+		}
+	}
+
 	function activityStatusLabel(status: ActivityStatus): string {
 		if (status === 'completed') return 'Done';
 		if (status === 'running') return 'Working';
@@ -676,7 +702,7 @@
 					{#if pendingTrials.length > 0}<span class="count-chip">{pendingTrials.length}</span>{/if}
 				</button>
 				<button class:current={step === 'active'} onclick={() => (step = 'active')}>
-					Active skill
+					{summary?.hasUnpublishedChanges ? 'Style draft' : 'Active skill'}
 					{#if activePropositions.length > 0}<span class="count-chip">{activePropositions.length}</span>{/if}
 				</button>
 			</nav>
@@ -974,6 +1000,14 @@
 											{:else if summary?.unresolvedCount}Nothing left for now. Come back later for more.
 											{:else}Nothing left to choose.{/if}
 										</p>
+										{#if canFinalize}
+											<button class="btn primary" disabled={finalizing} onclick={finalizeStyle}>
+												{#if finalizing}<LoaderCircle size={13} class="spinner" />{/if}
+												{summary?.profile?.publishedAt ? 'Update active skill' : 'Finalize style'}
+											</button>
+										{:else if summary?.profile?.publishedAt && !summary?.hasUnpublishedChanges}
+											<span class="hint">The active skill is up to date.</span>
+										{/if}
 									</div>
 								{/if}
 
@@ -1050,10 +1084,21 @@
 					     between them is the answer. -->
 					<div class="step step-active">
 						<div class="active-inner">
-							{#if summary?.profile?.skillPath}
+							{#if summary?.profile?.skillPath || canFinalize}
 								<div class="skill-actions">
-									<a class="btn" href="/api/style-profile/bundle"><Download size={13} /> Download skill</a>
+									{#if summary?.profile?.skillPath}
+										<a class="btn" href="/api/style-profile/bundle"><Download size={13} /> Download skill</a>
+									{/if}
+									{#if canFinalize}
+										<button class="btn primary" disabled={finalizing} onclick={finalizeStyle}>
+											{#if finalizing}<LoaderCircle size={13} class="spinner" />{/if}
+											{summary?.profile?.publishedAt ? 'Update active skill' : 'Finalize style'}
+										</button>
+									{/if}
 								</div>
+							{/if}
+							{#if summary?.hasUnpublishedChanges && allPropositions.length > 0}
+								<p class="column-note">The writing agent will keep using the current skill until you finalize this draft.</p>
 							{/if}
 
 							{#if allPropositions.length === 0}

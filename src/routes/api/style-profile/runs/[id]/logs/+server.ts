@@ -1,6 +1,7 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { readRunLogs } from '$lib/server/style-analysis/run-log-store';
+import { readStylePropositionSnapshots } from '$lib/server/style-analysis/proposition-store';
 
 /**
  * The stored working traces for a run, keyed by specialist. The events stream
@@ -8,5 +9,8 @@ import { readRunLogs } from '$lib/server/style-analysis/run-log-store';
  * still has something to show.
  */
 export const GET: RequestHandler = async ({ params }) => {
-	return json({ traces: readRunLogs(params.id) });
+	return json({
+		traces: readRunLogs(params.id),
+		propositions: readStylePropositionSnapshots(params.id)
+	});
 };

@@ -16,6 +16,7 @@ let testRoot = '';
 let answerCalibrationTrial: typeof import('./calibration').answerCalibrationTrial;
 let writeStyleProfile: typeof import('./profile-store').writeStyleProfile;
 let writeStyleReport: typeof import('./profile-store').writeStyleReport;
+let closeDb: typeof import('$lib/server/db').closeDb;
 
 const report: StyleAnalysisReport = {
 	schemaVersion: 2,
@@ -57,6 +58,7 @@ beforeAll(async () => {
 	process.env.DOCWRITER_ROOT = testRoot;
 	({ answerCalibrationTrial } = await import('./calibration'));
 	({ writeStyleProfile, writeStyleReport } = await import('./profile-store'));
+	({ closeDb } = await import('$lib/server/db'));
 });
 
 beforeEach(() => {
@@ -65,6 +67,7 @@ beforeEach(() => {
 });
 
 afterAll(() => {
+	closeDb();
 	rmSync(testRoot, { recursive: true, force: true });
 	delete process.env.DOCWRITER_ROOT;
 });

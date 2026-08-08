@@ -22,18 +22,20 @@ Three specialist agents then read your passages themselves. The lexis specialist
 
 Each proposition carries passages quoted verbatim from your writing. A proposition whose examples do not appear in your sources is discarded rather than shown to you.
 
-## Resolve the uncertain ones
+## Review and finalize the draft
 
-Reliable propositions become active immediately. For the rest, **Pick your poison** shows a passage you actually wrote next to the same passage with one habit changed, and asks which you would rather have written.
+DocWriter keeps every proposition in the workspace database while the analysis runs. Refreshing the page does not discard completed specialist or synthesis results. Reliable propositions enter the draft without a comparison. For the rest, the review shows a passage you actually wrote next to the same passage with one habit changed, and asks which you would rather have written.
 
 Choose either one, say they feel the same, or edit one when neither works. Your choice settles the proposition.
 
-**Start over** clears every proposition and the measurements behind them while leaving your sources in place.
+When no choices remain, select **Finalize style**. Finalization replaces the generated skill files and tells the main writing agent to read the updated skill. Closing the dialog does not publish the draft.
+
+**Start over** discards the current draft and its measurements while leaving your sources and finalized skill in place.
 
 ## The generated skill
 
-DocWriter saves the result as a skill under `.docwriter/skills/author-style/` and enables it for the workspace. If that name already belongs to a skill you installed, DocWriter uses a reserved fallback name and leaves your skill unchanged.
+DocWriter saves the finalized result as a skill under `.docwriter/skills/author-style/` and enables it for the workspace. If that name already belongs to a skill you installed, DocWriter uses a reserved fallback name and leaves your skill unchanged.
 
-From the same dialog you can inspect active instructions, disable or rewrite one, download the skill bundle, and export local study data. The header marks the skill as stale when a source changes; the current skill stays active until you run the analysis again.
+From the same dialog you can inspect instructions, disable or rewrite one, finalize the draft, download the skill bundle, and export local study data. The current skill stays active while you analyze or review a new draft. It changes only when you finalize the draft.
 
 The local study export includes setup time, calibration choices, confidence bands, skipped choices, and time per choice. A study harness can also record the assigned condition, editing rounds, accepted and rejected edits, edit distance, final correction size, and a blind preference through `/api/style-study`. The event schema rejects prose fields, and the exporter removes raw references, prompts, generated passages, and edited text.

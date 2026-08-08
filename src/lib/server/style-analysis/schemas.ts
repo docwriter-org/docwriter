@@ -158,6 +158,10 @@ export const StyleProfileSchema = z.object({
 	sourceSnapshotHash: z.string().min(1),
 	skillId: z.string().optional(),
 	skillPath: z.string().optional(),
+	publishedAt: z.number().int().nonnegative().optional(),
+	publishedAnalyzerVersion: z.string().min(1).optional(),
+	publishedSourceSnapshotHash: z.string().min(1).optional(),
+	publishedPropositions: z.array(StylePropositionSchema).optional(),
 	propositions: z.array(StylePropositionSchema),
 	calibrations: z.array(CalibrationTrialSchema),
 	lastRun: StyleAnalysisRunSchema.optional()

@@ -37,9 +37,9 @@ import {
 	type SpecialistSubmission,
 	type SynthesisSubmission
 } from './schemas';
-import { compileAuthorStyleSkill } from './skill-compiler';
 import { appendStyleStudyEvent } from './study-log';
 import { appendRunLog } from './run-log-store';
+import { replaceStyleAgentPropositions } from './proposition-store';
 import { propositionTypeIsAllowed, STYLE_FEATURE_REGISTRY } from './feature-registry';
 import { isSelected, listStyleReferences } from '$lib/server/references';
 
@@ -549,6 +549,7 @@ async function runSpecialist(
 			if (run.abortController.signal.aborted) throw error;
 			result = await execute();
 		}
+		replaceStyleAgentPropositions(run.state.id, 'specialist', specialist.id, result.propositions);
 		updateSpecialist(run, specialist.id, { status: 'completed', completedAt: now() });
 		return result.propositions;
 	} catch (error) {
@@ -594,6 +595,7 @@ async function runSynthesis(
 			},
 			abortSignal: run.abortController.signal
 		});
+		replaceStyleAgentPropositions(run.state.id, 'synthesis', 'synthesis', result.propositions);
 		updateSpecialist(run, 'synthesis', { status: 'completed', completedAt: now() });
 		return result.propositions;
 	} catch (error) {
@@ -697,14 +699,9 @@ async function executeRun(run: ManagedRun, force: boolean) {
 		}));
 		run.profile.status = deriveStyleProfileStatus(propositions);
 
-		run.state.phase = 'compiling';
+		run.state.phase = 'saving-draft';
 		run.state.progress = 90;
-		emit(run, 'progress', 'Compiling the author skill');
-		if (active.length) {
-			const skill = compileAuthorStyleSkill(run.profile, report, { startsNewVersion: true });
-			run.profile.skillId = skill.skillId;
-			run.profile.skillPath = skill.skillPath;
-		}
+		emit(run, 'progress', 'Saving propositions for review');
 
 		run.state.status = 'completed';
 		run.state.phase = 'completed';
