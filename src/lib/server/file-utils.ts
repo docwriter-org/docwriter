@@ -11,3 +11,9 @@ export function writeTextAtomic(path: string, text: string) {
 	writeFileSync(tempPath, text);
 	renameSync(tempPath, path);
 }
+
+export function writeBinaryAtomic(path: string, bytes: Uint8Array) {
+	const tempPath = `${path}.tmp`;
+	writeFileSync(tempPath, bytes);
+	renameSync(tempPath, path);
+}
