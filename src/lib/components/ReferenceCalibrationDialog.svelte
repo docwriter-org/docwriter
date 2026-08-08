@@ -4,8 +4,7 @@
 	import { fade, fly } from 'svelte/transition';
 	import { cubicOut } from 'svelte/easing';
 	import {
-		ArrowLeft,
-		BarChart3,
+			BarChart3,
 		BookOpen,
 		Cat,
 		Check,
@@ -15,8 +14,7 @@
 		FileStack,
 		LoaderCircle,
 		Sparkles,
-		Trash2,
-		TriangleAlert,
+			TriangleAlert,
 		Upload,
 		X
 	} from 'lucide-svelte';
@@ -80,7 +78,7 @@
 	let previewLoading = $state(false);
 	let run = $state<StyleAnalysisRun | null>(null);
 	/** Working traces per specialist, accumulated from the run's SSE stream. */
-	type TraceEntry = { kind: 'text' | 'thinking' | 'tool'; text?: string; toolName?: string };
+	type TraceEntry = { kind: 'text' | 'thinking' | 'tool' | 'result' | 'prompt'; text?: string; toolName?: string };
 	let specialistTraces = $state<Record<string, TraceEntry[]>>({});
 	let selectedStep = $state<string | null>(null);
 	let measurements = $state<Array<{ id: string; family: string; label: string; value: number; count: number; sourceCount: number }>>([]);
@@ -631,14 +629,14 @@
 			transition:fly={{ y: 14, duration: 180, easing: cubicOut }}
 		>
 			<div class="dialog-header">
-				<span id="reference-dialog-title">Writing references</span>
+				<span id="reference-dialog-title">Calibrate your style</span>
 				<div class="header-actions">
 					<!-- Lives here rather than on the Active skill tab: the writer who
 					     wants this has no profile yet, so they are on the first tab. -->
 					<button class="btn" onclick={() => (importOpen = !importOpen)}>
 						<Upload size={13} /> Restore from a skill
 					</button>
-					<button class="icon-btn" onclick={onClose} aria-label="Close writing references"><X size={14} /></button>
+					<button class="icon-btn" onclick={onClose} aria-label="Close style calibration"><X size={14} /></button>
 				</div>
 			</div>
 
@@ -692,16 +690,22 @@
 				</div>
 			{/if}
 
+			<!-- Numbered because the tabs are the flow: add sources, analyze,
+			     review the draft. The visible sequence replaces a "next" button
+			     on each step. -->
 			<nav class="steps" aria-label="Reference setup steps">
 				<button class:current={step === 'sources'} onclick={() => (step = 'sources')}>
+					<span class="step-num">1</span>
 					Sources
 					{#if references.length > 0}<span class="count-chip">{references.length}</span>{/if}
 				</button>
 				<button class:current={step === 'review'} onclick={() => (step = 'review')}>
+					<span class="step-num">2</span>
 					Analyze
 					{#if pendingTrials.length > 0}<span class="count-chip">{pendingTrials.length}</span>{/if}
 				</button>
 				<button class:current={step === 'active'} onclick={() => (step = 'active')}>
+					<span class="step-num">3</span>
 					{summary?.hasUnpublishedChanges ? 'Style draft' : 'Active skill'}
 					{#if activePropositions.length > 0}<span class="count-chip">{activePropositions.length}</span>{/if}
 				</button>
@@ -713,119 +717,94 @@
 
 			<div class="dialog-body">
 				{#if step === 'sources'}
-					<!-- Two columns: paste on the left, what you have on the right. -->
+					<!-- A writing surface, not a form: the canvas is the page you are
+					     pasting onto, and the rail on the right holds what you have. -->
 					<div class="step step-sources">
-						<div class="sources-inner">
-							<div class="sources-col">
-								<div class="sources-head">
-									<h3>Paste your writing here</h3>
-								</div>
-
-								<div class="add-form">
-										<input
-											class="what-input"
-											bind:value={sampleDescription}
-											placeholder="What is this? e.g. paper introduction"
-											aria-label="What this passage is"
-										/>
-										<textarea
-											class="paste-area"
-											bind:value={sampleText}
-											onkeydown={onComposerKeydown}
-											placeholder="Paste the writing here"
-											aria-label="Passage text"
-										></textarea>
-										<div class="add-actions">
-											<span class="hint">
-												{#if sampleWordCount > 0}
-												{sampleWordCount} words
-											{:else}
-												Navigation text, dates, URLs and HTML are fine to leave in.
-											{/if}
-											</span>
-											<button class="btn primary" disabled={!canAddSample} onclick={addSample}>
-												{#if addingSample}<LoaderCircle size={13} class="spinner" />{/if}
-												Add source
-											</button>
-										</div>
-									</div>
-							</div>
-
-							<div class="sources-col">
-								<div class="sources-head">
-									<h3>Your sources</h3>
-								</div>
-
-								<!-- One panel, two faces: the list, or the text of the source
-								     you opened. Swapping in place keeps the Analyze button
-								     still instead of shoving it down the sheet. -->
-								<div class="panel">
-								{#if previewId}
-									<div class="panel-head">
-										<button
-											class="icon-btn"
-											onclick={() => (previewId = null)}
-											aria-label="Back to sources"
-										><ArrowLeft size={14} /></button>
-										<span class="panel-title"
-											>{previewReference?.description || previewReference?.label || 'Stored text'}</span
-										>
-									</div>
-									{#if previewLoading}
-										<div class="empty"><LoaderCircle size={14} class="spinner" /> Reading</div>
-									{:else}
-										<textarea class="preview-text" bind:value={previewText} aria-label="Stored text"
-										></textarea>
-										<div class="panel-foot">
-											<span class="hint">Edit anything that came through wrong.</span>
-											<button class="btn primary" onclick={savePreview}>Save</button>
-										</div>
-									{/if}
+						<div class="source-canvas">
+							{#if previewId}
+								{#if previewLoading}
+									<div class="empty"><LoaderCircle size={14} class="spinner" /> Reading</div>
 								{:else}
-									<div class="panel-body">
-										{#if references.length === 0}
-											<p class="panel-empty">Nothing added yet.</p>
-										{:else}
-											{#each references as reference (reference.id)}
-												<div class="pick-row" class:busy={busyId === reference.id}>
-													<div class="source-main">
-														<strong>{reference.description || reference.label}</strong>
-														<span class="source-meta">{sourceKindLabel(reference)}</span>
-														{#if reference.error}<span class="source-error">{reference.error}</span>{/if}
-													</div>
-													<div class="source-controls">
-														<button
-															class="icon-btn"
-															onclick={() =>
-																materialize(reference, reference.materializationStatus === 'ready')}
-															disabled={previewLoading}
-															aria-label={`Read ${reference.label}`}
-														><BookOpen size={13} /></button>
-														<button
-															class="icon-btn"
-															onclick={() => removeReference(reference)}
-															disabled={busyId === reference.id}
-															aria-label={`Remove ${reference.label}`}
-														><Trash2 size={13} /></button>
-													</div>
-												</div>
-											{/each}
-										{/if}
-									</div>
-									<div class="panel-foot">
-										<span class="hint">
-											{#if references.length < 3}Add {3 - references.length} more{/if}
-										</span>
-										<button
-											class="btn primary"
-											disabled={references.length < 3}
-											onclick={() => (step = 'review')}
-										>Analyze my style</button>
+									<h2 class="canvas-title">
+										{previewReference?.description || previewReference?.label || 'Stored text'}
+									</h2>
+									<textarea class="canvas-text" bind:value={previewText} aria-label="Stored text"
+									></textarea>
+									<div class="canvas-foot">
+										<span class="hint">Edit anything that came through wrong.</span>
+										<button class="btn primary" onclick={savePreview}>Save</button>
 									</div>
 								{/if}
+							{:else}
+								<input
+									class="canvas-title-input"
+									bind:value={sampleDescription}
+									placeholder="What is this? e.g. paper introduction"
+									aria-label="What this passage is"
+								/>
+								<textarea
+									class="canvas-text"
+									bind:value={sampleText}
+									onkeydown={onComposerKeydown}
+									placeholder="Paste the writing here"
+									aria-label="Passage text"
+								></textarea>
+								<div class="canvas-foot">
+									<span class="hint">
+										{#if sampleWordCount > 0}
+											{sampleWordCount} words
+										{:else}
+											Navigation text, dates, URLs and HTML are fine to leave in.
+										{/if}
+									</span>
+									<button class="btn primary" disabled={!canAddSample} onclick={addSample}>
+										{#if addingSample}<LoaderCircle size={13} class="spinner" />{/if}
+										Add source
+									</button>
 								</div>
-							</div>
+							{/if}
 						</div>
+
+						<aside class="source-rail">
+							<div class="rail-head">
+								<span class="eyebrow">Your sources</span>
+								{#if previewId}
+									<button class="btn ghost" onclick={() => (previewId = null)}>Add source</button>
+								{/if}
+							</div>
+							<div class="rail-list">
+								{#if references.length === 0}
+									<p class="panel-empty">Nothing added yet.</p>
+								{:else}
+									{#each references as reference (reference.id)}
+										<div
+											class="source-card"
+											class:selected={previewId === reference.id}
+											class:busy={busyId === reference.id}
+										>
+											<button
+												class="source-open"
+												onclick={() => materialize(reference, reference.materializationStatus === 'ready')}
+												disabled={previewLoading}
+											>
+												<strong>{reference.description || reference.label}</strong>
+												<span class="source-meta">{sourceKindLabel(reference)}</span>
+												{#if reference.error}<span class="source-error">{reference.error}</span>{/if}
+											</button>
+											<button
+												class="icon-btn"
+												onclick={() => removeReference(reference)}
+												disabled={busyId === reference.id}
+												aria-label={`Remove ${reference.label}`}
+											><X size={13} /></button>
+										</div>
+									{/each}
+								{/if}
+							</div>
+							{#if references.length > 0 && references.length < 3}
+								<span class="hint rail-hint">Three to five sources work best. Add {3 - references.length} more.</span>
+							{/if}
+						</aside>
 					</div>
 				{:else if step === 'review'}
 					<div class="step step-review">
@@ -846,7 +825,8 @@
 								{/if}
 							</div>
 							<p class="column-note">
-								Reading your writing and turning it into style guidance. This takes a few minutes.
+								Reading your writing and turning it into style guidance. This may take 10+ minutes,
+								so feel free to keep writing or do other things in the meantime.
 							</p>
 
 							{#if run}
@@ -962,6 +942,18 @@
 														<p class="agent-say">{entry.text}</p>
 													{:else if entry.kind === 'thinking'}
 														<p class="agent-think">{entry.text}</p>
+													{:else if entry.kind === 'prompt'}
+														<details class="trace-block">
+															<summary>What it was asked</summary>
+															<pre>{entry.text}</pre>
+														</details>
+													{:else if entry.kind === 'result'}
+														<p class="agent-rejection">Submission rejected: {entry.text}</p>
+													{:else if entry.text}
+														<details class="trace-block" open>
+															<summary><span class="tool-name">{entry.toolName}</span></summary>
+															<pre>{entry.text}</pre>
+														</details>
 													{:else}
 														<span class="tool-name">{entry.toolName}</span>
 													{/if}
@@ -1431,6 +1423,23 @@
 		overflow-wrap: anywhere;
 	}
 
+	/* The tab order is the workflow, so each carries its position. */
+	.step-num {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 17px;
+		height: 17px;
+		border: 1px solid var(--border-light);
+		border-radius: 50%;
+		font-size: 10.5px;
+		font-weight: 600;
+		color: var(--text-faint);
+	}
+	.steps button.current .step-num {
+		border-color: var(--accent);
+		color: var(--accent);
+	}
 	.count-chip {
 		flex: none;
 		padding: 1px 6px;
@@ -1517,179 +1526,130 @@
 	}
 
 	/* ---- step 1: sources ---------------------------------------------- */
-	/* Left: paste a new passage. Right: the ones you already have, and the
-	 * text of whichever you opened. The dialog is a fixed-size sheet, so the
-	 * grid fills it top to bottom instead of floating in the upper third —
-	 * both columns end at the same line and neither one grows the page. */
+	/* The canvas is the page you paste onto — a document surface with a big
+	 * titled heading, not a boxed form. The rail on the right holds the
+	 * sources you already added and the button that starts the analysis. */
 	.step-sources {
-		display: flex;
-		justify-content: center;
-		height: 100%;
-		overflow: hidden;
-	}
-	.sources-inner {
 		display: grid;
+		grid-template-columns: minmax(0, 1fr) 300px;
+		height: 100%;
+		overflow: hidden;
+	}
+	.source-canvas {
+		display: flex;
 		box-sizing: border-box;
 		width: 100%;
-		max-width: 1120px;
+		max-width: 860px;
 		height: 100%;
 		min-height: 0;
-		grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-		gap: 28px;
-		padding: 24px 24px 28px;
-	}
-	.sources-col {
-		display: flex;
-		min-height: 0;
+		margin: 0 auto;
 		flex-direction: column;
-		gap: 14px;
+		padding: 30px 44px 20px;
 	}
-	.sources-head {
-		flex: none;
-	}
-	.sources-head h3 {
-		font-size: 16px;
-	}
-	/* One composer, not a card holding cards: a single border owns the whole
-	 * form and the fields inside are separated by hairlines only. */
-	/* One box, used by both columns so they read as one system. */
-	.add-form,
-	.panel {
-		display: flex;
-		flex: 1 1 auto;
-		min-height: 0;
-		flex-direction: column;
-		overflow: hidden;
-		border: 1px solid var(--border-light);
-		border-radius: 10px;
-		background: var(--bg);
-	}
-	.add-form:focus-within {
-		border-color: var(--accent);
-	}
-	.what-input {
+	.canvas-title-input,
+	.canvas-title {
 		box-sizing: border-box;
 		width: 100%;
-		padding: 10px 12px;
+		margin: 0;
+		padding: 4px 0 14px;
 		border: none;
 		border-bottom: 1px solid var(--border-light);
 		border-radius: 0;
 		background: transparent;
 		color: var(--text);
 		font: inherit;
-		font-size: 13px;
-		font-weight: 500;
+		font-size: 23px;
+		font-weight: 700;
+		letter-spacing: -0.015em;
+		line-height: 1.25;
 	}
-	.what-input:focus,
-	.paste-area:focus,
-	.preview-text:focus {
+	.canvas-title-input:focus {
 		outline: none;
+		border-color: var(--accent);
 	}
-	/* Grows with its box instead of being hand-resized, so `resize` is off. */
-	.paste-area,
-	.preview-text {
+	.canvas-text {
 		flex: 1 1 auto;
 		min-height: 0;
-		padding: 10px 12px;
+		padding: 18px 0;
 		border: none;
 		border-radius: 0;
 		background: transparent;
+		font-size: 13.5px;
+		line-height: 1.6;
 		resize: none;
 	}
-	.add-actions,
-	.panel-foot {
+	.canvas-text:focus {
+		outline: none;
+	}
+	.canvas-foot {
+		display: flex;
+		flex: none;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+		padding-top: 10px;
+	}
+
+	.source-rail {
+		display: flex;
+		min-height: 0;
+		flex-direction: column;
+		gap: 12px;
+		padding: 20px 16px 16px;
+		border-left: 1px solid var(--border-light);
+		background: var(--bg-surface);
+	}
+	.rail-head {
 		display: flex;
 		flex: none;
 		align-items: center;
 		justify-content: space-between;
 		gap: 10px;
-		padding: 8px 10px;
-		border-top: 1px solid var(--border-light);
+		min-height: 26px;
 	}
-
-	.panel-head {
+	.rail-list {
 		display: flex;
-		flex: none;
-		align-items: center;
-		gap: 8px;
-		padding: 7px 10px;
-		border-bottom: 1px solid var(--border-light);
-	}
-	.panel-title {
-		min-width: 0;
-		overflow: hidden;
-		font-size: 12.5px;
-		font-weight: 600;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	.panel-body {
 		flex: 1 1 auto;
 		min-height: 0;
-		padding: 6px;
+		flex-direction: column;
+		gap: 8px;
 		overflow-y: auto;
 	}
-
-	.panel-empty {
-		padding: 28px 12px;
-		color: var(--text-faint);
-		font-size: 12.5px;
-		text-align: center;
-	}
-	.composer {
-		margin: 20px 18px 0;
-	}
-
-	.pick-row {
+	.source-card {
 		display: flex;
-		align-items: flex-start;
-		gap: 10px;
-		padding: 9px 10px;
-		border: 1px solid transparent;
-		border-radius: 8px;
-	}
-	.pick-row + .pick-row {
-		margin-top: 2px;
-	}
-	.pick-row:hover {
-		background: var(--bg-hover);
-	}
-	.pick-row.busy {
-		opacity: 0.6;
-	}
-	.source-list {
-		display: flex;
-		flex-direction: column;
-	}
-	.source-row {
-		display: flex;
-		align-items: center;
-		gap: 12px;
-		padding: 10px 0;
-		border-bottom: 1px solid var(--border-light);
-	}
-	.source-row.busy {
-		opacity: 0.6;
-	}
-	.source-icon {
 		flex: none;
-		display: grid;
-		place-items: center;
-		width: 28px;
-		height: 28px;
-		border-radius: 7px;
-		background: var(--bg-hover);
-		color: var(--text-faint);
+		align-items: flex-start;
+		gap: 6px;
+		padding: 10px 8px 10px 12px;
+		border: 1px solid var(--border-light);
+		border-radius: 10px;
+		background: var(--bg);
 	}
-	.source-main {
+	.source-card:hover {
+		border-color: var(--border);
+	}
+	.source-card.selected {
+		border-color: var(--accent);
+	}
+	.source-card.busy {
+		opacity: 0.6;
+	}
+	/* The whole card body opens the source; the × beside it removes it. */
+	.source-open {
 		display: flex;
 		min-width: 0;
 		flex: 1;
 		flex-direction: column;
 		gap: 2px;
+		padding: 0;
+		border: none;
+		background: none;
+		color: inherit;
+		font: inherit;
+		text-align: left;
+		cursor: pointer;
 	}
-	/* Article titles, so two lines rather than one truncated one. */
-	.source-main strong {
+	.source-open strong {
 		display: -webkit-box;
 		-webkit-box-orient: vertical;
 		-webkit-line-clamp: 2;
@@ -1698,6 +1658,17 @@
 		font-size: 12.5px;
 		font-weight: 600;
 		line-height: 1.35;
+	}
+	.rail-hint {
+		flex: none;
+		text-align: center;
+	}
+
+	.panel-empty {
+		padding: 28px 12px;
+		color: var(--text-faint);
+		font-size: 12.5px;
+		text-align: center;
 	}
 	.source-meta {
 		font-size: 11px;
@@ -2046,6 +2017,41 @@
 		justify-content: flex-end;
 		gap: 8px;
 	}
+	/* Prompt and tool-input transcripts: monospace, boxed, own scrollbar. */
+	.trace-block {
+		border: 1px solid var(--border-light);
+		border-radius: 8px;
+		background: var(--bg-surface);
+	}
+	.trace-block summary {
+		padding: 7px 10px;
+		color: var(--text-secondary);
+		font-size: 12px;
+		font-weight: 600;
+		cursor: pointer;
+		user-select: none;
+	}
+	.trace-block pre {
+		max-height: 340px;
+		margin: 0;
+		padding: 10px 12px;
+		border-top: 1px solid var(--border-light);
+		overflow: auto;
+		font-family: 'Geist Mono', ui-monospace, monospace;
+		font-size: 11.5px;
+		line-height: 1.55;
+		white-space: pre-wrap;
+		word-break: break-word;
+	}
+	.agent-rejection {
+		padding: 7px 10px;
+		border: 1px solid color-mix(in srgb, var(--diff-removed-color) 32%, var(--border-light));
+		border-radius: 8px;
+		background: color-mix(in srgb, var(--diff-removed-color) 8%, var(--bg-elevated));
+		color: var(--diff-removed-color);
+		font-size: 12.5px;
+		line-height: 1.5;
+	}
 	.trace-working {
 		display: flex;
 		align-items: center;
@@ -2210,16 +2216,14 @@
 			grid-template-columns: 1fr;
 			overflow: auto;
 		}
-		/* Too narrow for two columns: stack them and scroll the step, with
-		 * each box tall enough to still be worth using. */
-		.sources-inner {
+		/* Too narrow for a sidebar: the canvas stacks above the rail. */
+		.source-canvas {
 			height: auto;
-			grid-template-columns: minmax(0, 1fr);
-			grid-template-rows: none;
+			min-height: 320px;
 		}
-		.add-form,
-		.panel {
-			min-height: 260px;
+		.source-rail {
+			border-left: 0;
+			border-top: 1px solid var(--border-light);
 		}
 		.analysis-column {
 			border-right: 0;
@@ -2239,9 +2243,6 @@
 			height: 100vh;
 			border: 0;
 			border-radius: 0;
-		}
-		.source-row {
-			flex-wrap: wrap;
 		}
 		.candidate-grid {
 			grid-template-columns: 1fr;

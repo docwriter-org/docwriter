@@ -28,7 +28,8 @@ import {
 	readStyleProfile,
 	validateDraftGrounding,
 	writeStyleProfile,
-	writeStyleReport
+	writeStyleReport,
+	normalizeForMatch
 } from './profile-store';
 import {
 	SpecialistSubmissionSchema,
@@ -46,7 +47,9 @@ import { isSelected, listStyleReferences } from '$lib/server/references';
 /** One line of a specialist's working trace, streamed as it happens. */
 export interface SpecialistLogEntry {
 	specialistId: SpecialistRunState['id'];
-	kind: 'text' | 'thinking' | 'tool';
+	/** prompt = what the agent was asked; tool = a call it made, text holds the
+	 *  input; result = a rejected submission, text holds why. */
+	kind: 'text' | 'thinking' | 'tool' | 'result' | 'prompt';
 	text?: string;
 	toolName?: string;
 }
@@ -294,6 +297,8 @@ Each proposition also needs a contrast, because the author will be shown it and 
 
 Keep the contrast short: one or two sentences, 20 to 60 words. This is not the example. The examples are long because the ghostwriter studies them; the contrast is a snap judgement the author makes side by side with the other version, and a long one is too much to hold in the eye at once. Pick the shortest passage that still shows the habit. Change only what the proposition governs: same meaning, facts, names, numbers and roughly the same length. The rewrite has to be prose a competent writer would be happy with, because the question is which the author prefers, not which is better written. If you cannot write a contrast for a proposition, the proposition is too vague to be worth keeping — drop it.
 
+No sentence carries two propositions. Each focus sentence and each contrast passage belongs to exactly one proposition, and two propositions should not quote the same passage as evidence. If two of your propositions want the same sentence, they are probably one habit — merge them, or find each its own evidence.
+
 A good proposition:
 - Sounds like advice you'd say out loud: "Open with the hard problem, then name your system." Not like a paper about writing.
 - Names a real choice (someone could write the opposite and still be competent).
@@ -380,6 +385,8 @@ Drop propositions that:
 
 Keep authored habits as "this is how they write" and inspiration preferences as "aim for this" when those differ. Smallest useful set wins.
 
+Specialists work apart, so two of their propositions may lean on the same sentence. After your merge no sentence appears in more than one proposition: same focus sentence or same contrast passage means they collapse into one, or one of them gets different evidence.
+
 Work fast: decide merges, then call submit_style_profile exactly once. Do not restate the input propositions. At most one short status line before the tool call — no merge essay.`;
 }
 
@@ -437,6 +444,53 @@ export async function runStructuredStyleAgent<T>(input: {
 }
 
 /**
+ * One sentence, one proposition. The same focus sentence or contrast passage
+ * quoted under two propositions means they are one habit split in two, and the
+ * writer would be asked the same question twice. Checked mechanically so a
+ * violation comes back as a rejection the model can fix, not advice it can skip.
+ */
+function assertDistinctEvidence(propositions: PropositionDraft[]): void {
+	const seen = new Map<string, string>();
+	for (const draft of propositions) {
+		const keys = [...(draft.focus ?? []).filter(Boolean), draft.contrast?.passage ?? ''];
+		for (const key of keys) {
+			const normalized = normalizeForMatch(key);
+			if (normalized.length < 12) continue;
+			const owner = seen.get(normalized);
+			if (owner && owner !== draft.statement) {
+				throw new Error(
+					`The sentence "${key.slice(0, 80)}…" is used by two propositions ("${owner}" and "${draft.statement}"). Merge them or give each its own evidence.`
+				);
+			}
+			seen.set(normalized, draft.statement);
+		}
+	}
+}
+
+/** Big enough to hold a full submission, small enough not to drown the panel. */
+const TRACE_CLIP = 20_000;
+function clipForTrace(text: string): string {
+	return text.length > TRACE_CLIP ? `${text.slice(0, TRACE_CLIP)}\n… trimmed` : text;
+}
+
+/** The exact instructions and material a specialist was handed, first in its
+ *  trace, so the transcript reads from the top: asked this, did that. */
+function logSpecialistPrompt(
+	run: ManagedRun,
+	specialistId: SpecialistRunState['id'],
+	systemPrompt: string,
+	prompt: string
+) {
+	const entry: SpecialistLogEntry = {
+		specialistId,
+		kind: 'prompt',
+		text: `${systemPrompt}\n\n─── the material ───\n\n${prompt}`
+	};
+	emitLog(run, entry);
+	appendRunLog(run.state.id, entry);
+}
+
+/**
  * Turn a specialist's provider events into trace lines. Text and thinking arrive
  * as deltas, so they are accumulated per message and re-emitted whole — the
  * client replaces the open line rather than collecting half-words.
@@ -472,8 +526,27 @@ function makeSpecialistForwarder(run: ManagedRun, specialistId: SpecialistRunSta
 				// not the specialist doing anything. Showing it as the only line in
 				// an otherwise empty panel reads as a stuck run.
 				if (toolName === 'ToolSearch') return;
-				emitLog(run, { specialistId, kind: 'tool', toolName });
-				appendRunLog(run.state.id, { specialistId, kind: 'tool', toolName });
+				// The input IS the work — for a specialist it holds every
+				// proposition it is submitting — so it goes in the trace, not
+				// just the tool's name.
+				const entry = {
+					specialistId,
+					kind: 'tool' as const,
+					toolName,
+					text: clipForTrace(JSON.stringify(event.input, null, 2))
+				};
+				emitLog(run, entry);
+				appendRunLog(run.state.id, entry);
+			} else if (event.type === 'tool_result' && event.is_error) {
+				// A rejection is why the same tool shows up twice in a row.
+				// Without it the retry reads as a stutter.
+				const entry = {
+					specialistId,
+					kind: 'result' as const,
+					text: clipForTrace(event.text)
+				};
+				emitLog(run, entry);
+				appendRunLog(run.state.id, entry);
 			}
 		},
 		flush: closeOpenLines
@@ -517,11 +590,14 @@ async function runSpecialist(
 	specialist: (typeof SPECIALISTS)[number]
 ): Promise<PropositionDraft[]> {
 	updateSpecialist(run, specialist.id, { status: 'running', startedAt: now(), error: undefined });
+	const systemPrompt = specialistSystemPrompt(specialist);
+	const prompt = specialistPrompt(report, specialist.families, vocabulary, excerpts);
+	logSpecialistPrompt(run, specialist.id, systemPrompt, prompt);
 	const execute = async () => runStructuredStyleAgent<SpecialistSubmission>({
 		providerId: run.state.provider as ProviderId,
 		model: run.state.model,
-		systemPrompt: specialistSystemPrompt(specialist),
-		prompt: specialistPrompt(report, specialist.families, vocabulary, excerpts),
+		systemPrompt,
+		prompt,
 		toolName: 'submit_style_families',
 		toolDescription: 'Submit all grounded style propositions for the assigned feature families.',
 		inputSchema: draftJsonSchema(),
@@ -529,6 +605,7 @@ async function runSpecialist(
 		onEvent: (event) => forwardSpecialistEvent(run, specialist.id, event),
 		parse: (value) => {
 			const parsed = SpecialistSubmissionSchema.parse(value);
+			assertDistinctEvidence(parsed.propositions);
 			for (const draft of parsed.propositions) {
 				if (!specialist.families.includes(draft.family)) throw new Error(`Family ${draft.family} is outside this specialist assignment`);
 				if (draft.propositionType && !propositionTypeIsAllowed(draft.family, draft.propositionType)) {
@@ -570,12 +647,15 @@ async function runSynthesis(
 	drafts: PropositionDraft[]
 ): Promise<PropositionDraft[]> {
 	updateSpecialist(run, 'synthesis', { status: 'running', startedAt: now(), error: undefined });
+	const systemPrompt = synthesisSystemPrompt();
+	const prompt = `Merge these specialist propositions. Decide overlaps, then submit once.\n\n${JSON.stringify({ propositions: drafts })}`;
+	logSpecialistPrompt(run, 'synthesis', systemPrompt, prompt);
 	try {
 		const result = await runStructuredStyleAgent<SynthesisSubmission>({
 			providerId: run.state.provider as ProviderId,
 			model: run.state.model,
-			systemPrompt: synthesisSystemPrompt(),
-			prompt: `Merge these specialist propositions. Decide overlaps, then submit once.\n\n${JSON.stringify({ propositions: drafts })}`,
+			systemPrompt,
+			prompt,
 			toolName: 'submit_style_profile',
 			toolDescription: 'Submit the complete merged and grounded author style profile.',
 			inputSchema: draftJsonSchema(),
@@ -585,6 +665,7 @@ async function runSynthesis(
 			onEvent: (event) => forwardSpecialistEvent(run, 'synthesis', event),
 			parse: (value) => {
 				const parsed = SynthesisSubmissionSchema.parse(value);
+				assertDistinctEvidence(parsed.propositions);
 				for (const draft of parsed.propositions) {
 					if (draft.propositionType && !propositionTypeIsAllowed(draft.family, draft.propositionType)) {
 						throw new Error(`Proposition type ${draft.propositionType} is outside family ${draft.family}`);

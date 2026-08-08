@@ -2278,7 +2278,7 @@
 				},
 				{
 					kind: 'action',
-					label: 'Writing references',
+					label: 'Calibrate your style',
 					onClick: () => (styleDialogOpen = true)
 				},
 				{
@@ -3072,6 +3072,17 @@
 			<ReferenceStatusPill
 				onOpen={() => (styleDialogOpen = true)}
 				refreshToken={styleRefreshToken}
+				onAnalysisFinished={(unresolvedCount) => {
+					pushHistory({
+						type: 'notification',
+						timestamp: Date.now(),
+						text:
+							unresolvedCount > 0
+								? `Your style analysis finished. ${unresolvedCount} propositions are waiting. Open "Calibrate your style" to review them.`
+								: 'Your style analysis finished. Open "Calibrate your style" to see the new guidance.',
+						priority: 'high'
+					});
+				}}
 			/>
 		</div>
 	</header>

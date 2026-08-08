@@ -7,8 +7,12 @@
 	interface Props {
 		onOpen: () => void;
 		refreshToken?: number;
+		/** Fired once when a running analysis finishes, whether or not the
+		 *  dialog is open. The pill is the one thing that always polls, so it
+		 *  is the one thing that reliably notices. */
+		onAnalysisFinished?: (unresolvedCount: number) => void;
 	}
-	let { onOpen, refreshToken = 0 }: Props = $props();
+	let { onOpen, refreshToken = 0, onAnalysisFinished }: Props = $props();
 	let summary = $state<StyleProfileSummary | null>(null);
 	let loading = $state(true);
 
@@ -59,7 +63,15 @@
 	async function load() {
 		try {
 			const response = await fetch('/api/style-profile');
-			if (response.ok) summary = await response.json();
+			if (response.ok) {
+				const next: StyleProfileSummary = await response.json();
+				// Only a transition seen while mounted counts: a page opened
+				// onto an already-finished pass should not announce it.
+				if (summary?.status === 'analyzing' && next.status !== 'analyzing' && next.status !== 'error') {
+					onAnalysisFinished?.(next.unresolvedCount);
+				}
+				summary = next;
+			}
 		} catch {
 			// Keep the last known status while the local server reconnects.
 		} finally {
