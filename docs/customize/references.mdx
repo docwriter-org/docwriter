@@ -2,29 +2,29 @@
 title: "Writing references"
 ---
 
-Paste a few passages of your writing and DocWriter works out how you write. The writing agent then follows that style.
+You paste a few passages of your own writing, and DocWriter works out how you write. The writing agent then follows that style when you ask it to help.
 
-This page walks through the full loop: add three sources, wait while specialist agents read them, pick between close passages, finalize the skill, then ask for an edit that sounds like you.
+This page walks you through the full loop: you add three sources, you wait while specialist agents read them, you pick between close passages, you finalize the skill, then you ask for an edit that sounds like you.
 
-For the screenshots below, the three sources are public-domain passages from [Alice Meynell](https://www.gutenberg.org/ebooks/1276) (1847–1922)—an essayist with a careful, slightly Latinate voice that most models will not immediately recognize as a famous style. Use your own writing when you set this up for real work. Writing references teach voice, not facts: use a [writing rule](/customize/rules) for a standing instruction and an [intended audience](/agent/customize#set-the-intended-audience) to name the reader.
+In this example, the screenshots use public-domain passages from [Alice Meynell](https://www.gutenberg.org/ebooks/1276) (1847–1922) so you can see a real analysis end to end. When you set this up for your own work, you should paste your writing, not hers. Writing references teach voice, not facts: you can use a [writing rule](/customize/rules) for a standing instruction and an [intended audience](/agent/customize#set-the-intended-audience) to name the reader.
 
 ## 1. Add three sources
 
-Click the references pill in the header (it says **References not provided** until you add some), or open **Settings**, then **Writing references**.
+You should start from the references pill in the header (it says **References not provided** until you add some), or open **Settings**, then **Writing references**.
 
-Paste a passage, say what it is, and choose **Add source**. Do this **three** times. Three to five sources is the useful range: fewer gives the analysis little to go on, more averages your voice away.
+Paste a passage of your writing, say what it is, and choose **Add source**. Do this **three** times. You want three to five sources: fewer gives the analysis little to go on, and more averages your voice away.
 
-Describe each passage in your own words — "introduction of a paper", "related work section", "a post I like the tone of". The specialists read the description beside the passage, so an introduction is read as an introduction rather than as prose in general.
+Describe each passage in your own words — "introduction of a paper", "related work section", "a post I like the tone of". The specialists read your description beside the passage, so you should label an introduction as an introduction rather than leaving it as unlabeled prose.
 
-To follow the walkthrough with the same material used in these screenshots, paste three Meynell passages and label them:
+In this example, we pasted three Meynell passages and labeled them:
 
-1. **Opening of an essay on recurrence** — the opening of *The Rhythm of Life*
-2. **Character sketch of a reserved man** — from *A Remembrance*
-3. **Essay on Latinate composure in English** — from *Composure*
+1. **Opening of an essay on recurrence**
+2. **Character sketch of a reserved man**
+3. **Essay on Latinate composure in English**
 
-Use a few hundred words for each. Longer is fine; a sentence or two is not enough.
+You should use a few hundred words for each of your own passages. Longer is fine; a sentence or two is not enough.
 
-<Frame caption="Step 1 — three sources on the right, ready to analyze.">
+<Frame caption="Step 1 — you have three sources on the right, ready to analyze.">
   ![The Calibrate your style dialog on the Sources step with three pasted passages listed](/images/style-guidance-sources.png)
 </Frame>
 
@@ -32,13 +32,13 @@ Once you have three sources, open the **Analyze** step.
 
 ## 2. Run the analysis and wait
 
-Choose **Run analysis**. DocWriter measures the passages, then three specialist agents read them and draft style guidance. A fourth pass combines the drafts.
+Choose **Run analysis**. DocWriter measures your passages, then three specialist agents read them and draft style guidance. A fourth pass combines the drafts.
 
-Plan on about **ten minutes**. You can keep writing elsewhere while it runs. The left column shows progress: sources prepared, measurements computed, then the Lexis, Grammar, and Discourse specialists, then **Guidance combined**.
+You should plan on about **ten minutes**. You can keep writing elsewhere while it runs. On the left, you will see progress: sources prepared, measurements computed, then the Lexis, Grammar, and Discourse specialists, then **Guidance combined**.
 
-Select any specialist to watch its reasoning, or **Measurements computed** to see every metric that fired. Each proposition has to quote your writing or it is discarded.
+You can select any specialist to watch its reasoning, or open **Measurements computed** to see every metric that fired. Each proposition has to quote your writing or it is discarded.
 
-<Frame caption="Step 2 — specialist agents working through the analysis. Expect roughly ten minutes.">
+<Frame caption="Step 2 — you wait while the specialist agents work. Expect roughly ten minutes.">
   ![The Analyze step showing Lexis, Grammar, and Discourse specialists in progress](/images/style-guidance-specialists.png)
 </Frame>
 
@@ -46,44 +46,44 @@ Select any specialist to watch its reasoning, or **Measurements computed** to se
 
 As propositions arrive, the right column asks **Which piece of writing sounds more like you?** One side is a passage from your sources; the other is the same passage with one habit changed.
 
-Choose **A** or **B**. If both feel fine, choose **Both are the same to me**. If neither works, choose **Neither is good** and edit one into something you would actually write. Use **Skip proposition** only when the habit does not matter to you.
+You should choose **A** or **B**. If both feel fine, choose **Both are the same to me**. If neither works, choose **Neither is good** and edit one into something you would actually write. You can **Skip proposition** when the habit does not matter to you.
 
-<Frame caption="Step 3 — preference cards. Pick the side that sounds more like you.">
+<Frame caption="Step 3 — you pick the side that sounds more like you.">
   ![Preference cards with passage A and passage B for style propositions](/images/style-guidance-preference.png)
 </Frame>
 
-Work through the cards until none remain. Reliable propositions can enter the draft without a comparison; the rest wait on your pick.
+Work through the cards until none remain. Reliable propositions can enter your draft without a comparison; the rest wait on your pick.
 
 ## 4. Review the style draft and finalize
 
 Open the **Style draft** (or **Active skill**) step. You will see the instructions the writing agent will follow, with short quoted examples from your sources.
 
-Choose **Finalize style** when you are ready. Finalization writes the skill under `.docwriter/skills/author-style/` and tells the writing agent to read it. Closing the dialog does not publish the draft. **Start over** on the Analyze step discards the current draft and its measurements while leaving your sources and any already-finalized skill in place.
+Choose **Finalize style** when you are ready. That writes the skill under `.docwriter/skills/author-style/` and tells the writing agent to read it. If you close the dialog without finalizing, your draft stays unpublished. On the Analyze step, **Start over** discards the current draft and its measurements while leaving your sources and any already-finalized skill in place.
 
-<Frame caption="Step 4 — the draft instructions, ready to finalize for the writing agent.">
+<Frame caption="Step 4 — you review the draft instructions, then finalize them for the writing agent.">
   ![The Active skill step listing style propositions with example passages](/images/style-guidance-skill.png)
 </Frame>
 
-From the same dialog you can download the skill bundle, restore an earlier version, or remove an instruction you do not want. The header pill reads **Style uploaded** once the skill is active.
+From the same dialog you can download the skill bundle, restore an earlier version, or remove an instruction you do not want. Once the skill is active, your header pill reads **Style uploaded**.
 
 ## 5. Ask for an edit that sounds like you
 
-With the skill finalized, write in the editor as usual. Put the request in a directive so the agent knows what to do. For this walkthrough the draft used a late train in the rain:
+With the skill finalized, write in the editor as usual. You should put the request in a directive so the agent knows what to do. In this example, we asked for a late train in the rain:
 
 ```text
 [[ Write two short paragraphs about waiting beside a late train in the rain, sounding like me. Keep the scene ordinary. Replace this directive. ]]
 ```
 
-Wake the agent (or let the idle timer fire). The proposed edit appears as tracked changes with an Accept / Reject / Retry card in the comment gutter. Expand the card to read the full proposal before you accept.
+Wake the agent, or let the idle timer fire. You will see the proposed edit as tracked changes, with an Accept / Reject / Retry card in the comment gutter. Expand the card so you can read the full proposal before you accept.
 
-<Frame caption="Step 5 — an expanded pending edit written to match the learned style.">
+<Frame caption="Step 5 — you expand the pending edit and decide whether it sounds like you.">
   ![The editor with an expanded review card for a style-matched rewrite about a late train](/images/style-guidance-editor-edit.png)
 </Frame>
 
-Accept when the wording sounds like you. Reject and retry when it drifts toward generic model prose. The skill stays active for later turns until you analyze again and finalize a new draft.
+Accept when the wording sounds like you. Reject and retry when it drifts toward generic model prose. Your skill stays active for later turns until you analyze again and finalize a new draft.
 
 ## What the analysis is doing
 
-The analysis follows the Leech and Short style checklist at three zoom levels: lexis (words and short phrases), grammar (sentences, clauses, and punctuation), and discourse (figures, cohesion, reader relationship, and other voices). Layout features such as headings and lists are kept separately as document conventions. Metrics that measured zero are discarded — a passage with no citations says nothing about how you use citations.
+The analysis follows the Leech and Short style checklist at three zoom levels: lexis (words and short phrases), grammar (sentences, clauses, and punctuation), and discourse (figures, cohesion, reader relationship, and other voices). Layout features such as headings and lists are kept separately as document conventions. Metrics that measured zero are discarded — if your passage has no citations, that says nothing about how you use citations.
 
-The local study export (setup time, calibration choices, confidence bands, and timing) lives under `.docwriter/style-study/` and does not include your reference text or generated passages. See [Storage and backups](/help/storage-and-backups) and [Privacy and safety](/help/privacy-and-safety) for where the files sit on disk.
+Your local study export (setup time, calibration choices, confidence bands, and timing) lives under `.docwriter/style-study/` and does not include your reference text or generated passages. See [Storage and backups](/help/storage-and-backups) and [Privacy and safety](/help/privacy-and-safety) for where the files sit on disk.
