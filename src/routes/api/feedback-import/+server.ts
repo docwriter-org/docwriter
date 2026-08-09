@@ -7,28 +7,52 @@ import {
 	clearFeedbackImport,
 	updateFeedbackDisposition
 } from '$lib/server/feedback-import';
+import { extractDocxComments } from '$lib/server/docx-comments';
 
 export const GET: RequestHandler = async () => {
 	return json({ import: getFeedbackImport() });
 };
 
 export const POST: RequestHandler = async ({ request }) => {
-	const body = (await request.json()) as {
-		comments: ImportedComment[];
-		tabId: string;
-		source?: 'paste' | 'docx' | 'gdocs';
-	};
-	if (!body.comments?.length) {
-		return json({ error: 'No comments provided' }, { status: 400 });
+	const contentType = request.headers.get('content-type') || '';
+	let comments: ImportedComment[];
+	let tabId: string;
+	let source: 'paste' | 'docx' | 'gdocs' = 'paste';
+
+	if (contentType.includes('multipart/form-data')) {
+		const formData = await request.formData();
+		tabId = formData.get('tabId') as string;
+		const file = formData.get('file') as File | null;
+		if (!file) {
+			return json({ error: 'No file provided' }, { status: 400 });
+		}
+		const buffer = Buffer.from(await file.arrayBuffer());
+		comments = await extractDocxComments(buffer);
+		source = 'docx';
+	} else {
+		const body = (await request.json()) as {
+			comments?: ImportedComment[];
+			rawText?: string;
+			tabId: string;
+			source?: 'paste' | 'docx' | 'gdocs';
+		};
+		tabId = body.tabId;
+		source = body.source ?? 'paste';
+		comments = body.comments ?? [];
 	}
+
+	if (!comments.length && source === 'docx') {
+		return json({ error: 'No comments found in the document' }, { status: 400 });
+	}
+
 	const state: FeedbackImportState = {
 		id: 'imp_' + Math.random().toString(36).slice(2, 10),
-		source: body.source ?? 'paste',
-		tabId: body.tabId,
+		source,
+		tabId,
 		createdAt: Date.now(),
-		comments: body.comments,
+		comments,
 		commentToThread: {},
-		dispositions: Object.fromEntries(body.comments.map((c) => [c.id, 'untouched' as const]))
+		dispositions: Object.fromEntries(comments.map((c) => [c.id, 'untouched' as const]))
 	};
 	saveFeedbackImport(state);
 	return json({ import: state });

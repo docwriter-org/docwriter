@@ -1,25 +1,32 @@
 <script lang="ts">
 	import { fly, fade } from 'svelte/transition';
 	import { cubicOut } from 'svelte/easing';
-	import { MessageSquare, X, Upload } from 'lucide-svelte';
-	import { parseCommentsPaste } from '$lib/shared/feedback-import';
+	import { FileUp, MessageSquare, X, Upload, FileText } from 'lucide-svelte';
 	import type { ImportedComment } from '$lib/types';
 
 	interface Props {
 		open: boolean;
+		tabId: string | null;
 		onClose: () => void;
-		onImport: (comments: ImportedComment[]) => void;
+		onImportComments: (comments: ImportedComment[]) => void;
+		onImportRawText: (text: string) => void;
 	}
-	let { open, onClose, onImport }: Props = $props();
+	let { open, tabId, onClose, onImportComments, onImportRawText }: Props = $props();
 
+	let mode = $state<'choose' | 'docx-preview' | 'text'>('choose');
 	let rawText = $state('');
-	let parsed = $state<ImportedComment[]>([]);
-	let step = $state<'input' | 'preview'>('input');
+	let docxComments = $state<ImportedComment[]>([]);
+	let docxFileName = $state('');
+	let uploading = $state(false);
+	let uploadError = $state('');
 
 	function reset() {
+		mode = 'choose';
 		rawText = '';
-		parsed = [];
-		step = 'input';
+		docxComments = [];
+		docxFileName = '';
+		uploading = false;
+		uploadError = '';
 	}
 
 	function close() {
@@ -27,15 +34,53 @@
 		onClose();
 	}
 
-	function doParse() {
-		parsed = parseCommentsPaste(rawText);
-		if (parsed.length > 0) {
-			step = 'preview';
+	async function handleFile(file: File) {
+		if (!file.name.endsWith('.docx')) {
+			uploadError = 'Please upload a .docx file.';
+			return;
 		}
+		uploading = true;
+		uploadError = '';
+		try {
+			const formData = new FormData();
+			formData.append('file', file);
+			formData.append('tabId', tabId ?? '');
+			const res = await fetch('/api/feedback-import', { method: 'POST', body: formData });
+			const data = await res.json();
+			if (!res.ok || data.error) {
+				uploadError = data.error || 'Failed to parse document.';
+				uploading = false;
+				return;
+			}
+			docxComments = data.import.comments;
+			docxFileName = file.name;
+			mode = 'docx-preview';
+		} catch (e) {
+			uploadError = e instanceof Error ? e.message : 'Upload failed.';
+		}
+		uploading = false;
 	}
 
-	function doImport() {
-		onImport(parsed);
+	function onFileInput(e: Event) {
+		const input = e.target as HTMLInputElement;
+		const file = input.files?.[0];
+		if (file) void handleFile(file);
+	}
+
+	function onDrop(e: DragEvent) {
+		e.preventDefault();
+		const file = e.dataTransfer?.files[0];
+		if (file) void handleFile(file);
+	}
+
+	function doImportDocx() {
+		onImportComments(docxComments);
+		close();
+	}
+
+	function doImportText() {
+		if (!rawText.trim()) return;
+		onImportRawText(rawText.trim());
 		close();
 	}
 
@@ -43,8 +88,8 @@
 		if (!open) return;
 		if (e.key === 'Escape') {
 			e.preventDefault();
-			if (step === 'preview') {
-				step = 'input';
+			if (mode !== 'choose') {
+				mode = 'choose';
 			} else {
 				close();
 			}
@@ -71,47 +116,80 @@
 				<button class="close-btn" onclick={close}><X size={14} /></button>
 			</div>
 
-			{#if step === 'input'}
+			{#if mode === 'choose'}
 				<div class="dialog-body">
 					<p class="hint">
-						Paste comments from a Google Doc, email, or any source. Use
-						<code>[Name]: comment</code> format, one comment per line or paragraph.
+						Bring in feedback from collaborators. The agent will create a thread for each
+						comment and take a first pass at addressing them.
 					</p>
-					<!-- svelte-ignore a11y_autofocus -->
-					<textarea
-						bind:value={rawText}
-						placeholder={`[Maya]: The intro is too long — consider cutting the first two paragraphs.\n\n[Raj]: Can you cite the 2023 paper here?\n\n[Maya]: This claim needs evidence.`}
-						autofocus
-					></textarea>
+
+					<div class="option-cards">
+						<label
+							class="option-card"
+							ondragover={(e) => e.preventDefault()}
+							ondrop={onDrop}
+						>
+							<input type="file" accept=".docx" onchange={onFileInput} hidden />
+							<FileUp size={24} strokeWidth={1.5} />
+							<span class="option-title">Upload .docx</span>
+							<span class="option-desc">Word document with comments or tracked changes</span>
+							{#if uploading}
+								<span class="option-status">Parsing…</span>
+							{/if}
+							{#if uploadError}
+								<span class="option-error">{uploadError}</span>
+							{/if}
+						</label>
+
+						<button class="option-card" onclick={() => (mode = 'text')}>
+							<FileText size={24} strokeWidth={1.5} />
+							<span class="option-title">Paste feedback</span>
+							<span class="option-desc">Email, Slack messages, or any plain text</span>
+						</button>
+					</div>
 				</div>
-				<div class="dialog-footer">
-					<button class="btn" onclick={close}>Cancel</button>
-					<button
-						class="btn primary"
-						disabled={!rawText.trim()}
-						onclick={doParse}
-					>
-						Preview
-					</button>
-				</div>
-			{:else}
+			{:else if mode === 'docx-preview'}
 				<div class="dialog-body">
 					<p class="hint">
-						{parsed.length} comment{parsed.length === 1 ? '' : 's'} detected. The agent will
-						create a thread for each and take a first pass at addressing them.
+						{docxComments.length} comment{docxComments.length === 1 ? '' : 's'} found in
+						<strong>{docxFileName}</strong>.
 					</p>
 					<div class="comment-list">
-						{#each parsed as c (c.id)}
+						{#each docxComments as c (c.id)}
 							<div class="comment-preview">
 								<span class="comment-author">{c.author}</span>
 								<span class="comment-text">{c.text}</span>
+								{#if c.originalAnchor}
+									<span class="comment-anchor">on: "{c.originalAnchor.length > 80 ? c.originalAnchor.slice(0, 77) + '…' : c.originalAnchor}"</span>
+								{/if}
 							</div>
 						{/each}
 					</div>
 				</div>
 				<div class="dialog-footer">
-					<button class="btn" onclick={() => (step = 'input')}>Back</button>
-					<button class="btn primary" onclick={doImport}>
+					<button class="btn" onclick={() => (mode = 'choose')}>Back</button>
+					<button class="btn primary" onclick={doImportDocx}>
+						<Upload size={13} />
+						Import &amp; address
+					</button>
+				</div>
+			{:else if mode === 'text'}
+				<div class="dialog-body">
+					<p class="hint">
+						Paste feedback as-is — email threads, Slack messages, reviewer notes.
+						Include quotes of the passages being discussed when possible so the agent
+						can find the right spots.
+					</p>
+					<!-- svelte-ignore a11y_autofocus -->
+					<textarea
+						bind:value={rawText}
+						placeholder={`Maya said the intro is too long and we should cut the first two paragraphs.\n\nRaj wants a citation for the 2023 Smith et al. claim in the methods section.\n\nThe conclusion needs to be tightened — "too many hedging words" per Maya.`}
+						autofocus
+					></textarea>
+				</div>
+				<div class="dialog-footer">
+					<button class="btn" onclick={() => (mode = 'choose')}>Back</button>
+					<button class="btn primary" disabled={!rawText.trim()} onclick={doImportText}>
 						<Upload size={13} />
 						Import &amp; address
 					</button>
@@ -187,12 +265,47 @@
 		line-height: 1.5;
 		margin: 0;
 	}
-	.hint code {
-		font-size: 11.5px;
+	.option-cards {
+		display: flex;
+		gap: 10px;
+	}
+	.option-card {
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 8px;
+		padding: 20px 14px;
 		background: var(--bg);
-		padding: 1px 4px;
-		border-radius: 3px;
-		border: 1px solid var(--border-light);
+		border: 1.5px dashed var(--border-light);
+		border-radius: 8px;
+		cursor: pointer;
+		color: var(--text-secondary);
+		text-align: center;
+		font: inherit;
+		transition: border-color 0.15s, background 0.15s;
+	}
+	.option-card:hover {
+		border-color: var(--accent);
+		background: color-mix(in srgb, var(--accent) 4%, var(--bg));
+	}
+	.option-title {
+		font-size: 13px;
+		font-weight: 600;
+		color: var(--text);
+	}
+	.option-desc {
+		font-size: 11.5px;
+		color: var(--text-muted);
+		line-height: 1.4;
+	}
+	.option-status {
+		font-size: 11px;
+		color: var(--accent);
+	}
+	.option-error {
+		font-size: 11px;
+		color: var(--diff-removed-color);
 	}
 	textarea {
 		font-family: 'Geist Mono', 'SF Mono', monospace;
@@ -237,6 +350,11 @@
 	}
 	.comment-text {
 		color: var(--text-secondary);
+	}
+	.comment-anchor {
+		font-size: 11px;
+		color: var(--text-muted);
+		font-style: italic;
 	}
 	.dialog-footer {
 		display: flex;

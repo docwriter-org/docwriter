@@ -138,7 +138,7 @@
 	import FeedbackImportDialog from '$lib/components/FeedbackImportDialog.svelte';
 	import ReviewerMascot from '$lib/components/ReviewerMascot.svelte';
 	import { BUILTIN_REVIEWERS, type Reviewer } from '$lib/shared/reviewers';
-	import { buildFeedbackImportMessage } from '$lib/shared/feedback-import';
+	import { buildFeedbackImportMessage, buildRawFeedbackMessage } from '$lib/shared/feedback-import';
 	import type { ImportedComment } from '$lib/types';
 	import TabBar from '$lib/components/TabBar.svelte';
 	import AiProvenanceToggle from '$lib/components/AiProvenanceToggle.svelte';
@@ -2196,15 +2196,17 @@
 	// ── Feedback import ──────────────────────────────────────────────────
 	let feedbackImportDialogOpen = $state(false);
 
-	async function runFeedbackImport(comments: ImportedComment[]) {
+	async function runFeedbackImportStructured(comments: ImportedComment[]) {
 		const tab = $activeTab;
 		if (!tab) return;
-		await fetch('/api/feedback-import', {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ comments, tabId: tab, source: 'paste' })
-		});
 		const message = buildFeedbackImportMessage(comments, tab);
+		void submit(message);
+	}
+
+	function runFeedbackImportRawText(text: string) {
+		const tab = $activeTab;
+		if (!tab) return;
+		const message = buildRawFeedbackMessage(text, tab);
 		void submit(message);
 	}
 	let styleDialogOpen = $state(false);
@@ -2236,10 +2238,15 @@
 
 	const menus = $derived<MenuSpec[]>([
 		{
-			label: 'Settings',
+			label: 'File',
 			items: [
-				{ kind: 'panel', label: 'API keys', panelKey: 'apiKeys' },
-				{ kind: 'panel', label: 'Agent behavior', panelKey: 'agentSettings' },
+				{
+					kind: 'action' as const,
+					label: 'Import feedback…',
+					onClick: () => {
+						feedbackImportDialogOpen = true;
+					}
+				},
 				{
 					kind: 'submenu',
 					label: 'Critique pass',
@@ -2263,12 +2270,29 @@
 					]
 				},
 				{
-					kind: 'action' as const,
-					label: 'Import feedback…',
+					kind: 'action',
+					label: 'Calibrate your style',
+					onClick: () => (styleDialogOpen = true)
+				},
+				{
+					kind: 'action',
+					label: 'Export study data',
 					onClick: () => {
-						feedbackImportDialogOpen = true;
+						window.location.href = '/api/style-study/export';
 					}
 				},
+				{
+					kind: 'action',
+					label: 'Sessions',
+					onClick: () => {
+						sessionsOpen = true;
+					}
+				}
+			]
+		},
+		{
+			label: 'View',
+			items: [
 				{
 					kind: 'submenu',
 					label: 'Theme',
@@ -2302,29 +2326,6 @@
 					onClick: () => editorLineNumbers.update((v) => !v)
 				},
 				{
-					kind: 'action',
-					label: 'Calibrate your style',
-					onClick: () => (styleDialogOpen = true)
-				},
-				{
-					kind: 'action',
-					label: 'Export study data',
-					onClick: () => {
-						window.location.href = '/api/style-study/export';
-					}
-				},
-				{ kind: 'panel', label: 'Intended audience', panelKey: 'audience' },
-				{ kind: 'panel', label: 'Skills', panelKey: 'skills' },
-				{ kind: 'panel', label: 'Hooks', panelKey: 'hooks' },
-				{ kind: 'divider' },
-				{
-					kind: 'action',
-					label: 'Sessions',
-					onClick: () => {
-						sessionsOpen = true;
-					}
-				},
-				{
 					kind: 'submenu',
 					label: 'History detail',
 					items: [
@@ -2354,6 +2355,16 @@
 					checked: filesVisible,
 					onClick: () => showFilesPane.set(!filesVisible)
 				}
+			]
+		},
+		{
+			label: 'Settings',
+			items: [
+				{ kind: 'panel', label: 'API keys', panelKey: 'apiKeys' },
+				{ kind: 'panel', label: 'Agent behavior', panelKey: 'agentSettings' },
+				{ kind: 'panel', label: 'Intended audience', panelKey: 'audience' },
+				{ kind: 'panel', label: 'Skills', panelKey: 'skills' },
+				{ kind: 'panel', label: 'Hooks', panelKey: 'hooks' }
 			]
 		}
 	]);
@@ -3317,8 +3328,10 @@
 
 <FeedbackImportDialog
 	open={feedbackImportDialogOpen}
+	tabId={$activeTab}
 	onClose={() => (feedbackImportDialogOpen = false)}
-	onImport={runFeedbackImport}
+	onImportComments={runFeedbackImportStructured}
+	onImportRawText={runFeedbackImportRawText}
 />
 
 <style>
