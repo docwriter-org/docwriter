@@ -49,7 +49,8 @@ project-root/
     docwriter.db       ← SQLite: yjs_updates, tabs, rules, reviewers,
                          recent_actions, action_usage_counts,
                          provider_session_entries, conversation_events,
-                         kv (sessionId, agentSettings, last_seen:<tabId>…)
+                         kv (sessionId, agentSettings, last_seen:<tabId>,
+                             feedbackImport…)
     hooks.json         ← user-defined shell hooks (read by hooks-config.ts)
     agent/scratch/     ← agent scratch workspace (lazy-created on first
                          scratch write; cleared on "New session")
@@ -99,9 +100,12 @@ first `synced` event — on localhost this is sub-20ms.
    the "how to decide whether to edit" section.
 2. `query()` runs with two MCP servers:
    - `docwriter` — `propose_rule` / `propose_hook` (user-review tools).
-   - `docwriter-doc` — `edit_doc` / `read_doc` / `write_doc` on tab paths;
+   - `docwriter-doc` — `edit_doc` / `read_doc` / `write_doc` /
+     `comment_doc` / `reply_to_comment` / `list_threads` on tab paths;
      these route scratch paths to plain filesystem I/O and tab paths to
      `DirectConnection.transact` against the live Hocuspocus document.
+     `comment_doc` accepts an optional `external_author` parameter for
+     feedback import (sets `author: 'external'` on the thread).
    Built-in `Edit` / `Write` / `Read` remain available for files outside
    the open-tab set; the prompt explicitly routes open-tab work through
    the custom tools.
@@ -189,6 +193,46 @@ one POSTs `/api/render` with `reviewerId`:
   `AgentDockShell` and `HistoryPane`); `CommentGutter` renders the
   reviewer's mascot + name on attributed cards via `ReviewerMascot`
   (line-icon set keyed by the reviewer's `icon` field).
+
+## Feedback import
+
+Settings → **Import feedback…** lets the user bring in external reviewer
+comments and have the agent take a first pass at addressing them. Two
+input paths:
+
+- **Upload .docx**: server-side extraction of Word comments from
+  `word/comments.xml` via `jszip` (`src/lib/server/docx-comments.ts`).
+  Each `<w:comment>` yields author + text; anchored passages come from
+  `<w:commentRangeStart/End>` markers in `word/document.xml`. The dialog
+  (`FeedbackImportDialog`) shows a preview before importing.
+- **Paste raw text**: any format (email, Slack, reviewer notes). Sent
+  as-is to the agent via `buildRawFeedbackMessage`; the agent identifies
+  individual comments, finds matching passages, and anchors them itself.
+
+The import is a single agent pass — threads appear progressively in the
+gutter as the agent works. For structured imports (.docx), the prompt
+uses `buildFeedbackImportMessage` (in `src/lib/shared/feedback-import.ts`)
+with numbered comments and original anchor hints. The main agent
+receives the prompt directly and can spawn subagents to parallelize
+large batches.
+
+**External author attribution**: `CommentAuthor` includes `'external'`
+alongside `'user'` and `'agent'`. The `comment_doc` MCP tool accepts an
+optional `external_author` parameter; when set,
+`createAgentCommentThread` stamps `author: 'external'` and
+`externalAuthor: <name>` on the first message. `CommentGutter` renders
+external authors with a purple `MessageSquare` icon and the person's
+name.
+
+**Coverage ledger**: import state (comments, thread mappings,
+dispositions) is persisted in the SQLite `kv` table under the
+`feedbackImport` key (`src/lib/server/feedback-import.ts`). The
+`FeedbackLedger` component in `AgentDockShell` polls
+`GET /api/feedback-import` and shows per-comment disposition
+(applied / discussed / deferred / untouched) with a progress bar.
+When `comment_doc` fires with `external_author`, the handler matches
+against the active import and records the thread ID; `edit_doc` upgrades
+the disposition from `discussed` to `applied`.
 
 ## Conventions
 
