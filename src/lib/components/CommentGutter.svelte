@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { Editor } from '@tiptap/core';
-	import { Send, Sparkles, Cat, Check, Copy, X, User } from 'lucide-svelte';
+	import { Send, Sparkles, Cat, Check, Copy, X, User, MessageSquare } from 'lucide-svelte';
 	import { isModEnter, modEnterToSend } from '$lib/keyboard';
 
 	/** Minimal inline markdown → HTML. Matches the renderer used in
@@ -541,7 +541,7 @@
 		return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 	}
 
-	function firstMessageAuthor(thread: CommentThread): 'agent' | 'user' | null {
+	function firstMessageAuthor(thread: CommentThread): 'agent' | 'user' | 'external' | null {
 		const first = thread.messages[0];
 		return first ? first.author : null;
 	}
@@ -625,11 +625,12 @@
 				>
 					{#each thread.messages as message (message.id)}
 						{@const rv = message.author === 'agent' ? messageReviewer(message) : null}
-						<div class="message" class:from-agent={message.author === 'agent'} class:from-user={message.author === 'user'}>
+						<div class="message" class:from-agent={message.author === 'agent'} class:from-user={message.author === 'user'} class:from-external={message.author === 'external'}>
 							<span
 								class="avatar msg"
 								class:avatar-agent={message.author === 'agent'}
-								class:avatar-user={message.author !== 'agent'}
+								class:avatar-user={message.author === 'user'}
+								class:avatar-external={message.author === 'external'}
 								style:color={rv?.color}
 							>
 								{#if message.author === 'agent'}
@@ -638,13 +639,15 @@
 									{:else}
 										<Cat size={14} strokeWidth={1.8} />
 									{/if}
+								{:else if message.author === 'external'}
+									<MessageSquare size={14} strokeWidth={1.8} />
 								{:else}
 									<User size={14} strokeWidth={1.8} />
 								{/if}
 							</span>
 							<span class="author-block">
 								<span class="author-name" style:color={rv?.color}
-									>{message.author === 'agent' ? (rv?.name ?? 'Agent') : 'You'}</span
+									>{message.author === 'agent' ? (rv?.name ?? 'Agent') : message.author === 'external' ? (message.externalAuthor ?? 'Reviewer') : 'You'}</span
 								>
 								<span class="timestamp">{formatTimestamp(message.timestamp)}</span>
 							</span>
@@ -783,7 +786,8 @@
 					<span
 						class="avatar"
 						class:avatar-agent={firstMessageAuthor(thread) === 'agent'}
-						class:avatar-user={firstMessageAuthor(thread) !== 'agent'}
+						class:avatar-user={firstMessageAuthor(thread) === 'user'}
+						class:avatar-external={firstMessageAuthor(thread) === 'external'}
 						style:color={collapsedReviewer?.color}
 					>
 						{#if firstMessageAuthor(thread) === 'agent'}
@@ -792,6 +796,8 @@
 							{:else}
 								<Cat size={12} strokeWidth={1.8} />
 							{/if}
+						{:else if firstMessageAuthor(thread) === 'external'}
+							<MessageSquare size={12} strokeWidth={1.8} />
 						{:else}
 							<User size={12} strokeWidth={1.8} />
 						{/if}
@@ -987,6 +993,10 @@
 	.avatar-user {
 		background: color-mix(in srgb, #3b82f6 16%, transparent);
 		color: #2563eb;
+	}
+	.avatar-external {
+		background: color-mix(in srgb, #8b5cf6 16%, transparent);
+		color: #7c3aed;
 	}
 	.card-collapsed-row {
 		display: flex;

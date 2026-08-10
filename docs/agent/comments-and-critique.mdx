@@ -1,5 +1,5 @@
 ---
-title: "Comments and critique"
+title: "Comments, critique, and feedback"
 ---
 
 ## Comment threads
@@ -35,3 +35,30 @@ A critique pass is useful when you want the whole active draft reviewed from one
 The reviewer reads the active draft and can produce up to six focused findings. You receive findings as comments, and the reviewer can also propose a fix. You can discuss each finding, accept a linked edit, or resolve the thread. The reviewer name and mascot remain attached to the resulting comments and edits.
 
 Choose **New reviewer** when you need a review that matches your own project or audience. Provide a name, mascot, color, and review prompt that explains what the reviewer should check.
+
+## Import external feedback
+
+Open **Settings**, then **Import feedback**. You can bring in feedback from collaborators who reviewed your draft outside DocWriter.
+
+### Upload a Word document
+
+Drop or select a `.docx` file that has comments. DocWriter extracts each comment with its author and the passage it was anchored to. You see a preview of the extracted comments before importing.
+
+### Paste plain text
+
+Choose **Paste feedback** and paste any text — email threads, Slack messages, reviewer notes. The agent reads the raw text and identifies each piece of feedback on its own. Include quotes of the passages being discussed when possible so the agent can find the right spots in your draft.
+
+### What happens after import
+
+The agent processes each comment and creates a gutter thread for it. Threads appear progressively as the agent works. For each comment, the agent:
+
+1. Finds the matching passage in your current draft.
+2. Creates a thread anchored to that passage, attributed to the original reviewer.
+3. Replies with a short assessment of whether it agrees and whether a fix is clear.
+4. Proposes an edit when the fix is straightforward. Otherwise it leaves the thread for you to decide.
+
+External reviewer comments appear with a purple icon and the reviewer's name in the gutter. You accept, reject, or reply to these threads the same way as any other thread.
+
+### Coverage ledger
+
+While an import is active, the agent dock shows a **Feedback coverage** panel. It tracks how many comments have been addressed and the disposition of each one: applied (edit proposed), discussed (reply only), deferred, or untouched. Click a row to jump to its thread. The ledger persists across page refreshes.

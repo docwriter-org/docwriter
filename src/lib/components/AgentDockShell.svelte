@@ -2,6 +2,7 @@
 	import { onDestroy, type Snippet } from 'svelte';
 	import { Cat, Pause } from 'lucide-svelte';
 	import HistoryPane from './HistoryPane.svelte';
+	import FeedbackLedger from './FeedbackLedger.svelte';
 	import ReviewerMascot from './ReviewerMascot.svelte';
 	import ShineBorder from './ShineBorder.svelte';
 	import {
@@ -122,6 +123,7 @@
 <div class="dock-shell" class:expanded bind:this={shellEl}>
 	{#if expanded}
 		<div class="dock-panel">
+			<FeedbackLedger />
 			<HistoryPane
 				{onNewSession}
 				{onWakeUp}
