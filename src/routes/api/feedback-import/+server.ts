@@ -13,8 +13,11 @@ export const GET: RequestHandler = async () => {
 	return json({ import: getFeedbackImport() });
 };
 
-export const POST: RequestHandler = async ({ request }) => {
+export const POST: RequestHandler = async ({ request, url }) => {
 	const contentType = request.headers.get('content-type') || '';
+	/** Reading a file is only a preview: the writer can still back out, so the
+	 *  coverage ledger is not written until they confirm the import. */
+	const previewOnly = url.searchParams.get('preview') === '1';
 	let comments: ImportedComment[];
 	let tabId: string;
 	let source: 'paste' | 'docx' | 'gdocs' = 'paste';
@@ -54,7 +57,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		commentToThread: {},
 		dispositions: Object.fromEntries(comments.map((c) => [c.id, 'untouched' as const]))
 	};
-	saveFeedbackImport(state);
+	if (!previewOnly) saveFeedbackImport(state);
 	return json({ import: state });
 };
 
