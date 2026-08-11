@@ -23,6 +23,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import type { Document } from '@hocuspocus/server';
 
+import { matchImportedComment, updateFeedbackDisposition, getFeedbackImport } from './feedback-import';
 import {
 	serializeYDoc,
 	getReviewArray,
@@ -687,6 +688,19 @@ const editDocTool = tool(
 				`Edit discarded for ${file_path}: the user resolved this feedback thread before the edit landed, so it was not applied. Do not retry.`
 			);
 		}
+
+		if (typeof thread_id === 'string' && thread_id) {
+			const imp = getFeedbackImport();
+			if (imp) {
+				for (const c of imp.comments) {
+					if (imp.commentToThread[c.id] === thread_id) {
+						updateFeedbackDisposition(c.id, thread_id, 'applied');
+						break;
+					}
+				}
+			}
+		}
+
 		return toolText(
 			replaceAll
 				? `Edit applied to ${file_path} (replaced ${appliedHits} occurrence${appliedHits === 1 ? '' : 's'}).`
@@ -836,12 +850,14 @@ function createAgentCommentThread(
 	anchorText: string,
 	occurrenceIndex: number,
 	message: string,
-	proposedEdit?: { old_string: string; new_string: string }
+	proposedEdit?: { old_string: string; new_string: string },
+	externalAuthor?: string
 ): string {
 	const threadId = 'thread_' + cryptoRandomId();
 	const now = Date.now();
 	const liveText = serializeYDoc(doc);
 	const anchorIdx = nthIndexOf(liveText, anchorText, occurrenceIndex);
+	const isExternal = !!externalAuthor;
 	const thread: CommentThread = {
 		id: threadId,
 		anchor: {
@@ -852,9 +868,10 @@ function createAgentCommentThread(
 		messages: [
 			{
 				id: 'msg_' + cryptoRandomId(),
-				author: 'agent',
+				author: isExternal ? 'external' : 'agent',
 				text: message,
 				timestamp: now,
+				...(isExternal ? { externalAuthor } : {}),
 				...(activeReviewerId ? { reviewerId: activeReviewerId } : {}),
 				...(proposedEdit
 					? {
@@ -870,6 +887,14 @@ function createAgentCommentThread(
 		createdAt: now
 	};
 	doc.transact(() => getCommentsMap(doc).set(threadId, thread), AGENT_ORIGIN);
+
+	if (isExternal) {
+		const commentId = matchImportedComment(externalAuthor, message);
+		if (commentId) {
+			updateFeedbackDisposition(commentId, threadId, 'discussed');
+		}
+	}
+
 	return threadId;
 }
 
@@ -904,9 +929,15 @@ const commentDocTool = tool(
 			.optional()
 			.describe(
 				'Optional concrete edit the user can approve from the comment. Do not use this at Medium autonomy unless the user directly asked for an edit.'
+			),
+		external_author: z
+			.string()
+			.optional()
+			.describe(
+				'Name of an external commenter when importing feedback from outside the system. When set, the comment is attributed to that person rather than the agent.'
 			)
 	},
-	async ({ file_path, anchor_text, message, occurrence_index, proposed_edit }) => {
+	async ({ file_path, anchor_text, message, occurrence_index, proposed_edit, external_author }) => {
 		if (isScratchPath(file_path)) {
 			return toolError('comment_doc cannot be used on scratch paths — only on workspace files.');
 		}
@@ -941,7 +972,7 @@ const commentDocTool = tool(
 					error: `occurrence_index ${occurrence} is out of range; anchor_text appears ${hits} time${hits === 1 ? '' : 's'}.`
 				};
 			}
-			threadId = createAgentCommentThread(doc, anchorText, occurrence, trimmedMessage, proposed_edit);
+			threadId = createAgentCommentThread(doc, anchorText, occurrence, trimmedMessage, proposed_edit, external_author);
 			return { ok: true };
 		});
 

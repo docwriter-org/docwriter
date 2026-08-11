@@ -22,6 +22,7 @@ import {
 	toolText
 } from '$lib/server/mcp-doc-tools';
 import { isScratchPath, resolveTabFromPath, isOpenTab } from '$lib/server/path-router';
+import { matchImportedComment, updateFeedbackDisposition } from '$lib/server/feedback-import';
 import { readFileSync, existsSync } from 'fs';
 import * as Y from 'yjs';
 import {
@@ -415,17 +416,22 @@ export function buildToolDefinitions(): ToolDefinition[] {
 							'Optional concrete edit the user can approve. Use only when the user directly asked for an edit or autonomy is High.',
 						properties: { old_string: { type: 'string' }, new_string: { type: 'string' } },
 						required: ['old_string', 'new_string']
+					},
+					external_author: {
+						type: 'string',
+						description: 'Name of an external commenter when importing feedback. When set, the comment is attributed to that person.'
 					}
 				},
 				required: ['file_path', 'anchor_text', 'message']
 			},
 			execute: async (input) => {
-				const { file_path: path, anchor_text, message: msg, occurrence_index, proposed_edit } = input as {
+				const { file_path: path, anchor_text, message: msg, occurrence_index, proposed_edit, external_author } = input as {
 					file_path: string;
 					anchor_text: string;
 					message: string;
 					occurrence_index?: number;
 					proposed_edit?: { old_string: string; new_string: string };
+					external_author?: string;
 				};
 				if (!path) {
 					return { isError: true, content: [{ type: 'text' as const, text: 'comment_doc requires `file_path`.' }] };
@@ -459,6 +465,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
 					// text came back" (undo) apart from "the same string appears
 					// somewhere else" once the passage is deleted.
 					const anchorIdx = nthIndexOf(liveText, anchorText, occurrence);
+					const isExternal = !!external_author;
 					const thread: CommentThread = {
 						id: threadId,
 						anchor: {
@@ -470,9 +477,10 @@ export function buildToolDefinitions(): ToolDefinition[] {
 						},
 						messages: [{
 							id: 'msg_' + cryptoRandomId(),
-							author: 'agent',
+							author: isExternal ? 'external' : 'agent',
 							text: trimmedMessage,
 							timestamp: now,
+							...(isExternal ? { externalAuthor: external_author } : {}),
 							...(proposed_edit
 								? {
 										proposedEdit: {
@@ -486,6 +494,14 @@ export function buildToolDefinitions(): ToolDefinition[] {
 						createdAt: now
 					};
 					doc.transact(() => commentsMap.set(threadId, thread), AGENT_ORIGIN);
+
+					if (isExternal && external_author) {
+						const commentId = matchImportedComment(external_author, trimmedMessage);
+						if (commentId) {
+							updateFeedbackDisposition(commentId, threadId, 'discussed');
+						}
+					}
+
 					return { ok: true as const };
 				});
 				if (!outcome.ok) return { isError: true, content: [{ type: 'text' as const, text: outcome.error }] };
