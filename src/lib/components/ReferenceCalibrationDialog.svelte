@@ -65,7 +65,7 @@
 	}
 
 	let { open, provider, model, onClose, onChanged, onFinalized }: Props = $props();
-	let step = $state<'sources' | 'review' | 'active'>('sources');
+	let step = $state<'welcome' | 'sources' | 'review' | 'active'>('sources');
 	let references = $state<ReferenceItem[]>([]);
 	let summary = $state<StyleProfileSummary | null>(null);
 	let loading = $state(false);
@@ -90,6 +90,7 @@
 	let importOpen = $state(false);
 	let importPath = $state('');
 	let importing = $state(false);
+	let uploadingSkill = $state(false);
 	let finalizing = $state(false);
 	let skillVersions = $state<Array<{ version: number; createdAt: number; propositionCount: number }>>([]);
 
@@ -234,6 +235,9 @@
 			calibrationSessionIds = [];
 			tracesLoadedFor = null;
 			void loadAll().then(() => {
+				if (references.length === 0 && (!summary || summary.status === 'empty') && !summary?.profile?.publishedAt) {
+					step = 'welcome';
+				}
 				if (run?.id) void loadStoredTraces(run.id);
 				if (run?.id && ['queued', 'running'].includes(run.status)) connectRun(run.id);
 			});
@@ -462,6 +466,33 @@
 		}
 	}
 
+	async function handleSkillUpload(event: Event) {
+		const input = event.target as HTMLInputElement;
+		const file = input.files?.[0];
+		if (!file) return;
+		uploadingSkill = true;
+		errorMessage = '';
+		try {
+			const formData = new FormData();
+			formData.append('file', file);
+			const response = await fetch('/api/style-profile/import', {
+				method: 'POST',
+				body: formData
+			});
+			const data = await response.json().catch(() => ({}));
+			if (!response.ok) throw new Error(messageFromResponse(data, `HTTP ${response.status}`));
+			await loadAll();
+			await loadSkillVersions();
+			step = 'active';
+			onChanged?.();
+		} catch (cause) {
+			errorMessage = cause instanceof Error ? cause.message : 'Could not upload the skill.';
+		} finally {
+			uploadingSkill = false;
+			input.value = '';
+		}
+	}
+
 	async function cancelAnalysis() {
 		if (!run) return;
 		await requestJson(`/api/style-profile/runs/${encodeURIComponent(run.id)}`, { method: 'DELETE' });
@@ -629,94 +660,127 @@
 			transition:fly={{ y: 14, duration: 180, easing: cubicOut }}
 		>
 			<div class="dialog-header">
-				<span id="reference-dialog-title">Calibrate your style</span>
-				<div class="header-actions">
-					<!-- Lives here rather than on the Active skill tab: the writer who
-					     wants this has no profile yet, so they are on the first tab. -->
-					<button class="btn" onclick={() => (importOpen = !importOpen)}>
-						<Upload size={13} /> Restore from a skill
-					</button>
-					<button class="icon-btn" onclick={onClose} aria-label="Close style calibration"><X size={14} /></button>
-				</div>
+				{#if step === 'welcome'}
+					<span id="reference-dialog-title">Get started</span>
+					<div class="header-actions">
+						<button class="icon-btn" onclick={onClose} aria-label="Close"><X size={14} /></button>
+					</div>
+				{:else}
+					<span id="reference-dialog-title">Calibrate your style</span>
+					<div class="header-actions">
+						<button class="btn" onclick={() => (importOpen = !importOpen)}>
+							<Upload size={13} /> Upload skill
+						</button>
+						<button class="icon-btn" onclick={onClose} aria-label="Close style calibration"><X size={14} /></button>
+					</div>
+				{/if}
 			</div>
 
-			{#if importOpen}
-				<div class="import-panel">
-					{#if skillVersions.length > 0}
-						<div class="version-list">
-							{#each skillVersions as entry (entry.version)}
-								<div class="version-row">
-									<div class="version-main">
-										<strong>Version {entry.version}</strong>
-										<span class="source-meta">
-											{entry.propositionCount} instruction{entry.propositionCount === 1 ? '' : 's'}
-											· {new Date(entry.createdAt).toLocaleString()}
-										</span>
-									</div>
-									<button
-										class="btn"
-										disabled={importing}
-										onclick={() => restoreSkill({ version: entry.version })}
-									>Restore</button>
-								</div>
-							{/each}
+			{#if step !== 'welcome'}
+				{#if importOpen}
+					<div class="import-panel">
+						<div class="import-upload-row">
+							<label class="btn primary upload-file-btn" class:disabled={importing || uploadingSkill}>
+								{#if uploadingSkill}<LoaderCircle size={13} class="spinner" />{/if}
+								<Upload size={13} /> Choose .zip file
+								<input type="file" accept=".zip" hidden onchange={handleSkillUpload} disabled={importing || uploadingSkill} />
+							</label>
 						</div>
-					{:else}
-						<p class="hint">No saved versions yet. One is kept every time the skill is built.</p>
-					{/if}
 
-					<div class="import-row">
-						<input
-							bind:value={importPath}
-							placeholder="…or a path to a skill folder or .zip"
-							aria-label="Path to a skill folder or zip"
-							onkeydown={(event) => {
-								if (event.key === 'Enter') void restoreSkill({ path: importPath });
-							}}
-						/>
-						<button
-							class="btn"
-							disabled={!importPath.trim() || importing}
-							onclick={() => restoreSkill({ path: importPath })}
-						>
-							{#if importing}<LoaderCircle size={13} class="spinner" />{/if}
-							Restore
-						</button>
+						{#if skillVersions.length > 0}
+							<div class="version-list">
+								{#each skillVersions as entry (entry.version)}
+									<div class="version-row">
+										<div class="version-main">
+											<strong>Version {entry.version}</strong>
+											<span class="source-meta">
+												{entry.propositionCount} instruction{entry.propositionCount === 1 ? '' : 's'}
+												· {new Date(entry.createdAt).toLocaleString()}
+											</span>
+										</div>
+										<button
+											class="btn"
+											disabled={importing}
+											onclick={() => restoreSkill({ version: entry.version })}
+										>Restore</button>
+									</div>
+								{/each}
+							</div>
+						{/if}
+
+						<div class="import-row">
+							<input
+								bind:value={importPath}
+								placeholder="Path to a skill folder or .zip"
+								aria-label="Path to a skill folder or zip"
+								onkeydown={(event) => {
+									if (event.key === 'Enter') void restoreSkill({ path: importPath });
+								}}
+							/>
+							<button
+								class="btn"
+								disabled={!importPath.trim() || importing}
+								onclick={() => restoreSkill({ path: importPath })}
+							>
+								{#if importing}<LoaderCircle size={13} class="spinner" />{/if}
+								Import
+							</button>
+						</div>
 					</div>
-					<p class="hint">
-						Restoring installs that whole skill folder and replaces your guidance. Your sources and
-						measurements are untouched.
-					</p>
-				</div>
-			{/if}
+				{/if}
 
-			<!-- Numbered because the tabs are the flow: add sources, analyze,
-			     review the draft. The visible sequence replaces a "next" button
-			     on each step. -->
-			<nav class="steps" aria-label="Reference setup steps">
-				<button class:current={step === 'sources'} onclick={() => (step = 'sources')}>
-					<span class="step-num">1</span>
-					Sources
-					{#if references.length > 0}<span class="count-chip">{references.length}</span>{/if}
-				</button>
-				<button class:current={step === 'review'} onclick={() => (step = 'review')}>
-					<span class="step-num">2</span>
-					Analyze
-					{#if pendingTrials.length > 0}<span class="count-chip">{pendingTrials.length}</span>{/if}
-				</button>
-				<button class:current={step === 'active'} onclick={() => (step = 'active')}>
-					<span class="step-num">3</span>
-					{summary?.hasUnpublishedChanges ? 'Style draft' : 'Active skill'}
-					{#if activePropositions.length > 0}<span class="count-chip">{activePropositions.length}</span>{/if}
-				</button>
-			</nav>
+				<nav class="steps" aria-label="Reference setup steps">
+					<button class:current={step === 'sources'} onclick={() => (step = 'sources')}>
+						<span class="step-num">1</span>
+						Sources
+						{#if references.length > 0}<span class="count-chip">{references.length}</span>{/if}
+					</button>
+					<button class:current={step === 'review'} onclick={() => (step = 'review')}>
+						<span class="step-num">2</span>
+						Analyze
+						{#if pendingTrials.length > 0}<span class="count-chip">{pendingTrials.length}</span>{/if}
+					</button>
+					<button class:current={step === 'active'} onclick={() => (step = 'active')}>
+						<span class="step-num">3</span>
+						{summary?.hasUnpublishedChanges ? 'Style draft' : 'Active skill'}
+						{#if activePropositions.length > 0}<span class="count-chip">{activePropositions.length}</span>{/if}
+					</button>
+				</nav>
+			{/if}
 
 			{#if errorMessage}
 				<div class="error-box"><TriangleAlert size={13} /><span>{errorMessage}</span></div>
 			{/if}
 
 			<div class="dialog-body">
-				{#if step === 'sources'}
+				{#if step === 'welcome'}
+					<div class="step step-welcome">
+						<div class="welcome-inner">
+							<div class="welcome-hero">
+								<h2>Learn your writing style</h2>
+								<p>Paste a few samples of your writing and DocWriter will build a skill that matches your voice.</p>
+							</div>
+							<div class="welcome-cards">
+								<button class="welcome-card" onclick={() => (step = 'sources')}>
+									<span class="welcome-card-icon"><FileStack size={22} /></span>
+									<h3>Add writing samples</h3>
+									<p>Paste 3–5 passages from your own writing. DocWriter will analyze your style and generate a skill for you.</p>
+									<span class="welcome-card-cta">Get started <span aria-hidden="true">&rarr;</span></span>
+								</button>
+								<div class="welcome-card">
+									<span class="welcome-card-icon"><Upload size={22} /></span>
+									<h3>Upload a skill</h3>
+									<p>Have a .zip skill file from a previous session? Upload it to skip the analysis.</p>
+									<label class="btn primary welcome-upload-btn" class:disabled={uploadingSkill}>
+										{#if uploadingSkill}<LoaderCircle size={13} class="spinner" />{/if}
+										Choose .zip file
+										<input type="file" accept=".zip" hidden onchange={handleSkillUpload} disabled={uploadingSkill} />
+									</label>
+								</div>
+							</div>
+						</div>
+					</div>
+				{:else if step === 'sources'}
 					<!-- A writing surface, not a form: the canvas is the page you are
 					     pasting onto, and the rail on the right holds what you have. -->
 					<div class="step step-sources">
@@ -1523,6 +1587,114 @@
 		max-width: 320px;
 		font-size: 12px;
 		line-height: 1.55;
+	}
+
+	/* ---- welcome step ------------------------------------------------- */
+	.step-welcome {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		overflow: auto;
+	}
+	.welcome-inner {
+		max-width: 640px;
+		padding: 40px 24px 48px;
+		text-align: center;
+	}
+	.welcome-hero {
+		margin-bottom: 32px;
+	}
+	.welcome-hero h2 {
+		margin: 0 0 8px;
+		font-size: 22px;
+		font-weight: 700;
+		letter-spacing: -0.015em;
+		color: var(--text);
+	}
+	.welcome-hero p {
+		margin: 0 auto;
+		max-width: 420px;
+		font-size: 13.5px;
+		line-height: 1.55;
+		color: var(--text-muted);
+	}
+	.welcome-cards {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 16px;
+	}
+	.welcome-card {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 8px;
+		padding: 24px 22px;
+		border: 1px solid var(--border-light);
+		border-radius: 10px;
+		background: var(--bg-surface);
+		text-align: left;
+		font: inherit;
+		color: inherit;
+		cursor: pointer;
+		transition: border-color 0.12s;
+	}
+	button.welcome-card:hover {
+		border-color: var(--accent);
+		background: var(--bg-hover);
+	}
+	.welcome-card h3 {
+		margin: 4px 0 0;
+		font-size: 14px;
+		font-weight: 600;
+	}
+	.welcome-card p {
+		margin: 0;
+		font-size: 12.5px;
+		line-height: 1.55;
+		color: var(--text-muted);
+	}
+	.welcome-card-icon {
+		display: grid;
+		place-items: center;
+		width: 40px;
+		height: 40px;
+		border-radius: 9px;
+		background: var(--bg-hover);
+		color: var(--text-secondary);
+	}
+	.welcome-card-cta {
+		margin-top: auto;
+		padding-top: 4px;
+		color: var(--accent);
+		font-size: 13px;
+		font-weight: 500;
+	}
+	.welcome-upload-btn {
+		margin-top: auto;
+		cursor: pointer;
+	}
+	.welcome-upload-btn.disabled {
+		opacity: 0.45;
+		cursor: default;
+	}
+	.upload-file-btn {
+		cursor: pointer;
+	}
+	.upload-file-btn.disabled {
+		opacity: 0.45;
+		cursor: default;
+	}
+	.import-upload-row {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		padding-bottom: 10px;
+		border-bottom: 1px solid var(--border-light);
+	}
+	@media (max-width: 580px) {
+		.welcome-cards {
+			grid-template-columns: 1fr;
+		}
 	}
 
 	/* ---- step 1: sources ---------------------------------------------- */

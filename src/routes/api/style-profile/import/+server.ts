@@ -1,5 +1,7 @@
 import { error, json } from '@sveltejs/kit';
-import { isAbsolute, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import type { RequestHandler } from './$types';
 import {
 	profileFromSkillFolder,
@@ -14,19 +16,37 @@ import { replacePublishedStylePropositions } from '$lib/server/style-analysis/pr
 
 /**
  * Restore an author-style skill instead of running the pass: either a version
- * from this workspace's history, or a folder / zip from Download skill.
- *
- * The whole folder is installed, not regenerated, so an older skill comes back
- * exactly as it was rather than rebuilt in today's format. The profile is
- * rebuilt alongside it so the UI and the turn prompt agree with the files.
- * Everything is validated before anything is written.
+ * from this workspace's history, a folder / zip from Download skill, or a
+ * .zip file uploaded via multipart form data.
  */
 export const POST: RequestHandler = async ({ request }) => {
-	const body = await request.json().catch(() => ({}));
-	const version = typeof body.version === 'number' ? body.version : null;
-	const path = typeof body.path === 'string' ? body.path.trim() : '';
+	const contentType = request.headers.get('content-type') ?? '';
+
+	let version: number | null = null;
+	let path = '';
+
+	if (contentType.includes('multipart/form-data')) {
+		const formData = await request.formData();
+		const file = formData.get('file');
+		if (!file || !(file instanceof File)) {
+			throw error(400, 'No file provided');
+		}
+		if (!file.name.toLowerCase().endsWith('.zip')) {
+			throw error(400, 'Only .zip skill files are accepted');
+		}
+		const uploadDir = mkdtempSync(join(tmpdir(), 'docwriter-upload-'));
+		const uploadPath = join(uploadDir, file.name);
+		const buffer = Buffer.from(await file.arrayBuffer());
+		writeFileSync(uploadPath, buffer);
+		path = uploadPath;
+	} else {
+		const body = await request.json().catch(() => ({}));
+		version = typeof body.version === 'number' ? body.version : null;
+		path = typeof body.path === 'string' ? body.path.trim() : '';
+	}
+
 	if (version === null && !path) {
-		throw error(400, 'Give a version number or the path to a skill folder or .zip');
+		throw error(400, 'Give a version number, a path, or upload a .zip file');
 	}
 
 	let sourceDir: string;
