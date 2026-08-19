@@ -716,7 +716,7 @@
 									class="canvas-text"
 									bind:value={sampleText}
 									onkeydown={onComposerKeydown}
-									placeholder="Paste the writing here"
+									placeholder="Paste your writing here — aim for 3–5 samples"
 									aria-label="Passage text"
 								></textarea>
 								<div class="canvas-foot">
