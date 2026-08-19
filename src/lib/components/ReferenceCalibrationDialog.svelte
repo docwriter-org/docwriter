@@ -716,7 +716,7 @@
 									class="canvas-text"
 									bind:value={sampleText}
 									onkeydown={onComposerKeydown}
-									placeholder="Paste your writing here — aim for 3–5 samples"
+									placeholder="Paste the writing here"
 									aria-label="Passage text"
 								></textarea>
 								<div class="canvas-foot">
@@ -744,7 +744,7 @@
 							</div>
 							<div class="rail-list">
 								{#if references.length === 0}
-									<p class="panel-empty">Nothing added yet.</p>
+									<p class="panel-empty">Nothing added yet. Aim for 3 - 5 samples.</p>
 								{:else}
 									{#each references as reference (reference.id)}
 										<div
