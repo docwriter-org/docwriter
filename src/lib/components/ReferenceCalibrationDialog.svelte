@@ -87,12 +87,8 @@
 	let busyId = $state<string | null>(null);
 	let neitherEdits = $state<Record<string, string>>({});
 	let calibrationSessionIds = $state<string[]>([]);
-	let importOpen = $state(false);
-	let importPath = $state('');
-	let importing = $state(false);
 	let uploadingSkill = $state(false);
 	let finalizing = $state(false);
-	let skillVersions = $state<Array<{ version: number; createdAt: number; propositionCount: number }>>([]);
 
 	const pendingTrials = $derived((summary?.profile?.calibrations ?? [])
 		.filter((trial) => calibrationSessionIds.includes(trial.id) && ['pending', 'generated', 'error'].includes(trial.status)));
@@ -241,7 +237,6 @@
 				if (run?.id) void loadStoredTraces(run.id);
 				if (run?.id && ['queued', 'running'].includes(run.status)) connectRun(run.id);
 			});
-			void loadSkillVersions();
 		}
 		else eventSource?.close();
 	});
@@ -433,38 +428,6 @@
 		}
 	}
 
-	async function loadSkillVersions() {
-		try {
-			const data = await requestJson('/api/style-profile/versions');
-			skillVersions = Array.isArray(data.versions) ? data.versions : [];
-		} catch {
-			skillVersions = [];
-		}
-	}
-
-	/** Put a saved version or a downloaded bundle back in place. */
-	async function restoreSkill(source: { version: number } | { path: string }) {
-		const path = 'path' in source ? source.path.trim() : '';
-		if ('path' in source && !path) return;
-		importing = true;
-		errorMessage = '';
-		try {
-			await requestJson('/api/style-profile/import', {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify('version' in source ? { version: source.version } : { path })
-			});
-			importPath = '';
-			importOpen = false;
-			await loadAll();
-			await loadSkillVersions();
-			onChanged?.();
-		} catch (cause) {
-			errorMessage = cause instanceof Error ? cause.message : 'Could not restore that skill.';
-		} finally {
-			importing = false;
-		}
-	}
 
 	async function handleSkillUpload(event: Event) {
 		const input = event.target as HTMLInputElement;
@@ -482,7 +445,6 @@
 			const data = await response.json().catch(() => ({}));
 			if (!response.ok) throw new Error(messageFromResponse(data, `HTTP ${response.status}`));
 			await loadAll();
-			await loadSkillVersions();
 			step = 'active';
 			onChanged?.();
 		} catch (cause) {
@@ -612,7 +574,6 @@
 		try {
 			const data = await requestJson('/api/style-profile/finalize', { method: 'POST' });
 			await loadAll();
-			await loadSkillVersions();
 			step = 'active';
 			onChanged?.();
 			onFinalized?.(data?.profile?.skillId ?? 'author-style');
@@ -668,49 +629,12 @@
 				{:else}
 					<span id="reference-dialog-title">Calibrate your style</span>
 					<div class="header-actions">
-						<button class="btn" onclick={() => (importOpen = !importOpen)}>
-							<Upload size={13} /> Upload skill
-						</button>
 						<button class="icon-btn" onclick={onClose} aria-label="Close style calibration"><X size={14} /></button>
 					</div>
 				{/if}
 			</div>
 
 			{#if step !== 'welcome'}
-				{#if importOpen}
-					<div class="import-panel">
-						<div class="import-upload-row">
-							<label class="btn primary upload-file-btn" class:disabled={importing || uploadingSkill}>
-								{#if uploadingSkill}<LoaderCircle size={13} class="spinner" />{/if}
-								<Upload size={13} /> Upload .zip
-								<input type="file" accept=".zip" hidden onchange={handleSkillUpload} disabled={importing || uploadingSkill} />
-							</label>
-						</div>
-
-						{#if skillVersions.length > 0}
-							<div class="version-list">
-								{#each skillVersions as entry (entry.version)}
-									<div class="version-row">
-										<div class="version-main">
-											<strong>Version {entry.version}</strong>
-											<span class="source-meta">
-												{entry.propositionCount} instruction{entry.propositionCount === 1 ? '' : 's'}
-												· {new Date(entry.createdAt).toLocaleString()}
-											</span>
-										</div>
-										<button
-											class="btn"
-											disabled={importing}
-											onclick={() => restoreSkill({ version: entry.version })}
-										>Restore</button>
-									</div>
-								{/each}
-							</div>
-						{/if}
-
-					</div>
-				{/if}
-
 				<nav class="steps" aria-label="Reference setup steps">
 					<button class:current={step === 'sources'} onclick={() => (step = 'sources')}>
 						<span class="step-num">1</span>
@@ -1666,13 +1590,6 @@
 		opacity: 0.45;
 		cursor: default;
 	}
-	.import-upload-row {
-		display: flex;
-		align-items: center;
-		gap: 10px;
-		padding-bottom: 10px;
-		border-bottom: 1px solid var(--border-light);
-	}
 	@media (max-width: 580px) {
 		.welcome-cards {
 			grid-template-columns: 1fr;
@@ -2218,59 +2135,6 @@
 		display: flex;
 		align-items: center;
 		gap: 10px;
-	}
-	/* Drops out of the dialog header, so it sits above the tabs rather than
-	 * inside whichever step happens to be open. */
-	.import-panel {
-		display: flex;
-		flex-direction: column;
-		gap: 10px;
-		margin: 12px 24px 0;
-		padding: 12px;
-		border: 1px solid var(--border-light);
-		border-radius: 10px;
-		background: var(--bg-surface);
-	}
-	.version-list {
-		display: flex;
-		flex-direction: column;
-	}
-	.version-row {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 12px;
-		padding: 7px 0;
-	}
-	.version-row + .version-row {
-		border-top: 1px solid var(--border-light);
-	}
-	.version-main {
-		display: flex;
-		min-width: 0;
-		flex-direction: column;
-		gap: 2px;
-		font-size: 12.5px;
-	}
-	.import-row {
-		display: flex;
-		gap: 8px;
-	}
-	.import-row input {
-		box-sizing: border-box;
-		width: 100%;
-		flex: 1;
-		padding: 7px 10px;
-		border: 1px solid var(--border-light);
-		border-radius: 7px;
-		background: var(--bg);
-		color: var(--text);
-		font: inherit;
-		font-size: 12.5px;
-	}
-	.import-row input:focus {
-		outline: none;
-		border-color: var(--accent);
 	}
 	.proposition-list {
 		display: flex;
