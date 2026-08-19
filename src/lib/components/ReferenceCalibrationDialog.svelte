@@ -682,7 +682,7 @@
 						<div class="import-upload-row">
 							<label class="btn primary upload-file-btn" class:disabled={importing || uploadingSkill}>
 								{#if uploadingSkill}<LoaderCircle size={13} class="spinner" />{/if}
-								<Upload size={13} /> Choose .zip file
+								<Upload size={13} /> Upload .zip
 								<input type="file" accept=".zip" hidden onchange={handleSkillUpload} disabled={importing || uploadingSkill} />
 							</label>
 						</div>
@@ -708,24 +708,6 @@
 							</div>
 						{/if}
 
-						<div class="import-row">
-							<input
-								bind:value={importPath}
-								placeholder="Path to a skill folder or .zip"
-								aria-label="Path to a skill folder or zip"
-								onkeydown={(event) => {
-									if (event.key === 'Enter') void restoreSkill({ path: importPath });
-								}}
-							/>
-							<button
-								class="btn"
-								disabled={!importPath.trim() || importing}
-								onclick={() => restoreSkill({ path: importPath })}
-							>
-								{#if importing}<LoaderCircle size={13} class="spinner" />{/if}
-								Import
-							</button>
-						</div>
 					</div>
 				{/if}
 
@@ -765,15 +747,15 @@
 									<span class="welcome-card-icon"><FileStack size={22} /></span>
 									<h3>Add writing samples</h3>
 									<p>Paste 3–5 passages from your own writing. DocWriter will analyze your style and generate a skill for you.</p>
-									<span class="welcome-card-cta">Get started <span aria-hidden="true">&rarr;</span></span>
+									<span class="welcome-card-cta">Get started</span>
 								</button>
 								<div class="welcome-card">
 									<span class="welcome-card-icon"><Upload size={22} /></span>
-									<h3>Upload a skill</h3>
-									<p>Have a .zip skill file from a previous session? Upload it to skip the analysis.</p>
+									<h3>Upload a style skill</h3>
+									<p>Have a previously generated style skill? Upload the .zip to skip the analysis.</p>
 									<label class="btn primary welcome-upload-btn" class:disabled={uploadingSkill}>
 										{#if uploadingSkill}<LoaderCircle size={13} class="spinner" />{/if}
-										Choose .zip file
+										Upload .zip
 										<input type="file" accept=".zip" hidden onchange={handleSkillUpload} disabled={uploadingSkill} />
 									</label>
 								</div>
