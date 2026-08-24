@@ -194,7 +194,7 @@ const pageFeatures = {
 		['Agent', 'Write a blog post and add a supported citation', C, 'Blog writing example']
 	],
 	'guides/overleaf': [
-		['Automation', 'Edit, build, preview, and sync an Overleaf project', C, 'Overleaf guide'],
+		['Automation', 'Edit, build, preview, and sync an Overleaf project with Dropbox or Git', C, 'Overleaf guide'],
 		['Workspace', 'Use forward and reverse SyncTeX between source and PDF', T, 'Preview covers part of the flow'],
 		['Automation', 'Find a same name PDF automatically for a TeX file', M, 'No page']
 	],
