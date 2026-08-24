@@ -2,23 +2,18 @@
 title: "Edit an Overleaf project"
 ---
 
-You can edit an Overleaf project in DocWriter in two ways. The local writing steps are the same. The methods differ in how files travel between your machine and Overleaf, and in which hooks you add.
+You can keep an Overleaf project in a local folder with Dropbox or with Git. The rest of this guide is the same after that: open the folder, build a PDF, preview it, and ask for an edit. The methods differ only in how you get the files and how accepted files return to Overleaf.
 
-- **[Dropbox sync](#get-the-project-with-dropbox):** Dropbox copies saved files both ways. Add the `pdflatex` hook only.
-- **[Git](#get-the-project-with-git):** You pull and push a Git repository. Add the `pdflatex` hook and Git.
+- **Dropbox:** Dropbox copies saved files both ways. Add the `pdflatex` hook only.
+- **Git:** You pull and push a Git repository. Add the `pdflatex` hook and Git.
 
 Choose one method for the project. Do not enable Dropbox and Git on the same Overleaf project.
 
-<CardGroup cols={2}>
-  <Card title="Dropbox sync" icon="dropbox" href="/guides/overleaf#get-the-project-with-dropbox">
-    Open the Dropbox folder for the project. Add only the `pdflatex` hook. Dropbox sends accepted files back to Overleaf.
-  </Card>
-  <Card title="Git" icon="git-alt" href="/guides/overleaf#get-the-project-with-git">
-    Clone the Overleaf or GitHub repository. Add the `pdflatex` hook and Git. You push accepted files back yourself, or with a Git hook.
-  </Card>
-</CardGroup>
+## Get the project
 
-## Get the project with Dropbox
+Use one of these two ways to get a local folder, then continue with [Open the project](#open-the-project).
+
+### Dropbox
 
 Use Dropbox when Overleaf already copies the project into a local folder. Link Dropbox in Overleaf **Account Settings**, then confirm the project folder exists under `Dropbox/Apps/Overleaf`. Open that project folder, not the parent `Overleaf` folder.
 
@@ -29,9 +24,7 @@ ls
 
 You should see the TeX source. Overleaf premium Dropbox sync is required. See [Overleaf's Dropbox documentation](https://docs.overleaf.com/integrations-and-add-ons/dropbox) if the folder is missing.
 
-Continue with [Open the project](#open-the-project). After you accept an edit, [Dropbox sends the change back](#send-the-change-back-with-dropbox). Add only the `pdflatex` hook. Do not add a Git hook.
-
-## Get the project with Git
+### Git
 
 Use Git when you clone the project and move accepted files with pull and push. Connect the Overleaf project to GitHub, or copy its Git URL from the Overleaf project menu. Then run:
 
@@ -41,8 +34,6 @@ cd ~/writing/my-paper
 ```
 
 Confirm that `~/writing/my-paper` contains the TeX source and that `git status` runs there without an error. Pull before each writing session so the local files include changes made in Overleaf.
-
-Continue with [Open the project](#open-the-project). After you accept an edit, [send the change back with Git](#send-the-change-back-with-git). You need both the `pdflatex` hook and Git.
 
 ## Open the project
 
@@ -62,7 +53,7 @@ Open the main TeX file. You should see the TeX source and the project files in t
 
 ## Build the PDF
 
-Both methods need the `pdflatex` hook so you can catch TeX errors and review the formatted paper after each accepted edit. The Git method adds a second hook later. Do not add a Git hook for Dropbox.
+Both methods need the `pdflatex` hook so you can catch TeX errors and review the formatted paper after each accepted edit. Git adds a second hook later, when you [send the change back](#send-the-change-back). Do not add a Git hook for Dropbox.
 
 Install a TeX distribution that provides `pdflatex`, `bibtex`, and `synctex`.
 
@@ -114,9 +105,13 @@ The `%` starts a TeX comment, so LaTeX ignores the request while it waits. Revie
 
 Run the build again after accepting the change. Confirm that the request is gone, the accepted source is present, the hook finishes successfully, and the PDF shows the intended revision.
 
-Then send the accepted files back with the method you chose: [Dropbox](#send-the-change-back-with-dropbox) or [Git](#send-the-change-back-with-git).
+Then [send the change back](#send-the-change-back) with the same method you used to get the project.
 
-## Send the change back with Dropbox
+## Send the change back
+
+Use the same Dropbox or Git method you chose above.
+
+### Dropbox
 
 Dropbox copies the saved source files to Overleaf. You do not add a Git hook. Keep only the `pdflatex` hook.
 
@@ -126,7 +121,7 @@ Do not upload the locally compiled PDF into the Overleaf project. Overleaf build
 
 Read [Hooks](/customize/hooks) if you need to change the `pdflatex` command or output path.
 
-## Send the change back with Git
+### Git
 
 Git needs a second step after the `pdflatex` hook. Review the Git diff, then commit and push:
 
