@@ -89,6 +89,7 @@
 	let calibrationSessionIds = $state<string[]>([]);
 	let uploadingSkill = $state(false);
 	let finalizing = $state(false);
+	let startingAnalysis = $state(false);
 
 	const pendingTrials = $derived((summary?.profile?.calibrations ?? [])
 		.filter((trial) => calibrationSessionIds.includes(trial.id) && ['pending', 'generated', 'error'].includes(trial.status)));
@@ -400,6 +401,7 @@
 
 	async function startAnalysis() {
 		errorMessage = '';
+		startingAnalysis = true;
 		try {
 			const data = await requestJson('/api/style-profile/runs', {
 				method: 'POST',
@@ -410,6 +412,8 @@
 			connectRun(run!.id);
 		} catch (cause) {
 			errorMessage = cause instanceof Error ? cause.message : 'Could not start style analysis.';
+		} finally {
+			startingAnalysis = false;
 		}
 	}
 
@@ -567,12 +571,26 @@
 		}
 	}
 
+	let showGlobalPrompt = $state(false);
+	let pendingFinalizeResolve: ((saveToGlobal: boolean) => void) | null = null;
+
 	async function finalizeStyle() {
 		if (!canFinalize || finalizing) return;
 		finalizing = true;
 		errorMessage = '';
 		try {
-			const data = await requestJson('/api/style-profile/finalize', { method: 'POST' });
+			const saveToGlobal = await new Promise<boolean>((resolve) => {
+				pendingFinalizeResolve = resolve;
+				showGlobalPrompt = true;
+			});
+			showGlobalPrompt = false;
+			pendingFinalizeResolve = null;
+
+			const data = await requestJson('/api/style-profile/finalize', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ saveToGlobal })
+			});
 			await loadAll();
 			step = 'active';
 			onChanged?.();
@@ -581,6 +599,8 @@
 			errorMessage = cause instanceof Error ? cause.message : 'Could not finalize the style.';
 		} finally {
 			finalizing = false;
+			showGlobalPrompt = false;
+			pendingFinalizeResolve = null;
 		}
 	}
 
@@ -652,6 +672,16 @@
 						{#if activePropositions.length > 0}<span class="count-chip">{activePropositions.length}</span>{/if}
 					</button>
 				</nav>
+			{/if}
+
+			{#if showGlobalPrompt}
+				<div class="global-prompt">
+					<p>Save this style to your global Claude Code skills (<code>~/.claude/skills/</code>) so it works in every project?</p>
+					<div class="global-prompt-actions">
+						<button class="btn" onclick={() => pendingFinalizeResolve?.(false)}>Just this project</button>
+						<button class="btn primary" onclick={() => pendingFinalizeResolve?.(true)}>Save globally</button>
+					</div>
+				</div>
 			{/if}
 
 			{#if errorMessage}
@@ -783,8 +813,12 @@
 								<div class="head-copy">
 									<h3>Style analysis</h3>
 								</div>
-								{#if analysisRunning}
-									<button class="btn" onclick={cancelAnalysis}>Cancel</button>
+								{#if analysisRunning || startingAnalysis}
+									{#if analysisRunning}
+										<button class="btn" onclick={cancelAnalysis}>Cancel</button>
+									{:else}
+										<button class="btn" disabled>Starting…</button>
+									{/if}
 								{:else}
 									{#if run}
 										<button class="btn" onclick={resetAnalysis}>Start over</button>
@@ -799,7 +833,17 @@
 								so feel free to keep writing or do other things in the meantime.
 							</p>
 
-							{#if run}
+							{#if startingAnalysis && !run}
+								<div class="progress-summary">
+									<div class="progress-top">
+										<strong>Starting…</strong>
+										<span>Setting up the analysis</span>
+									</div>
+									<div class="progress-track" aria-label="Starting analysis">
+										<div class="progress-fill running" style:width="0%"></div>
+									</div>
+								</div>
+							{:else if run}
 								<div class="progress-summary">
 									<div class="progress-top">
 										<strong>{Math.round(run.progress)}% complete</strong>
@@ -1454,6 +1498,27 @@
 	}
 	.status-chip.error .chip-dot {
 		background: var(--diff-removed-color);
+	}
+
+	.global-prompt {
+		margin: 10px 16px 0;
+		padding: 12px 14px;
+		border: 1px solid var(--border-light);
+		border-radius: 7px;
+		background: var(--bg-elevated);
+		font-size: 13px;
+	}
+	.global-prompt p { margin: 0 0 10px; }
+	.global-prompt code {
+		font-size: 11.5px;
+		padding: 1px 5px;
+		background: var(--bg-inset);
+		border-radius: 3px;
+	}
+	.global-prompt-actions {
+		display: flex;
+		gap: 8px;
+		justify-content: flex-end;
 	}
 
 	.error-box {

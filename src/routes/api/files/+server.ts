@@ -68,7 +68,9 @@ export const GET: RequestHandler = async ({ url }) => {
 			kind,
 			path: childRel,
 			watched: childRel === 'notes' || childRel.startsWith('notes/'),
-			internal: childRel === '.docwriter' || childRel.startsWith('.docwriter/')
+			internal: ['.docwriter', '.agents', '.claude'].some(
+				(prefix) => childRel === prefix || childRel.startsWith(prefix + '/')
+			)
 		});
 	}
 

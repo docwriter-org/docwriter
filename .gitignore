@@ -45,8 +45,7 @@ vite.config.ts.timestamp-*
 # Agent worktrees and locks
 .agents/
 /.codex/
-.claude/skills/*/.docwriter-bundled-skill
-.claude/skills/plain-writing/
+.claude/skills/*/
 .claude/worktrees/
 .claude/scheduled_tasks.lock
 
