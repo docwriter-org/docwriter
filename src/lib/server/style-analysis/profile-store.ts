@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type {
 	CalibrationTrial,
@@ -31,6 +32,8 @@ import {
 export const STYLE_PROFILE_FILE = join(DOCWRITER_DIR, 'style-profile.json');
 export const STYLE_ANALYSIS_DIR = join(DOCWRITER_DIR, 'style-analysis');
 export const STYLE_REPORT_FILE = join(STYLE_ANALYSIS_DIR, 'report.json');
+
+export const GLOBAL_STYLE_SKILL_DIR = join(homedir(), '.claude', 'skills', 'my-writing-style');
 
 function migrateStoredProfile(value: unknown): unknown {
 	if (!value || typeof value !== 'object') return value;
@@ -235,6 +238,11 @@ export function propositionFromDraft(
 		createdAt: now,
 		updatedAt: now
 	};
+}
+
+export function checkGlobalStyleSkill(): { available: boolean; path: string } {
+	const available = existsSync(join(GLOBAL_STYLE_SKILL_DIR, 'references', 'propositions.json'));
+	return { available, path: GLOBAL_STYLE_SKILL_DIR };
 }
 
 export function styleProfileSummary(): StyleProfileSummary {
