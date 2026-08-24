@@ -4,10 +4,8 @@ title: "Edit an Overleaf project"
 
 You can edit an Overleaf project in DocWriter in two ways. The local writing steps are the same. The methods differ in how files travel between your machine and Overleaf, and in which hooks you add.
 
-| Method | How files move | Hooks you add |
-| --- | --- | --- |
-| [Dropbox sync](#get-the-project-with-dropbox) | Dropbox copies saved files both ways | `pdflatex` only |
-| [Git](#get-the-project-with-git) | You pull and push a Git repository | `pdflatex` and Git |
+- **[Dropbox sync](#get-the-project-with-dropbox):** Dropbox copies saved files both ways. Add the `pdflatex` hook only.
+- **[Git](#get-the-project-with-git):** You pull and push a Git repository. Add the `pdflatex` hook and Git.
 
 Choose one method for the project. Do not enable Dropbox and Git on the same Overleaf project.
 
@@ -31,7 +29,7 @@ ls
 
 You should see the TeX source. Overleaf premium Dropbox sync is required. See [Overleaf's Dropbox documentation](https://docs.overleaf.com/integrations-and-add-ons/dropbox) if the folder is missing.
 
-Continue with [Open the project](#open-the-project). After you accept an edit, [Dropbox sends the change back](#send-the-change-back-with-dropbox). You do not add a Git hook.
+Continue with [Open the project](#open-the-project). After you accept an edit, [Dropbox sends the change back](#send-the-change-back-with-dropbox). Add only the `pdflatex` hook. Do not add a Git hook.
 
 ## Get the project with Git
 
