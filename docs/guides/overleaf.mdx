@@ -2,11 +2,40 @@
 title: "Edit an Overleaf project"
 ---
 
-Use this workflow when an Overleaf project is available through Git. You can edit the local files in DocWriter and use Git to move accepted changes between the local repository and Overleaf.
+You can edit an Overleaf project in DocWriter in two ways. The local writing steps are the same. The methods differ in how files travel between your machine and Overleaf, and in which hooks you add.
 
-## Get the project
+| Method | How files move | Hooks you add |
+| --- | --- | --- |
+| [Dropbox sync](#get-the-project-with-dropbox) | Dropbox copies saved files both ways | `pdflatex` only |
+| [Git](#get-the-project-with-git) | You pull and push a Git repository | `pdflatex` and Git |
 
-Clone the project so DocWriter and your TeX tools can work with local files. Connect the Overleaf project to GitHub, or copy its Git URL from the Overleaf project menu. Then run:
+Choose one method for the project. Do not enable Dropbox and Git on the same Overleaf project.
+
+<CardGroup cols={2}>
+  <Card title="Dropbox sync" icon="dropbox" href="/guides/overleaf#get-the-project-with-dropbox">
+    Open the Dropbox folder for the project. Add only the `pdflatex` hook. Dropbox sends accepted files back to Overleaf.
+  </Card>
+  <Card title="Git" icon="git-alt" href="/guides/overleaf#get-the-project-with-git">
+    Clone the Overleaf or GitHub repository. Add the `pdflatex` hook and Git. You push accepted files back yourself, or with a Git hook.
+  </Card>
+</CardGroup>
+
+## Get the project with Dropbox
+
+Use Dropbox when Overleaf already copies the project into a local folder. Link Dropbox in Overleaf **Account Settings**, then confirm the project folder exists under `Dropbox/Apps/Overleaf`. Open that project folder, not the parent `Overleaf` folder.
+
+```sh
+cd ~/Dropbox/Apps/Overleaf/my-paper
+ls
+```
+
+You should see the TeX source. Overleaf premium Dropbox sync is required. See [Overleaf's Dropbox documentation](https://docs.overleaf.com/integrations-and-add-ons/dropbox) if the folder is missing.
+
+Continue with [Open the project](#open-the-project). After you accept an edit, [Dropbox sends the change back](#send-the-change-back-with-dropbox). You do not add a Git hook.
+
+## Get the project with Git
+
+Use Git when you clone the project and move accepted files with pull and push. Connect the Overleaf project to GitHub, or copy its Git URL from the Overleaf project menu. Then run:
 
 ```sh
 git clone <repository-url> ~/writing/my-paper
@@ -15,15 +44,19 @@ cd ~/writing/my-paper
 
 Confirm that `~/writing/my-paper` contains the TeX source and that `git status` runs there without an error. Pull before each writing session so the local files include changes made in Overleaf.
 
+Continue with [Open the project](#open-the-project). After you accept an edit, [send the change back with Git](#send-the-change-back-with-git). You need both the `pdflatex` hook and Git.
+
 ## Open the project
 
-Start DocWriter in watch mode so it opens this project and watches its files for outside changes:
+Start DocWriter in watch mode so it opens this project and watches its files for outside changes. Use the Dropbox folder or the Git clone you just confirmed:
 
 ```sh
 docwriter --watch ~/writing/my-paper
 ```
 
-Open the main TeX file. You should see the TeX source and the project files in the file tree. The files remain normal workspace files, so Git and Overleaf can still track them.
+For Dropbox, pass the project folder under `Dropbox/Apps/Overleaf`. Watch mode matters for both methods: Dropbox writes Overleaf changes onto disk, and a Git pull does the same.
+
+Open the main TeX file. You should see the TeX source and the project files in the file tree. The files remain normal workspace files, so Dropbox or Git can still track them.
 
 <Frame>
   ![A TeX project open in the source editor](/images/overleaf-tex-open.png)
@@ -31,7 +64,9 @@ Open the main TeX file. You should see the TeX source and the project files in t
 
 ## Build the PDF
 
-Build the PDF so you can catch TeX errors and review the formatted paper after each accepted edit. Install a TeX distribution that provides `pdflatex`, `bibtex`, and `synctex`.
+Both methods need the `pdflatex` hook so you can catch TeX errors and review the formatted paper after each accepted edit. The Git method adds a second hook later. Do not add a Git hook for Dropbox.
+
+Install a TeX distribution that provides `pdflatex`, `bibtex`, and `synctex`.
 
 Confirm that each command is available on `PATH`:
 
@@ -81,18 +116,32 @@ The `%` starts a TeX comment, so LaTeX ignores the request while it waits. Revie
 
 Run the build again after accepting the change. Confirm that the request is gone, the accepted source is present, the hook finishes successfully, and the PDF shows the intended revision.
 
-## Send the change back
+Then send the accepted files back with the method you chose: [Dropbox](#send-the-change-back-with-dropbox) or [Git](#send-the-change-back-with-git).
 
-Use Git to send the accepted local files back to the remote repository connected to Overleaf. Review the Git diff, then commit and push:
+## Send the change back with Dropbox
+
+Dropbox copies the saved source files to Overleaf. You do not add a Git hook. Keep only the `pdflatex` hook.
+
+Accepting an edit writes the workspace file. Wait for Dropbox to finish syncing, then open the Overleaf project and confirm the accepted source is there. If Overleaf still shows the old text, use **Sync this project now** in the project's Dropbox integration.
+
+Do not upload the locally compiled PDF into the Overleaf project. Overleaf builds its own PDF from the source. If Dropbox creates conflict copies of `.pdf`, `.aux`, or `.log` files, add [Dropbox ignore rules](https://docs.overleaf.com/integrations-and-add-ons/dropbox#avoiding-conflicts-on-pdf-and-compiled-output-files) for those build outputs.
+
+Read [Hooks](/customize/hooks) if you need to change the `pdflatex` command or output path.
+
+## Send the change back with Git
+
+Git needs a second step after the `pdflatex` hook. Review the Git diff, then commit and push:
 
 ```sh
 git status
 git diff
-git add .
+git add -A -- ':(exclude).docwriter' ':(exclude).claude' ':(exclude)CLAUDE.md'
 git commit -m "Revise manuscript"
 git push
 ```
 
-Confirm that `git status` is clean and that the remote repository contains the new commit. You pull and push changes yourself by default. You can add a Git hook later, but first confirm that manual pull and push work without a credential prompt.
+The `:(exclude)` paths keep local agent files out of the Overleaf or GitHub remote. Confirm that `git status` is clean except for those excluded files, and that the remote repository contains the new commit.
 
-Read [Hooks](/customize/hooks) before automating the build or Git commands.
+You pull and push changes yourself by default. Add a Git hook only after a manual pull and push work without a credential prompt. Open **Settings**, then **Hooks**, and choose a Git template. The private template skips `.docwriter/`, `.claude/`, and `CLAUDE.md`.
+
+Read [Hooks](/customize/hooks) before you automate the build or Git commands. Read [Pandoc, Mermaid, and Git](/automation/example-projects#git) for the Git templates.
