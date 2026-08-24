@@ -815,7 +815,7 @@
     {
       "id": "guides-overleaf-01",
       "area": "Automation",
-      "feature": "Edit, build, preview, and sync an Overleaf project",
+      "feature": "Edit, build, preview, and sync an Overleaf project with Dropbox or Git",
       "targetPage": "guides/overleaf"
     },
     {
