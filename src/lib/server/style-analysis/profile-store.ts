@@ -88,7 +88,6 @@ export function writeStyleProfile(profile: StyleProfile): StyleProfile {
 	ensureStyleAnalysisDir();
 	const next = StyleProfileSchema.parse({ ...profile, updatedAt: Date.now() }) as StyleProfile;
 	writePersistedStyleProfile(next);
-	writeJsonAtomic(STYLE_PROFILE_FILE, next);
 	return next;
 }
 
