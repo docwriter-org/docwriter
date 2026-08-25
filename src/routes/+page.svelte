@@ -310,6 +310,14 @@
 	activeTab.subscribe((value) => {
 		currentActiveTabId = value;
 	});
+	// Remember the last thread the user opened on each tab. Tab-bar
+	// clicks used to clear `openCommentThreadId` before switchTab ran;
+	// keeping the last non-null id means a peek-and-return can restore it.
+	openCommentThreadId.subscribe((id) => {
+		if (currentActiveTabId && id) {
+			openCommentThreadByTab.update((m) => ({ ...m, [currentActiveTabId as string]: id }));
+		}
+	});
 
 	let editorRef: EditorRef | undefined = $state();
 	// FileTree instance handle. Used to nudge the sidebar to re-fetch when
@@ -586,10 +594,12 @@
 		await loadTab(tabId);
 		const savedOpen = get(openCommentThreadByTab)[tabId] ?? null;
 		const threads = get(commentThreads);
-		openCommentThreadId.set(
-			savedOpen && threads.some((t) => t.id === savedOpen) ? savedOpen : null
-		);
+		const restoreId =
+			savedOpen && threads.some((t) => t.id === savedOpen) ? savedOpen : null;
 		docLoaded = true;
+		// Set the open thread after the editor remounts so the new
+		// TiptapEditor's first sync cannot race-clear it.
+		queueMicrotask(() => openCommentThreadId.set(restoreId));
 	}
 
 	async function createTab(id: string) {

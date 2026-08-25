@@ -20,6 +20,7 @@
 			.replace(/\n/g, '<br>');
 	}
 	import { onDestroy, onMount } from 'svelte';
+	import { get } from 'svelte/store';
 	import { fly } from 'svelte/transition';
 	import { cubicOut } from 'svelte/easing';
 	import type { CommentMessage, CommentThread } from '$lib/types';
@@ -267,6 +268,18 @@
 		awaitTimers.set(tid, setTimeout(() => clearAwaiting(tid), 120000));
 	});
 	onDestroy(() => {
+		// Flush whatever is still in the open reply box — some input
+		// paths (IME, automation) update the textarea without oninput.
+		if (gutterEl) {
+			const flushed = { ...get(commentReplyDrafts) };
+			gutterEl
+				.querySelectorAll<HTMLTextAreaElement>('textarea.reply-input[data-thread-id]')
+				.forEach((el) => {
+					const id = el.dataset.threadId;
+					if (id) flushed[id] = el.value;
+				});
+			commentReplyDrafts.set(flushed);
+		}
 		unsubscribeRendering();
 		unsubscribeReplyDrafts();
 		for (const t of awaitTimers.values()) clearTimeout(t);
@@ -742,6 +755,7 @@
 				{/if}
 				<textarea
 					class="reply-input"
+					data-thread-id={thread.id}
 					placeholder="Reply…"
 					rows="2"
 					value={replyDrafts[thread.id] ?? ''}
