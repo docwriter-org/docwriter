@@ -71,6 +71,14 @@ export const commentThreads = writable<CommentThread[]>([]);
  * the popover is closed. */
 export const openCommentThreadId = writable<string | null>(null);
 
+/** Per-tab memory of which comment thread was open, so peeking at another
+ * file and coming back re-expands the same thread. Session-only. */
+export const openCommentThreadByTab = writable<Record<string, string | null>>({});
+
+/** Unsent reply text keyed by comment thread id. Survives the editor
+ * remount that happens on every tab switch. Session-only. */
+export const commentReplyDrafts = writable<Record<string, string>>({});
+
 /** Writing rules (mirror of document.meta.json rules). */
 export const rules = writable<Rule[]>([]);
 

@@ -28,7 +28,7 @@
 	import { tooltip } from '$lib/actions/tooltip';
 	import type { MaterializedPendingReviewRound } from '$lib/review-rounds';
 	import { summarizeRound } from '$lib/review-diff';
-	import { isRendering, customReviewers } from '$lib/stores';
+	import { commentReplyDrafts, isRendering, customReviewers } from '$lib/stores';
 	import { BUILTIN_REVIEWERS, type Reviewer } from '$lib/shared/reviewers';
 	import ReviewerMascot from '$lib/components/ReviewerMascot.svelte';
 
@@ -201,6 +201,7 @@
 
 	let gutterEl: HTMLDivElement | null = $state(null);
 	let replyDrafts = $state<Record<string, string>>({});
+	const unsubscribeReplyDrafts = commentReplyDrafts.subscribe((v) => (replyDrafts = v));
 	let replying = $state<Record<string, boolean>>({});
 	/** Threads currently waiting for the agent's response to a just-sent reply.
 	 * Set on send; cleared when the agent posts a new message OR a new edit on
@@ -267,6 +268,7 @@
 	});
 	onDestroy(() => {
 		unsubscribeRendering();
+		unsubscribeReplyDrafts();
 		for (const t of awaitTimers.values()) clearTimeout(t);
 		awaitTimers.clear();
 	});
@@ -497,7 +499,7 @@
 				body: JSON.stringify({ mode: 'reply', tabId, threadId: thread.id, message: text })
 			});
 			if (!res.ok) throw new Error(await res.text());
-			replyDrafts = { ...replyDrafts, [thread.id]: '' };
+			commentReplyDrafts.update((d) => ({ ...d, [thread.id]: '' }));
 			// Snapshot what the thread had BEFORE the agent responds, so the
 			// $effect can detect the agent's new message/edit and clear the
 			// waiting indicator. Timeout is a safety net if the agent stays
@@ -744,10 +746,10 @@
 					rows="2"
 					value={replyDrafts[thread.id] ?? ''}
 					oninput={(e) => {
-						replyDrafts = {
-							...replyDrafts,
+						commentReplyDrafts.update((d) => ({
+							...d,
 							[thread.id]: (e.currentTarget as HTMLTextAreaElement).value
-						};
+						}));
 					}}
 					onkeydown={(e) => {
 						if (isModEnter(e)) {

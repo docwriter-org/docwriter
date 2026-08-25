@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount, onDestroy, type Component } from 'svelte';
+	import { get } from 'svelte/store';
 	import type * as Y from 'yjs';
 	import MenuBar, { type MenuSpec } from '$lib/components/MenuBar.svelte';
 	import ModelPicker from '$lib/components/ModelPicker.svelte';
@@ -129,6 +130,7 @@
 		commentThreads,
 		allTabCommentThreads,
 		openCommentThreadId,
+		openCommentThreadByTab,
 		queuedSubmissionCount,
 		activeReviewer,
 		customReviewers,
@@ -549,6 +551,13 @@
 	async function switchTab(tabId: string) {
 		const current = getCurrentActiveTab();
 		if (tabId === current) return;
+		// Remember the open comment thread on the tab we're leaving so a
+		// quick peek at another file can restore it (and its reply draft)
+		// when the user comes back. The editor remounts on every switch.
+		if (current) {
+			const leavingOpen = get(openCommentThreadId);
+			openCommentThreadByTab.update((m) => ({ ...m, [current]: leavingOpen }));
+		}
 		if (freshAgentTabs.has(tabId)) {
 			freshAgentTabs.delete(tabId);
 			freshAgentTabs = new Set(freshAgentTabs);
@@ -575,6 +584,11 @@
 			console.error('Failed to persist active tab:', e);
 		}
 		await loadTab(tabId);
+		const savedOpen = get(openCommentThreadByTab)[tabId] ?? null;
+		const threads = get(commentThreads);
+		openCommentThreadId.set(
+			savedOpen && threads.some((t) => t.id === savedOpen) ? savedOpen : null
+		);
 		docLoaded = true;
 	}
 
