@@ -2399,6 +2399,10 @@
 	}
 
 	let docLoaded = $state(false);
+	/** Stays true after the first session hydrate. Tab switches flip
+	 * `docLoaded` to remount TiptapEditor; the agent dock must NOT follow
+	 * that — remounting it used to wipe an in-progress Chat draft. */
+	let appReady = $state(false);
 
 	/**
 	 * Load the persisted selection-toolbar state (recent actions + LRU usage
@@ -2530,6 +2534,7 @@
 		const active = await loadTabs();
 		if (active) await loadTab(active);
 		docLoaded = true;
+		appReady = true;
 
 		// Rehydrate the Agent History pane from the SDK's persisted session
 		// transcript so refresh doesn't wipe the activity log. The SDK
@@ -3274,7 +3279,7 @@
 	</div>
 </div>
 
-{#if docLoaded}
+{#if appReady}
 	<AgentDockShell
 		onNewSession={newSession}
 		onWakeUp={docLoaded && activeTabFilePath && !activeTabIsPdf ? () => submit() : undefined}

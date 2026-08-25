@@ -9,7 +9,8 @@ import type {
 	AgentSettings,
 	ProposedRule,
 	ProposedHook,
-	CommentThread
+	CommentThread,
+	ImageAttachment
 } from './types';
 import type { MaterializedPendingReviewRound } from './review-rounds';
 
@@ -591,6 +592,23 @@ export const dockExpanded = writable<boolean>(readDockExpanded());
 if (typeof window !== 'undefined') {
 	dockExpanded.subscribe((v) => window.localStorage.setItem(DOCK_EXPANDED_KEY, String(v)));
 }
+
+/** In-progress Chat compose box. Lives in a store so switching tabs (which
+ * remounts the editor, and used to remount the dock) cannot wipe the
+ * draft, attachments, or whether the popover was open. Session-only —
+ * not persisted across reloads. */
+export interface ChatComposeDraft {
+	open: boolean;
+	message: string;
+	planMode: boolean;
+	images: ImageAttachment[];
+}
+export const chatCompose = writable<ChatComposeDraft>({
+	open: false,
+	message: '',
+	planMode: false,
+	images: []
+});
 
 /** Agent behavior settings. Persisted through the server runtime-state
  * layer (SQLite-backed) whenever the user changes them via the settings UI. */
