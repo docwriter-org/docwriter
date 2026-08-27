@@ -1,7 +1,8 @@
 <script lang="ts">
+	import { get } from 'svelte/store';
 	import { MessageCircle } from 'lucide-svelte';
 	import ChatPanel from './ChatPanel.svelte';
-	import { isRendering, queuedSubmissionCount } from '$lib/stores';
+	import { chatCompose, isRendering, queuedSubmissionCount } from '$lib/stores';
 	import { tooltip } from '$lib/actions/tooltip';
 	import type { ImageAttachment } from '$lib/types';
 
@@ -16,10 +17,24 @@
 	let queuedCount = $state(0);
 	queuedSubmissionCount.subscribe((v) => (queuedCount = v));
 
-	let chatOpen = $state(false);
+	// Hydrate from the session store so a remount (tab switch used to
+	// tear the dock down with `docLoaded`) restores the open popover and
+	// whatever the user was typing / had attached.
+	const initial = get(chatCompose);
+	let chatOpen = $state(initial.open);
+	let chatMessageDraft = $state(initial.message);
+	let chatPlanModeDraft = $state(initial.planMode);
+	let chatImagesDraft = $state<ImageAttachment[]>(initial.images);
 	let dockEl: HTMLDivElement | null = $state(null);
-	let chatMessageDraft = $state('');
-	let chatPlanModeDraft = $state(false);
+
+	$effect(() => {
+		chatCompose.set({
+			open: chatOpen,
+			message: chatMessageDraft,
+			planMode: chatPlanModeDraft,
+			images: chatImagesDraft
+		});
+	});
 
 	function toggleChat() {
 		chatOpen = !chatOpen;
@@ -37,8 +52,14 @@
 			// popover: a mousedown on the Chat button would close here and the
 			// button's click would immediately toggle it back open, making the
 			// button unable to ever close the popover.
-			const target = e.target as Node | null;
-			if (dockEl && target && !dockEl.contains(target)) chatOpen = false;
+			const target = e.target as HTMLElement | null;
+			if (!target) return;
+			if (dockEl && dockEl.contains(target)) return;
+			// Switching files, clicking a tab, or peeking at the editor
+			// should not dismiss an in-progress compose. `.body` is the
+			// workspace (file tree + outline + tabs + editor).
+			if (target.closest('.body')) return;
+			chatOpen = false;
 		}
 		function onKey(e: KeyboardEvent) {
 			if (e.key === 'Escape') chatOpen = false;
@@ -62,13 +83,17 @@
 			? `Chat with the agent. ${queuedCount} message${queuedCount === 1 ? '' : 's'} already queued — a new message will run after them.`
 			: rendering
 				? 'Chat with the agent. Messages sent while it works are queued and run after the current render finishes.'
-				: 'Chat with the agent. Type a request and Claude will run a render with your message as the prompt.'}
+				: chatMessageDraft.trim() || chatImagesDraft.length > 0
+					? 'Chat with the agent. Your unsent draft is still here.'
+					: 'Chat with the agent. Type a request and Claude will run a render with your message as the prompt.'}
 		onclick={toggleChat}
 	>
 		<MessageCircle size={12} />
 		<span>Chat</span>
 		{#if queuedCount > 0}
 			<span class="queue-badge">{queuedCount}</span>
+		{:else if !chatOpen && (chatMessageDraft.trim().length > 0 || chatImagesDraft.length > 0)}
+			<span class="draft-dot" aria-label="Unsent draft"></span>
 		{/if}
 	</button>
 	{#if chatOpen}
@@ -76,6 +101,7 @@
 			<ChatPanel
 				bind:message={chatMessageDraft}
 				bind:planMode={chatPlanModeDraft}
+				bind:images={chatImagesDraft}
 				onSend={sendMessage}
 				onClose={() => (chatOpen = false)}
 				rendering={rendering}
@@ -121,6 +147,16 @@
 		line-height: 14px;
 		text-align: center;
 		font-variant-numeric: tabular-nums;
+		box-shadow: 0 0 0 1.5px var(--bg-surface);
+	}
+	.draft-dot {
+		position: absolute;
+		top: -3px;
+		right: -3px;
+		width: 8px;
+		height: 8px;
+		border-radius: 999px;
+		background: var(--accent);
 		box-shadow: 0 0 0 1.5px var(--bg-surface);
 	}
 	.dock-chat-popover {

@@ -21,6 +21,9 @@
 		/** Lifted so the parent can preserve text when the popover unmounts. */
 		message?: string;
 		planMode?: boolean;
+		/** Lifted with the text draft so switching files / closing the
+		 * popover does not drop attached images. */
+		images?: ImageAttachment[];
 	}
 	let {
 		onSend,
@@ -28,18 +31,18 @@
 		rendering = false,
 		queuedCount = 0,
 		message = $bindable(''),
-		planMode = $bindable(false)
+		planMode = $bindable(false),
+		images = $bindable([])
 	}: Props = $props();
 	let textareaEl: HTMLTextAreaElement | null = $state(null);
-	let attachedImages = $state<ImageAttachment[]>([]);
 	let isDragOver = $state(false);
 
 	function send() {
 		const trimmed = message.trim();
-		if (!trimmed && attachedImages.length === 0) return;
-		onSend(trimmed, { planMode, images: attachedImages });
+		if (!trimmed && images.length === 0) return;
+		onSend(trimmed, { planMode, images });
 		message = '';
-		attachedImages = [];
+		images = [];
 	}
 
 	function onKeyDown(e: KeyboardEvent) {
@@ -66,20 +69,20 @@
 	}
 
 	async function attachFiles(files: File[]) {
-		const images = files.filter((f) => isAllowedImageType(f.type));
-		if (images.length === 0) return;
+		const incoming = files.filter((f) => isAllowedImageType(f.type));
+		if (incoming.length === 0) return;
 		const newAttachments = await Promise.all(
-			images.map(async (file): Promise<ImageAttachment> => ({
+			incoming.map(async (file): Promise<ImageAttachment> => ({
 				name: file.name,
 				mediaType: file.type as AllowedImageMediaType,
 				data: await readFileAsBase64(file)
 			}))
 		);
-		attachedImages = [...attachedImages, ...newAttachments];
+		images = [...images, ...newAttachments];
 	}
 
 	function removeImage(index: number) {
-		attachedImages = attachedImages.filter((_, i) => i !== index);
+		images = images.filter((_, i) => i !== index);
 	}
 
 	function handleDragOver(e: DragEvent) {
@@ -137,9 +140,9 @@
 		rows="5"
 	></textarea>
 
-	{#if attachedImages.length > 0}
+	{#if images.length > 0}
 		<div class="image-chips">
-			{#each attachedImages as img, i}
+			{#each images as img, i}
 				<div class="image-chip">
 					<img
 						class="chip-thumb"
@@ -172,7 +175,7 @@
 		</label>
 		<div class="footer-right">
 			<span class="kbd-hint">{modEnterToSend}</span>
-			<button class="send-btn" onclick={send} disabled={!message.trim() && attachedImages.length === 0}>
+			<button class="send-btn" onclick={send} disabled={!message.trim() && images.length === 0}>
 				<Send size={12} />
 				{#if rendering}
 					Queue{queuedCount > 0 ? ` (${queuedCount})` : ''}

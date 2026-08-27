@@ -20,6 +20,7 @@
 			.replace(/\n/g, '<br>');
 	}
 	import { onDestroy, onMount } from 'svelte';
+	import { get } from 'svelte/store';
 	import { fly } from 'svelte/transition';
 	import { cubicOut } from 'svelte/easing';
 	import type { CommentMessage, CommentThread } from '$lib/types';
@@ -28,7 +29,7 @@
 	import { tooltip } from '$lib/actions/tooltip';
 	import type { MaterializedPendingReviewRound } from '$lib/review-rounds';
 	import { summarizeRound } from '$lib/review-diff';
-	import { isRendering, customReviewers } from '$lib/stores';
+	import { commentReplyDrafts, isRendering, customReviewers } from '$lib/stores';
 	import { BUILTIN_REVIEWERS, type Reviewer } from '$lib/shared/reviewers';
 	import ReviewerMascot from '$lib/components/ReviewerMascot.svelte';
 
@@ -201,6 +202,7 @@
 
 	let gutterEl: HTMLDivElement | null = $state(null);
 	let replyDrafts = $state<Record<string, string>>({});
+	const unsubscribeReplyDrafts = commentReplyDrafts.subscribe((v) => (replyDrafts = v));
 	let replying = $state<Record<string, boolean>>({});
 	/** Threads currently waiting for the agent's response to a just-sent reply.
 	 * Set on send; cleared when the agent posts a new message OR a new edit on
@@ -266,7 +268,20 @@
 		awaitTimers.set(tid, setTimeout(() => clearAwaiting(tid), 120000));
 	});
 	onDestroy(() => {
+		// Flush whatever is still in the open reply box — some input
+		// paths (IME, automation) update the textarea without oninput.
+		if (gutterEl) {
+			const flushed = { ...get(commentReplyDrafts) };
+			gutterEl
+				.querySelectorAll<HTMLTextAreaElement>('textarea.reply-input[data-thread-id]')
+				.forEach((el) => {
+					const id = el.dataset.threadId;
+					if (id) flushed[id] = el.value;
+				});
+			commentReplyDrafts.set(flushed);
+		}
 		unsubscribeRendering();
+		unsubscribeReplyDrafts();
 		for (const t of awaitTimers.values()) clearTimeout(t);
 		awaitTimers.clear();
 	});
@@ -497,7 +512,7 @@
 				body: JSON.stringify({ mode: 'reply', tabId, threadId: thread.id, message: text })
 			});
 			if (!res.ok) throw new Error(await res.text());
-			replyDrafts = { ...replyDrafts, [thread.id]: '' };
+			commentReplyDrafts.update((d) => ({ ...d, [thread.id]: '' }));
 			// Snapshot what the thread had BEFORE the agent responds, so the
 			// $effect can detect the agent's new message/edit and clear the
 			// waiting indicator. Timeout is a safety net if the agent stays
@@ -740,14 +755,15 @@
 				{/if}
 				<textarea
 					class="reply-input"
+					data-thread-id={thread.id}
 					placeholder="Reply…"
 					rows="2"
 					value={replyDrafts[thread.id] ?? ''}
 					oninput={(e) => {
-						replyDrafts = {
-							...replyDrafts,
+						commentReplyDrafts.update((d) => ({
+							...d,
 							[thread.id]: (e.currentTarget as HTMLTextAreaElement).value
-						};
+						}));
 					}}
 					onkeydown={(e) => {
 						if (isModEnter(e)) {

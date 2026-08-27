@@ -9,7 +9,8 @@ import type {
 	AgentSettings,
 	ProposedRule,
 	ProposedHook,
-	CommentThread
+	CommentThread,
+	ImageAttachment
 } from './types';
 import type { MaterializedPendingReviewRound } from './review-rounds';
 
@@ -69,6 +70,14 @@ export const commentThreads = writable<CommentThread[]>([]);
 /** Which thread id (if any) is currently open in the popover. Null when
  * the popover is closed. */
 export const openCommentThreadId = writable<string | null>(null);
+
+/** Per-tab memory of which comment thread was open, so peeking at another
+ * file and coming back re-expands the same thread. Session-only. */
+export const openCommentThreadByTab = writable<Record<string, string | null>>({});
+
+/** Unsent reply text keyed by comment thread id. Survives the editor
+ * remount that happens on every tab switch. Session-only. */
+export const commentReplyDrafts = writable<Record<string, string>>({});
 
 /** Writing rules (mirror of document.meta.json rules). */
 export const rules = writable<Rule[]>([]);
@@ -591,6 +600,23 @@ export const dockExpanded = writable<boolean>(readDockExpanded());
 if (typeof window !== 'undefined') {
 	dockExpanded.subscribe((v) => window.localStorage.setItem(DOCK_EXPANDED_KEY, String(v)));
 }
+
+/** In-progress Chat compose box. Lives in a store so switching tabs (which
+ * remounts the editor, and used to remount the dock) cannot wipe the
+ * draft, attachments, or whether the popover was open. Session-only —
+ * not persisted across reloads. */
+export interface ChatComposeDraft {
+	open: boolean;
+	message: string;
+	planMode: boolean;
+	images: ImageAttachment[];
+}
+export const chatCompose = writable<ChatComposeDraft>({
+	open: false,
+	message: '',
+	planMode: false,
+	images: []
+});
 
 /** Agent behavior settings. Persisted through the server runtime-state
  * layer (SQLite-backed) whenever the user changes them via the settings UI. */

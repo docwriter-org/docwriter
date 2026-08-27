@@ -162,6 +162,9 @@
 	});
 	let feedbackInputEl: HTMLDivElement | null = $state(null);
 	let feedbackInput = $state('');
+	/** After a tab remount, ignore "user edit → collapse thread" for a
+	 * beat so the restored open thread isn't immediately closed by sync. */
+	let suppressThreadCollapseUntil = 0;
 	/** Routing mode for the current feedback submission. `edit` = direct
 	 * edit_doc proposal; `plan` = the agent first replies on the feedback
 	 * thread with WHY the passage was flagged (same reflection contract as
@@ -1311,11 +1314,16 @@
 		restartIdleCountdown();
 		// The user is writing, not reading comments. Collapse any expanded
 		// thread so its margin card doesn't sit in their peripheral vision;
-		// they can re-open it via the pill or gutter card.
-		if (openThreadId) openCommentThreadId.set(null);
+		// they can re-open it via the pill or gutter card. Skip the first
+		// moments after remount — tab-switch sync can look like a local
+		// edit and would wipe the thread we just restored.
+		if (openThreadId && Date.now() >= suppressThreadCollapseUntil) {
+			openCommentThreadId.set(null);
+		}
 	}
 
 	onMount(async () => {
+		suppressThreadCollapseUntil = Date.now() + 750;
 		// Wait for the Hocuspocus provider's initial sync to finish. The
 		// server is authoritative: it replays the tab's Yjs update log from
 		// SQLite (seeding from the workspace file on first open if the log
@@ -1474,6 +1482,10 @@
 			if (target.closest?.('.comment-thread-pill')) return;
 			if (target.closest?.('.freeze-lock-menu')) return;
 			if (target.closest?.('.freeze-lock')) return;
+			// Peeking at another file should not collapse an in-progress
+			// thread — switchTab remounts this editor and restores the
+			// open id + reply draft on the way back.
+			if (target.closest?.('.tab-bar, .tab-slot, .file-tree, .file-tree-panel, .tree-row')) return;
 			openCommentThreadId.set(null);
 			expandedReviewRoundId.set(null);
 			freezeMenu = null;

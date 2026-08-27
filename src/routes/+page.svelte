@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount, onDestroy, type Component } from 'svelte';
+	import { get } from 'svelte/store';
 	import type * as Y from 'yjs';
 	import MenuBar, { type MenuSpec } from '$lib/components/MenuBar.svelte';
 	import ModelPicker from '$lib/components/ModelPicker.svelte';
@@ -129,6 +130,7 @@
 		commentThreads,
 		allTabCommentThreads,
 		openCommentThreadId,
+		openCommentThreadByTab,
 		queuedSubmissionCount,
 		activeReviewer,
 		customReviewers,
@@ -307,6 +309,14 @@
 	let currentActiveTabId = $state<string | null>(null);
 	activeTab.subscribe((value) => {
 		currentActiveTabId = value;
+	});
+	// Remember the last thread the user opened on each tab. Tab-bar
+	// clicks used to clear `openCommentThreadId` before switchTab ran;
+	// keeping the last non-null id means a peek-and-return can restore it.
+	openCommentThreadId.subscribe((id) => {
+		if (currentActiveTabId && id) {
+			openCommentThreadByTab.update((m) => ({ ...m, [currentActiveTabId as string]: id }));
+		}
 	});
 
 	let editorRef: EditorRef | undefined = $state();
@@ -549,6 +559,13 @@
 	async function switchTab(tabId: string) {
 		const current = getCurrentActiveTab();
 		if (tabId === current) return;
+		// Remember the open comment thread on the tab we're leaving so a
+		// quick peek at another file can restore it (and its reply draft)
+		// when the user comes back. The editor remounts on every switch.
+		if (current) {
+			const leavingOpen = get(openCommentThreadId);
+			openCommentThreadByTab.update((m) => ({ ...m, [current]: leavingOpen }));
+		}
 		if (freshAgentTabs.has(tabId)) {
 			freshAgentTabs.delete(tabId);
 			freshAgentTabs = new Set(freshAgentTabs);
@@ -575,7 +592,14 @@
 			console.error('Failed to persist active tab:', e);
 		}
 		await loadTab(tabId);
+		const savedOpen = get(openCommentThreadByTab)[tabId] ?? null;
+		const threads = get(commentThreads);
+		const restoreId =
+			savedOpen && threads.some((t) => t.id === savedOpen) ? savedOpen : null;
 		docLoaded = true;
+		// Set the open thread after the editor remounts so the new
+		// TiptapEditor's first sync cannot race-clear it.
+		queueMicrotask(() => openCommentThreadId.set(restoreId));
 	}
 
 	async function createTab(id: string) {
@@ -2399,6 +2423,10 @@
 	}
 
 	let docLoaded = $state(false);
+	/** Stays true after the first session hydrate. Tab switches flip
+	 * `docLoaded` to remount TiptapEditor; the agent dock must NOT follow
+	 * that — remounting it used to wipe an in-progress Chat draft. */
+	let appReady = $state(false);
 
 	/**
 	 * Load the persisted selection-toolbar state (recent actions + LRU usage
@@ -2530,6 +2558,7 @@
 		const active = await loadTabs();
 		if (active) await loadTab(active);
 		docLoaded = true;
+		appReady = true;
 
 		// Rehydrate the Agent History pane from the SDK's persisted session
 		// transcript so refresh doesn't wipe the activity log. The SDK
@@ -3274,7 +3303,7 @@
 	</div>
 </div>
 
-{#if docLoaded}
+{#if appReady}
 	<AgentDockShell
 		onNewSession={newSession}
 		onWakeUp={docLoaded && activeTabFilePath && !activeTabIsPdf ? () => submit() : undefined}
