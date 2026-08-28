@@ -41,7 +41,7 @@
     {
       "id": "connect-provider-04",
       "area": "Models",
-      "feature": "Use Claude or Codex login instead of an API key",
+      "feature": "Use Claude Code terminal login (/login) instead of an API key",
       "targetPage": "connect-provider"
     },
     {
@@ -353,7 +353,7 @@
     {
       "id": "agent-ask-and-steer-09",
       "area": "Agent",
-      "feature": "See failed run toasts with authentication recovery hints",
+      "feature": "See auth failure toasts with Claude Code /login steps",
       "targetPage": "agent/ask-and-steer"
     },
     {
