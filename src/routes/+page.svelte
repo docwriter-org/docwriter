@@ -1025,6 +1025,36 @@
 
 	/** True when the dequeued message can be safely skipped because there's
 	 * a more specific user message right behind it. */
+	/** Plain-language recovery steps when the provider rejects auth.
+	 * `/login` is a Claude Code CLI slash command — not a DocWriter UI action. */
+	function authRecoveryHint(providerId: string): string {
+		if (providerId === 'claude') {
+			return [
+				'Claude Code login expired or is missing. This is not a DocWriter setting.',
+				'In a terminal on this computer:',
+				'1. Run: claude',
+				'2. Type: /login',
+				'3. Finish the browser sign-in, then return here and try again.',
+				'',
+				'In DocWriter: Settings → API keys — Claude should say "Using login".',
+				'Leave the Anthropic API key empty to keep using your Claude Code / Claude.ai subscription. Pasting a key bills Anthropic API usage instead.',
+				'',
+				'More detail: Settings → API keys, or docs.docwriter.org/connect-provider'
+			].join('\n');
+		}
+		if (providerId === 'codex') {
+			return [
+				'Codex login expired or is missing.',
+				'In a terminal on this computer, run your Codex CLI login again, then retry.',
+				'Or open Settings → API keys and paste a key for Codex / OpenAI.'
+			].join('\n');
+		}
+		return [
+			'Re-authenticate this provider, then try again.',
+			'Open Settings → API keys to see whether a login or API key is available.'
+		].join('\n');
+	}
+
 	function isSkippableWhenQueued(trigger?: string): boolean {
 		return isAcceptedEditsMessage(trigger) || isImplicitWakeupTrigger(trigger);
 	}
@@ -1548,7 +1578,7 @@
 							kind: 'error',
 							title: isAuthError ? 'Agent auth failed' : 'Agent run failed',
 							body: isAuthError
-								? `${errText}\n\nRe-authenticate your provider (e.g. run \`claude\` in a terminal and /login), then try again.`
+								? `${errText}\n\n${authRecoveryHint(provider)}`
 								: errText,
 							refId: String(renderStart)
 						});

@@ -6,6 +6,8 @@ You can use the editor without an AI account. Connect one provider when you want
 
 DocWriter supports Claude, OpenAI, Codex, Cursor, and Pi. You choose the provider and model from pills in the page header.
 
+For Claude, DocWriter can reuse your existing Claude Code terminal login (`claude`, then `/login`) so agent calls use your Claude.ai / Claude Code subscription. An Anthropic API key is optional and bills API usage instead.
+
 ## Choose a provider
 
 Click the provider pill in the header and choose one provider where you already have an account or API key. Click the model pill beside it to search the available models or add a custom model identifier.
@@ -36,13 +38,24 @@ Saved keys live in `~/.docwriter/keys.env`. A process environment variable or pr
 
 ### Claude
 
-Use an Anthropic key or an existing Claude login:
+Prefer your Claude Code / Claude.ai subscription when you already use Claude Code on this computer. DocWriter reuses that login. You do not paste anything in the DocWriter UI for this path.
+
+1. Open a terminal **on the same computer that runs DocWriter**.
+2. Run `claude` to open Claude Code.
+3. Type `/login` (a Claude Code slash command — not a DocWriter menu) and finish the browser sign-in.
+4. In DocWriter, open **Settings**, then **API keys**. Claude should show **Using login**.
+
+Leave the Anthropic API key field empty. Pasting an `ANTHROPIC_API_KEY` works, but agent calls then bill Anthropic **API** usage instead of your Claude Code subscription.
+
+If the agent toast says authentication failed and mentions `/login`, it means those terminal steps above — refresh the Claude Code login, then retry in DocWriter. See [Provider errors](/help/provider-errors#claude-code-login-expired).
+
+To use an API key instead:
 
 ```sh
 export ANTHROPIC_API_KEY=sk-ant-...
-# or
-claude login
 ```
+
+Or paste the key under **Settings → API keys**. Remove the stored key (and clear any shell `ANTHROPIC_API_KEY`) when you want to return to Claude Code login.
 
 ### OpenAI and Codex
 

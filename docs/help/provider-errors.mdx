@@ -16,11 +16,25 @@ Adding a key allows future requests to use that provider. When you enter a key i
 
 Process environment variables and project `.env` files take precedence over `~/.docwriter/keys.env`. Restart DocWriter after changing a shell environment variable. A wrong value in the environment can continue to override a correct value saved in the panel.
 
-## A command line login expired
+## Claude Code login expired
 
-Run the provider login command again. Claude and Codex can use existing command line logins.
+`/login` is a **Claude Code terminal** command, not a DocWriter control.
 
-Choose **New session** if the provider still tries to resume the expired conversation. New session clears the saved provider conversation, agent activity for the current session, temporary scratch files, and pending proposals. It keeps workspace files, comments, rules, hooks, and settings. Copy any proposal text you need before choosing it.
+1. On the same computer that runs DocWriter, open a terminal.
+2. Run `claude`.
+3. Type `/login` and finish the browser sign-in.
+4. In DocWriter, open **Settings**, then **API keys**. Claude should show **Using login**.
+5. Retry the agent request.
+
+Leave the Anthropic API key empty to keep using your Claude Code / Claude.ai subscription. If a key is saved (or `ANTHROPIC_API_KEY` is set in the environment), DocWriter uses API billing instead. Choose **Remove stored key** and clear the env var when you want subscription login again.
+
+Choose **New session** if the provider still tries to resume an expired conversation. New session clears the saved provider conversation, agent activity for the current session, temporary scratch files, and pending proposals. It keeps workspace files, comments, rules, hooks, and settings. Copy any proposal text you need before choosing it.
+
+## Other command line logins expired
+
+Codex can also use an existing command line login. Run that provider's login again in a terminal on this computer, then retry.
+
+Choose **New session** if the provider still tries to resume the expired conversation.
 
 ## The selected model does not exist
 

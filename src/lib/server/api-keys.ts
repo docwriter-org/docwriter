@@ -43,7 +43,8 @@ export const PROVIDER_KEYS: ProviderKeySpec[] = [
 		label: 'Claude',
 		envVar: 'ANTHROPIC_API_KEY',
 		required: false,
-		altAuthNote: 'Falls back to your `claude login` (Claude.ai subscription) if no key is set.'
+		altAuthNote:
+			'No key needed if Claude Code is logged in on this computer. In a terminal: run `claude`, type `/login`, finish the browser sign-in. DocWriter reuses that login (Claude.ai / Claude Code subscription). Pasting an Anthropic API key here bills API usage instead.'
 	},
 	{
 		id: 'openai',
