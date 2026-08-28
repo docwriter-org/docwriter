@@ -1996,19 +1996,37 @@
 	 * fixed decline string for every question so the agent knows to move on. */
 	async function answerUserQuestion(id: string, answers: Record<string, string>) {
 		pendingUserQuestions.update((list) => list.filter((q) => q.id !== id));
-		try {
-			await fetch('/api/ask-user-reply', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ id, answers })
-			});
-		} catch (e) {
-			console.error('Answer failed:', e);
-		}
 		const values = Object.values(answers);
 		const declined =
 			values.length > 0 &&
 			values.every((v) => v === "None, I don't want to respond to the question");
+		try {
+			const res = await fetch('/api/ask-user-reply', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ id, answers })
+			});
+			if (!res.ok) {
+				const detail = await res.text().catch(() => res.statusText);
+				console.error('Answer failed:', res.status, detail);
+				pushHistory({
+					type: 'notification',
+					timestamp: Date.now(),
+					text: `Failed to send answer to agent (${res.status}). The question may have timed out.`,
+					priority: 'high'
+				});
+				return;
+			}
+		} catch (e) {
+			console.error('Answer failed:', e);
+			pushHistory({
+				type: 'notification',
+				timestamp: Date.now(),
+				text: 'Failed to send answer to agent (network error).',
+				priority: 'high'
+			});
+			return;
+		}
 		pushHistory({
 			type: 'user_action',
 			timestamp: Date.now(),
