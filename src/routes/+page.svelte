@@ -1992,7 +1992,8 @@
 	 * server, which resolves the SDK's paused tool call and lets the
 	 * agent continue with the answers in context. `answers` is keyed by
 	 * question text (multi-select labels comma-joined) — the shape the
-	 * SDK's AskUserQuestion input schema requires. */
+	 * SDK's AskUserQuestion input schema requires. Dismiss (X) sends a
+	 * fixed decline string for every question so the agent knows to move on. */
 	async function answerUserQuestion(id: string, answers: Record<string, string>) {
 		pendingUserQuestions.update((list) => list.filter((q) => q.id !== id));
 		try {
@@ -2004,10 +2005,16 @@
 		} catch (e) {
 			console.error('Answer failed:', e);
 		}
+		const values = Object.values(answers);
+		const declined =
+			values.length > 0 &&
+			values.every((v) => v === "None, I don't want to respond to the question");
 		pushHistory({
 			type: 'user_action',
 			timestamp: Date.now(),
-			description: `Answered: ${Object.values(answers).join(' · ')}`
+			description: declined
+				? 'Declined question (no response)'
+				: `Answered: ${values.join(' · ')}`
 		});
 	}
 

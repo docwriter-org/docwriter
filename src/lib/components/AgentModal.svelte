@@ -121,6 +121,21 @@
 		onAnswerQuestion(card.id, answers);
 	}
 
+	/** Decline-without-answering reply sent when the user Xs out of a
+	 * question card. The agent is still paused on AskUserQuestion, so we
+	 * must resolve the tool call — an empty answers map would leave the
+	 * agent without a clear signal; this fixed string tells it to move on. */
+	const DECLINE_ANSWER = "None, I don't want to respond to the question";
+
+	function dismissQuestion(card: PendingUserQuestion) {
+		const answers: Record<string, string> = {};
+		for (const q of card.questions) {
+			answers[q.question] = DECLINE_ANSWER;
+		}
+		clearCardSelections(card);
+		onAnswerQuestion(card.id, answers);
+	}
+
 	/** Single-select click. A one-question card submits immediately (the
 	 * common quick-clarification case keeps its one-click feel); a card
 	 * with more questions records the choice radio-style and waits for
@@ -206,6 +221,14 @@
 				<div class="modal-header">
 					<HelpCircle size={14} />
 					<span>Question from agent</span>
+					<button
+						class="close-btn"
+						title="Dismiss"
+						aria-label="Dismiss question"
+						onclick={() => dismissQuestion(card)}
+					>
+						<X size={14} />
+					</button>
 				</div>
 				<div class="modal-body">
 					{#each card.questions as q, qIdx}
