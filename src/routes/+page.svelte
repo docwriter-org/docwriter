@@ -1580,20 +1580,20 @@
 			void fileTreeRef?.refresh();
 			// If the render failed, push one visible error entry. Otherwise
 			// the mascot already tells the user it's done.
+			if (
+				pendingStaleApply &&
+				/^The user clicked Accept on your previous edit/.test(trigger ?? '')
+			) {
+				// Apply even if the render later reported an error — the
+				// agent may already have landed a rebased edit_doc.
+				await applyPendingStaleAccept();
+			}
 			if (!success) {
 				pushHistory({
 					type: 'assistant_text',
 					timestamp: Date.now(),
 					text: `Render failed after ${Math.round((Date.now() - renderStart) / 100) / 10}s.`
 				});
-				if (/^The user clicked Accept on your previous edit/.test(trigger ?? '')) {
-					pendingStaleApply = null;
-				}
-			} else if (
-				pendingStaleApply &&
-				/^The user clicked Accept on your previous edit/.test(trigger ?? '')
-			) {
-				await applyPendingStaleAccept();
 			}
 			let next = queuedSubmissions[0];
 			if (next) {
