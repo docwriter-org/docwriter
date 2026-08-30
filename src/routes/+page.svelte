@@ -135,6 +135,7 @@
 		allTabCommentThreads,
 		openCommentThreadId,
 		openCommentThreadByTab,
+		staleAcceptUi,
 		queuedSubmissionCount,
 		activeReviewer,
 		customReviewers,
@@ -1696,12 +1697,13 @@
 
 	/** After a stale Accept, auto-apply the agent's rebased edit. */
 	const STALE_ACCEPT_STORAGE_KEY = 'docwriter-stale-accept';
-	let pendingStaleApply: {
+	type PendingStaleApply = {
 		tabId: string;
 		threadId?: string;
 		staleRoundId: string;
 		newString?: string;
-	} | null = null;
+	};
+	let pendingStaleApply: PendingStaleApply | null = null;
 	let staleAcceptSettling = false;
 
 	function persistPendingStaleApply(
@@ -1718,11 +1720,28 @@
 	function setPendingStaleApply(value: typeof pendingStaleApply) {
 		pendingStaleApply = value;
 		persistPendingStaleApply(value);
+		staleAcceptUi.set(
+			value
+				? {
+						tabId: value.tabId,
+						threadId: value.threadId,
+						staleRoundId: value.staleRoundId
+					}
+				: null
+		);
 	}
 
 	try {
 		const raw = sessionStorage.getItem(STALE_ACCEPT_STORAGE_KEY);
-		if (raw) pendingStaleApply = JSON.parse(raw) as typeof pendingStaleApply;
+		if (raw) {
+			const restored = JSON.parse(raw) as PendingStaleApply;
+			pendingStaleApply = restored;
+			staleAcceptUi.set({
+				tabId: restored.tabId,
+				threadId: restored.threadId,
+				staleRoundId: restored.staleRoundId
+			});
+		}
 	} catch {
 		pendingStaleApply = null;
 	}
@@ -1827,7 +1846,7 @@
 			newString: intendedReplacement(staleRound)
 		});
 		if (staleRound.feedbackThreadId) {
-			editorRef?.markThreadAwaiting(staleRound.feedbackThreadId);
+			openCommentThreadId.set(staleRound.feedbackThreadId);
 		}
 		pushHistory({
 			type: 'notification',

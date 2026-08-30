@@ -71,6 +71,15 @@ export const commentThreads = writable<CommentThread[]>([]);
  * the popover is closed. */
 export const openCommentThreadId = writable<string | null>(null);
 
+/** Stale-Accept in flight: the gutter keeps that card visible with a
+ * pulsing border and an agent "thinking how to apply" note until the
+ * rebased edit lands. */
+export const staleAcceptUi = writable<{
+	tabId: string;
+	threadId?: string;
+	staleRoundId: string;
+} | null>(null);
+
 /** Per-tab memory of which comment thread was open, so peeking at another
  * file and coming back re-expands the same thread. Session-only. */
 export const openCommentThreadByTab = writable<Record<string, string | null>>({});

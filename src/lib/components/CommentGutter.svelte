@@ -29,7 +29,7 @@
 	import { tooltip } from '$lib/actions/tooltip';
 	import type { MaterializedPendingReviewRound } from '$lib/review-rounds';
 	import { summarizeRound } from '$lib/review-diff';
-	import { commentReplyDrafts, isRendering, customReviewers } from '$lib/stores';
+	import { commentReplyDrafts, isRendering, customReviewers, staleAcceptUi } from '$lib/stores';
 	import { BUILTIN_REVIEWERS, type Reviewer } from '$lib/shared/reviewers';
 	import ReviewerMascot from '$lib/components/ReviewerMascot.svelte';
 
@@ -105,6 +105,13 @@
 
 	const BATCH_BAR_HEIGHT = 36;
 	let showBatchBar = $derived(!muted && rounds.length > 0 && !!(onAcceptAll || onRejectAll));
+	let reapply = $derived($staleAcceptUi?.tabId === tabId ? $staleAcceptUi : null);
+	function isReapplyingThread(threadId: string): boolean {
+		return !!reapply?.threadId && reapply.threadId === threadId;
+	}
+	function isReapplyingRound(roundId: string): boolean {
+		return !!reapply && reapply.staleRoundId === roundId;
+	}
 
 	/** A short one-line snippet — just enough to tell edits apart in the card.
 	 * The full (possibly large) diff is shown in the editor, not here. */
@@ -383,11 +390,13 @@
 				// Passage gone (neighboring accept wiped it) but the thread
 				// still has a stale proposal — park the card at the top so
 				// the user can click Accept and ask the agent to re-attach.
-				if (threadEdits.length > 0) {
+				// Keep it parked while a stale Accept is in flight even if
+				// the pending row already dropped, so the thinking state stays.
+				if (threadEdits.length > 0 || isReapplyingThread(thread.id)) {
 					parked.push({
 						id: thread.id,
 						kind: 'comment',
-						expanded: thread.id === openThreadId,
+						expanded: thread.id === openThreadId || isReapplyingThread(thread.id),
 						editCount: threadEdits.length
 					});
 				}
@@ -410,11 +419,11 @@
 			for (const round of looseEditRounds) {
 				const pos = resolveRoundAnchorPos(editor, round, baseline);
 				if (pos == null) {
-					if (round.stale) {
+					if (round.stale || isReapplyingRound(round.id)) {
 						parked.push({
 							id: editCardId(round.id),
 							kind: 'edit',
-							expanded: false,
+							expanded: isReapplyingRound(round.id),
 							editCount: 0
 						});
 					}
@@ -435,11 +444,11 @@
 			}
 		} else if (!muted) {
 			for (const round of looseEditRounds) {
-				if (round.stale) {
+				if (round.stale || isReapplyingRound(round.id)) {
 					parked.push({
 						id: editCardId(round.id),
 						kind: 'edit',
-						expanded: false,
+						expanded: isReapplyingRound(round.id),
 						editCount: 0
 					});
 				}
@@ -495,6 +504,7 @@
 		baseline;
 		muted;
 		showBatchBar;
+		reapply;
 		requestAnimationFrame(() => recomputePositions());
 	});
 
@@ -510,7 +520,10 @@
 	let visibleThreads = $derived(
 		threads
 			.filter(
-				(t) => !t.resolved && stackedPositions.has(t.id) && !(muted && isAgentThread(t))
+				(t) =>
+					(!t.resolved || isReapplyingThread(t.id)) &&
+					(stackedPositions.has(t.id) || isReapplyingThread(t.id)) &&
+					!(muted && isAgentThread(t))
 			)
 			.sort(
 				(a, b) =>
@@ -643,13 +656,15 @@
 		</div>
 	{/if}
 	{#each visibleThreads as thread (thread.id)}
-		{@const isOpen = thread.id === openThreadId}
+		{@const isOpen = thread.id === openThreadId || isReapplyingThread(thread.id)}
+		{@const reapplying = isReapplyingThread(thread.id)}
 		{@const top = stackedPositions.get(thread.id) ?? 0}
 		<!-- svelte-ignore a11y_click_events_have_key_events -->
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<div
 			class="gutter-card"
 			class:expanded={isOpen}
+			class:reapplying={reapplying}
 			data-card-id={thread.id}
 			style:top="{top}px"
 			in:fly={cardIn()}
@@ -727,7 +742,21 @@
 						</div>
 					{/each}
 				</div>
-				{#if awaitingAgent[thread.id]}
+				{#if reapplying}
+					<div class="message from-agent reapplying-note">
+						<span class="avatar msg avatar-agent">
+							<Cat size={14} strokeWidth={1.8} />
+						</span>
+						<span class="author-block">
+							<span class="author-name">Agent</span>
+							<span class="timestamp">now</span>
+						</span>
+						<div class="message-body">
+							<span class="awaiting-dots"><span></span><span></span><span></span></span>
+							Thinking about how to apply this…
+						</div>
+					</div>
+				{:else if awaitingAgent[thread.id]}
 					<div class="awaiting-agent">
 						<span class="awaiting-dots"><span></span><span></span><span></span></span>
 						<span>Thinking…</span>
@@ -791,7 +820,12 @@
 									<button
 										class="mini-btn accept"
 										class:reapply={ed.stale}
-										title={ed.stale ? 'Re-apply this edit' : 'Accept this edit'}
+										disabled={reapplying || isReapplyingRound(ed.id)}
+										title={reapplying || isReapplyingRound(ed.id)
+											? 'Finding where to apply this edit…'
+											: ed.stale
+												? 'Re-apply this edit'
+												: 'Accept this edit'}
 										onclick={(e) => {
 											e.stopPropagation();
 											onAcceptRound(ed.id);
@@ -890,6 +924,7 @@
 		<div
 			class="gutter-card loose-edit-card"
 			class:stale={round.stale}
+			class:reapplying={isReapplyingRound(round.id)}
 			data-card-id={editCardId(round.id)}
 			style:top="{top}px"
 			in:fly={cardIn()}
@@ -924,7 +959,12 @@
 					<button
 						class="mini-btn accept"
 						class:reapply={round.stale}
-						title={round.stale ? 'Re-apply this edit' : 'Accept this edit'}
+						disabled={isReapplyingRound(round.id)}
+						title={isReapplyingRound(round.id)
+							? 'Finding where to apply this edit…'
+							: round.stale
+								? 'Re-apply this edit'
+								: 'Accept this edit'}
 						onclick={(e) => {
 							e.stopPropagation();
 							onAcceptRound(round.id);
@@ -934,6 +974,12 @@
 					</button>
 				</span>
 			</div>
+			{#if isReapplyingRound(round.id)}
+				<div class="awaiting-agent loose-reapply">
+					<span class="awaiting-dots"><span></span><span></span><span></span></span>
+					<span>Thinking about how to apply this…</span>
+				</div>
+			{/if}
 		</div>
 	{/each}
 </div>
@@ -1038,6 +1084,31 @@
 		box-shadow: 0 10px 30px rgba(0, 0, 0, 0.13), 0 2px 6px rgba(0, 0, 0, 0.05);
 		border-color: color-mix(in srgb, var(--text) 14%, var(--border-light));
 		padding: 16px;
+	}
+	.gutter-card.reapplying,
+	.gutter-card.reapplying:hover,
+	.gutter-card.reapplying.expanded {
+		border-color: var(--accent);
+		z-index: 3;
+		animation: reapplyPulse 1.5s ease-in-out infinite;
+	}
+	@keyframes reapplyPulse {
+		0%,
+		100% {
+			box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 0%, transparent);
+			border-color: var(--accent);
+		}
+		50% {
+			box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 28%, transparent);
+			border-color: color-mix(in srgb, var(--accent) 75%, white);
+		}
+	}
+	.reapplying-note .message-body {
+		display: flex;
+		align-items: center;
+		gap: 7px;
+		font-style: italic;
+		color: var(--text-faint);
 	}
 	/* Circular avatars carry the only color on the card (Google-Docs style):
 	 * the card itself stays a neutral white sheet. */
