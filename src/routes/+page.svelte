@@ -1099,17 +1099,19 @@
 		try {
 			const synced = await editorRef?.flushAutosave();
 			if (synced === false) {
-				pushHistory({
-					type: 'notification',
-					timestamp: Date.now(),
-					text: 'Latest local edits are still syncing to the server. Try again in a moment.',
-					priority: 'high'
-				});
-				submitInFlight = false;
-				if (isStaleAcceptFollowup(trigger)) {
-					setPendingStaleApply(null);
+				// A stale-Accept rebase reads the live Y.Doc via read_doc —
+				// don't abort (or drop the Rebasing… card) because the
+				// browser still has a keystroke in flight.
+				if (!isStaleAcceptFollowup(trigger)) {
+					pushHistory({
+						type: 'notification',
+						timestamp: Date.now(),
+						text: 'Latest local edits are still syncing to the server. Try again in a moment.',
+						priority: 'high'
+					});
+					submitInFlight = false;
+					return;
 				}
-				return;
 			}
 		} catch (e) {
 			console.error('flushAutosave failed:', e);
