@@ -43,7 +43,7 @@ export const PROVIDER_KEYS: ProviderKeySpec[] = [
 		label: 'Claude',
 		envVar: 'ANTHROPIC_API_KEY',
 		required: false,
-		altAuthNote: 'Falls back to your `claude login` (Claude.ai subscription) if no key is set.'
+		altAuthNote: 'Or skip the key: in a terminal run `claude`, then type `/login`.'
 	},
 	{
 		id: 'openai',

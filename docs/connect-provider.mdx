@@ -36,13 +36,16 @@ Saved keys live in `~/.docwriter/keys.env`. A process environment variable or pr
 
 ### Claude
 
-Use an Anthropic key or an existing Claude login:
+DocWriter can use your Claude Code login on this computer. You do not need to paste a key in DocWriter for that.
 
-```sh
-export ANTHROPIC_API_KEY=sk-ant-...
-# or
-claude login
-```
+1. Open a terminal on the same computer that runs DocWriter.
+2. Enter `claude` and press Enter. Wait until the Claude Code session is running.
+3. Type `/login` and press Enter. Finish the browser sign-in when it opens.
+4. In DocWriter, open **Settings → API keys**. Claude should show **Using login**.
+
+Leave the Anthropic key field empty. If you paste an `ANTHROPIC_API_KEY` (or set it in the environment), agent calls bill Anthropic API usage instead of your Claude Code subscription. Remove the stored key and unset the env var to go back to login.
+
+If auth fails later, repeat steps 1–3, then retry in DocWriter. See [Provider errors](/help/provider-errors#claude-code-login-expired).
 
 ### OpenAI and Codex
 
