@@ -614,12 +614,6 @@
 		return body.length > 90 ? body.slice(0, 87) + '…' : body;
 	}
 
-	function acceptRoundTitle(round: MaterializedPendingReviewRound): string {
-		if (!round.stale) return 'Accept this edit';
-		return round.staleReason
-			? `Ask the agent to re-apply this against the current text — ${round.staleReason}`
-			: 'Ask the agent to re-apply this against the current text';
-	}
 </script>
 
 <div class="comment-gutter" bind:this={gutterEl}>
@@ -797,7 +791,7 @@
 									<button
 										class="mini-btn accept"
 										class:reapply={ed.stale}
-										title={acceptRoundTitle(ed)}
+										title={ed.stale ? 'Re-apply this edit' : 'Accept this edit'}
 										onclick={(e) => {
 											e.stopPropagation();
 											onAcceptRound(ed.id);
@@ -930,7 +924,7 @@
 					<button
 						class="mini-btn accept"
 						class:reapply={round.stale}
-						title={acceptRoundTitle(round)}
+						title={round.stale ? 'Re-apply this edit' : 'Accept this edit'}
 						onclick={(e) => {
 							e.stopPropagation();
 							onAcceptRound(round.id);
