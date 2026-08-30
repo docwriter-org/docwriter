@@ -46,6 +46,7 @@ import type {
 	PendingReviewOperation,
 	PendingReviewRound
 } from '$lib/types';
+import { formatListedThreads } from '$lib/shared/list-threads';
 import { isValidTabId, tabFile, WORKSPACE_ROOT } from './document-files';
 import { resolveWorkspacePath } from './workspace-path';
 import { getRules, getTabsState, setTabsState } from './runtime-state';
@@ -1061,18 +1062,26 @@ const replyToCommentTool = tool(
 	}
 );
 
-/** Read all open (unresolved) comment threads for a tab. Threads are stored
- * in the Y.Doc and persisted to SQLite — not in the JSONL transcript — so the
- * prompt only carries stubs; call this tool to get the full conversations. */
+/** Read comment threads for a tab. Threads live on the Y.Doc (persisted via
+ * `yjs_updates`), so the prompt only carries stubs; call this for the full
+ * conversation. Dismissed threads stay on the map with `resolved: true` —
+ * pass include_dismissed to read them, then review_action(reopen_thread) to
+ * put one back in the gutter. */
 const listThreadsTool = tool(
 	'list_threads',
-	'Return all open comment threads for a workspace tab, with every message in each. The prompt shows only thread ids and anchor quotes. Call this to read the full conversation before replying.',
+	'Return comment threads for a workspace tab, with every message in each. Defaults to open (visible) threads. The prompt shows only stubs. Set include_dismissed=true to read threads the user dismissed — they stay on the document, hidden from the gutter. Then review_action({ action: "reopen_thread", thread_id }) brings one back.',
 	{
 		file_path: z
 			.string()
-			.describe('Workspace-relative tab id or absolute path to the tab file.')
+			.describe('Workspace-relative tab id or absolute path to the tab file.'),
+		include_dismissed: z
+			.boolean()
+			.optional()
+			.describe(
+				'If true, also return dismissed (hidden) threads so you can reopen one. Use when the user asks about a thread that disappeared or wants one brought back.'
+			)
 	},
-	async ({ file_path }) => {
+	async ({ file_path, include_dismissed }) => {
 		if (isScratchPath(file_path)) {
 			return toolError('list_threads cannot be used on scratch paths — only on workspace tab files.');
 		}
@@ -1090,25 +1099,8 @@ const listThreadsTool = tool(
 			await direct.transact((document) => {
 				const commentsMap = getCommentsMap(document as unknown as Y.Doc);
 				const threads: CommentThread[] = [];
-				commentsMap.forEach((t) => { if (!t.resolved) threads.push(t); });
-				threads.sort((a, b) => a.createdAt - b.createdAt);
-				if (threads.length === 0) {
-					result = `No open threads on ${file_path}.`;
-					return;
-				}
-				const lines: string[] = [`${threads.length} open thread${threads.length === 1 ? '' : 's'} on ${file_path}:\n`];
-				for (const thread of threads) {
-					lines.push(`Thread \`${thread.id}\` — anchor: "${thread.anchor.quote.slice(0, 120)}${thread.anchor.quote.length > 120 ? '…' : ''}"`);
-					for (const msg of thread.messages) {
-						const role = msg.author === 'agent' ? 'you' : 'user';
-						lines.push(`  [${role}] ${msg.text}`);
-						if (msg.proposedEdit) {
-							lines.push(`    proposed_edit: "${msg.proposedEdit.oldString}" → "${msg.proposedEdit.newString}"`);
-						}
-					}
-					lines.push('');
-				}
-				result = lines.join('\n');
+				commentsMap.forEach((t) => threads.push(t));
+				result = formatListedThreads(file_path, threads, include_dismissed === true);
 			});
 		} finally {
 			await direct.disconnect();
