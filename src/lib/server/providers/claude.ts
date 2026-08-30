@@ -106,7 +106,7 @@ function buildDocwriterMcp() {
 		),
 		tool(
 			'review_action',
-			'Accept or reject pending edits, or resolve or reopen comment threads, only when the user\'s current message explicitly asks for that action. This mutates document review state.',
+			'Accept or reject pending edits, or dismiss or reopen comment threads, only when the user\'s current message explicitly asks. reopen_thread brings a dismissed thread back into the gutter — find its id with list_threads(include_dismissed=true).',
 			{
 				file_path: z.string().describe('Workspace-relative path or absolute path inside the workspace.'),
 				action: z.enum(['accept_round', 'accept_all', 'reject_round', 'reject_all', 'resolve_thread', 'reopen_thread']).describe('The explicit review action requested by the user.'),

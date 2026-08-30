@@ -37,6 +37,7 @@ import type {
 	CommentMessage,
 	CommentThread
 } from '$lib/types';
+import { formatListedThreads } from '$lib/shared/list-threads';
 import { resolveWorkspacePath } from '$lib/server/workspace-path';
 import { addCustomSkill, readEnabledSkill } from '$lib/server/skills-config';
 import {
@@ -349,7 +350,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
 		{
 			name: 'review_action',
 			description:
-				'Accept/reject pending review edits or resolve/reopen comment threads ONLY when the user explicitly asks you to do that action. This mutates document review state.',
+				'Accept/reject pending review edits, or dismiss/reopen comment threads, ONLY when the user explicitly asks. reopen_thread brings a dismissed thread back into the gutter — find its id with list_threads(include_dismissed=true).',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -561,14 +562,25 @@ export function buildToolDefinitions(): ToolDefinition[] {
 		},
 		{
 			name: 'list_threads',
-			description: 'Return all open (unresolved) comment threads for a workspace tab.',
+			description:
+				'Return comment threads for a workspace tab, with every message in each. Defaults to open threads. Set include_dismissed=true to read threads the user dismissed (they stay on the document, hidden from the gutter). Then review_action({ action: "reopen_thread", thread_id }) brings one back.',
 			inputSchema: {
 				type: 'object',
-				properties: { file_path: { type: 'string' } },
+				properties: {
+					file_path: { type: 'string' },
+					include_dismissed: {
+						type: 'boolean',
+						description:
+							'If true, also return dismissed (hidden) threads so you can reopen one. Use when the user asks about a thread that disappeared or wants one brought back.'
+					}
+				},
 				required: ['file_path']
 			},
 			execute: async (input) => {
-				const { file_path: path } = input as { file_path: string };
+				const { file_path: path, include_dismissed } = input as {
+					file_path: string;
+					include_dismissed?: boolean;
+				};
 				if (!path) {
 					return { isError: true, content: [{ type: 'text' as const, text: 'list_threads requires `file_path`.' }] };
 				}
@@ -585,20 +597,8 @@ export function buildToolDefinitions(): ToolDefinition[] {
 					await direct.transact((document) => {
 						const commentsMap = getCommentsMap(document as unknown as Y.Doc);
 						const threads: CommentThread[] = [];
-						commentsMap.forEach((t) => { if (!t.resolved) threads.push(t); });
-						threads.sort((a, b) => a.createdAt - b.createdAt);
-						if (threads.length === 0) { result = `No open threads on ${path}.`; return; }
-						const lines: string[] = [`${threads.length} open thread${threads.length === 1 ? '' : 's'} on ${path}:\n`];
-						for (const thread of threads) {
-							lines.push(`Thread \`${thread.id}\` — anchor: "${thread.anchor.quote.slice(0, 120)}${thread.anchor.quote.length > 120 ? '…' : ''}"`);
-							for (const m of thread.messages) {
-								const role = m.author === 'agent' ? 'you' : 'user';
-								lines.push(`  [${role}] ${m.text}`);
-								if (m.proposedEdit) lines.push(`    proposed_edit: "${m.proposedEdit.oldString}" → "${m.proposedEdit.newString}"`);
-							}
-							lines.push('');
-						}
-						result = lines.join('\n');
+						commentsMap.forEach((t) => threads.push(t));
+						result = formatListedThreads(path, threads, include_dismissed === true);
 					});
 				} finally {
 					await direct.disconnect();

@@ -22,6 +22,7 @@ import { readMeta } from '$lib/server/document-io';
 import { kvGet, kvSet, dbAppendConversationEvent } from '$lib/server/db-writes';
 import { readCommentThreads, readReviewRounds } from '$lib/shared/ydoc-codec';
 import type { CommentThread } from '$lib/types';
+import { formatDismissedThreadsHint } from '$lib/shared/list-threads';
 import { replayUpdatesInto } from '$lib/server/ydoc-persistence';
 import { registerPendingAskUser } from '$lib/server/ask-user-state';
 import { unifiedLineDiff } from '$lib/diff';
@@ -317,7 +318,7 @@ Before your first edit in a session, list the files in the workspace directory w
 - Your scratch space is ${AGENT_SCRATCH_DIR}/. Use it for drafts, outlines, and notes to yourself. The user never sees it. It persists across turns and is wiped on "New session".
 - Read anywhere in the workspace with the built-in Read, Glob, and Grep. For open tabs, use read_doc instead. The built-in Read can also read images.
 - For hooks call propose_hook. For rules call propose_rule. For skills call add_skill with a GitHub URL or local path. Do not edit .docwriter/hooks.json, .docwriter/skills.json, .claude/skills, or .agents/skills directly.
-- Call review_action to accept, reject, resolve, or reopen only when the user's current message explicitly asks for that action.
+- Call review_action to accept, reject, dismiss, or reopen only when the user's current message explicitly asks for that action. Dismissed threads stay on the document. list_threads(include_dismissed=true) reads them; review_action(reopen_thread) puts one back in the gutter.
 
 ## Announce edits on a thread
 
@@ -334,7 +335,7 @@ Every edit proposal needs a comment thread that says what is about to happen, so
 
 Each turn may contain these blocks, in this order.
 
-- <workspace_state>: the open tabs, a diff of what changed in each since your last turn, and open comment threads as one-line stubs. Unchanged tabs say "Unchanged". Tab content is never inlined. Call read_doc(file_path) when you need it. Calls are cheap because the server holds the document in memory, so read what you need, not every tab.
+- <workspace_state>: the open tabs, a diff of what changed in each since your last turn, and comment-thread stubs (open threads plus a count of dismissed ones). Unchanged tabs say "Unchanged". Tab content is never inlined. Call read_doc(file_path) when you need it. Calls are cheap because the server holds the document in memory, so read what you need, not every tab.
 - <author_style>: how the user writes, learned from their own writing. Present on every turn once a style has been learned. Follow it whenever you draft or revise prose, unless the user asks for something different this turn.
 - <session_state>: rules, style references, the agency level, and the intended audience. Sent in full on the first turn, then only when something changed. If the block is absent, nothing changed.
 - <mode>: present only in special modes, such as plan-first.
@@ -440,15 +441,21 @@ function renderCommentThreadsBlock(
 	pendingEditThreadIds: string[] = []
 ): string {
 	const open = threads.filter((t) => !t.resolved);
-	if (open.length === 0) return '';
+	const dismissedCount = threads.filter((t) => t.resolved).length;
+	if (open.length === 0 && dismissedCount === 0) return '';
 	const pending = new Set(pendingEditThreadIds);
-	const lines: string[] = ['Open threads (route per "Where a response goes"):'];
-	for (const thread of open) {
-		const quote = thread.anchor.quote.replace(/\n+/g, ' ').slice(0, 120);
-		const ellipsis = thread.anchor.quote.length > 120 ? '…' : '';
-		const pendingNote = pending.has(thread.id) ? ' (pending edit)' : '';
-		lines.push(`- ${thread.id}${pendingNote} anchored to: "${quote}${ellipsis}"`);
+	const lines: string[] = [];
+	if (open.length > 0) {
+		lines.push('Open threads (route per "Where a response goes"):');
+		for (const thread of open) {
+			const quote = thread.anchor.quote.replace(/\n+/g, ' ').slice(0, 120);
+			const ellipsis = thread.anchor.quote.length > 120 ? '…' : '';
+			const pendingNote = pending.has(thread.id) ? ' (pending edit)' : '';
+			lines.push(`- ${thread.id}${pendingNote} anchored to: "${quote}${ellipsis}"`);
+		}
 	}
+	const dismissedHint = formatDismissedThreadsHint(dismissedCount);
+	if (dismissedHint) lines.push(dismissedHint);
 	return '\n' + lines.join('\n');
 }
 

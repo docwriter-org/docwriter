@@ -1701,8 +1701,8 @@
 		}
 	}
 
-	/** Resolve / reopen a thread through the same undo-friendly transport as
-	 * Accept/Reject: pause sync, let the server resolve the thread AND drop its
+	/** Dismiss / reopen a thread through the same undo-friendly transport as
+	 * Accept/Reject: pause sync, let the server dismiss the thread AND drop its
 	 * pending edits in one transaction, apply the delta locally with
 	 * USER_ORIGIN. ctrl+z then reopens the thread and resurrects its edits in a
 	 * single step. */

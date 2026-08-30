@@ -83,7 +83,7 @@
 		/** Accept / reject every pending round on this tab. */
 		onAcceptAllEdits?: () => void;
 		onRejectAllEdits?: () => void;
-		/** Resolve / reopen a thread (undoable; also drops its pending edits). */
+		/** Dismiss / reopen a thread (undoable; also drops its pending edits). */
 		onResolveThread?: (threadId: string, resolved: boolean) => void;
 		/** Open the resolved preview output beside the source editor
 		 * (used by "Locate in PDF" on the feedback popup). */
