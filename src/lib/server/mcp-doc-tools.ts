@@ -39,11 +39,7 @@ import {
 	applyEditToFragment,
 	replaceYDocTextWithAiProvenance
 } from '$lib/shared/ydoc-codec';
-import {
-	matchesStaleAcceptApply,
-	type StaleAcceptApply
-} from '$lib/shared/stale-accept';
-import { touchLastSeen } from '$lib/server/last-seen';
+import type { StaleAcceptApply } from '$lib/shared/stale-accept';
 import { isScratchPath, resolveTabFromPath, isOpenTab } from './path-router';
 import { classifyRoundKind } from '$lib/review-diff';
 import {
@@ -195,9 +191,8 @@ export function setActiveReviewerId(id: string | null) {
 	activeReviewerId = id;
 }
 
-/** Set for the duration of a stale-Accept render. While set, `edit_doc` /
- * `write_doc` on that tab commit the replacement immediately — the user
- * already clicked Accept; the agent is only finding the current old_string. */
+/** Set for the duration of a stale-Accept / rebase render. The agent
+ * still lands a pending review round (a visible diff), not a live commit. */
 let staleAcceptApply: StaleAcceptApply | null = null;
 export function setStaleAcceptApply(value: StaleAcceptApply | null) {
 	staleAcceptApply = value;
@@ -372,25 +367,6 @@ export async function runTabWrite(
 						narrowWriteOperation(baseForRound, afterMd) ??
 						({ type: 'write', content: afterMd } as const);
 				}
-			}
-
-			// Stale Accept: the user already clicked Accept. Apply the
-			// rebased op to the live fragment in a USER_ORIGIN transact —
-			// do not leave a new review card for a second Accept.
-			if (matchesStaleAcceptApply(staleAcceptApply, tabId)) {
-				const committed = commitWriteToLiveDoc(doc, normalizedOperation, {
-					dropThreadId: threadIdExplicit ?? staleAcceptApply?.threadId,
-					dropRoundId: staleAcceptApply?.staleRoundId
-				});
-				if (committed.ok) {
-					touchLastSeen(tabId, doc);
-					result = { beforeMd, afterMd, committed: true };
-					return;
-				}
-				// Could not apply to the live fragment (e.g. the agent's
-				// old_string only exists in a stacked proposal view). Fall
-				// through and leave a pending round so the client can still
-				// Accept the rebased edit.
 			}
 
 			doc.transact(() => {

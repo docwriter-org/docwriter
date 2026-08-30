@@ -1,6 +1,5 @@
 /** Intent left when the user Accepts a stale/orphaned proposal: the agent
- * must find the current `old_string`, and that write should land immediately
- * instead of becoming another review card. */
+ * finds the current `old_string` and leaves a reviewable pending diff. */
 
 export type StaleAcceptApply = {
 	tabId: string;
@@ -9,9 +8,9 @@ export type StaleAcceptApply = {
 	newString?: string;
 };
 
-/** A stale-accept render commits every `edit_doc` / `write_doc` on the
- * tab the user accepted. The render is dedicated to applying that one
- * change; matching only on `new_string` would miss an adapted replacement. */
+/** A stale-accept render is dedicated to rebasing that one change onto
+ * the current text. Matching only on `new_string` would miss an adapted
+ * replacement. */
 export function matchesStaleAcceptApply(
 	ctx: StaleAcceptApply | null | undefined,
 	tabId: string

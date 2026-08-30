@@ -64,7 +64,7 @@
 		}
 		// Reject-and-reconsider trigger starts with "The user just rejected"
 		if (/^The user clicked Accept on your previous edit/.test(trigger)) {
-			return 'Re-apply stale proposal';
+			return 'Rebase stale proposal';
 		}
 		if (/^The user just rejected/.test(trigger)) {
 			const retryFeedbackMatch = trigger.match(
@@ -1592,9 +1592,8 @@
 			// If the render failed, push one visible error entry. Otherwise
 			// the mascot already tells the user it's done.
 			if (pendingStaleApply && isStaleAcceptFollowup(trigger)) {
-				// Apply even if the render later reported an error — the
-				// agent may already have landed a rebased edit_doc. If the
-				// server committed immediately, this just confirms the text.
+				// Settle even if the render later reported an error — the
+				// agent may already have landed a rebased pending diff.
 				await applyPendingStaleAccept({ allowFail: true });
 			}
 			if (!success) {
@@ -1654,7 +1653,7 @@
 		const oldString = stale.operation?.type === 'edit' ? stale.operation.oldString : undefined;
 		const newString = intendedReplacement(stale);
 		const lines: string[] = [
-			`The user clicked Accept on your previous edit to \`${tabId}\`. They already accepted the change — apply it. It could not be applied as-is because it became stale:`,
+			`The user clicked Accept on your previous edit to \`${tabId}\`. Rebase it onto the current text and leave a pending reviewable diff — do not apply it to the live document. It could not be accepted as-is because it became stale:`,
 			'',
 			`> ${reason}`,
 			'',
@@ -1675,7 +1674,7 @@
 		}
 		lines.push(
 			'',
-			'Find the current passage that now corresponds to that old_string — match on intent and nearby wording, not a string-equal match. Then call edit_doc with that current passage as old_string and the intended new_string (adapt it only if the surrounding sentence requires it). The editor will commit that edit_doc immediately — the user already accepted. Do not wait for another Accept, and do not leave a second proposal.'
+			'Find the current passage that now corresponds to that old_string — match on intent and nearby wording, not a string-equal match. Then call edit_doc with that current passage as old_string and the intended new_string (adapt it only if the surrounding sentence requires it). Leave that edit as a pending proposal so the user can see the rebased diff and Accept it.'
 		);
 		if (thread) {
 			const transcript = thread.messages
@@ -1851,7 +1850,7 @@
 		pushHistory({
 			type: 'notification',
 			timestamp: Date.now(),
-			text: 'Finding where to apply this edit…',
+			text: 'Rebasing this edit…',
 			priority: 'medium'
 		});
 		const followup = buildStaleAcceptFollowup(tabId, staleRound, reason);
@@ -1879,23 +1878,6 @@
 		if (!pending || staleAcceptSettling) return;
 		if (getCurrentActiveTab() !== pending.tabId) return;
 
-		const liveText = currentTabText(pending.tabId);
-		if (pending.newString && liveText.includes(pending.newString)) {
-			staleAcceptSettling = true;
-			setPendingStaleApply(null);
-			editorRef?.flashAcceptedRange(pending.newString);
-			if (currentRounds().some((r) => r.id === pending.staleRoundId)) {
-				await rejectAgentEdit(pending.staleRoundId, { keepThreads: true, silent: true });
-			}
-			pushHistory({
-				type: 'user_action',
-				timestamp: Date.now(),
-				description: 'Accepted agent edit'
-			});
-			staleAcceptSettling = false;
-			return;
-		}
-
 		const rebased = findRebasedRound(currentRounds(), pending);
 		if (!rebased) {
 			if (!options?.allowFail || get(isRendering)) return;
@@ -1908,9 +1890,10 @@
 			});
 			return;
 		}
+		// Rebased proposal is now a pending diff — leave it for the user
+		// to Accept. Drop only the original stale round if it is still there.
 		staleAcceptSettling = true;
 		setPendingStaleApply(null);
-		await acceptAgentEdit(rebased.id, { skipFollowup: true });
 		if (currentRounds().some((r) => r.id === pending.staleRoundId)) {
 			await rejectAgentEdit(pending.staleRoundId, { keepThreads: true, silent: true });
 		}
@@ -1922,8 +1905,7 @@
 	 * server applies just this round's edit op against the current live
 	 * doc. If the round became stale (its `old_string` no longer matches
 	 * because a prior pending round changed the same text), Accept asks
-	 * the agent to find the current old_string and then applies that
-	 * rebased edit. */
+	 * the agent to rebase it onto the current text as a new pending diff. */
 	async function acceptAgentEdit(
 		roundId?: string | string[],
 		options?: { skipFollowup?: boolean }

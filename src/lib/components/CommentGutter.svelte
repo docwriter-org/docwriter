@@ -753,7 +753,7 @@
 						</span>
 						<div class="message-body">
 							<span class="awaiting-dots"><span></span><span></span><span></span></span>
-							Thinking about how to apply this…
+							Rebasing…
 						</div>
 					</div>
 				{:else if awaitingAgent[thread.id]}
@@ -822,7 +822,7 @@
 										class:reapply={ed.stale}
 										disabled={reapplying || isReapplyingRound(ed.id)}
 										title={reapplying || isReapplyingRound(ed.id)
-											? 'Finding where to apply this edit…'
+											? 'Rebasing…'
 											: ed.stale
 												? 'Re-apply this edit'
 												: 'Accept this edit'}
@@ -961,7 +961,7 @@
 						class:reapply={round.stale}
 						disabled={isReapplyingRound(round.id)}
 						title={isReapplyingRound(round.id)
-							? 'Finding where to apply this edit…'
+							? 'Rebasing…'
 							: round.stale
 								? 'Re-apply this edit'
 								: 'Accept this edit'}
@@ -977,7 +977,7 @@
 			{#if isReapplyingRound(round.id)}
 				<div class="awaiting-agent loose-reapply">
 					<span class="awaiting-dots"><span></span><span></span><span></span></span>
-					<span>Thinking about how to apply this…</span>
+					<span>Rebasing…</span>
 				</div>
 			{/if}
 		</div>

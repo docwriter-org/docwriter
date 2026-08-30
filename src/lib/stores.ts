@@ -72,8 +72,7 @@ export const commentThreads = writable<CommentThread[]>([]);
 export const openCommentThreadId = writable<string | null>(null);
 
 /** Stale-Accept in flight: the gutter keeps that card visible with a
- * pulsing border and an agent "thinking how to apply" note until the
- * rebased edit lands. */
+ * pulsing border and a "Rebasing…" note until a reviewable diff lands. */
 export const staleAcceptUi = writable<{
 	tabId: string;
 	threadId?: string;
