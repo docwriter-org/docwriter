@@ -758,6 +758,15 @@
 		clearCountdown();
 	}
 
+	/** Show the gutter "Thinking…" spinner on a thread — used when Accept
+	 * on a stale proposal re-queues the agent to re-attach that thread. */
+	export function markThreadAwaiting(threadId: string): void {
+		newAwaitingThreadId = threadId;
+		tick().then(() => {
+			newAwaitingThreadId = null;
+		});
+	}
+
 	export async function flushAutosave(): Promise<boolean> {
 		// Let the local ProseMirror/Yjs transaction settle into the provider
 		// before we ask whether there are unsynced changes. Without this small

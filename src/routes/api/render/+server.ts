@@ -39,8 +39,10 @@ import {
 	REPLY_TO_COMMENT_TOOL_NAME,
 	setActiveFeedbackThreadId,
 	setActiveReviewerId,
+	setStaleAcceptApply,
 	REPLY_BEFORE_EDIT_PROMPT_NOTE
 } from '$lib/server/mcp-doc-tools';
+import type { StaleAcceptApply } from '$lib/shared/stale-accept';
 import { getReviewerById, buildCritiqueMessage } from '$lib/server/reviewers';
 import type { Reviewer } from '$lib/shared/reviewers';
 
@@ -325,6 +327,7 @@ Before your first edit in a session, list the files in the workspace directory w
 Every edit proposal needs a comment thread that says what is about to happen, so the user sees your reasoning next to the pending edit instead of a bare diff.
 
 - If the work already has a thread — user feedback arrives with a thread_id, or you are revising a thread's pending edit — use it. If you have not yet explained this edit there, reply first with reply_to_comment, then call edit_doc with that thread_id. ${REPLY_BEFORE_EDIT_PROMPT_NOTE}
+- If the user clicked Accept on a stale or orphaned proposal, rebase it. Keep that thread_id. Re-read the file, find the current passage that now corresponds to the original old_string, re-attach the thread with reply_to_comment(anchor_text) if the original quote is gone, then edit_doc with that new old_string and the intended replacement. Leave the result as a pending reviewable diff — do not expect it to apply until the user Accepts the rebased proposal. Do not open a new thread.
 - Otherwise, before the edit, call comment_doc anchored to the exact text you are about to change, with one or two first-person sentences: what prompted the edit (the user's words, an inline directive, a rule), what you think is wrong, and what you will do. Then call edit_doc with the thread_id that comment_doc returns.
 - Inline directives such as [[ ... ]] follow the same contract: anchor the thread on the directive text, say how you read the directive and what you will write, then propose the edit on that thread.
 - For write_doc on an existing file, anchor the thread to the first sentence of the text you are replacing.
@@ -768,7 +771,7 @@ function buildHooks(
 export const POST: RequestHandler = async ({ request }) => {
 	try {
 		const body = await request.json();
-		const { userMessage, model, warmup, tab, planMode, images, reviewerId, provider: providerIdRaw } = body as {
+		const { userMessage, model, warmup, tab, planMode, images, reviewerId, provider: providerIdRaw, staleAccept } = body as {
 			userMessage?: string;
 			model?: string;
 			warmup?: boolean;
@@ -779,6 +782,9 @@ export const POST: RequestHandler = async ({ request }) => {
 			 * instead of an ordinary render. */
 			reviewerId?: string;
 			provider?: string;
+			/** User Accepted a stale proposal: commit the agent's rebased
+			 * edit_doc immediately instead of leaving another review card. */
+			staleAccept?: StaleAcceptApply;
 		};
 		const providerId = (providerIdRaw || 'claude') as ProviderId;
 		// Switching providers invalidates the persisted session id: each
@@ -1083,6 +1089,9 @@ export const POST: RequestHandler = async ({ request }) => {
 					const feedbackThreadId = message.match(/thread_id="([^"]+)"/)?.[1] ?? null;
 					setActiveFeedbackThreadId(feedbackThreadId);
 					setActiveReviewerId(critiqueReviewer?.id ?? null);
+					setStaleAcceptApply(
+						staleAccept && typeof staleAccept.tabId === 'string' ? staleAccept : null
+					);
 					try {
 					const firstOutcome = await runQueryRound(prompt, images);
 					if (
@@ -1113,6 +1122,7 @@ export const POST: RequestHandler = async ({ request }) => {
 					} finally {
 						setActiveFeedbackThreadId(null);
 						setActiveReviewerId(null);
+						setStaleAcceptApply(null);
 					}
 				} catch (err) {
 					// Plan-mode aborts the controller from canUseTool once we've

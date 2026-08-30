@@ -32,6 +32,7 @@
 	import { themes, applyTheme } from '$lib/themes';
 	import { unifiedLineDiff } from '$lib/diff';
 	import { materializePendingReviewRounds } from '$lib/review-rounds';
+	import { isStaleAcceptFollowup } from '$lib/shared/stale-accept';
 	import {
 		serializeFragment as plainTextFromFragment,
 		matchCommentAnchor
@@ -62,6 +63,9 @@
 			return 'Apply rules';
 		}
 		// Reject-and-reconsider trigger starts with "The user just rejected"
+		if (/^The user clicked Accept on your previous edit/.test(trigger)) {
+			return 'Rebase stale proposal';
+		}
 		if (/^The user just rejected/.test(trigger)) {
 			const retryFeedbackMatch = trigger.match(
 				/The user explained why they rejected it:\n\n```text\n([\s\S]*?)\n```/
@@ -131,6 +135,7 @@
 		allTabCommentThreads,
 		openCommentThreadId,
 		openCommentThreadByTab,
+		staleAcceptUi,
 		queuedSubmissionCount,
 		activeReviewer,
 		customReviewers,
@@ -174,6 +179,7 @@
 		getScrollTop: () => number;
 		focusEditor: (opts?: { scrollIntoView?: boolean }) => void;
 		flashAcceptedRange: (text: string) => void;
+		markThreadAwaiting: (threadId: string) => void;
 	};
 
 	let rendering = $state(false);
@@ -1110,13 +1116,19 @@
 		try {
 			const synced = await editorRef?.flushAutosave();
 			if (synced === false) {
-				pushHistory({
-					type: 'notification',
-					timestamp: Date.now(),
-					text: 'Latest local edits are still syncing to the server. Try again in a moment.',
-					priority: 'high'
-				});
-				return;
+				// A stale-Accept rebase reads the live Y.Doc via read_doc —
+				// don't abort (or drop the Rebasing… card) because the
+				// browser still has a keystroke in flight.
+				if (!isStaleAcceptFollowup(trigger)) {
+					pushHistory({
+						type: 'notification',
+						timestamp: Date.now(),
+						text: 'Latest local edits are still syncing to the server. Try again in a moment.',
+						priority: 'high'
+					});
+					submitInFlight = false;
+					return;
+				}
 			}
 		} catch (e) {
 			console.error('flushAutosave failed:', e);
@@ -1172,7 +1184,16 @@
 					tab: tabId,
 					images: images.length > 0 ? images : undefined,
 					reviewerId: reviewer?.id,
-					provider
+					provider,
+					staleAccept:
+						isStaleAcceptFollowup(trigger) && pendingStaleApply
+							? {
+									tabId: pendingStaleApply.tabId,
+									staleRoundId: pendingStaleApply.staleRoundId,
+									threadId: pendingStaleApply.threadId,
+									newString: pendingStaleApply.newString
+								}
+							: undefined
 				}),
 				signal: currentAbort.signal
 			});
@@ -1589,6 +1610,11 @@
 			void fileTreeRef?.refresh();
 			// If the render failed, push one visible error entry. Otherwise
 			// the mascot already tells the user it's done.
+			if (pendingStaleApply && isStaleAcceptFollowup(trigger)) {
+				// Settle even if the render later reported an error — the
+				// agent may already have landed a rebased pending diff.
+				await applyPendingStaleAccept({ allowFail: true });
+			}
 			if (!success) {
 				pushHistory({
 					type: 'assistant_text',
@@ -1627,14 +1653,26 @@
 		return rounds;
 	}
 
+	function intendedReplacement(round: MaterializedPendingReviewRound): string | undefined {
+		const op = round.operation;
+		if (op?.type === 'edit') return op.newString;
+		if (op?.type === 'write') return op.content;
+		return typeof round.afterMd === 'string' ? round.afterMd : undefined;
+	}
+
 	function buildStaleAcceptFollowup(
 		tabId: string,
 		stale: MaterializedPendingReviewRound,
 		reason: string
 	): string {
 		const staleDiff = unifiedLineDiff(stale.beforeMd, stale.afterMd, 1);
-		return [
-			`The user clicked Accept on your previous edit to \`${tabId}\`, but it could not be applied because it became stale:`,
+		const thread = stale.feedbackThreadId
+			? get(commentThreads).find((t) => t.id === stale.feedbackThreadId)
+			: undefined;
+		const oldString = stale.operation?.type === 'edit' ? stale.operation.oldString : undefined;
+		const newString = intendedReplacement(stale);
+		const lines: string[] = [
+			`The user clicked Accept on your previous edit to \`${tabId}\`. Rebase it onto the current text and leave a pending reviewable diff — do not apply it to the live document. It could not be accepted as-is because it became stale:`,
 			'',
 			`> ${reason}`,
 			'',
@@ -1642,10 +1680,88 @@
 			'',
 			'```diff',
 			staleDiff,
-			'```',
+			'```'
+		];
+		if (oldString && newString) {
+			lines.push(
+				'',
+				'Intended replacement:',
+				'',
+				`old_string (gone): ${JSON.stringify(oldString)}`,
+				`new_string (apply this): ${JSON.stringify(newString)}`
+			);
+		}
+		lines.push(
 			'',
-			'The user still wants this change applied. Re-read the current state of the file with `read_doc` and propose a fresh edit that reflects whatever the document looks like now.'
-		].join('\n');
+			'Find the current passage that now corresponds to that old_string — match on intent and nearby wording, not a string-equal match. Then call edit_doc with that current passage as old_string and the intended new_string (adapt it only if the surrounding sentence requires it). Leave that edit as a pending proposal so the user can see the rebased diff and Accept it.'
+		);
+		if (thread) {
+			const transcript = thread.messages
+				.map((m) => `- [${m.author}] ${m.text}`)
+				.join('\n');
+			lines.push(
+				'',
+				`Keep comment thread thread_id="${thread.id}". Do not open a new thread.`,
+				`The thread's original anchor was: "${thread.anchor.quote}"`,
+				'',
+				'Full thread:',
+				transcript,
+				'',
+				`If that original anchor quote is no longer in the document, re-attach the thread first: reply_to_comment with thread_id="${thread.id}" and \`anchor_text\` set to the current passage.`
+			);
+		}
+		return lines.join('\n');
+	}
+
+	/** After a stale Accept, auto-apply the agent's rebased edit. */
+	const STALE_ACCEPT_STORAGE_KEY = 'docwriter-stale-accept';
+	type PendingStaleApply = {
+		tabId: string;
+		threadId?: string;
+		staleRoundId: string;
+		newString?: string;
+	};
+	let pendingStaleApply: PendingStaleApply | null = null;
+	let staleAcceptSettling = false;
+
+	function persistPendingStaleApply(
+		value: typeof pendingStaleApply
+	) {
+		try {
+			if (value) sessionStorage.setItem(STALE_ACCEPT_STORAGE_KEY, JSON.stringify(value));
+			else sessionStorage.removeItem(STALE_ACCEPT_STORAGE_KEY);
+		} catch {
+			/* ignore quota / private mode */
+		}
+	}
+
+	function setPendingStaleApply(value: typeof pendingStaleApply) {
+		pendingStaleApply = value;
+		persistPendingStaleApply(value);
+		staleAcceptUi.set(
+			value
+				? {
+						tabId: value.tabId,
+						threadId: value.threadId,
+						staleRoundId: value.staleRoundId
+					}
+				: null
+		);
+	}
+
+	try {
+		const raw = sessionStorage.getItem(STALE_ACCEPT_STORAGE_KEY);
+		if (raw) {
+			const restored = JSON.parse(raw) as PendingStaleApply;
+			pendingStaleApply = restored;
+			staleAcceptUi.set({
+				tabId: restored.tabId,
+				threadId: restored.threadId,
+				staleRoundId: restored.staleRoundId
+			});
+		}
+	} catch {
+		pendingStaleApply = null;
 	}
 
 	type ReviewAction = 'accept_rounds' | 'reject_rounds';
@@ -1669,7 +1785,8 @@
 	async function postReviewAction(
 		tabId: string,
 		action: ReviewAction,
-		roundId?: string | string[]
+		roundId?: string | string[],
+		extra?: Record<string, unknown>
 	): Promise<{ res: Response; data: ReviewActionResponse }> {
 		const synced = await editorRef?.flushAutosave();
 		if (synced === false) {
@@ -1679,8 +1796,8 @@
 		const resumeTabSync = pauseTabSync(tabId);
 		try {
 			const body = Array.isArray(roundId)
-				? { action, roundIds: roundId }
-				: { action, roundId };
+				? { action, roundIds: roundId, ...extra }
+				: { action, roundId, ...extra };
 			const res = await fetch(`/api/document?tab=${encodeURIComponent(tabId)}`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -1733,25 +1850,123 @@
 	}
 
 
+	/** User accepted a stale/dangling proposal: keep the thread, ask the
+	 * agent to find the current old_string, then apply that rebased edit. */
+	async function requeueStaleAccept(
+		tabId: string,
+		staleRound: MaterializedPendingReviewRound,
+		reason: string
+	) {
+		setPendingStaleApply({
+			tabId,
+			threadId: staleRound.feedbackThreadId,
+			staleRoundId: staleRound.id,
+			newString: intendedReplacement(staleRound)
+		});
+		if (staleRound.feedbackThreadId) {
+			openCommentThreadId.set(staleRound.feedbackThreadId);
+		}
+		pushHistory({
+			type: 'notification',
+			timestamp: Date.now(),
+			text: 'Rebasing this edit…',
+			priority: 'medium'
+		});
+		const followup = buildStaleAcceptFollowup(tabId, staleRound, reason);
+		setTimeout(() => void submit(followup), 50);
+	}
+
+	function findRebasedRound(
+		rounds: MaterializedPendingReviewRound[],
+		pending: NonNullable<typeof pendingStaleApply>
+	): MaterializedPendingReviewRound | undefined {
+		const fresh = rounds.filter((r) => !r.stale && r.id !== pending.staleRoundId);
+		if (pending.threadId) {
+			const onThread = fresh.find((r) => r.feedbackThreadId === pending.threadId);
+			if (onThread) return onThread;
+		}
+		if (pending.newString) {
+			const byNew = fresh.find((r) => intendedReplacement(r) === pending.newString);
+			if (byNew) return byNew;
+		}
+		return undefined;
+	}
+
+	async function applyPendingStaleAccept(options?: { allowFail?: boolean }) {
+		const pending = pendingStaleApply;
+		if (!pending || staleAcceptSettling) return;
+		if (getCurrentActiveTab() !== pending.tabId) return;
+
+		const rebased = findRebasedRound(currentRounds(), pending);
+		if (!rebased) {
+			if (!options?.allowFail || get(isRendering)) return;
+			setPendingStaleApply(null);
+			pushHistory({
+				type: 'notification',
+				timestamp: Date.now(),
+				text: 'Could not rebase this edit onto the current text. The proposal is still stale.',
+				priority: 'high'
+			});
+			return;
+		}
+		// Rebased proposal is now a pending diff — leave it for the user
+		// to Accept. Drop only the original stale round if it is still there.
+		staleAcceptSettling = true;
+		setPendingStaleApply(null);
+		if (currentRounds().some((r) => r.id === pending.staleRoundId)) {
+			await rejectAgentEdit(pending.staleRoundId, { keepThreads: true, silent: true });
+		}
+		staleAcceptSettling = false;
+	}
+
 	/** Accept a single pending round by id (or all rounds if no id is
 	 * given — used by the "Accept all" path). Rounds are independent: the
 	 * server applies just this round's edit op against the current live
 	 * doc. If the round became stale (its `old_string` no longer matches
-	 * because a prior pending round changed the same text), the server
-	 * returns 409 and we re-queue it with a follow-up prompt asking the
-	 * agent to regenerate against the now-current text. */
-	async function acceptAgentEdit(roundId?: string | string[]) {
+	 * because a prior pending round changed the same text), Accept asks
+	 * the agent to rebase it onto the current text as a new pending diff. */
+	async function acceptAgentEdit(
+		roundId?: string | string[],
+		options?: { skipFollowup?: boolean }
+	) {
 		const tabId = getCurrentActiveTab();
 		if (!tabId) return;
 		const rounds = currentRounds();
 		const single = typeof roundId === 'string' ? roundId : undefined;
-		const ids = Array.isArray(roundId) ? roundId : single ? [single] : null;
 		if (single && rounds.findIndex((r) => r.id === single) < 0) return;
 		if (Array.isArray(roundId) && !rounds.some((r) => roundId.includes(r.id))) return;
+
+		const knownStale = single ? rounds.find((r) => r.id === single && r.stale) : undefined;
+		if (knownStale) {
+			clearPeekIfMatches(single);
+			editorRef?.cancelIdleTimer();
+			await requeueStaleAccept(
+				tabId,
+				knownStale,
+				knownStale.staleReason ?? 'The proposal no longer fits the current text.'
+			);
+			return;
+		}
+
+		// Accept-all / batch: skip stale orphans so they don't 409 the
+		// whole batch. The user can Accept each stale card individually
+		// to re-queue the agent.
+		let target: string | string[] | undefined = roundId;
+		if (target === undefined) {
+			const fresh = rounds.filter((r) => !r.stale).map((r) => r.id);
+			if (fresh.length === 0) return;
+			target = fresh;
+		} else if (Array.isArray(target)) {
+			const fresh = target.filter((id) => !rounds.find((r) => r.id === id)?.stale);
+			if (fresh.length === 0) return;
+			target = fresh;
+		}
+		const ids = Array.isArray(target) ? target : single ? [single] : null;
+
 		clearPeekIfMatches(single);
 		editorRef?.cancelIdleTimer();
 		try {
-			const { res, data } = await postReviewAction(tabId, 'accept_rounds', roundId);
+			const { res, data } = await postReviewAction(tabId, 'accept_rounds', target);
 			if (res.status === 409 && data?.stale) {
 				const staleRoundId: string | null = data.staleRoundId ?? single ?? null;
 				const reason: string = typeof data.error === 'string' && data.error
@@ -1759,18 +1974,10 @@
 					: 'The proposal no longer fits the current text.';
 				const staleRound =
 					staleRoundId != null ? rounds.find((r) => r.id === staleRoundId) : rounds[0];
-				if (staleRoundId) {
-					await rejectAgentEdit(staleRoundId);
-				}
-				pushHistory({
-					type: 'notification',
-					timestamp: Date.now(),
-					text: `Proposal was stale (${reason}) — re-queuing the agent with the current text.`,
-					priority: 'medium'
-				});
 				if (staleRound) {
-					const followup = buildStaleAcceptFollowup(tabId, staleRound, reason);
-					setTimeout(() => void submit(followup), 50);
+					await requeueStaleAccept(tabId, staleRound, reason);
+				} else if (staleRoundId) {
+					await rejectAgentEdit(staleRoundId, { keepThreads: true, silent: true });
 				}
 				return;
 			}
@@ -1802,7 +2009,9 @@
 				timestamp: Date.now(),
 				description: acceptedMsg
 			});
-			void submit(acceptedMsg);
+			if (!options?.skipFollowup) {
+				void submit(acceptedMsg);
+			}
 		} catch (e) {
 			console.error('Failed to accept agent edit:', e);
 			pushHistory({
@@ -1856,7 +2065,7 @@
 
 	async function rejectAgentEdit(
 		roundId?: string,
-		options?: { retryFeedback?: string }
+		options?: { retryFeedback?: string; keepThreads?: boolean; silent?: boolean }
 	) {
 		const tabId = getCurrentActiveTab();
 		if (!tabId) return;
@@ -1867,7 +2076,12 @@
 		clearPeekIfMatches(roundId);
 		editorRef?.cancelIdleTimer();
 		try {
-			const { res, data } = await postReviewAction(tabId, 'reject_rounds', roundId);
+			const { res, data } = await postReviewAction(
+				tabId,
+				'reject_rounds',
+				roundId,
+				options?.keepThreads ? { keepThreads: true } : undefined
+			);
 			if (!res.ok || !data?.ok || !Array.isArray(data.rounds)) {
 				throw new Error(data?.error || `HTTP ${res.status}`);
 			}
@@ -1875,14 +2089,16 @@
 				typeof data.rejectedCount === 'number'
 					? data.rejectedCount
 					: Math.max(0, rounds.length - (data.rounds as PendingReviewRound[]).length);
-			pushHistory({
-				type: 'user_action',
-				timestamp: Date.now(),
-				description:
-					!roundId
-						? `Rejected all ${rounds.length} agent edit${rounds.length === 1 ? '' : 's'}`
-						: `Rejected ${rejectedCount} agent edit${rejectedCount === 1 ? '' : 's'}`
-			});
+			if (!options?.silent) {
+				pushHistory({
+					type: 'user_action',
+					timestamp: Date.now(),
+					description:
+						!roundId
+							? `Rejected all ${rounds.length} agent edit${rounds.length === 1 ? '' : 's'}`
+							: `Rejected ${rejectedCount} agent edit${rejectedCount === 1 ? '' : 's'}`
+				});
+			}
 		} catch (e) {
 			console.error('reject failed:', e);
 			pushHistory({
@@ -2224,7 +2440,10 @@
 	agentSettings.subscribe((v) => (muted = v.muted));
 
 	let pendingRoundCount = $state(0);
-	pendingReviewRounds.subscribe((v) => (pendingRoundCount = v.length));
+	pendingReviewRounds.subscribe((v) => {
+		pendingRoundCount = v.length;
+		if (pendingStaleApply) void applyPendingStaleAccept();
+	});
 
 	let currentVerbosity = $state<'verbose' | 'minimal'>('verbose');
 	historyVerbosity.subscribe((v) => (currentVerbosity = v));
