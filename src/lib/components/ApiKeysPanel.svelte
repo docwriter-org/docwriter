@@ -111,8 +111,11 @@
 					<span class="badge {statusClass(p)}">{statusLabel(p)}</span>
 				</div>
 				<div class="env-var"><code>{p.envVar}</code></div>
-				{#if !p.present && p.usable && p.altAuthNote}
+				{#if !p.present && p.altAuthNote}
 					<div class="alt-note">{p.altAuthNote}</div>
+				{/if}
+				{#if p.id === 'claude' && p.present}
+					<div class="alt-note">Key set — API billing. Remove it to use Claude Code login instead.</div>
 				{/if}
 				<div class="key-input">
 					<input
@@ -235,6 +238,13 @@
 		color: var(--text-muted);
 		line-height: 1.45;
 		margin-bottom: 8px;
+	}
+	.alt-note code {
+		font-family: ui-monospace, monospace;
+		font-size: 11px;
+		background: var(--bg-surface);
+		padding: 1px 4px;
+		border-radius: 4px;
 	}
 	.key-input {
 		display: flex;

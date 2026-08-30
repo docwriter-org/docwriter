@@ -1025,6 +1025,23 @@
 
 	/** True when the dequeued message can be safely skipped because there's
 	 * a more specific user message right behind it. */
+	/** Recovery steps when the provider rejects auth. `/login` is typed inside
+	 * a Claude Code terminal session — not in the DocWriter UI. */
+	function authRecoveryHint(providerId: string): string {
+		if (providerId === 'claude') {
+			return [
+				'In a terminal on this computer:',
+				'1. Enter claude and wait for the session to start',
+				'2. Type /login and finish the browser sign-in',
+				'3. Retry here (Settings → API keys should show Using login; leave the Anthropic key empty)'
+			].join('\n');
+		}
+		if (providerId === 'codex') {
+			return 'Re-run your Codex CLI login in a terminal, or paste a key under Settings → API keys.';
+		}
+		return 'Re-authenticate this provider, then try again. See Settings → API keys.';
+	}
+
 	function isSkippableWhenQueued(trigger?: string): boolean {
 		return isAcceptedEditsMessage(trigger) || isImplicitWakeupTrigger(trigger);
 	}
@@ -1548,7 +1565,7 @@
 							kind: 'error',
 							title: isAuthError ? 'Agent auth failed' : 'Agent run failed',
 							body: isAuthError
-								? `${errText}\n\nRe-authenticate your provider (e.g. run \`claude\` in a terminal and /login), then try again.`
+								? `${errText}\n\n${authRecoveryHint(provider)}`
 								: errText,
 							refId: String(renderStart)
 						});
