@@ -1103,6 +1103,10 @@
 					text: 'Latest local edits are still syncing to the server. Try again in a moment.',
 					priority: 'high'
 				});
+				submitInFlight = false;
+				if (/^The user clicked Accept on your previous edit/.test(trigger ?? '')) {
+					pendingStaleApply = null;
+				}
 				return;
 			}
 		} catch (e) {
