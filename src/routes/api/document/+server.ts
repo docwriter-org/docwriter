@@ -128,7 +128,9 @@ export const POST: RequestHandler = async ({ request, url }) => {
 			}
 		}
 		if (body?.action === 'reject_rounds') {
-			const result = await rejectTabRounds(tabId, roundId);
+			const result = await rejectTabRounds(tabId, roundId, {
+				keepThreads: body.keepThreads === true
+			});
 			return json({ ok: true, ...result });
 		}
 		if (body?.action === 'set_thread_resolution') {

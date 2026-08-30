@@ -85,6 +85,23 @@ export function captureAnchorContext(
 	};
 }
 
+/** Build a quote-based comment-thread anchor at a known occurrence.
+ * Omits Yjs relative positions — the client backfills those on first
+ * render, the same way server-created threads already work. */
+export function buildThreadAnchor(
+	liveText: string,
+	quote: string,
+	occurrenceIndex: number
+): CommentThread['anchor'] | null {
+	const idx = nthIndexOf(liveText, quote, occurrenceIndex);
+	if (idx < 0) return null;
+	return {
+		quote,
+		occurrenceIndex,
+		...captureAnchorContext(liveText, idx, quote.length)
+	};
+}
+
 /** Locate the Nth occurrence of `needle` in `haystack`. Returns -1 when
  * fewer than N+1 matches exist. */
 export function nthIndexOf(haystack: string, needle: string, occurrenceIndex: number): number {
