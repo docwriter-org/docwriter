@@ -95,7 +95,6 @@
 	<div class="intro">
 		Stored in <code>~/.docwriter/keys.env</code> and shared across all workspaces.
 		Environment variables (and the repo <code>.env</code>) override these.
-		Claude and Codex can also reuse a terminal login — see each provider note below.
 	</div>
 
 	{#if error}
@@ -112,20 +111,11 @@
 					<span class="badge {statusClass(p)}">{statusLabel(p)}</span>
 				</div>
 				<div class="env-var"><code>{p.envVar}</code></div>
-				{#if p.altAuthNote && (!p.present || p.source === 'login')}
+				{#if !p.present && p.altAuthNote}
 					<div class="alt-note">{p.altAuthNote}</div>
 				{/if}
-				{#if p.id === 'claude' && p.source === 'login'}
-					<div class="alt-note refresh">
-						If the agent still fails with auth errors, refresh the login in a terminal:
-						run <code>claude</code>, type <code>/login</code>, finish the browser sign-in, then retry.
-					</div>
-				{/if}
 				{#if p.id === 'claude' && p.present}
-					<div class="alt-note refresh">
-						An Anthropic API key is set, so agent calls bill API usage (not your Claude Code subscription).
-						Choose <strong>Remove stored key</strong> below (and clear any shell <code>ANTHROPIC_API_KEY</code>) to reuse Claude Code login instead.
-					</div>
+					<div class="alt-note">Key set — API billing. Remove it to use Claude Code login instead.</div>
 				{/if}
 				<div class="key-input">
 					<input

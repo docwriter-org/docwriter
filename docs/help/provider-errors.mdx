@@ -18,15 +18,15 @@ Process environment variables and project `.env` files take precedence over `~/.
 
 ## Claude Code login expired
 
-`/login` is a **Claude Code terminal** command, not a DocWriter control.
+`/login` is typed inside Claude Code in a terminal — not in the DocWriter UI.
 
-1. On the same computer that runs DocWriter, open a terminal.
-2. Run `claude`.
-3. Type `/login` and finish the browser sign-in.
-4. In DocWriter, open **Settings**, then **API keys**. Claude should show **Using login**.
+1. Open a terminal on the same computer that runs DocWriter.
+2. Enter `claude` and press Enter. Wait until the session is running.
+3. Type `/login` and press Enter. Finish the browser sign-in.
+4. In DocWriter, open **Settings → API keys**. Claude should show **Using login**.
 5. Retry the agent request.
 
-Leave the Anthropic API key empty to keep using your Claude Code / Claude.ai subscription. If a key is saved (or `ANTHROPIC_API_KEY` is set in the environment), DocWriter uses API billing instead. Choose **Remove stored key** and clear the env var when you want subscription login again.
+Keep the Anthropic key field empty for subscription login. If a key is set in the panel or as `ANTHROPIC_API_KEY`, DocWriter bills API usage instead — remove the stored key and unset the env var to use login again.
 
 Choose **New session** if the provider still tries to resume an expired conversation. New session clears the saved provider conversation, agent activity for the current session, temporary scratch files, and pending proposals. It keeps workspace files, comments, rules, hooks, and settings. Copy any proposal text you need before choosing it.
 
