@@ -29,12 +29,21 @@ import {
 	getReviewArray,
 	readReviewRounds,
 	getCommentsMap,
+	getFragment,
 	AGENT_ORIGIN,
+	USER_ORIGIN,
 	normalizeTypography,
 	captureAnchorContext,
 	nthIndexOf,
-	buildThreadAnchor
+	buildThreadAnchor,
+	applyEditToFragment,
+	replaceYDocTextWithAiProvenance
 } from '$lib/shared/ydoc-codec';
+import {
+	matchesStaleAcceptApply,
+	type StaleAcceptApply
+} from '$lib/shared/stale-accept';
+import { touchLastSeen } from '$lib/server/last-seen';
 import { isScratchPath, resolveTabFromPath, isOpenTab } from './path-router';
 import { classifyRoundKind } from '$lib/review-diff';
 import {
@@ -104,6 +113,9 @@ interface TabWriteResult {
 	/** True when the edit was tossed because its target thread was already
 	 * resolved (no review round created). */
 	discarded?: boolean;
+	/** True when a stale Accept committed this write to the live document
+	 * instead of leaving another pending review round. */
+	committed?: boolean;
 }
 
 interface RoundMutation {
@@ -183,6 +195,89 @@ export function setActiveReviewerId(id: string | null) {
 	activeReviewerId = id;
 }
 
+/** Set for the duration of a stale-Accept render. While set, `edit_doc` /
+ * `write_doc` on that tab commit the replacement immediately — the user
+ * already clicked Accept; the agent is only finding the current old_string. */
+let staleAcceptApply: StaleAcceptApply | null = null;
+export function setStaleAcceptApply(value: StaleAcceptApply | null) {
+	staleAcceptApply = value;
+}
+export function getStaleAcceptApply(): StaleAcceptApply | null {
+	return staleAcceptApply;
+}
+
+function applyWriteToLiveFragment(doc: Y.Doc, operation: PendingReviewOperation): boolean {
+	if (operation.type === 'write') {
+		replaceYDocTextWithAiProvenance(doc, operation.content);
+		return true;
+	}
+	return applyEditToFragment(
+		getFragment(doc),
+		operation.oldString,
+		operation.newString,
+		operation.replaceAll === true
+	);
+}
+
+function dropMatchingReviewRounds(
+	doc: Y.Doc,
+	options?: { dropThreadId?: string; dropRoundId?: string }
+): string[] {
+	const reviewArr = getReviewArray(doc);
+	const existing = reviewArr.toArray();
+	const droppedThreadIds: string[] = [];
+	for (let i = existing.length - 1; i >= 0; i--) {
+		const round = existing[i];
+		const drop =
+			(options?.dropRoundId && round.id === options.dropRoundId) ||
+			(options?.dropThreadId && round.feedbackThreadId === options.dropThreadId);
+		if (!drop) continue;
+		if (round.feedbackThreadId) droppedThreadIds.push(round.feedbackThreadId);
+		reviewArr.delete(i, 1);
+	}
+	return droppedThreadIds;
+}
+
+function resolveEmptyEditThreads(ydoc: Y.Doc, threadIds: Iterable<string>): void {
+	const ids = new Set([...threadIds].filter((id): id is string => !!id));
+	if (ids.size === 0) return;
+	const commentsMap = getCommentsMap(ydoc);
+	const stillReferenced = new Set(
+		getReviewArray(ydoc)
+			.toArray()
+			.map((r) => r.feedbackThreadId)
+			.filter((id): id is string => typeof id === 'string')
+	);
+	for (const tid of ids) {
+		const thread = commentsMap.get(tid);
+		if (!thread || thread.resolved) continue;
+		if (stillReferenced.has(tid)) continue;
+		if (thread.messages.some((m) => m.author === 'user')) continue;
+		commentsMap.set(tid, { ...thread, resolved: true });
+	}
+}
+
+/** Apply an agent write to the live fragment and drop the stale/superseded
+ * pending rounds. Used when the user already Accepted an orphaned proposal.
+ * Caller is responsible for origin: this wraps a USER_ORIGIN transact so
+ * the apply is undoable like a normal Accept. */
+export function commitWriteToLiveDoc(
+	doc: Y.Doc,
+	operation: PendingReviewOperation,
+	options?: { dropThreadId?: string; dropRoundId?: string }
+): { ok: true } | { ok: false; error: string } {
+	let applied = false;
+	doc.transact(() => {
+		applied = applyWriteToLiveFragment(doc, operation);
+		if (!applied) return;
+		const dropped = dropMatchingReviewRounds(doc, options);
+		resolveEmptyEditThreads(doc, [...dropped, options?.dropThreadId ?? '']);
+	}, USER_ORIGIN);
+	return applied
+		? { ok: true }
+		: { ok: false, error: 'Could not apply the rebased edit to the live document.' };
+}
+
 export async function runTabWrite(
 	tabId: string,
 	trigger: PendingReviewRound['trigger'],
@@ -241,45 +336,64 @@ export async function runTabWrite(
 					return;
 				}
 			}
-			doc.transact(() => {
-				const reviewArr = getReviewArray(doc);
-				const threadIdExplicit = activeFeedbackThreadId ?? undefined;
-				// Default op: an explicit edit as given, or a narrowed wholesale
-				// write. `baseForRound` is the text this op is anchored to.
-				let baseForRound = beforeMd;
-				let normalizedOperation =
-					operation.type === 'write'
-						? (narrowWriteOperation(beforeMd, afterMd) ?? operation)
-						: operation;
+			const reviewArr = getReviewArray(doc);
+			const threadIdExplicit = activeFeedbackThreadId ?? undefined;
+			// Default op: an explicit edit as given, or a narrowed wholesale
+			// write. `baseForRound` is the text this op is anchored to.
+			let baseForRound = beforeMd;
+			let normalizedOperation =
+				operation.type === 'write'
+					? (narrowWriteOperation(beforeMd, afterMd) ?? operation)
+					: operation;
 
-				// ── Revise-in-place re-base ──────────────────────────────────
-				// When this edit attaches to a thread that ALREADY has pending
-				// rounds, the agent produced `afterMd` on top of those rounds'
-				// text (the proposal it was revising — that's what `read_doc`
-				// and the prompt show). We're about to SUPERSEDE those rounds,
-				// so the agent's `old_string` would no longer match the
-				// committed document: the round would show in the thread card
-				// but fail to render in the doc (stale). Re-derive the operation
-				// against the document WITHOUT this thread's pending rounds, so
-				// it anchors to text that still exists once the old proposal is
-				// withdrawn. `afterMd` is the agent's intended final text, so a
-				// diff from that clean base reconstructs a valid op.
-				const existingRounds = reviewArr.toArray();
-				const supersedes = threadIdExplicit
-					? existingRounds.filter((r) => r.feedbackThreadId === threadIdExplicit)
-					: [];
-				if (supersedes.length > 0) {
-					baseForRound = materializePendingReviewText(
-						serializeYDoc(doc),
-						existingRounds.filter((r) => r.feedbackThreadId !== threadIdExplicit)
-					);
-					if (afterMd !== baseForRound) {
-						normalizedOperation =
-							narrowWriteOperation(baseForRound, afterMd) ??
-							({ type: 'write', content: afterMd } as const);
-					}
+			// ── Revise-in-place re-base ──────────────────────────────────
+			// When this edit attaches to a thread that ALREADY has pending
+			// rounds, the agent produced `afterMd` on top of those rounds'
+			// text (the proposal it was revising — that's what `read_doc`
+			// and the prompt show). We're about to SUPERSEDE those rounds,
+			// so the agent's `old_string` would no longer match the
+			// committed document: the round would show in the thread card
+			// but fail to render in the doc (stale). Re-derive the operation
+			// against the document WITHOUT this thread's pending rounds, so
+			// it anchors to text that still exists once the old proposal is
+			// withdrawn. `afterMd` is the agent's intended final text, so a
+			// diff from that clean base reconstructs a valid op.
+			const existingRounds = reviewArr.toArray();
+			const supersedes = threadIdExplicit
+				? existingRounds.filter((r) => r.feedbackThreadId === threadIdExplicit)
+				: [];
+			if (supersedes.length > 0) {
+				baseForRound = materializePendingReviewText(
+					serializeYDoc(doc),
+					existingRounds.filter((r) => r.feedbackThreadId !== threadIdExplicit)
+				);
+				if (afterMd !== baseForRound) {
+					normalizedOperation =
+						narrowWriteOperation(baseForRound, afterMd) ??
+						({ type: 'write', content: afterMd } as const);
 				}
+			}
 
+			// Stale Accept: the user already clicked Accept. Apply the
+			// rebased op to the live fragment in a USER_ORIGIN transact —
+			// do not leave a new review card for a second Accept.
+			if (matchesStaleAcceptApply(staleAcceptApply, tabId)) {
+				const committed = commitWriteToLiveDoc(doc, normalizedOperation, {
+					dropThreadId: threadIdExplicit ?? staleAcceptApply?.threadId,
+					dropRoundId: staleAcceptApply?.staleRoundId
+				});
+				if (committed.ok) {
+					touchLastSeen(tabId, doc);
+					result = { beforeMd, afterMd, committed: true };
+					return;
+				}
+				// Could not apply to the live fragment (e.g. the agent's
+				// old_string only exists in a stacked proposal view). Fall
+				// through and leave a pending round so the client can still
+				// Accept the rebased edit.
+			}
+
+			doc.transact(() => {
 				// No explicit thread → open one so EVERY edit lives under a
 				// thread (the thread is the parent; there are no standalone edit
 				// cards). Anchor an edit to its replaced passage; anchor a
@@ -301,6 +415,7 @@ export async function runTabWrite(
 						threadId = createAgentEditThread(doc, anchorQuote, occIdx, baseForRound);
 					}
 				}
+
 				const round: PendingReviewRound = {
 					id: cryptoRandomId(),
 					operation: normalizedOperation,
@@ -703,9 +818,13 @@ const editDocTool = tool(
 		}
 
 		return toolText(
-			replaceAll
-				? `Edit applied to ${file_path} (replaced ${appliedHits} occurrence${appliedHits === 1 ? '' : 's'}).`
-				: `Edit applied to ${file_path}.`
+			result.committed
+				? replaceAll
+					? `Edit applied and accepted on ${file_path} (replaced ${appliedHits} occurrence${appliedHits === 1 ? '' : 's'}). The user already clicked Accept — do not leave another proposal.`
+					: `Edit applied and accepted on ${file_path}. The user already clicked Accept — do not leave another proposal.`
+				: replaceAll
+					? `Edit applied to ${file_path} (replaced ${appliedHits} occurrence${appliedHits === 1 ? '' : 's'}).`
+					: `Edit applied to ${file_path}.`
 		);
 	}
 );
@@ -810,7 +929,11 @@ const writeDocTool = tool(
 			return toolError(`write_doc failed for ${file_path}: ${result.error}`);
 		}
 		const verb = opened.existedOnDisk ? 'Wrote' : 'Created';
-		return toolText(`${verb} ${content.length} chars to ${file_path}.`);
+		return toolText(
+			result.committed
+				? `${verb} and accepted ${content.length} chars on ${file_path}. The user already clicked Accept — do not leave another proposal.`
+				: `${verb} ${content.length} chars to ${file_path}.`
+		);
 	}
 );
 

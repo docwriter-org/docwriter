@@ -32,6 +32,7 @@
 	import { themes, applyTheme } from '$lib/themes';
 	import { unifiedLineDiff } from '$lib/diff';
 	import { materializePendingReviewRounds } from '$lib/review-rounds';
+	import { isStaleAcceptFollowup } from '$lib/shared/stale-accept';
 	import {
 		serializeFragment as plainTextFromFragment,
 		matchCommentAnchor
@@ -1104,8 +1105,8 @@
 					priority: 'high'
 				});
 				submitInFlight = false;
-				if (/^The user clicked Accept on your previous edit/.test(trigger ?? '')) {
-					pendingStaleApply = null;
+				if (isStaleAcceptFollowup(trigger)) {
+					setPendingStaleApply(null);
 				}
 				return;
 			}
@@ -1163,7 +1164,16 @@
 					tab: tabId,
 					images: images.length > 0 ? images : undefined,
 					reviewerId: reviewer?.id,
-					provider
+					provider,
+					staleAccept:
+						isStaleAcceptFollowup(trigger) && pendingStaleApply
+							? {
+									tabId: pendingStaleApply.tabId,
+									staleRoundId: pendingStaleApply.staleRoundId,
+									threadId: pendingStaleApply.threadId,
+									newString: pendingStaleApply.newString
+								}
+							: undefined
 				}),
 				signal: currentAbort.signal
 			});
@@ -1580,13 +1590,11 @@
 			void fileTreeRef?.refresh();
 			// If the render failed, push one visible error entry. Otherwise
 			// the mascot already tells the user it's done.
-			if (
-				pendingStaleApply &&
-				/^The user clicked Accept on your previous edit/.test(trigger ?? '')
-			) {
+			if (pendingStaleApply && isStaleAcceptFollowup(trigger)) {
 				// Apply even if the render later reported an error — the
-				// agent may already have landed a rebased edit_doc.
-				await applyPendingStaleAccept();
+				// agent may already have landed a rebased edit_doc. If the
+				// server committed immediately, this just confirms the text.
+				await applyPendingStaleAccept({ allowFail: true });
 			}
 			if (!success) {
 				pushHistory({
@@ -1666,7 +1674,7 @@
 		}
 		lines.push(
 			'',
-			'Find the current passage that now corresponds to that old_string — match on intent and nearby wording, not a string-equal match. Then call edit_doc with that current passage as old_string and the intended new_string (adapt it only if the surrounding sentence requires it). The editor will apply the edit as soon as you land it. Do not leave it as a proposal for another review.'
+			'Find the current passage that now corresponds to that old_string — match on intent and nearby wording, not a string-equal match. Then call edit_doc with that current passage as old_string and the intended new_string (adapt it only if the surrounding sentence requires it). The editor will commit that edit_doc immediately — the user already accepted. Do not wait for another Accept, and do not leave a second proposal.'
 		);
 		if (thread) {
 			const transcript = thread.messages
@@ -1687,12 +1695,37 @@
 	}
 
 	/** After a stale Accept, auto-apply the agent's rebased edit. */
+	const STALE_ACCEPT_STORAGE_KEY = 'docwriter-stale-accept';
 	let pendingStaleApply: {
 		tabId: string;
 		threadId?: string;
 		staleRoundId: string;
 		newString?: string;
 	} | null = null;
+	let staleAcceptSettling = false;
+
+	function persistPendingStaleApply(
+		value: typeof pendingStaleApply
+	) {
+		try {
+			if (value) sessionStorage.setItem(STALE_ACCEPT_STORAGE_KEY, JSON.stringify(value));
+			else sessionStorage.removeItem(STALE_ACCEPT_STORAGE_KEY);
+		} catch {
+			/* ignore quota / private mode */
+		}
+	}
+
+	function setPendingStaleApply(value: typeof pendingStaleApply) {
+		pendingStaleApply = value;
+		persistPendingStaleApply(value);
+	}
+
+	try {
+		const raw = sessionStorage.getItem(STALE_ACCEPT_STORAGE_KEY);
+		if (raw) pendingStaleApply = JSON.parse(raw) as typeof pendingStaleApply;
+	} catch {
+		pendingStaleApply = null;
+	}
 
 	type ReviewAction = 'accept_rounds' | 'reject_rounds';
 	type ReviewActionResponse = {
@@ -1787,12 +1820,12 @@
 		staleRound: MaterializedPendingReviewRound,
 		reason: string
 	) {
-		pendingStaleApply = {
+		setPendingStaleApply({
 			tabId,
 			threadId: staleRound.feedbackThreadId,
 			staleRoundId: staleRound.id,
 			newString: intendedReplacement(staleRound)
-		};
+		});
 		if (staleRound.feedbackThreadId) {
 			editorRef?.markThreadAwaiting(staleRound.feedbackThreadId);
 		}
@@ -1822,13 +1855,32 @@
 		return undefined;
 	}
 
-	async function applyPendingStaleAccept() {
+	async function applyPendingStaleAccept(options?: { allowFail?: boolean }) {
 		const pending = pendingStaleApply;
-		pendingStaleApply = null;
-		if (!pending) return;
+		if (!pending || staleAcceptSettling) return;
 		if (getCurrentActiveTab() !== pending.tabId) return;
+
+		const liveText = currentTabText(pending.tabId);
+		if (pending.newString && liveText.includes(pending.newString)) {
+			staleAcceptSettling = true;
+			setPendingStaleApply(null);
+			editorRef?.flashAcceptedRange(pending.newString);
+			if (currentRounds().some((r) => r.id === pending.staleRoundId)) {
+				await rejectAgentEdit(pending.staleRoundId, { keepThreads: true, silent: true });
+			}
+			pushHistory({
+				type: 'user_action',
+				timestamp: Date.now(),
+				description: 'Accepted agent edit'
+			});
+			staleAcceptSettling = false;
+			return;
+		}
+
 		const rebased = findRebasedRound(currentRounds(), pending);
 		if (!rebased) {
+			if (!options?.allowFail || get(isRendering)) return;
+			setPendingStaleApply(null);
 			pushHistory({
 				type: 'notification',
 				timestamp: Date.now(),
@@ -1837,10 +1889,13 @@
 			});
 			return;
 		}
+		staleAcceptSettling = true;
+		setPendingStaleApply(null);
 		await acceptAgentEdit(rebased.id, { skipFollowup: true });
 		if (currentRounds().some((r) => r.id === pending.staleRoundId)) {
 			await rejectAgentEdit(pending.staleRoundId, { keepThreads: true, silent: true });
 		}
+		staleAcceptSettling = false;
 	}
 
 	/** Accept a single pending round by id (or all rounds if no id is
@@ -2365,7 +2420,10 @@
 	agentSettings.subscribe((v) => (muted = v.muted));
 
 	let pendingRoundCount = $state(0);
-	pendingReviewRounds.subscribe((v) => (pendingRoundCount = v.length));
+	pendingReviewRounds.subscribe((v) => {
+		pendingRoundCount = v.length;
+		if (pendingStaleApply) void applyPendingStaleAccept();
+	});
 
 	let currentVerbosity = $state<'verbose' | 'minimal'>('verbose');
 	historyVerbosity.subscribe((v) => (currentVerbosity = v));

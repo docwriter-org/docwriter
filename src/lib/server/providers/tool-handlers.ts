@@ -198,9 +198,13 @@ export function buildToolDefinitions(): ToolDefinition[] {
 				return {
 					content: [{
 						type: 'text' as const,
-						text: replaceAll
-							? `Edit applied to ${path} (replaced ${appliedHits} occurrence${appliedHits === 1 ? '' : 's'}).`
-							: `Edit applied to ${path}.`
+						text: result.committed
+							? replaceAll
+								? `Edit applied and accepted on ${path} (replaced ${appliedHits} occurrence${appliedHits === 1 ? '' : 's'}). The user already clicked Accept — do not leave another proposal.`
+								: `Edit applied and accepted on ${path}. The user already clicked Accept — do not leave another proposal.`
+							: replaceAll
+								? `Edit applied to ${path} (replaced ${appliedHits} occurrence${appliedHits === 1 ? '' : 's'}).`
+								: `Edit applied to ${path}.`
 					}]
 				};
 			}
@@ -283,7 +287,14 @@ export function buildToolDefinitions(): ToolDefinition[] {
 				if ('error' in result) {
 					return { isError: true, content: [{ type: 'text' as const, text: `write_doc failed: ${result.error}` }] };
 				}
-				return { content: [{ type: 'text' as const, text: `${opened.existedOnDisk ? 'Wrote' : 'Created'} ${content.length} chars to ${path}.` }] };
+				return {
+					content: [{
+						type: 'text' as const,
+						text: result.committed
+							? `${opened.existedOnDisk ? 'Wrote' : 'Created'} and accepted ${content.length} chars on ${path}. The user already clicked Accept — do not leave another proposal.`
+							: `${opened.existedOnDisk ? 'Wrote' : 'Created'} ${content.length} chars to ${path}.`
+					}]
+				};
 			}
 		},
 		{

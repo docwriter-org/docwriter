@@ -3,11 +3,14 @@ import * as Y from 'yjs';
 import {
 	buildThreadAnchor,
 	getCommentsMap,
+	getReviewArray,
+	readReviewRounds,
 	seedYDoc,
 	serializeYDoc
 } from '$lib/shared/ydoc-codec';
 import { applyPendingReviewRound } from '$lib/review-rounds';
-import { applyReplyToComment } from './mcp-doc-tools';
+import { applyReplyToComment, commitWriteToLiveDoc } from './mcp-doc-tools';
+import { matchesStaleAcceptApply } from '$lib/shared/stale-accept';
 import type { CommentThread } from '$lib/types';
 
 function seedDoc(text: string): Y.Doc {
@@ -108,5 +111,85 @@ describe('stale proposal + thread re-attach', () => {
 		);
 		expect(result.ok).toBe(false);
 		if (!result.ok) expect(result.error).toMatch(/not found/);
+	});
+});
+
+describe('stale Accept commits the rebased write', () => {
+	it('matches only the tab the user accepted', () => {
+		const ctx = { tabId: 'document.md', staleRoundId: 'r1' };
+		expect(matchesStaleAcceptApply(ctx, 'document.md')).toBe(true);
+		expect(matchesStaleAcceptApply(ctx, 'other.md')).toBe(false);
+		expect(matchesStaleAcceptApply(null, 'document.md')).toBe(false);
+	});
+
+	it('applies the current old_string and drops the stale round', () => {
+		const live =
+			'A draft note about course goals that no longer matches the proposal.';
+		const intended =
+			'This course surveys database architecture, data models, and concurrency.';
+		const doc = seedDoc(live);
+		getReviewArray(doc).push([
+			{
+				id: 'stale-round',
+				timestamp: 1,
+				feedbackThreadId: 'thread_orphan',
+				operation: {
+					type: 'edit',
+					oldString: '[Placeholder: add a short description of the course goals and content.]',
+					newString: intended
+				}
+			}
+		]);
+		getCommentsMap(doc).set('thread_orphan', {
+			id: 'thread_orphan',
+			anchor: {
+				quote: '[Placeholder: add a short description of the course goals and content.]',
+				occurrenceIndex: 0
+			},
+			messages: [
+				{
+					id: 'msg_1',
+					author: 'agent',
+					text: 'I will replace the placeholder.',
+					timestamp: 1
+				}
+			],
+			resolved: false,
+			createdAt: 1
+		});
+
+		const result = commitWriteToLiveDoc(
+			doc,
+			{ type: 'edit', oldString: live, newString: intended },
+			{ dropThreadId: 'thread_orphan', dropRoundId: 'stale-round' }
+		);
+		expect(result.ok).toBe(true);
+		expect(serializeYDoc(doc)).toBe(intended);
+		expect(readReviewRounds(doc)).toHaveLength(0);
+	});
+
+	it('leaves the document alone when the rebased old_string is missing', () => {
+		const live = 'Current sentence that is not the target.';
+		const doc = seedDoc(live);
+		getReviewArray(doc).push([
+			{
+				id: 'stale-round',
+				timestamp: 1,
+				operation: {
+					type: 'edit',
+					oldString: 'gone placeholder',
+					newString: 'intended'
+				}
+			}
+		]);
+
+		const result = commitWriteToLiveDoc(
+			doc,
+			{ type: 'edit', oldString: 'not in the document', newString: 'intended' },
+			{ dropRoundId: 'stale-round' }
+		);
+		expect(result.ok).toBe(false);
+		expect(serializeYDoc(doc)).toBe(live);
+		expect(readReviewRounds(doc)).toHaveLength(1);
 	});
 });
