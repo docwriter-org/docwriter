@@ -246,9 +246,6 @@
 		padding: 1px 4px;
 		border-radius: 4px;
 	}
-	.alt-note.refresh {
-		margin-top: -2px;
-	}
 	.key-input {
 		display: flex;
 		gap: 6px;
