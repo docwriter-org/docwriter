@@ -345,7 +345,7 @@ export function cryptoRandomId(): string {
 
 /** Open a comment thread anchored to the passage an agent edit replaces and
  * return its id, so a spontaneous edit renders as a thread card (with a
- * conversation + Resolve) instead of a bare standalone edit card. The anchor
+ * conversation + Dismiss) instead of a bare standalone edit card. The anchor
  * quote is the edit's `oldString`, which `edit_doc` already guaranteed
  * matches the live text exactly once, so the gutter can position the card and
  * the client backfills CRDT rel-positions on first render. The single agent

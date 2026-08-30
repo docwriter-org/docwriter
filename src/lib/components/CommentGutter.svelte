@@ -61,7 +61,7 @@
 		/** Accept / reject every pending round on this tab. */
 		onAcceptAll?: () => void;
 		onRejectAll?: () => void;
-		/** Resolve / reopen a thread (undoable; resolving also drops its edits). */
+		/** Dismiss / reopen a thread (undoable; dismissing also drops its edits). */
 		onResolveThread: (threadId: string, resolved: boolean) => void;
 		/** Pin/unpin a whole feedback thread's edits so their diffs stay shown
 		 * even when the card is collapsed. */
@@ -541,7 +541,7 @@
 
 	function toggleResolved(thread: CommentThread) {
 		const next = !thread.resolved;
-		// Resolving also drops the thread's pending edits, and the whole action
+		// Dismissing also drops the thread's pending edits, and the whole action
 		// is applied locally with USER_ORIGIN by the parent so ctrl+z reopens
 		// the thread and brings its edits back in one step.
 		onResolveThread(thread.id, next);
@@ -737,7 +737,7 @@
 										<Copy size={11} />
 									</button>
 									<!-- No per-edit reject on thread cards: the natural "no" is a
-									     follow-up reply asking for a revision (or Resolve, which
+									     follow-up reply asking for a revision (or Dismiss, which
 									     drops the thread's pending edits). Loose edit cards keep
 									     their X — they have no reply box. -->
 									<button
@@ -779,9 +779,9 @@
 						onclick={() => toggleResolved(thread)}
 						title={thread.resolved
 							? 'Re-open this thread (it will appear in the agent prompt again)'
-							: 'Mark this thread done. It stops being inlined into the agent prompt.'}
+							: 'Dismiss this thread. It hides from the gutter and the agent prompt. Unaccepted edits on this thread are discarded.'}
 					>
-						{thread.resolved ? 'Reopen' : 'Resolve'}
+						{thread.resolved ? 'Reopen' : 'Dismiss'}
 					</button>
 					<div class="card-actions-right">
 						<span class="kbd-hint">{modEnterToSend}</span>
@@ -1193,7 +1193,7 @@
 		align-items: center;
 		gap: 6px;
 	}
-	/* Text-style buttons for secondary actions (Resolve, Close) — no
+	/* Text-style buttons for secondary actions (Dismiss, Close) — no
 	 * border, just a link-y color. Keeps the card from stacking more
 	 * boxed UI. */
 	.resolve-link {

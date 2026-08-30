@@ -233,7 +233,7 @@
 						</div>
 						<input class="rp-reply" type="text" placeholder="Reply..." disabled />
 						<div class="rp-footer">
-							<span class="rp-resolve">Resolve</span>
+							<span class="rp-resolve">Dismiss</span>
 							<button class="rp-send">Send</button>
 						</div>
 					</div>
