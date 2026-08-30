@@ -1582,6 +1582,14 @@
 					timestamp: Date.now(),
 					text: `Render failed after ${Math.round((Date.now() - renderStart) / 100) / 10}s.`
 				});
+				if (/^The user clicked Accept on your previous edit/.test(trigger ?? '')) {
+					pendingStaleApply = null;
+				}
+			} else if (
+				pendingStaleApply &&
+				/^The user clicked Accept on your previous edit/.test(trigger ?? '')
+			) {
+				await applyPendingStaleAccept();
 			}
 			let next = queuedSubmissions[0];
 			if (next) {
@@ -1614,6 +1622,13 @@
 		return rounds;
 	}
 
+	function intendedReplacement(round: MaterializedPendingReviewRound): string | undefined {
+		const op = round.operation;
+		if (op?.type === 'edit') return op.newString;
+		if (op?.type === 'write') return op.content;
+		return typeof round.afterMd === 'string' ? round.afterMd : undefined;
+	}
+
 	function buildStaleAcceptFollowup(
 		tabId: string,
 		stale: MaterializedPendingReviewRound,
@@ -1623,8 +1638,10 @@
 		const thread = stale.feedbackThreadId
 			? get(commentThreads).find((t) => t.id === stale.feedbackThreadId)
 			: undefined;
+		const oldString = stale.operation?.type === 'edit' ? stale.operation.oldString : undefined;
+		const newString = intendedReplacement(stale);
 		const lines: string[] = [
-			`The user clicked Accept on your previous edit to \`${tabId}\`, but it could not be applied because it became stale:`,
+			`The user clicked Accept on your previous edit to \`${tabId}\`. They already accepted the change — apply it. It could not be applied as-is because it became stale:`,
 			'',
 			`> ${reason}`,
 			'',
@@ -1632,10 +1649,21 @@
 			'',
 			'```diff',
 			staleDiff,
-			'```',
-			'',
-			'The user still wants this change applied. Another accepted edit likely replaced the original passage, so this proposal is now an orphan.'
+			'```'
 		];
+		if (oldString && newString) {
+			lines.push(
+				'',
+				'Intended replacement:',
+				'',
+				`old_string (gone): ${JSON.stringify(oldString)}`,
+				`new_string (apply this): ${JSON.stringify(newString)}`
+			);
+		}
+		lines.push(
+			'',
+			'Find the current passage that now corresponds to that old_string — match on intent and nearby wording, not a string-equal match. Then call edit_doc with that current passage as old_string and the intended new_string (adapt it only if the surrounding sentence requires it). The editor will apply the edit as soon as you land it. Do not leave it as a proposal for another review.'
+		);
 		if (thread) {
 			const transcript = thread.messages
 				.map((m) => `- [${m.author}] ${m.text}`)
@@ -1648,21 +1676,19 @@
 				'Full thread:',
 				transcript,
 				'',
-				'Do this:',
-				'1. Call `read_doc` on this file and find the passage that now corresponds to the intended change — match on intent and nearby wording, not a string-equal old_string.',
-				`2. If that original anchor quote is no longer in the document, re-attach the thread: call reply_to_comment with thread_id="${thread.id}" and \`anchor_text\` set to the corresponding current passage, plus a short first-person note that you are re-attaching the thread after a neighboring edit landed.`,
-				`3. Then call edit_doc with thread_id="${thread.id}" to propose a fresh edit against the current text.`
-			);
-		} else {
-			lines.push(
-				'',
-				'Do this:',
-				'1. Call `read_doc` on this file and find the passage that now corresponds to the intended change — match on intent and nearby wording, not a string-equal old_string.',
-				'2. Announce the edit on a thread anchored to that current passage, then propose a fresh edit_doc against the current text.'
+				`If that original anchor quote is no longer in the document, re-attach the thread first: reply_to_comment with thread_id="${thread.id}" and \`anchor_text\` set to the current passage.`
 			);
 		}
 		return lines.join('\n');
 	}
+
+	/** After a stale Accept, auto-apply the agent's rebased edit. */
+	let pendingStaleApply: {
+		tabId: string;
+		threadId?: string;
+		staleRoundId: string;
+		newString?: string;
+	} | null = null;
 
 	type ReviewAction = 'accept_rounds' | 'reject_rounds';
 	type ReviewActionResponse = {
@@ -1750,25 +1776,67 @@
 	}
 
 
-	/** Drop a stale round, keep its announce thread, and ask the agent to
-	 * find the corresponding current passage and re-attach the change. */
+	/** User accepted a stale/dangling proposal: keep the thread, ask the
+	 * agent to find the current old_string, then apply that rebased edit. */
 	async function requeueStaleAccept(
 		tabId: string,
 		staleRound: MaterializedPendingReviewRound,
 		reason: string
 	) {
-		await rejectAgentEdit(staleRound.id, { keepThreads: true, silent: true });
+		pendingStaleApply = {
+			tabId,
+			threadId: staleRound.feedbackThreadId,
+			staleRoundId: staleRound.id,
+			newString: intendedReplacement(staleRound)
+		};
 		if (staleRound.feedbackThreadId) {
 			editorRef?.markThreadAwaiting(staleRound.feedbackThreadId);
 		}
 		pushHistory({
 			type: 'notification',
 			timestamp: Date.now(),
-			text: `Proposal was stale (${reason}) — asking the agent to re-attach it to the current text.`,
+			text: 'Finding where to apply this edit…',
 			priority: 'medium'
 		});
 		const followup = buildStaleAcceptFollowup(tabId, staleRound, reason);
 		setTimeout(() => void submit(followup), 50);
+	}
+
+	function findRebasedRound(
+		rounds: MaterializedPendingReviewRound[],
+		pending: NonNullable<typeof pendingStaleApply>
+	): MaterializedPendingReviewRound | undefined {
+		const fresh = rounds.filter((r) => !r.stale && r.id !== pending.staleRoundId);
+		if (pending.threadId) {
+			const onThread = fresh.find((r) => r.feedbackThreadId === pending.threadId);
+			if (onThread) return onThread;
+		}
+		if (pending.newString) {
+			const byNew = fresh.find((r) => intendedReplacement(r) === pending.newString);
+			if (byNew) return byNew;
+		}
+		return undefined;
+	}
+
+	async function applyPendingStaleAccept() {
+		const pending = pendingStaleApply;
+		pendingStaleApply = null;
+		if (!pending) return;
+		if (getCurrentActiveTab() !== pending.tabId) return;
+		const rebased = findRebasedRound(currentRounds(), pending);
+		if (!rebased) {
+			pushHistory({
+				type: 'notification',
+				timestamp: Date.now(),
+				text: 'Could not rebase this edit onto the current text. The proposal is still stale.',
+				priority: 'high'
+			});
+			return;
+		}
+		await acceptAgentEdit(rebased.id, { skipFollowup: true });
+		if (currentRounds().some((r) => r.id === pending.staleRoundId)) {
+			await rejectAgentEdit(pending.staleRoundId, { keepThreads: true, silent: true });
+		}
 	}
 
 	/** Accept a single pending round by id (or all rounds if no id is
@@ -1776,9 +1844,12 @@
 	 * server applies just this round's edit op against the current live
 	 * doc. If the round became stale (its `old_string` no longer matches
 	 * because a prior pending round changed the same text), Accept asks
-	 * the agent to re-attach the change to the current text instead of
-	 * applying it blindly. */
-	async function acceptAgentEdit(roundId?: string | string[]) {
+	 * the agent to find the current old_string and then applies that
+	 * rebased edit. */
+	async function acceptAgentEdit(
+		roundId?: string | string[],
+		options?: { skipFollowup?: boolean }
+	) {
 		const tabId = getCurrentActiveTab();
 		if (!tabId) return;
 		const rounds = currentRounds();
@@ -1859,7 +1930,9 @@
 				timestamp: Date.now(),
 				description: acceptedMsg
 			});
-			void submit(acceptedMsg);
+			if (!options?.skipFollowup) {
+				void submit(acceptedMsg);
+			}
 		} catch (e) {
 			console.error('Failed to accept agent edit:', e);
 			pushHistory({
