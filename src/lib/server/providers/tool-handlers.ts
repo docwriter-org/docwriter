@@ -19,7 +19,8 @@ import {
 	cryptoRandomId,
 	currentProposalText,
 	toolError,
-	toolText
+	toolText,
+	applyReplyToComment
 } from '$lib/server/mcp-doc-tools';
 import { isScratchPath, resolveTabFromPath, isOpenTab } from '$lib/server/path-router';
 import { matchImportedComment, updateFeedbackDisposition } from '$lib/server/feedback-import';
@@ -511,13 +512,22 @@ export function buildToolDefinitions(): ToolDefinition[] {
 		{
 			name: 'reply_to_comment',
 			description:
-				'Reply on an existing comment thread. Include proposed_edit only when the user directly asked for an edit or autonomy is High.',
+				'Reply on an existing comment thread. Include proposed_edit only when the user directly asked for an edit or autonomy is High. Pass optional anchor_text to re-attach the thread to a new passage after the original text was replaced.',
 			inputSchema: {
 				type: 'object',
 				properties: {
 					file_path: { type: 'string' },
 					thread_id: { type: 'string' },
 					message: { type: 'string' },
+					anchor_text: {
+						type: 'string',
+						description:
+							'Exact current document text to move this thread onto. Use when the original anchor was deleted and you need to re-attach the conversation to the corresponding current passage.'
+					},
+					occurrence_index: {
+						type: 'number',
+						description: 'Zero-based occurrence when anchor_text appears more than once.'
+					},
 					proposed_edit: {
 						type: 'object',
 						properties: { old_string: { type: 'string' }, new_string: { type: 'string' } },
@@ -527,9 +537,11 @@ export function buildToolDefinitions(): ToolDefinition[] {
 				required: ['file_path', 'thread_id', 'message']
 			},
 			execute: async (input) => {
-				const { file_path: path, thread_id, message: msg, proposed_edit } = input as {
+				const { file_path: path, thread_id, message: msg, proposed_edit, anchor_text, occurrence_index } = input as {
 					file_path: string; thread_id: string; message: string;
 					proposed_edit?: { old_string: string; new_string: string };
+					anchor_text?: string;
+					occurrence_index?: number;
 				};
 				if (!path) {
 					return { isError: true, content: [{ type: 'text' as const, text: 'reply_to_comment requires `file_path`.' }] };
@@ -539,24 +551,25 @@ export function buildToolDefinitions(): ToolDefinition[] {
 				if (!opened.ok) return toToolResult(opened.error);
 				const trimmedMessage = msg.trim();
 				if (!trimmedMessage) return { isError: true, content: [{ type: 'text' as const, text: 'reply_to_comment requires a non-empty message.' }] };
+				let reanchored = false;
 				const outcome = await runCommentWrite(opened.tabId, (doc) => {
-					const commentsMap = getCommentsMap(doc);
-					const now = Date.now();
-					const newMessage: CommentMessage = {
-						id: 'msg_' + cryptoRandomId(),
-						author: 'agent',
-						text: trimmedMessage,
-						timestamp: now,
-						...(proposed_edit ? { proposedEdit: { oldString: proposed_edit.old_string, newString: proposed_edit.new_string } } : {})
-					};
-					const existing = commentsMap.get(thread_id);
-					if (!existing) return { ok: false as const, error: `Thread "${thread_id}" does not exist on ${path}.` };
-					const updated: CommentThread = { ...existing, resolved: false, messages: [...existing.messages, newMessage] };
-					doc.transact(() => commentsMap.set(thread_id, updated), AGENT_ORIGIN);
-					return { ok: true as const };
+					const result = applyReplyToComment(doc, thread_id, path, trimmedMessage, {
+						proposedEdit: proposed_edit,
+						anchorText: anchor_text,
+						occurrenceIndex: occurrence_index
+					});
+					if (result.ok) reanchored = result.reanchored;
+					return result;
 				});
 				if (!outcome.ok) return { isError: true, content: [{ type: 'text' as const, text: outcome.error }] };
-				return { content: [{ type: 'text' as const, text: `Replied on thread ${thread_id} (${path}).` }] };
+				return {
+					content: [{
+						type: 'text' as const,
+						text: reanchored
+							? `Replied on thread ${thread_id} (${path}) and re-attached it to the new passage.`
+							: `Replied on thread ${thread_id} (${path}).`
+					}]
+				};
 			}
 		},
 		{

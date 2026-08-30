@@ -325,7 +325,8 @@ export async function acceptTabRounds(
 
 export async function rejectTabRounds(
 	tabId: string,
-	roundId?: string
+	roundId?: string,
+	options?: { keepThreads?: boolean }
 ): Promise<{ rejectedCount: number; rounds: PendingReviewRound[]; yjsUpdate: string | null }> {
 	return withLiveDoc(tabId, (ydoc) => {
 		const reviewArr = getReviewArray(ydoc);
@@ -334,6 +335,10 @@ export async function rejectTabRounds(
 		// No roundId = reject everything. With a roundId, drop only that
 		// round; later rounds stay and will surface stale if they no longer
 		// apply (the materializer marks them).
+		// keepThreads: drop the edit but leave its announce thread open —
+		// used when Accept on a stale proposal re-queues the agent to
+		// re-attach that same thread to the current text.
+		const keepThreads = options?.keepThreads === true;
 		const beforeStateVector = Y.encodeStateVector(ydoc);
 		const threadIdsOf = (rs: PendingReviewRound[]) =>
 			new Set(
@@ -344,7 +349,7 @@ export async function rejectTabRounds(
 		if (!roundId) {
 			ydoc.transact(() => {
 				reviewArr.delete(0, current.length);
-				resolveEmptyEditThreads(ydoc, threadIdsOf(current));
+				if (!keepThreads) resolveEmptyEditThreads(ydoc, threadIdsOf(current));
 			}, USER_ORIGIN);
 			const deltaBytes = Y.encodeStateAsUpdate(ydoc, beforeStateVector);
 			const yjsUpdate = Buffer.from(deltaBytes).toString('base64');
@@ -355,7 +360,7 @@ export async function rejectTabRounds(
 		if (idx < 0) return { rejectedCount: 0, rounds: current, yjsUpdate: null };
 		ydoc.transact(() => {
 			reviewArr.delete(idx, 1);
-			resolveEmptyEditThreads(ydoc, threadIdsOf([current[idx]]));
+			if (!keepThreads) resolveEmptyEditThreads(ydoc, threadIdsOf([current[idx]]));
 		}, USER_ORIGIN);
 		const remaining = current.slice(0, idx).concat(current.slice(idx + 1));
 		const deltaBytes = Y.encodeStateAsUpdate(ydoc, beforeStateVector);

@@ -363,6 +363,12 @@
 			expanded: boolean;
 			editCount: number;
 		}> = [];
+		const parked: Array<{
+			id: string;
+			kind: 'comment' | 'edit';
+			expanded: boolean;
+			editCount: number;
+		}> = [];
 		for (const thread of threads) {
 			if (thread.resolved) continue;
 			if (muted && isAgentThread(thread)) continue;
@@ -373,7 +379,20 @@
 					: null;
 			const range = editPos == null ? resolveThreadRange(editor, thread) : null;
 			const anchorPos = editPos ?? range?.from ?? null;
-			if (anchorPos == null) continue;
+			if (anchorPos == null) {
+				// Passage gone (neighboring accept wiped it) but the thread
+				// still has a stale proposal — park the card at the top so
+				// the user can click Accept and ask the agent to re-attach.
+				if (threadEdits.length > 0) {
+					parked.push({
+						id: thread.id,
+						kind: 'comment',
+						expanded: thread.id === openThreadId,
+						editCount: threadEdits.length
+					});
+				}
+				continue;
+			}
 			try {
 				const coords = editor.view.coordsAtPos(anchorPos);
 				entries.push({
@@ -390,7 +409,17 @@
 		if (!muted && baseline) {
 			for (const round of looseEditRounds) {
 				const pos = resolveRoundAnchorPos(editor, round, baseline);
-				if (pos == null) continue;
+				if (pos == null) {
+					if (round.stale) {
+						parked.push({
+							id: editCardId(round.id),
+							kind: 'edit',
+							expanded: false,
+							editCount: 0
+						});
+					}
+					continue;
+				}
 				try {
 					const coords = editor.view.coordsAtPos(pos);
 					entries.push({
@@ -404,13 +433,31 @@
 					// View not mounted or anchor no longer addressable.
 				}
 			}
+		} else if (!muted) {
+			for (const round of looseEditRounds) {
+				if (round.stale) {
+					parked.push({
+						id: editCardId(round.id),
+						kind: 'edit',
+						expanded: false,
+						editCount: 0
+					});
+				}
+			}
 		}
 		entries.sort((a, b) => a.top - b.top);
 		// Collision stack: each card claims [top, top + height + gap]; if
 		// the next card's natural top falls inside that, push it down to
 		// sit right below the previous one. Reserve room for the batch bar.
+		// Parked (detached/stale) cards sit at the top so they stay clickable.
 		let runningBottom = showBatchBar ? BATCH_BAR_HEIGHT + CARD_GAP : -Infinity;
 		const next = new Map<string, number>();
+		for (const card of parked) {
+			const h = cardHeightFor(card.id, card.kind, card.expanded, card.editCount);
+			const top = Math.max(0, runningBottom);
+			next.set(card.id, top);
+			runningBottom = top + h + CARD_GAP;
+		}
 		for (const entry of entries) {
 			const h = cardHeightFor(entry.id, entry.kind, entry.expanded, entry.editCount);
 			const top = Math.max(entry.top, runningBottom);
@@ -565,6 +612,13 @@
 		if (!first) return '';
 		const body = first.text.replace(/\n+/g, ' ').replace(/[*_`]/g, '');
 		return body.length > 90 ? body.slice(0, 87) + '…' : body;
+	}
+
+	function acceptRoundTitle(round: MaterializedPendingReviewRound): string {
+		if (!round.stale) return 'Accept this edit';
+		return round.staleReason
+			? `Ask the agent to re-apply this against the current text — ${round.staleReason}`
+			: 'Ask the agent to re-apply this against the current text';
 	}
 </script>
 
@@ -742,9 +796,12 @@
 									     their X — they have no reply box. -->
 									<button
 										class="mini-btn accept"
-										title={ed.stale ? 'Stale — can no longer apply' : 'Accept this edit'}
-										disabled={ed.stale}
-										onclick={() => onAcceptRound(ed.id)}
+										class:reapply={ed.stale}
+										title={acceptRoundTitle(ed)}
+										onclick={(e) => {
+											e.stopPropagation();
+											onAcceptRound(ed.id);
+										}}
 									>
 										<Check size={12} />
 									</button>
@@ -872,9 +929,12 @@
 					</button>
 					<button
 						class="mini-btn accept"
-						title={round.stale ? 'Stale — can no longer apply' : 'Accept this edit'}
-						disabled={round.stale}
-						onclick={() => onAcceptRound(round.id)}
+						class:reapply={round.stale}
+						title={acceptRoundTitle(round)}
+						onclick={(e) => {
+							e.stopPropagation();
+							onAcceptRound(round.id);
+						}}
 					>
 						<Check size={12} />
 					</button>
@@ -1409,6 +1469,14 @@
 	}
 	.mini-btn.accept:hover:not(:disabled) {
 		background: color-mix(in srgb, var(--accent) 88%, black);
+	}
+	.mini-btn.accept.reapply {
+		background: color-mix(in srgb, var(--accent) 18%, var(--bg-surface));
+		border-color: var(--accent);
+		color: var(--accent);
+	}
+	.mini-btn.accept.reapply:hover {
+		background: color-mix(in srgb, var(--accent) 28%, var(--bg-surface));
 	}
 	.mini-btn.accept:disabled {
 		opacity: 0.45;

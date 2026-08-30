@@ -32,7 +32,8 @@ import {
 	AGENT_ORIGIN,
 	normalizeTypography,
 	captureAnchorContext,
-	nthIndexOf
+	nthIndexOf,
+	buildThreadAnchor
 } from '$lib/shared/ydoc-codec';
 import { isScratchPath, resolveTabFromPath, isOpenTab } from './path-router';
 import { classifyRoundKind } from '$lib/review-diff';
@@ -898,6 +899,87 @@ function createAgentCommentThread(
 	return threadId;
 }
 
+/** Reply on an existing thread, optionally moving its anchor onto a new
+ * passage (`anchorText`). Used by both the Claude MCP tool and the
+ * provider-agnostic tool-handlers path. Caller runs inside `runCommentWrite`. */
+export function applyReplyToComment(
+	doc: Y.Doc,
+	threadId: string,
+	filePath: string,
+	message: string,
+	options?: {
+		proposedEdit?: { old_string: string; new_string: string };
+		anchorText?: string;
+		occurrenceIndex?: number;
+	}
+): { ok: true; reanchored: boolean } | { ok: false; error: string } {
+	const commentsMap = getCommentsMap(doc);
+	const existing = commentsMap.get(threadId);
+	if (!existing) {
+		return { ok: false, error: `Thread "${threadId}" does not exist on ${filePath}.` };
+	}
+
+	let nextAnchor = existing.anchor;
+	let reanchored = false;
+	const anchorText = options?.anchorText?.trim();
+	if (anchorText) {
+		const liveText = serializeYDoc(doc);
+		const hits = countOccurrences(liveText, anchorText);
+		if (hits === 0) {
+			return {
+				ok: false,
+				error: `anchor_text was not found in ${filePath}. Call read_doc and retry with exact current text.`
+			};
+		}
+		if (hits > 1 && options?.occurrenceIndex === undefined) {
+			return {
+				ok: false,
+				error: `anchor_text matches ${hits} locations in ${filePath}. Pass occurrence_index to choose one.`
+			};
+		}
+		const occurrence = options?.occurrenceIndex ?? 0;
+		if (!Number.isInteger(occurrence) || occurrence < 0 || occurrence >= hits) {
+			return {
+				ok: false,
+				error: `occurrence_index ${occurrence} is out of range; anchor_text appears ${hits} time${hits === 1 ? '' : 's'}.`
+			};
+		}
+		const built = buildThreadAnchor(liveText, anchorText, occurrence);
+		if (!built) {
+			return { ok: false, error: `anchor_text was not found in ${filePath}.` };
+		}
+		nextAnchor = built;
+		reanchored = true;
+	}
+
+	const now = Date.now();
+	const newMessage: CommentMessage = {
+		id: 'msg_' + cryptoRandomId(),
+		author: 'agent',
+		text: message,
+		timestamp: now,
+		...(activeReviewerId ? { reviewerId: activeReviewerId } : {}),
+		...(options?.proposedEdit
+			? {
+					proposedEdit: {
+						oldString: options.proposedEdit.old_string,
+						newString: options.proposedEdit.new_string
+					}
+				}
+			: {})
+	};
+	const updated: CommentThread = {
+		...existing,
+		anchor: nextAnchor,
+		// Re-opening via a new reply un-resolves the thread so the user
+		// sees the new message (and a re-attached orphan).
+		resolved: false,
+		messages: [...existing.messages, newMessage]
+	};
+	doc.transact(() => commentsMap.set(threadId, updated), AGENT_ORIGIN);
+	return { ok: true, reanchored };
+}
+
 const commentDocTool = tool(
 	'comment_doc',
 	'Create a new comment thread anchored to existing text in a workspace document. Use it, at any autonomy level, as the announce thread before an edit proposal (see "Announce edits on a thread" in your instructions). Unprompted observation comments are allowed only at Medium or High autonomy, or when the user asks for a comment; at Low autonomy you may otherwise only reply on threads the user opened. The comment appears in the document gutter and does not change document text.',
@@ -983,7 +1065,7 @@ const commentDocTool = tool(
 
 const replyToCommentTool = tool(
 	'reply_to_comment',
-	'Reply on an existing comment thread. Route per the "Where a response goes" rules in your instructions. Write in the first person and keep it to a few sentences. You may attach proposed_edit for the user to approve later. To start a new thread, use comment_doc.',
+	'Reply on an existing comment thread. Route per the "Where a response goes" rules in your instructions. Write in the first person and keep it to a few sentences. Pass optional anchor_text to move the thread onto a new passage (re-attach after the original text was replaced by another accepted edit). You may attach proposed_edit for the user to approve later. To start a new thread, use comment_doc.',
 	{
 		file_path: z
 			.string()
@@ -1000,6 +1082,20 @@ const replyToCommentTool = tool(
 			.describe(
 				'Your reply. Speak in first person ("I\'d cut …", "I think …"), not as a narrator. Keep it shorter than an essay — a few sentences.'
 			),
+		anchor_text: z
+			.string()
+			.optional()
+			.describe(
+				'Exact current document text to move this thread onto. Use when the original anchor was deleted (e.g. the user accepted a neighboring proposal) and you need to re-attach the conversation to the corresponding current passage. Prefer a short unique sentence or clause.'
+			),
+		occurrence_index: z
+			.number()
+			.int()
+			.min(0)
+			.optional()
+			.describe(
+				'Zero-based occurrence to anchor when anchor_text appears more than once. Required only when anchor_text is not unique.'
+			),
 		proposed_edit: z
 			.object({
 				old_string: z.string(),
@@ -1010,7 +1106,7 @@ const replyToCommentTool = tool(
 				'Optional concrete edit you would propose if the user approves. `old_string` must match once in the current live markdown at the time of writing. The edit is NOT applied until the user clicks "Approve & propose edit" on your comment.'
 			)
 	},
-	async ({ file_path, thread_id, message, proposed_edit }) => {
+	async ({ file_path, thread_id, message, proposed_edit, anchor_text, occurrence_index }) => {
 		if (isScratchPath(file_path)) {
 			return toolError(
 				'reply_to_comment cannot be used on scratch paths — only on workspace tab files.'
@@ -1022,42 +1118,23 @@ const replyToCommentTool = tool(
 		const trimmedMessage = message.trim();
 		if (!trimmedMessage) return toolError('reply_to_comment requires a non-empty message.');
 
+		let reanchored = false;
 		const outcome = await runCommentWrite(opened.tabId, (doc) => {
-			const commentsMap = getCommentsMap(doc);
-			const now = Date.now();
-			const newMessage: CommentMessage = {
-				id: 'msg_' + cryptoRandomId(),
-				author: 'agent',
-				text: trimmedMessage,
-				timestamp: now,
-				...(activeReviewerId ? { reviewerId: activeReviewerId } : {}),
-				...(proposed_edit
-					? {
-							proposedEdit: {
-								oldString: proposed_edit.old_string,
-								newString: proposed_edit.new_string
-							}
-						}
-					: {})
-			};
-
-			const existing = commentsMap.get(thread_id);
-			if (!existing) {
-				return { ok: false, error: `Thread "${thread_id}" does not exist on ${file_path}.` };
-			}
-			const updated: CommentThread = {
-				...existing,
-				// Re-opening via a new reply un-resolves the thread so
-				// the user sees the new message.
-				resolved: false,
-				messages: [...existing.messages, newMessage]
-			};
-			doc.transact(() => commentsMap.set(thread_id, updated), AGENT_ORIGIN);
-			return { ok: true };
+			const result = applyReplyToComment(doc, thread_id, file_path, trimmedMessage, {
+				proposedEdit: proposed_edit,
+				anchorText: anchor_text,
+				occurrenceIndex: occurrence_index
+			});
+			if (result.ok) reanchored = result.reanchored;
+			return result;
 		});
 
 		if (!outcome.ok) return toolError(outcome.error);
-		return toolText(`Replied on thread ${thread_id} (${file_path}).`);
+		return toolText(
+			reanchored
+				? `Replied on thread ${thread_id} (${file_path}) and re-attached it to the new passage.`
+				: `Replied on thread ${thread_id} (${file_path}).`
+		);
 	}
 );
 

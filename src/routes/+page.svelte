@@ -62,6 +62,9 @@
 			return 'Apply rules';
 		}
 		// Reject-and-reconsider trigger starts with "The user just rejected"
+		if (/^The user clicked Accept on your previous edit/.test(trigger)) {
+			return 'Re-apply stale proposal';
+		}
 		if (/^The user just rejected/.test(trigger)) {
 			const retryFeedbackMatch = trigger.match(
 				/The user explained why they rejected it:\n\n```text\n([\s\S]*?)\n```/
@@ -174,6 +177,7 @@
 		getScrollTop: () => number;
 		focusEditor: (opts?: { scrollIntoView?: boolean }) => void;
 		flashAcceptedRange: (text: string) => void;
+		markThreadAwaiting: (threadId: string) => void;
 	};
 
 	let rendering = $state(false);
@@ -1616,7 +1620,10 @@
 		reason: string
 	): string {
 		const staleDiff = unifiedLineDiff(stale.beforeMd, stale.afterMd, 1);
-		return [
+		const thread = stale.feedbackThreadId
+			? get(commentThreads).find((t) => t.id === stale.feedbackThreadId)
+			: undefined;
+		const lines: string[] = [
 			`The user clicked Accept on your previous edit to \`${tabId}\`, but it could not be applied because it became stale:`,
 			'',
 			`> ${reason}`,
@@ -1627,8 +1634,34 @@
 			staleDiff,
 			'```',
 			'',
-			'The user still wants this change applied. Re-read the current state of the file with `read_doc` and propose a fresh edit that reflects whatever the document looks like now.'
-		].join('\n');
+			'The user still wants this change applied. Another accepted edit likely replaced the original passage, so this proposal is now an orphan.'
+		];
+		if (thread) {
+			const transcript = thread.messages
+				.map((m) => `- [${m.author}] ${m.text}`)
+				.join('\n');
+			lines.push(
+				'',
+				`Keep comment thread thread_id="${thread.id}". Do not open a new thread.`,
+				`The thread's original anchor was: "${thread.anchor.quote}"`,
+				'',
+				'Full thread:',
+				transcript,
+				'',
+				'Do this:',
+				'1. Call `read_doc` on this file and find the passage that now corresponds to the intended change — match on intent and nearby wording, not a string-equal old_string.',
+				`2. If that original anchor quote is no longer in the document, re-attach the thread: call reply_to_comment with thread_id="${thread.id}" and \`anchor_text\` set to the corresponding current passage, plus a short first-person note that you are re-attaching the thread after a neighboring edit landed.`,
+				`3. Then call edit_doc with thread_id="${thread.id}" to propose a fresh edit against the current text.`
+			);
+		} else {
+			lines.push(
+				'',
+				'Do this:',
+				'1. Call `read_doc` on this file and find the passage that now corresponds to the intended change — match on intent and nearby wording, not a string-equal old_string.',
+				'2. Announce the edit on a thread anchored to that current passage, then propose a fresh edit_doc against the current text.'
+			);
+		}
+		return lines.join('\n');
 	}
 
 	type ReviewAction = 'accept_rounds' | 'reject_rounds';
@@ -1652,7 +1685,8 @@
 	async function postReviewAction(
 		tabId: string,
 		action: ReviewAction,
-		roundId?: string | string[]
+		roundId?: string | string[],
+		extra?: Record<string, unknown>
 	): Promise<{ res: Response; data: ReviewActionResponse }> {
 		const synced = await editorRef?.flushAutosave();
 		if (synced === false) {
@@ -1662,8 +1696,8 @@
 		const resumeTabSync = pauseTabSync(tabId);
 		try {
 			const body = Array.isArray(roundId)
-				? { action, roundIds: roundId }
-				: { action, roundId };
+				? { action, roundIds: roundId, ...extra }
+				: { action, roundId, ...extra };
 			const res = await fetch(`/api/document?tab=${encodeURIComponent(tabId)}`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -1716,25 +1750,73 @@
 	}
 
 
+	/** Drop a stale round, keep its announce thread, and ask the agent to
+	 * find the corresponding current passage and re-attach the change. */
+	async function requeueStaleAccept(
+		tabId: string,
+		staleRound: MaterializedPendingReviewRound,
+		reason: string
+	) {
+		await rejectAgentEdit(staleRound.id, { keepThreads: true, silent: true });
+		if (staleRound.feedbackThreadId) {
+			editorRef?.markThreadAwaiting(staleRound.feedbackThreadId);
+		}
+		pushHistory({
+			type: 'notification',
+			timestamp: Date.now(),
+			text: `Proposal was stale (${reason}) — asking the agent to re-attach it to the current text.`,
+			priority: 'medium'
+		});
+		const followup = buildStaleAcceptFollowup(tabId, staleRound, reason);
+		setTimeout(() => void submit(followup), 50);
+	}
+
 	/** Accept a single pending round by id (or all rounds if no id is
 	 * given — used by the "Accept all" path). Rounds are independent: the
 	 * server applies just this round's edit op against the current live
 	 * doc. If the round became stale (its `old_string` no longer matches
-	 * because a prior pending round changed the same text), the server
-	 * returns 409 and we re-queue it with a follow-up prompt asking the
-	 * agent to regenerate against the now-current text. */
+	 * because a prior pending round changed the same text), Accept asks
+	 * the agent to re-attach the change to the current text instead of
+	 * applying it blindly. */
 	async function acceptAgentEdit(roundId?: string | string[]) {
 		const tabId = getCurrentActiveTab();
 		if (!tabId) return;
 		const rounds = currentRounds();
 		const single = typeof roundId === 'string' ? roundId : undefined;
-		const ids = Array.isArray(roundId) ? roundId : single ? [single] : null;
 		if (single && rounds.findIndex((r) => r.id === single) < 0) return;
 		if (Array.isArray(roundId) && !rounds.some((r) => roundId.includes(r.id))) return;
+
+		const knownStale = single ? rounds.find((r) => r.id === single && r.stale) : undefined;
+		if (knownStale) {
+			clearPeekIfMatches(single);
+			editorRef?.cancelIdleTimer();
+			await requeueStaleAccept(
+				tabId,
+				knownStale,
+				knownStale.staleReason ?? 'The proposal no longer fits the current text.'
+			);
+			return;
+		}
+
+		// Accept-all / batch: skip stale orphans so they don't 409 the
+		// whole batch. The user can Accept each stale card individually
+		// to re-queue the agent.
+		let target: string | string[] | undefined = roundId;
+		if (target === undefined) {
+			const fresh = rounds.filter((r) => !r.stale).map((r) => r.id);
+			if (fresh.length === 0) return;
+			target = fresh;
+		} else if (Array.isArray(target)) {
+			const fresh = target.filter((id) => !rounds.find((r) => r.id === id)?.stale);
+			if (fresh.length === 0) return;
+			target = fresh;
+		}
+		const ids = Array.isArray(target) ? target : single ? [single] : null;
+
 		clearPeekIfMatches(single);
 		editorRef?.cancelIdleTimer();
 		try {
-			const { res, data } = await postReviewAction(tabId, 'accept_rounds', roundId);
+			const { res, data } = await postReviewAction(tabId, 'accept_rounds', target);
 			if (res.status === 409 && data?.stale) {
 				const staleRoundId: string | null = data.staleRoundId ?? single ?? null;
 				const reason: string = typeof data.error === 'string' && data.error
@@ -1742,18 +1824,10 @@
 					: 'The proposal no longer fits the current text.';
 				const staleRound =
 					staleRoundId != null ? rounds.find((r) => r.id === staleRoundId) : rounds[0];
-				if (staleRoundId) {
-					await rejectAgentEdit(staleRoundId);
-				}
-				pushHistory({
-					type: 'notification',
-					timestamp: Date.now(),
-					text: `Proposal was stale (${reason}) — re-queuing the agent with the current text.`,
-					priority: 'medium'
-				});
 				if (staleRound) {
-					const followup = buildStaleAcceptFollowup(tabId, staleRound, reason);
-					setTimeout(() => void submit(followup), 50);
+					await requeueStaleAccept(tabId, staleRound, reason);
+				} else if (staleRoundId) {
+					await rejectAgentEdit(staleRoundId, { keepThreads: true, silent: true });
 				}
 				return;
 			}
@@ -1839,7 +1913,7 @@
 
 	async function rejectAgentEdit(
 		roundId?: string,
-		options?: { retryFeedback?: string }
+		options?: { retryFeedback?: string; keepThreads?: boolean; silent?: boolean }
 	) {
 		const tabId = getCurrentActiveTab();
 		if (!tabId) return;
@@ -1850,7 +1924,12 @@
 		clearPeekIfMatches(roundId);
 		editorRef?.cancelIdleTimer();
 		try {
-			const { res, data } = await postReviewAction(tabId, 'reject_rounds', roundId);
+			const { res, data } = await postReviewAction(
+				tabId,
+				'reject_rounds',
+				roundId,
+				options?.keepThreads ? { keepThreads: true } : undefined
+			);
 			if (!res.ok || !data?.ok || !Array.isArray(data.rounds)) {
 				throw new Error(data?.error || `HTTP ${res.status}`);
 			}
@@ -1858,14 +1937,16 @@
 				typeof data.rejectedCount === 'number'
 					? data.rejectedCount
 					: Math.max(0, rounds.length - (data.rounds as PendingReviewRound[]).length);
-			pushHistory({
-				type: 'user_action',
-				timestamp: Date.now(),
-				description:
-					!roundId
-						? `Rejected all ${rounds.length} agent edit${rounds.length === 1 ? '' : 's'}`
-						: `Rejected ${rejectedCount} agent edit${rejectedCount === 1 ? '' : 's'}`
-			});
+			if (!options?.silent) {
+				pushHistory({
+					type: 'user_action',
+					timestamp: Date.now(),
+					description:
+						!roundId
+							? `Rejected all ${rounds.length} agent edit${rounds.length === 1 ? '' : 's'}`
+							: `Rejected ${rejectedCount} agent edit${rejectedCount === 1 ? '' : 's'}`
+				});
+			}
 		} catch (e) {
 			console.error('reject failed:', e);
 			pushHistory({
