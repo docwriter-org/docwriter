@@ -156,8 +156,8 @@ async function withLiveDoc<T>(
  * user message) — has nothing left to show once its edit is gone, so we
  * auto-resolve it (the card disappears). A thread with genuine back-and-
  * forth (any user message) is left open: the edit row clears but the
- * conversation stays, and the user resolves it manually via the card's
- * Resolve button. Runs inside the caller's transaction so the resolve
+ * conversation stays, and the user dismisses it manually via the card's
+ * Dismiss button. Runs inside the caller's transaction so the dismiss
  * lands in the same Yjs delta as the round removal.
  *
  * `threadIds` are the feedbackThreadIds of the just-removed rounds. */
@@ -365,9 +365,9 @@ export async function rejectTabRounds(
 	});
 }
 
-/** Resolve (or reopen) a comment thread. The thread is the PARENT of any
- * edits grouped under it, so resolving it also drops those pending edits —
- * a resolved thread carries no live proposals. Both the comments-map write
+/** Dismiss (or reopen) a comment thread. The thread is the PARENT of any
+ * edits grouped under it, so dismissing it also drops those pending edits —
+ * a dismissed thread carries no live proposals. Both the comments-map write
  * and the review-array deletes happen in ONE `USER_ORIGIN` transaction, so
  * the returned delta — applied on the client with `USER_ORIGIN` — lands as a
  * single undoable step: ctrl+z reopens the thread AND resurrects its edits
