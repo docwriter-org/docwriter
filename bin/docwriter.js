@@ -16,6 +16,7 @@
  *       --api-key <key>   Anthropic API key (overrides ANTHROPIC_API_KEY env var)
  *       --model <name>    Default model: opus | sonnet | haiku (overrides UI setting)
  *       --new-session     Clear the persisted AI session — start a fresh conversation
+ *       --reset-ui        Clear pending reviews and comment threads, then start
  *   -h, --help            Show this help
  *
  * Auth:
@@ -35,6 +36,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, extname, join, resolve } from 'node:path';
 import { existsSync, mkdirSync, readFileSync, watch as fsWatch } from 'node:fs';
+import { conflictingCwdState, describeWorkspace, printWorkspaceBanner } from './workspace-identity.js';
 
 // ---------------------------------------------------------------------------
 // Argument parsing (no external deps, pure stdlib)
@@ -49,6 +51,7 @@ let rootArg = null;
 let apiKey = null;
 let modelArg = null;
 let newSession = false;
+let resetUi = false;
 let showHelp = false;
 let showVersion = false;
 
@@ -68,6 +71,8 @@ for (let i = 0; i < argv.length; i++) {
 		modelArg = a.slice(8);
 	} else if (a === '--new-session') {
 		newSession = true;
+	} else if (a === '--reset-ui') {
+		resetUi = true;
 	} else if (a === '-p' || a === '--port') {
 		portArg = parseInt(argv[++i] ?? '', 10);
 	} else if (a.startsWith('--port=')) {
@@ -127,6 +132,7 @@ Options:
       --api-key <key>   Anthropic API key (overrides ANTHROPIC_API_KEY)
       --model <name>    Default model: opus | sonnet | haiku
       --new-session     Start a fresh AI conversation (clear persisted session)
+      --reset-ui        Clear pending reviews and comment threads, then start
   -h, --help            Show this help
 
 Auth:
@@ -140,6 +146,7 @@ Examples:
   docwriter --host --watch          # LAN + live reload
   docwriter --model opus            # force Opus for this session
   docwriter --new-session           # fresh conversation on start
+  docwriter --reset-ui ~/writing/book
 `.trim());
 	process.exit(0);
 }
@@ -196,13 +203,17 @@ const wsPort = parseInt(process.env.DOCWRITER_WS_PORT ?? '', 10) || (await getFr
 const hasApiKey = !!(apiKey || process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_CODE_OAUTH_TOKEN);
 const authLabel = hasApiKey ? 'api key' : 'claude.ai subscription';
 
+const workspace = describeWorkspace(docwriterRoot);
+const cwdConflict = conflictingCwdState(docwriterRoot);
+
 console.log(`\n  docwriter  ${origin}`);
-console.log(`  workspace  ${docwriterRoot}`);
+printWorkspaceBanner(workspace, cwdConflict);
 console.log(`  auth       ${authLabel}`);
 if (modelArg) console.log(`  model      ${modelArg}`);
 if (watchFlag) console.log('  watch      on (file changes → browser reload)');
 if (restartFlag) console.log('  restart    on crash');
 if (newSession) console.log('  session    new (cleared persisted context)');
+if (resetUi) console.log('  reset      pending reviews and comment threads');
 console.log('');
 
 // ---------------------------------------------------------------------------
@@ -214,6 +225,7 @@ function spawnServer() {
 		env: {
 			...process.env,
 			DOCWRITER_ROOT: docwriterRoot,
+			DOCWRITER_INVOKE_CWD: process.cwd(),
 			PORT: String(port),
 			HOST: hostArg,
 			ORIGIN: origin,
@@ -227,7 +239,8 @@ function spawnServer() {
 			// CLI model default; render endpoint reads this as fallback.
 			...(modelArg ? { DOCWRITER_DEFAULT_MODEL: modelArg } : {}),
 			// Signals hooks.server.ts to clear the persisted session on startup.
-			...(newSession ? { DOCWRITER_NEW_SESSION: '1' } : {})
+			...(newSession ? { DOCWRITER_NEW_SESSION: '1' } : {}),
+			...(resetUi ? { DOCWRITER_RESET_UI: '1' } : {})
 		},
 		stdio: 'inherit'
 	});

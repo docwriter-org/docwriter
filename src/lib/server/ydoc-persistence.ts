@@ -218,3 +218,15 @@ export function purgeTabUpdates(tabId: string) {
 	lastWrittenByPath.delete(tabFile(tabId));
 	getDb().prepare(`DELETE FROM yjs_updates WHERE tab_id = ?`).run(tabId);
 }
+
+/** Tab ids that have a CRDT log and/or an open-tabs row. Recovery walks
+ * this set so a stuck review on a closed tab is still cleared. */
+export function listPersistedTabIds(): string[] {
+	const fromUpdates = getDb()
+		.prepare(`SELECT DISTINCT tab_id FROM yjs_updates`)
+		.all() as Array<{ tab_id: string }>;
+	const fromTabs = getDb()
+		.prepare(`SELECT tab_id FROM tabs`)
+		.all() as Array<{ tab_id: string }>;
+	return [...new Set([...fromUpdates, ...fromTabs].map((row) => row.tab_id))].sort();
+}

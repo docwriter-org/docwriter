@@ -4,6 +4,8 @@
  * Handles one-shot CLI flags that are communicated via environment variables:
  *   DOCWRITER_NEW_SESSION=1   — clear the persisted SDK session ID so the
  *                               next render starts a fresh conversation.
+ *   DOCWRITER_RESET_UI=1      — clear pending reviews and comment threads
+ *                               on every tab that has saved CRDT state.
  */
 import type { Handle } from '@sveltejs/kit';
 import { randomUUID } from 'node:crypto';
@@ -13,6 +15,7 @@ import { installBundledSkills } from '$lib/server/skills-install';
 import { createWsServer } from '$lib/server/ws-server';
 import { loadGlobalKeys, loadRepoEnv } from '$lib/server/api-keys';
 import { failInterruptedStyleRun } from '$lib/server/style-analysis/interrupted-run';
+import { resetWorkspaceUiState } from '$lib/server/reset-ui-state';
 
 // Load repo .env, then ~/.docwriter/keys.env into process.env so provider API
 // keys are available before any render path reads process.env.<KEY>. The
@@ -81,6 +84,17 @@ if (process.env.DOCWRITER_NEW_SESSION === '1') {
 		}
 	} catch {
 		// Fresh workspace or early DB init failure — ignore.
+	}
+}
+
+if (process.env.DOCWRITER_RESET_UI === '1') {
+	try {
+		const result = await resetWorkspaceUiState({ reviews: true, comments: true });
+		console.log(
+			`[docwriter] --reset-ui: cleared ${result.reviewsCleared} review${result.reviewsCleared === 1 ? '' : 's'} and ${result.commentsCleared} comment thread${result.commentsCleared === 1 ? '' : 's'} across ${result.tabs.length} tab${result.tabs.length === 1 ? '' : 's'}`
+		);
+	} catch (err) {
+		console.error('[docwriter] --reset-ui failed:', err);
 	}
 }
 

@@ -221,7 +221,8 @@ const pageFeatures = {
 	'help/recovery': [
 		['Reference', 'Restart automatically after a server crash', C, 'CLI'],
 		['Reference', 'Recover from a server restart or WebSocket mismatch', M, 'No troubleshooting page'],
-		['Reference', 'Use the agent scratch workspace until a new session', M, 'No page']
+		['Reference', 'Use the agent scratch workspace until a new session', M, 'No page'],
+		['Workspace', 'Clear stuck pending reviews and comment threads without deleting the database', C, 'Recovery']
 	],
 	'help/privacy-and-safety': [
 		['Workspace', 'Block paths and symlinks outside the workspace', T, 'Tabs mentions the boundary without a safety page'],

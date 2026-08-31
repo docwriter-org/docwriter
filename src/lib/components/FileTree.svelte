@@ -54,6 +54,8 @@
 	let treeEl: HTMLDivElement | null = $state(null);
 	let createInput: HTMLInputElement | null = $state(null);
 	let treeError = $state('');
+	let workspaceName = $state<string | null>(null);
+	let workspaceRoot = $state<string | null>(null);
 
 	async function fetchEntries(path: string): Promise<FileEntry[]> {
 		const res = await fetch(`/api/files?path=${encodeURIComponent(path)}`, {
@@ -111,7 +113,19 @@
 		return FileText;
 	}
 
-	onMount(() => void loadRoot());
+	onMount(() => {
+		void loadRoot();
+		void fetch('/api/workspace')
+			.then((res) => (res.ok ? res.json() : null))
+			.then((data) => {
+				if (!data || typeof data.name !== 'string') return;
+				workspaceName = data.name;
+				workspaceRoot = typeof data.root === 'string' ? data.root : null;
+			})
+			.catch(() => {
+				/* banner is optional */
+			});
+	});
 
 	/** Re-fetch the root list and every currently-expanded folder. Called
 	 * from the parent when something outside the FileTree (typically the
@@ -502,7 +516,12 @@
 	ondrop={onDropRoot}
 >
 	<div class="tree-header-row">
-		<div class="tree-header">Files</div>
+		<div class="tree-heading">
+			<div class="tree-header">Files</div>
+			{#if workspaceName}
+				<div class="tree-workspace" title={workspaceRoot ?? workspaceName}>{workspaceName}</div>
+			{/if}
+		</div>
 		<div class="tree-actions">
 			<button class="tree-action-btn" title="New file" onclick={() => beginCreate('file')}>
 				<FilePlus2 size={13} />
@@ -673,12 +692,27 @@
 		font-size: 13px;
 		color: var(--text);
 	}
+	.tree-heading {
+		min-width: 0;
+		flex: 1;
+	}
 	.tree-header {
 		font-size: 12px;
 		font-weight: 600;
 		color: var(--text-faint);
 		text-transform: uppercase;
 		letter-spacing: 0.05em;
+	}
+	.tree-workspace {
+		font-size: 11px;
+		font-weight: 500;
+		color: var(--text-muted);
+		letter-spacing: 0;
+		text-transform: none;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		margin-top: 1px;
 	}
 	.tree-header-row {
 		display: flex;

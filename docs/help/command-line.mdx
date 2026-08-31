@@ -2,7 +2,7 @@
 title: "Command line"
 ---
 
-The directory passed to `docwriter` sets the workspace boundary. Confirm it before you create, rename, or delete files in DocWriter.
+The directory passed to `docwriter` sets the workspace boundary. Confirm it before you create, rename, or delete files in DocWriter. Saved comments, pending reviews, and sessions live in that folder's `.docwriter` directory, not in the directory you ran the command from (unless they are the same). The startup banner prints both paths. If the current directory has a different `.docwriter`, the banner warns you.
 
 ```text
 docwriter [options] [directory]
@@ -17,6 +17,7 @@ docwriter [options] [directory]
 | `--restart` | Start the server again one second after a crash. The active agent run does not resume. |
 | `--root <dir>` | Use this directory as the workspace root. The positional directory does the same job. |
 | `--new-session` | Clear the saved provider conversation at startup. Workspace files remain. |
+| `--reset-ui` | Clear pending reviews and comment threads at startup. Workspace files, rules, hooks, and settings remain. |
 | `--api-key <key>` | Set the Anthropic key for this process. The key can appear in shell history or process information. |
 | `--model <name>` | Set the Claude default model alias for this process. |
 | `--version` | Print the installed version without starting the server. |
@@ -28,6 +29,7 @@ docwriter ~/writing/book
 docwriter --watch ~/writing/paper
 docwriter --no-open --port 9000 ~/writing/notes
 docwriter --host 0.0.0.0 ~/writing/shared
+docwriter --reset-ui ~/writing/book
 ```
 
 In DocWriter, you select among Claude, OpenAI, Codex, Cursor, and Pi through the provider and model controls. The `--api-key` and `--model` flags apply only to Claude.
@@ -38,6 +40,6 @@ Use `--watch` when another program changes workspace files. A reload protects yo
 
 ## Environment
 
-Useful environment values include `DOCWRITER_ROOT`, `DOCWRITER_DEFAULT_MODEL`, `DOCWRITER_NEW_SESSION`, `ANTHROPIC_API_KEY`, and provider keys described in [Connect a provider](/connect-provider).
+Useful environment values include `DOCWRITER_ROOT`, `DOCWRITER_INVOKE_CWD`, `DOCWRITER_DEFAULT_MODEL`, `DOCWRITER_NEW_SESSION`, `DOCWRITER_RESET_UI`, `ANTHROPIC_API_KEY`, and provider keys described in [Connect a provider](/connect-provider).
 
 Environment values can override settings loaded from `~/.docwriter/keys.env`. Restart DocWriter after changing an environment value so the new process uses it. Removing a key can stop provider requests. Your earlier transcripts and provider records remain.

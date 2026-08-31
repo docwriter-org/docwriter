@@ -27,6 +27,7 @@
 	import HooksPanel from '$lib/components/HooksPanel.svelte';
 	import SkillsPanel from '$lib/components/SkillsPanel.svelte';
 	import ApiKeysPanel from '$lib/components/ApiKeysPanel.svelte';
+	import WorkspacePanel from '$lib/components/WorkspacePanel.svelte';
 	import CustomModelDialog from '$lib/components/CustomModelDialog.svelte';
 	import SessionBrowser from '$lib/components/SessionBrowser.svelte';
 	import { themes, applyTheme } from '$lib/themes';
@@ -2357,6 +2358,28 @@
 		submitInFlight = false;
 	}
 
+	function applyWorkspaceUiReset(
+		tabs: Array<{ tabId: string; yjsUpdate: string | null; reviewsCleared: number; commentsCleared: number }>
+	) {
+		for (const tab of tabs) {
+			if (!tab.yjsUpdate) continue;
+			applyUpdateToTab(tab.tabId, tab.yjsUpdate);
+		}
+		const reviews = tabs.reduce((n, t) => n + t.reviewsCleared, 0);
+		const comments = tabs.reduce((n, t) => n + t.commentsCleared, 0);
+		if (reviews === 0 && comments === 0) return;
+		pushHistory({
+			type: 'user_action',
+			timestamp: Date.now(),
+			description:
+				reviews && comments
+					? `Reset review UI (${reviews} pending review${reviews === 1 ? '' : 's'}, ${comments} comment thread${comments === 1 ? '' : 's'})`
+					: reviews
+						? `Cleared ${reviews} pending review${reviews === 1 ? '' : 's'}`
+						: `Cleared ${comments} comment thread${comments === 1 ? '' : 's'}`
+		});
+	}
+
 	async function newSession() {
 		if (rendering) cancelRender();
 		// Drop any queued submissions before they can fire from
@@ -2649,7 +2672,8 @@
 				{ kind: 'panel', label: 'Agent behavior', panelKey: 'agentSettings' },
 				{ kind: 'panel', label: 'Intended audience', panelKey: 'audience' },
 				{ kind: 'panel', label: 'Skills', panelKey: 'skills' },
-				{ kind: 'panel', label: 'Hooks', panelKey: 'hooks' }
+				{ kind: 'panel', label: 'Hooks', panelKey: 'hooks' },
+				{ kind: 'panel', label: 'Workspace', panelKey: 'workspace' }
 			]
 		}
 	]);
@@ -3383,7 +3407,8 @@
 					audience: audiencePanelSnippet,
 					hooks: hooksPanelSnippet,
 					skills: skillsPanelSnippet,
-					apiKeys: apiKeysPanelSnippet
+					apiKeys: apiKeysPanelSnippet,
+					workspace: workspacePanelSnippet
 				}}
 			/>
 			<ModelPicker
@@ -3444,6 +3469,10 @@
 
 	{#snippet apiKeysPanelSnippet()}
 		<ApiKeysPanel />
+	{/snippet}
+
+	{#snippet workspacePanelSnippet()}
+		<WorkspacePanel onApplied={applyWorkspaceUiReset} />
 	{/snippet}
 
 	<div class="toolbar">

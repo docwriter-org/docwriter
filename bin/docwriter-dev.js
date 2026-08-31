@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { mkdirSync } from 'node:fs';
+import { conflictingCwdState, describeWorkspace, printWorkspaceBanner } from './workspace-identity.js';
 
 const argv = process.argv.slice(2);
 let portArg = null;
@@ -13,6 +14,7 @@ let rootArg = null;
 let apiKey = null;
 let modelArg = null;
 let newSession = false;
+let resetUi = false;
 let showHelp = false;
 
 for (let i = 0; i < argv.length; i++) {
@@ -29,6 +31,8 @@ for (let i = 0; i < argv.length; i++) {
 		modelArg = a.slice(8);
 	} else if (a === '--new-session') {
 		newSession = true;
+	} else if (a === '--reset-ui') {
+		resetUi = true;
 	} else if (a === '-p' || a === '--port') {
 		portArg = argv[++i];
 	} else if (a.startsWith('--port=')) {
@@ -63,6 +67,7 @@ Options:
       --api-key <key>   Anthropic API key (overrides ANTHROPIC_API_KEY)
       --model <name>    Default model: opus | sonnet | haiku
       --new-session     Start with a fresh AI conversation
+      --reset-ui        Clear pending reviews and comment threads, then start
   -h, --help            Show this help
 
 Example:
@@ -80,10 +85,14 @@ mkdirSync(docwriterRoot, { recursive: true });
 const viteArgs = ['dev', '--host', hostArg, '--port', portArg || '5173'];
 if (openBrowser) viteArgs.push('--open');
 
+const workspace = describeWorkspace(docwriterRoot);
+const cwdConflict = conflictingCwdState(docwriterRoot);
+
 console.log(`\n  docwriter dev  http://${hostArg === '0.0.0.0' ? 'localhost' : hostArg}:${portArg || '5173'}`);
-console.log(`  workspace      ${docwriterRoot}`);
+printWorkspaceBanner(workspace, cwdConflict);
 if (modelArg) console.log(`  model          ${modelArg}`);
 if (newSession) console.log('  session        new (cleared persisted context)');
+if (resetUi) console.log('  reset          pending reviews and comment threads');
 console.log('');
 
 const child = spawn(process.execPath, [viteBin, ...viteArgs], {
@@ -91,9 +100,11 @@ const child = spawn(process.execPath, [viteBin, ...viteArgs], {
 	env: {
 		...process.env,
 		DOCWRITER_ROOT: docwriterRoot,
+		DOCWRITER_INVOKE_CWD: process.cwd(),
 		...(apiKey ? { ANTHROPIC_API_KEY: apiKey } : {}),
 		...(modelArg ? { DOCWRITER_DEFAULT_MODEL: modelArg } : {}),
-		...(newSession ? { DOCWRITER_NEW_SESSION: '1' } : {})
+		...(newSession ? { DOCWRITER_NEW_SESSION: '1' } : {}),
+		...(resetUi ? { DOCWRITER_RESET_UI: '1' } : {})
 	},
 	stdio: 'inherit'
 });

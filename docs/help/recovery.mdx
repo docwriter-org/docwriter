@@ -40,9 +40,23 @@ Reload DocWriter so it can remove tabs for files that no longer exist. Removing 
 
 When you delete a file inside DocWriter, you also lose its comments, pending reviews, and saved AI authorship markers. Browser undo history lasts only while the tab is loaded. Restore the project file and `.docwriter` folder from a backup if you need this information.
 
+## A review card will not accept or dismiss
+
+A pending edit can remain in the gutter even when it has no comment thread. New session clears pending reviews on open tabs, but it keeps comment threads and does not walk closed tabs.
+
+Open **Settings**, then **Workspace**, and choose the smallest reset that matches the problem:
+
+- **Clear pending reviews** removes every unaccepted agent edit. Document text, comments, rules, and settings stay.
+- **Clear comment threads** removes every comment thread. Document text and pending reviews stay.
+- **Reset review UI** removes both.
+
+You can also start DocWriter with `--reset-ui` to clear reviews and comment threads at startup. Workspace files are unchanged. Copy proposal or comment text first if you may need it.
+
+Confirm the folder shown under **Opened folder**. State lives in that folder's `.docwriter` directory. If you started DocWriter with a directory argument, looking at `.docwriter` in the directory you ran the command from can look like an empty database.
+
 ## You need to reset DocWriter
 
-Delete `.docwriter/docwriter.db` only when you want to clear all saved DocWriter state for the workspace. A reset can help when the database is damaged or when you want the workspace to start with new DocWriter state.
+Delete `.docwriter/docwriter.db` only when you want to clear all saved DocWriter state for the workspace. A reset can help when the database is damaged or when you want the workspace to start with new DocWriter state. Try **Settings → Workspace → Reset review UI** first if only the gutter is stuck.
 
 Your project files remain, but you lose open tabs, comments, pending reviews, rules, reviewers, sessions, recent agent activity, and interface settings. The next time you open a file, DocWriter starts from the text in that file.
 

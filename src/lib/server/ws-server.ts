@@ -123,7 +123,7 @@ export function flushTabMarkdownNow(tabId: string) {
 /** Run a write-transaction against the live Hocuspocus Document. Falls back
  * to a throwaway Y.Doc + direct SQLite append when the server isn't up (test
  * harness / startup race). */
-async function withLiveDoc<T>(
+export async function withLiveDoc<T>(
 	tabId: string,
 	mutate: (doc: Y.Doc) => T
 ): Promise<T> {

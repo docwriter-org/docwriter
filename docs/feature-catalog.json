@@ -1,5 +1,5 @@
 {
-  "featureCount": 157,
+  "featureCount": 158,
   "unassignedCount": 0,
   "features": [
     {
@@ -41,7 +41,7 @@
     {
       "id": "connect-provider-04",
       "area": "Models",
-      "feature": "Use Claude Code terminal login (/login) instead of an API key",
+      "feature": "Use Claude or Codex login instead of an API key",
       "targetPage": "connect-provider"
     },
     {
@@ -353,7 +353,7 @@
     {
       "id": "agent-ask-and-steer-09",
       "area": "Agent",
-      "feature": "See auth failure toasts with Claude Code /login steps",
+      "feature": "See failed run toasts with authentication recovery hints",
       "targetPage": "agent/ask-and-steer"
     },
     {
@@ -906,6 +906,12 @@
       "id": "help-recovery-03",
       "area": "Reference",
       "feature": "Use the agent scratch workspace until a new session",
+      "targetPage": "help/recovery"
+    },
+    {
+      "id": "help-recovery-04",
+      "area": "Workspace",
+      "feature": "Clear stuck pending reviews and comment threads without deleting the database",
       "targetPage": "help/recovery"
     },
     {
