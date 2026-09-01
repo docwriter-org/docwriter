@@ -103,10 +103,12 @@
 		newAwaitingThreadId
 	}: Props = $props();
 
-	/** Vertical space the batch bar claims at the top of the gutter, so the
-	 * first card can be pushed clear of it: `top` + `height` on
-	 * `.gutter-batch-bar`. */
-	const BATCH_BAR_HEIGHT = 6 + 26;
+	/** Offset of the batch bar from the top of the gutter (mirrors its
+	 * `top`). Its height is measured rather than assumed: the bar wraps to a
+	 * second row in a narrow gutter with a large count, and a hard-coded
+	 * height would let the first card slide under it. */
+	const BATCH_BAR_TOP = 6;
+	let batchBarHeight = $state(0);
 	let showBatchBar = $derived(!muted && rounds.length > 0 && !!(onAcceptAll || onRejectAll));
 	let reapply = $derived($staleAcceptUi?.tabId === tabId ? $staleAcceptUi : null);
 	function isReapplyingThread(threadId: string): boolean {
@@ -460,7 +462,7 @@
 		// the next card's natural top falls inside that, push it down to
 		// sit right below the previous one. Reserve room for the batch bar.
 		// Parked (detached/stale) cards sit at the top so they stay clickable.
-		let runningBottom = showBatchBar ? BATCH_BAR_HEIGHT + CARD_GAP : -Infinity;
+		let runningBottom = showBatchBar ? BATCH_BAR_TOP + batchBarHeight + CARD_GAP : -Infinity;
 		const next = new Map<string, number>();
 		for (const card of parked) {
 			const h = cardHeightFor(card.id, card.kind, card.expanded, card.editCount);
@@ -505,6 +507,7 @@
 		baseline;
 		muted;
 		showBatchBar;
+		batchBarHeight;
 		reapply;
 		requestAnimationFrame(() => recomputePositions());
 	});
@@ -632,7 +635,7 @@
 
 <div class="comment-gutter" bind:this={gutterEl}>
 	{#if showBatchBar}
-		<div class="gutter-batch-bar">
+		<div class="gutter-batch-bar" bind:clientHeight={batchBarHeight}>
 			<button
 				class="batch-btn reject"
 				type="button"
@@ -640,7 +643,7 @@
 				disabled={!onRejectAll}
 				use:tooltip={`Reject all ${rounds.length} pending suggestion${rounds.length === 1 ? '' : 's'}`}
 			>
-				<X size={11} /> Reject {rounds.length}
+				<X size={11} /> Reject all ({rounds.length})
 			</button>
 			<button
 				class="batch-btn accept"
@@ -649,7 +652,7 @@
 				disabled={!onAcceptAll}
 				use:tooltip={`Accept all ${rounds.length} pending suggestion${rounds.length === 1 ? '' : 's'}`}
 			>
-				<Check size={11} /> Accept {rounds.length}
+				<Check size={11} /> Accept all ({rounds.length})
 			</button>
 		</div>
 	{/if}
@@ -1006,16 +1009,19 @@
 	 *
 	 * The count lives inside each button rather than in a separate label
 	 * (GitHub's batched "Commit suggestions"), which is what removed the
-	 * third fragment that kept needing somewhere to live. */
+	 * third fragment that kept needing somewhere to live. Both buttons name
+	 * the whole action - "Accept all (2)", not "Accept 2" - so neither can
+	 * be misread as applying to some subset. */
 	.gutter-batch-bar {
 		position: absolute;
 		top: 6px;
 		right: 10px;
 		z-index: 4;
 		display: flex;
+		flex-wrap: wrap;
 		align-items: center;
+		justify-content: flex-end;
 		gap: 6px;
-		height: 26px;
 	}
 	.batch-btn {
 		display: inline-flex;
