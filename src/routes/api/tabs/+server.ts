@@ -12,6 +12,8 @@ import { writeTextAtomic } from '$lib/server/file-utils';
 import { destroyTabState } from '$lib/server/ws-server';
 import { migrateRenamedTab } from '$lib/server/tab-rename';
 import { resolveTabRename, visibleTabsState } from '$lib/shared/tab-reconcile';
+import { markTabClosed, markTabOpened } from '$lib/server/closed-tabs';
+import { healOrphanedTabs } from '$lib/server/leftover-tabs';
 
 /** GET /api/tabs  →  { order, active, tabs: string[] }
  *
@@ -19,6 +21,7 @@ import { resolveTabRename, visibleTabsState } from '$lib/shared/tab-reconcile';
  * a compile/sync/rename race used to DELETE the `tabs` row while thousands
  * of `yjs_updates` stayed behind. */
 export const GET: RequestHandler = async () => {
+	healOrphanedTabs();
 	const state = visibleOpenTabs();
 	return json({
 		order: state.order,
@@ -53,6 +56,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	if (!state.order.includes(id)) state.order.push(id);
 	state.active = id;
 	setTabsState(state);
+	markTabOpened(id);
 
 	return json({ ok: true, id, active: id, order: visibleOpenTabs().order });
 };
@@ -77,6 +81,7 @@ export const DELETE: RequestHandler = async ({ url }) => {
 		// Otherwise reopening the same path would replay stale updates and
 		// resurrect the deleted content.
 		await destroyTabState(id);
+		markTabOpened(id);
 	}
 
 	// Drop from order even if the file still exists (close semantics).
@@ -85,6 +90,7 @@ export const DELETE: RequestHandler = async ({ url }) => {
 	let active = stored.active === id ? null : stored.active;
 	if (!active && order.length > 0) active = order[0];
 	setTabsState({ order, active });
+	if (!deleteFile) markTabClosed(id);
 	const visible = visibleOpenTabs();
 	return json({ ok: true, order: visible.order, active: visible.active });
 };

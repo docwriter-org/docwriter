@@ -44,12 +44,18 @@ When you delete a file inside DocWriter, you also lose its comments, pending rev
 
 The most-edited file can disappear from the tab list while its edit history remains in `.docwriter/docwriter.db`. That happens when the tab row was dropped without cleaning up saved updates — for example after an older missing-file cleanup, or after a rename that did not move the history to the new path.
 
-Open **Settings**, then **Workspace**, and look under **Leftover tab state**.
+Reload DocWriter. Writing tabs that still have a file and were not closed on purpose are put back automatically. Preview files such as PDFs are not.
+
+If the tab is still missing, open **Settings**, then **Workspace**, and look under **Leftover tab state**.
 
 - **Reopen** puts the file back in the tab list and keeps its comments, pending reviews, and edit history.
 - **Purge** forgets that leftover history. The workspace file stays if it is still on disk.
 
 Closing a tab on purpose also leaves history so you can reopen the file later. Use **Purge** only when you want to discard that saved state.
+
+Saved text usually matches the workspace file. A hyphen on disk and an en dash in the editor can come from typography normalization when DocWriter writes the file. That is not data loss.
+
+Large saved updates after an agent pass are often comment threads or pending reviews, not a rewrite of the document text.
 
 SQLite sequence numbers in `yjs_updates` are global, not per file. Small gaps of one or two numbers are normal after a tab is purged or a short log is replaced. They do not mean the database file is corrupt.
 

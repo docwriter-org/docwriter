@@ -15,6 +15,7 @@
 		hasUpdates: boolean;
 		hasLastSeen: boolean;
 		listed: boolean;
+		intentionallyClosed: boolean;
 		updateCount: number;
 		lastActivity: number | null;
 	}
@@ -151,11 +152,11 @@
 	function leftoverHint(item: LeftoverTab): string {
 		const updates =
 			item.updateCount === 1 ? '1 saved update' : `${item.updateCount} saved updates`;
-		if (item.kind === 'closed') {
-			return `File is still on disk. ${updates}.`;
+		if (item.kind === 'closed' && item.intentionallyClosed) {
+			return `You closed this tab. ${updates}.`;
 		}
-		if (item.listed) {
-			return `Listed as a tab, but the file is missing. ${updates}.`;
+		if (item.kind === 'closed') {
+			return `Dropped from the tab list; the file is still here. ${updates}.`;
 		}
 		return `Not in the tab list and the file is missing. ${updates}.`;
 	}
@@ -248,11 +249,10 @@
 		<div class="settings-section">
 			<div class="setting-label">Leftover tab state</div>
 			<div class="setting-hint">
-				Closing a tab keeps its edit history so you can reopen it. If a
-				tab disappeared from the list while the file is still here —
-				often after a rename or a brief missing-file race — reopen it
-				from this list. Purge only when you want to forget that
-				history.
+				A dropped writing tab is put back automatically when you reload.
+				This list is for tabs you closed on purpose, preview files with
+				leftover history, or paths whose files are gone. Reopen keeps
+				the history. Purge forgets it.
 			</div>
 			{#if leftovers.length === 0}
 				<div class="muted">No leftover tab state.</div>

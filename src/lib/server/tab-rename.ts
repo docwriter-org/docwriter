@@ -5,11 +5,13 @@ import { listYjsTabIds, renameTabUpdates } from './ydoc-persistence';
 import { listLastSeenTabIds, migrateLastSeen } from './last-seen';
 import { getTabsState, setTabsState } from './runtime-state';
 import { unloadTabDocument } from './ws-server';
+import { renameClosedTab } from './closed-tabs';
 
 export async function migrateRenamedTab(fromId: string, toId: string): Promise<void> {
 	if (fromId === toId) return;
 	renameTabUpdates(fromId, toId);
 	migrateLastSeen(fromId, toId);
+	renameClosedTab(fromId, toId);
 	await unloadTabDocument(fromId);
 }
 

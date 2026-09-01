@@ -57,6 +57,7 @@ import { isValidTabId, tabFile, WORKSPACE_ROOT } from './document-files';
 import { isBinaryOrPreviewPath } from '$lib/shared/file-kinds';
 import { resolveWorkspacePath } from './workspace-path';
 import { getRules, getTabsState, setTabsState } from './runtime-state';
+import { markTabOpened } from './closed-tabs';
 import { writeTextAtomic } from './file-utils';
 import { findOverlappingFreeze, freezeQuoteFromRule } from '$lib/freeze';
 
@@ -622,6 +623,7 @@ export function ensureWorkspaceTabOpen(
 		// and the user opens it when they're ready.
 		setTabsState(state);
 	}
+	markTabOpened(tabId);
 
 	return { ok: true, tabId, existedOnDisk: fileExists };
 }

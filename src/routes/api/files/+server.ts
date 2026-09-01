@@ -25,6 +25,7 @@ import { destroyTabState } from '$lib/server/ws-server';
 import { migrateTabsUnderPath } from '$lib/server/tab-rename';
 import { listLastSeenTabIds } from '$lib/server/last-seen';
 import { listYjsTabIds } from '$lib/server/ydoc-persistence';
+import { markTabOpened } from '$lib/server/closed-tabs';
 
 /** Names we always hide from the tree — noise that obscures the writing
  * workspace. `.docwriter/` is intentionally NOT here; the user wants to
@@ -149,6 +150,7 @@ export const DELETE: RequestHandler = async ({ url }) => {
 	if (doomed.length > 0) {
 		for (const id of doomed) {
 			await destroyTabState(id);
+			markTabOpened(id);
 		}
 		const remaining = state.order.filter((id) => !doomed.includes(id));
 		let active = state.active && doomed.includes(state.active) ? null : state.active;

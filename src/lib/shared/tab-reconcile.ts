@@ -57,6 +57,26 @@ export function classifyGhostTabs(input: {
 	return out;
 }
 
+/** Tabs that still have a file and were dropped from `tabs` without a
+ * recorded close. Historical workspaces have no close list, so a vanished
+ * research file is restored. After this ships, an intentional close is
+ * recorded and is not put back. */
+export function tabsToAutoRestore(input: {
+	leftovers: ReadonlyArray<{ tabId: string; kind: GhostTabKind }>;
+	intentionallyClosed: readonly string[];
+	shouldSkip?: (tabId: string) => boolean;
+}): string[] {
+	const closed = new Set(input.intentionallyClosed);
+	return input.leftovers
+		.filter(
+			(item) =>
+				item.kind === 'closed' &&
+				!closed.has(item.tabId) &&
+				!input.shouldSkip?.(item.tabId)
+		)
+		.map((item) => item.tabId);
+}
+
 export type TabRenameResolution = 'rename' | 'already-moved' | 'source-missing' | 'target-exists';
 
 /** File-tree rename moves the file first, then PATCH /api/tabs. Treat

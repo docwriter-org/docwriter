@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { classifyGhostTabs, resolveTabRename, visibleTabsState } from './tab-reconcile';
+import {
+	classifyGhostTabs,
+	resolveTabRename,
+	tabsToAutoRestore,
+	visibleTabsState
+} from './tab-reconcile';
 
 describe('visibleTabsState', () => {
 	it('hides missing files without requiring a persisted drop', () => {
@@ -36,6 +41,22 @@ describe('classifyGhostTabs', () => {
 				hasLastSeen: true
 			}
 		]);
+	});
+});
+
+describe('tabsToAutoRestore', () => {
+	it('re-inserts a dropped research tab and skips a user-closed one', () => {
+		expect(
+			tabsToAutoRestore({
+				leftovers: [
+					{ tabId: 'research_2026.tex', kind: 'closed' },
+					{ tabId: 'teaching_2026.tex', kind: 'closed' },
+					{ tabId: 'cv.pdf', kind: 'missing' }
+				],
+				intentionallyClosed: ['teaching_2026.tex'],
+				shouldSkip: (id) => id.endsWith('.pdf')
+			})
+		).toEqual(['research_2026.tex']);
 	});
 });
 
