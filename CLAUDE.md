@@ -208,11 +208,20 @@ collects name, mascot, color, and the reviewer's system prompt). Picking
 one POSTs `/api/render` with `reviewerId`:
 
 - The server resolves the reviewer, builds a `<mode>` message
-  (`buildCritiqueMessage` in `src/lib/server/reviewers.ts`) instructing
-  the main agent to spawn ONE subagent via the Agent tool with the
-  reviewer's brief (its prompt + the shared pass procedure: read the
-  whole draft, rationale comment before each edit, ≤6 findings, honest
-  "no findings" allowed). Critique renders run at `effort: 'medium'`.
+  (`buildCritiqueMessage` in `src/lib/server/reviewers.ts`) telling the
+  agent to adopt the reviewer's brief (its prompt + the shared pass
+  procedure: read the whole draft, rationale comment before each edit,
+  ≤6 findings, honest "no findings" allowed) and run it IN THIS TURN.
+  Critique renders run at `effort: 'medium'`.
+- **Never delegate document work to a subagent.** `docwriter-doc` is an
+  in-process SDK MCP server bound to the query that connects it, so a
+  subagent's `read_doc` / `comment_doc` / `edit_doc` calls fail with
+  "Stream closed" — and the failure takes the parent's connection with
+  it, costing the rest of the turn its tools too. The pass used to spawn
+  a subagent and silently produced nothing: the reviewer did the whole
+  analysis, then could not land one finding. The same rule is stated in
+  the system prompt's `## Subagents` section and in the feedback-import
+  prompts, which had the same defect.
 - `setActiveReviewerId` in `mcp-doc-tools.ts` (same lifecycle as
   `setActiveFeedbackThreadId`) stamps `reviewerId` onto every review
   round and agent comment the pass creates. Findings are ordinary
@@ -241,9 +250,9 @@ input paths:
 The import is a single agent pass — threads appear progressively in the
 gutter as the agent works. For structured imports (.docx), the prompt
 uses `buildFeedbackImportMessage` (in `src/lib/shared/feedback-import.ts`)
-with numbered comments and original anchor hints. The main agent
-receives the prompt directly and can spawn subagents to parallelize
-large batches.
+with numbered comments and original anchor hints. The agent receives the
+prompt directly and works the batch itself — like a critique pass, it
+must not delegate to a subagent, which cannot reach the document tools.
 
 **External author attribution**: `CommentAuthor` includes `'external'`
 alongside `'user'` and `'agent'`. The `comment_doc` MCP tool accepts an
@@ -316,6 +325,16 @@ the disposition from `discussed` to `applied`.
   `setThreadResolved` / `setThreadAnchor`. Legacy threads migrate on doc
   load. Client observers must `observeDeep` — nested mutations don't fire
   shallow map observers.
+- **Per-render state is per-render, not module-level.** The reviewer id,
+  the active feedback thread and the stale-accept payload live in an
+  `AsyncLocalStorage` scope opened by `runWithRenderScope`
+  (`mcp-doc-tools.ts`), because `runTabWrite` / `createAgentEditThread` /
+  `createAgentCommentThread` / `applyReplyToComment` are shared by every
+  provider and read them ambiently. As module globals they were clobbered
+  by overlapping renders: a critique pass's findings got another
+  reviewer's id or none, a feedback reply attached to the wrong thread,
+  and whichever render finished first blanked all three for the one still
+  streaming. Never move them back to module scope.
 - **Agent tool availability is per-render.** `buildDocToolsMcp()` builds a
   FRESH `docwriter-doc` MCP server for every `query()`. It must never become
   a module singleton again: an in-process SDK MCP server binds to the query
