@@ -577,6 +577,104 @@ export function applyEditToFragment(
 	return true;
 }
 
+/** The fragment's RAW text (no typography normalization): paragraphs joined
+ * by '\n', hardBreak as '\n'. Character offsets into this string map 1:1
+ * onto Y.XmlText indices, which `serializeFragment`'s normalized output
+ * does not guarantee (an ellipsis normalizes 1 char → 3). Used to compute
+ * CRDT relative positions server-side. */
+export function serializeFragmentRaw(fragment: Y.XmlFragment): string {
+	const lines: string[] = [];
+	fragment.forEach((child) => lines.push(textOf(child)));
+	return lines.join('\n');
+}
+
+/** Compute base64-encoded Yjs relative positions for the character range
+ * [rawIdx, rawIdx + len) of the fragment's RAW text (see
+ * `serializeFragmentRaw`). Returns null when the range doesn't land inside
+ * text nodes (offset out of range, or it falls on structural boundaries).
+ *
+ * This is what lets SERVER-created comment threads (announce threads,
+ * comment_doc, feedback import) arrive fully anchored: rel positions are
+ * plain Yjs — no ProseMirror needed — so the client's render-time backfill
+ * write becomes a legacy-only path instead of a per-render writer racing
+ * the agent. */
+export function computeFragmentRelRange(
+	fragment: Y.XmlFragment,
+	rawIdx: number,
+	len: number
+): { relStart: string; relEnd: string } | null {
+	if (rawIdx < 0 || len < 0) return null;
+	const endIdx = rawIdx + len;
+	let cursor = 0;
+	let start: Y.RelativePosition | null = null;
+	let end: Y.RelativePosition | null = null;
+
+	const visitText = (node: Y.XmlText) => {
+		let textLen = 0;
+		for (const d of node.toDelta() as Array<{ insert?: unknown }>) {
+			if (typeof d.insert === 'string') textLen += d.insert.length;
+		}
+		const nodeStart = cursor;
+		const nodeEnd = cursor + textLen;
+		if (start === null && rawIdx >= nodeStart && rawIdx <= nodeEnd) {
+			start = Y.createRelativePositionFromTypeIndex(node, rawIdx - nodeStart);
+		}
+		if (end === null && endIdx >= nodeStart && endIdx <= nodeEnd) {
+			// assoc -1 binds the end position to the character BEFORE it, so
+			// text appended right at the range end doesn't grow the anchor.
+			end = Y.createRelativePositionFromTypeIndex(node, endIdx - nodeStart, -1);
+		}
+		cursor = nodeEnd;
+	};
+
+	const visitElement = (el: Y.XmlElement | Y.XmlFragment) => {
+		el.forEach((child: unknown) => {
+			if (child instanceof Y.XmlText) {
+				visitText(child);
+				return;
+			}
+			if (child instanceof Y.XmlElement) {
+				if (child.nodeName === 'hardBreak') {
+					cursor += 1;
+					return;
+				}
+				visitElement(child);
+			}
+		});
+	};
+
+	let first = true;
+	fragment.forEach((child) => {
+		if (!first) cursor += 1; // the '\n' joining paragraphs
+		first = false;
+		if (child instanceof Y.XmlElement) visitElement(child);
+	});
+
+	if (!start || !end) return null;
+	return { relStart: encodeRelPosition(start), relEnd: encodeRelPosition(end) };
+}
+
+/** Base64 encode/decode for storing a Y.RelativePosition (a Uint8Array) in
+ * a JSON-friendly Y.Map value. btoa/atob are global in both the browser
+ * and Node 16+, so one implementation serves client and server. */
+export function encodeRelPosition(rp: Y.RelativePosition): string {
+	const bytes = Y.encodeRelativePosition(rp);
+	let bin = '';
+	for (let i = 0; i < bytes.length; i += 1) bin += String.fromCharCode(bytes[i]);
+	return btoa(bin);
+}
+
+export function decodeRelPosition(s: string): Y.RelativePosition | null {
+	try {
+		const bin = atob(s);
+		const bytes = new Uint8Array(bin.length);
+		for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+		return Y.decodeRelativePosition(bytes);
+	} catch {
+		return null;
+	}
+}
+
 /** Seed an EMPTY Y.Doc's fragment from a content string. No-op if non-empty
  * (seeding a populated fragment produces merge garbage). Does NOT wrap in a
  * transact — callers pick their own origin. */

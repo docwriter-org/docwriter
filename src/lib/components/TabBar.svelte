@@ -18,8 +18,13 @@
 		/** Called when the user drops files from Finder / the filesystem onto
 		 * the tab bar. Parent is responsible for copying and registering. */
 		onDropFile?: (files: File[]) => Promise<void>;
+		/** Tab ids whose file is currently missing on disk (mid-`git pull`,
+		 * external delete). The tab stays — content is safe in the CRDT log
+		 * and restores on next load — and gets a warning badge. */
+		missingTabs?: Set<string>;
 	}
-	let { onSwitch, onClose, onDelete, onRename, pendingTabs, onDropFile }: Props = $props();
+	let { onSwitch, onClose, onDelete, onRename, pendingTabs, onDropFile, missingTabs }: Props =
+		$props();
 
 	let isDragOver = $state(false);
 
@@ -226,6 +231,13 @@
 				/>
 			{:else}
 				<span class="tab-name">{shortPath(id)}</span>
+				{#if missingTabs?.has(id)}
+					<span
+						class="missing-dot"
+						aria-label="File missing on disk"
+						title="The file is currently missing on disk (a git operation or external tool may have removed it). Your content is safe and will be restored from history."
+					>!</span>
+				{/if}
 				{#if (pendingTabs?.get(id) ?? 0) > 0}
 					{@const count = pendingTabs!.get(id)!}
 					<span
@@ -369,6 +381,21 @@
 		height: 14px;
 		padding: 0 4px;
 		border-radius: 7px;
+	}
+	.missing-dot {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		min-width: 12px;
+		height: 12px;
+		border-radius: 50%;
+		background: #d97706;
+		margin-left: 2px;
+		flex-shrink: 0;
+		color: white;
+		font-size: 9px;
+		font-weight: 700;
+		line-height: 1;
 	}
 	.tab.pending .pending-dot {
 		/* Slow pulse on every pending tab so the user notices */

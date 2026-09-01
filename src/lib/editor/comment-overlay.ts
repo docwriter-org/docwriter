@@ -17,7 +17,9 @@ import {
 	SYSTEM_ORIGIN,
 	captureAnchorContext,
 	matchCommentAnchor,
-	nthIndexOf
+	nthIndexOf,
+	encodeRelPosition,
+	decodeRelPosition
 } from '$lib/shared/ydoc-codec';
 import { buildCharIndex as cachedBuildCharIndex } from './char-index';
 import type { CommentThread } from '$lib/types';
@@ -66,26 +68,10 @@ export function setCommentOverlayState(editor: Editor, state: CommentOverlayStat
 // Aliased here so the rest of this file reads cleanly.
 const buildCharIndex = cachedBuildCharIndex;
 
-/** Base64 encode/decode for storing Y.RelativePosition (a Uint8Array) in
- * a JSON-friendly Y.Map value. We pass through atob/btoa because (a) it
- * works in browser without polyfills and (b) the encoded length is short
- * enough that the byte-string-detour overhead doesn't matter. */
-function encodeRelPos(rp: Y.RelativePosition): string {
-	const bytes = Y.encodeRelativePosition(rp);
-	let bin = '';
-	for (let i = 0; i < bytes.length; i += 1) bin += String.fromCharCode(bytes[i]);
-	return btoa(bin);
-}
-function decodeRelPos(s: string): Y.RelativePosition | null {
-	try {
-		const bin = atob(s);
-		const bytes = new Uint8Array(bin.length);
-		for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
-		return Y.decodeRelativePosition(bytes);
-	} catch {
-		return null;
-	}
-}
+// Rel-position base64 codec lives in the shared ydoc-codec so the server
+// can stamp anchors at thread creation with the exact same encoding.
+const encodeRelPos = encodeRelPosition;
+const decodeRelPos = decodeRelPosition;
 
 /** Compute Yjs rel positions for a PM range and return them base64-
  * encoded so callers can ship them over the wire. Returns null when the

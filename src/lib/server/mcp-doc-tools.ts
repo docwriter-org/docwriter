@@ -37,7 +37,9 @@ import {
 	nthIndexOf,
 	buildThreadAnchor,
 	applyEditToFragment,
-	replaceYDocTextWithAiProvenance
+	replaceYDocTextWithAiProvenance,
+	serializeFragmentRaw,
+	computeFragmentRelRange
 } from '$lib/shared/ydoc-codec';
 import type { StaleAcceptApply } from '$lib/shared/stale-accept';
 import { isScratchPath, resolveTabFromPath, isOpenTab } from './path-router';
@@ -123,6 +125,29 @@ interface RoundMutation {
 	afterMd: string;
 }
 
+/** A narrowed span must not balloon into "most of the document as an edit
+ * op" — past this share of the doc, storing the round as a wholesale write
+ * is smaller and clearer. */
+const NARROW_MAX_DOC_SHARE = 0.5;
+/** How far context expansion will reach on each side while hunting for a
+ * unique anchor. */
+const NARROW_MAX_CONTEXT = 4_096;
+
+/** Reduce a wholesale write (beforeMd → afterMd) to a minimal `edit` op.
+ *
+ * The changed core is the text between the common prefix and suffix. When
+ * that core is empty (a pure insertion) or not unique in the document, the
+ * span is EXPANDED with surrounding context — taken equally from the
+ * common prefix/suffix, so old and new strings share it — until it matches
+ * exactly once. Returns null only when no reasonable unique span exists
+ * (the change genuinely rewrites most of the document).
+ *
+ * This matters far beyond aesthetics: a round physically embeds its op's
+ * strings, so the old fallback-to-write path stored the ENTIRE document
+ * per revision — the 20–35 KB "metadata-only" updates that bloated the
+ * CRDT log during agent revision bursts. A pure insertion (the most common
+ * revise-in-place shape) now costs its own size plus a few dozen context
+ * chars. */
 function narrowWriteOperation(
 	beforeMd: string,
 	afterMd: string
@@ -147,15 +172,26 @@ function narrowWriteOperation(
 		afterTail -= 1;
 	}
 
-	const oldString = beforeMd.slice(prefix, beforeTail + 1);
-	const newString = afterMd.slice(prefix, afterTail + 1);
-	if (!oldString) return null;
-	if (countOccurrences(beforeMd, oldString) !== 1) return null;
-	return {
-		type: 'edit',
-		oldString,
-		newString
-	};
+	const coreOldEnd = beforeTail + 1;
+	const coreNewEnd = afterTail + 1;
+
+	for (let radius = 0; ; radius = radius === 0 ? 16 : radius * 4) {
+		const start = Math.max(0, prefix - radius);
+		const oldEnd = Math.min(beforeMd.length, coreOldEnd + radius);
+		const oldString = beforeMd.slice(start, oldEnd);
+		if (oldString && countOccurrences(beforeMd, oldString) === 1) {
+			if (oldString.length > Math.max(64, beforeMd.length * NARROW_MAX_DOC_SHARE)) {
+				return null;
+			}
+			// The expansion is common prefix/suffix text, identical in both
+			// strings — mirror it onto the new side.
+			const suffixExt = oldEnd - coreOldEnd;
+			const newString = afterMd.slice(start, coreNewEnd + suffixExt);
+			return { type: 'edit', oldString, newString };
+		}
+		const exhausted = start === 0 && oldEnd === beforeMd.length;
+		if (exhausted || radius >= NARROW_MAX_CONTEXT) return null;
+	}
 }
 
 export function currentProposalText(doc: Y.Doc): string {
@@ -386,17 +422,24 @@ export async function runTabWrite(
 					// Anchor to a SINGLE line (the first changed/non-empty line),
 					// never the whole multi-line old_string: a multi-line quote
 					// doesn't match the editor's plain text verbatim, so the
-					// thread card can't be positioned and silently disappears.
+					// thread card can't be positioned.
 					const fullOldStr = normalizedOperation.type === 'edit'
 						? normalizedOperation.oldString
 						: baseForRound;
-					const anchorQuote = firstNonEmptyLine(fullOldStr);
+					let anchorQuote = firstNonEmptyLine(fullOldStr);
+					let occIdx = 0;
 					if (anchorQuote) {
-						const occIdx = computeAnchorOccurrenceIndex(
-							baseForRound, anchorQuote, fullOldStr
-						);
-						threadId = createAgentEditThread(doc, anchorQuote, occIdx, baseForRound);
+						occIdx = computeAnchorOccurrenceIndex(baseForRound, anchorQuote, fullOldStr);
+					} else {
+						// Whitespace-only old_string (inserting at a blank line)
+						// or an empty document. The thread is created REGARDLESS
+						// — a round without a thread has no Dismiss and used to
+						// strand an un-actionable diff in the doc. Fall back to
+						// the document's first non-empty line; an empty quote
+						// parks the card at the top of the gutter.
+						anchorQuote = firstNonEmptyLine(baseForRound);
 					}
+					threadId = createAgentEditThread(doc, anchorQuote, occIdx, baseForRound);
 				}
 
 				const round: PendingReviewRound = {
@@ -498,7 +541,11 @@ function createAgentEditThread(
 			// Snapshot the surroundings so the client's quote fallback can
 			// tell "this text came back" (undo) apart from "the same string
 			// was typed somewhere else" once the passage is deleted.
-			...(anchorIdx >= 0 ? captureAnchorContext(docText, anchorIdx, oldString.length) : {})
+			...(anchorIdx >= 0 ? captureAnchorContext(docText, anchorIdx, oldString.length) : {}),
+			// docText may be the MATERIALIZED proposal text; rel positions
+			// index the live committed fragment, so they are computed there
+			// (empty when the quote isn't committed yet).
+			...relRangeForQuote(doc, oldString, occurrenceIndex)
 		},
 		messages: [
 			{
@@ -976,6 +1023,28 @@ export async function runCommentWrite(
  * Mirrors the thread shape used by `reply_to_comment`; writes under
  * AGENT_ORIGIN so the update is classified as an agent change (never on the
  * user's undo stack). Runs inside the caller's `runCommentWrite` transaction. */
+/** CRDT rel positions for the `occurrenceIndex`-th occurrence of `quote`
+ * in the LIVE fragment, stamped at thread creation so server-created
+ * threads arrive fully anchored (the client's render-time backfill write
+ * is legacy-only). Searches the fragment's RAW text — offsets there map
+ * 1:1 onto Y.XmlText indices, which the normalized serialization doesn't
+ * guarantee. Empty when the quote isn't present in the committed text
+ * (e.g. it only exists in a pending proposal) — the quote/context anchor
+ * still applies and the client backfills if the text lands later. */
+function relRangeForQuote(
+	doc: Y.Doc,
+	quote: string,
+	occurrenceIndex: number
+): { relStart: string; relEnd: string } | Record<string, never> {
+	if (!quote) return {};
+	const fragment = getFragment(doc);
+	const rawText = serializeFragmentRaw(fragment);
+	let idx = nthIndexOf(rawText, quote, occurrenceIndex);
+	if (idx < 0) idx = nthIndexOf(rawText, quote, 0);
+	if (idx < 0) return {};
+	return computeFragmentRelRange(fragment, idx, quote.length) ?? {};
+}
+
 function createAgentCommentThread(
 	doc: Y.Doc,
 	anchorText: string,
@@ -994,7 +1063,8 @@ function createAgentCommentThread(
 		anchor: {
 			quote: anchorText,
 			occurrenceIndex,
-			...(anchorIdx >= 0 ? captureAnchorContext(liveText, anchorIdx, anchorText.length) : {})
+			...(anchorIdx >= 0 ? captureAnchorContext(liveText, anchorIdx, anchorText.length) : {}),
+			...relRangeForQuote(doc, anchorText, occurrenceIndex)
 		},
 		messages: [
 			{
@@ -1078,7 +1148,7 @@ export function applyReplyToComment(
 		if (!built) {
 			return { ok: false, error: `anchor_text was not found in ${filePath}.` };
 		}
-		nextAnchor = built;
+		nextAnchor = { ...built, ...relRangeForQuote(doc, anchorText, occurrence) };
 		reanchored = true;
 	}
 

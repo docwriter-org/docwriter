@@ -206,6 +206,10 @@
 	 * still want the pulsing "new content" dot so the user notices the
 	 * new file appeared. Cleared when the user switches to that tab. */
 	let freshAgentTabs: Set<string> = $state(new Set());
+	/** Open tabs whose file is currently absent on disk (mid-git-pull,
+	 * external delete). Reported by GET /api/tabs; the TabBar badges them.
+	 * Content is safe in the CRDT log and restores on next load/flush. */
+	let missingFileTabs: Set<string> = $state(new Set());
 	// Local mirror of the cross-tab comment aggregate. The merged gutter only
 	// renders the active tab's cards, so awareness of comments on background
 	// tabs rides on the TabBar dots derived from this.
@@ -381,6 +385,7 @@
 			let active: string | null = data.active ?? null;
 			tabs.set(tabIds);
 			activeTab.set(active);
+			missingFileTabs = new Set(Array.isArray(data.missing) ? data.missing : []);
 			if (active && !isPdfPath(active)) getYDocForTab(active);
 			refreshPendingReviewTabs(tabIds);
 			// Attach background observers for every non-active tab so their
@@ -1775,6 +1780,10 @@
 		stale?: boolean;
 		staleRoundId?: string | null;
 		staleRoundKind?: string | null;
+		/** Batch accepts skip stale rounds instead of failing wholesale;
+		 * these stay pending for individual accept (→ agent rebase) or
+		 * dismissal. */
+		skippedStale?: Array<{ id: string; reason: string }>;
 	};
 
 	/** Shared accept/reject transport. The ordering here is the undo contract:
@@ -1790,7 +1799,13 @@
 	): Promise<{ res: Response; data: ReviewActionResponse }> {
 		const synced = await editorRef?.flushAutosave();
 		if (synced === false) {
-			throw new Error('Latest local edits are still syncing to the server. Try again in a moment.');
+			if (action === 'accept_rounds') {
+				throw new Error('Latest local edits are still syncing to the server. Try again in a moment.');
+			}
+			// Reject doesn't apply text ops, so it stays available even when
+			// the sync gate can't settle — a wedged WebSocket used to freeze
+			// the entire review surface behind this throw.
+			console.warn(`[docwriter] proceeding with ${action} while local edits are unsynced`);
 		}
 
 		const resumeTabSync = pauseTabSync(tabId);
@@ -1811,6 +1826,18 @@
 				// edit and the default scroll yanked the user away from the
 				// card they just clicked.
 				editorRef?.focusEditor({ scrollIntoView: false });
+			}
+			if (res.ok && data?.ok && (data.skippedStale?.length ?? 0) > 0) {
+				const n = data.skippedStale!.length;
+				pushHistory({
+					type: 'notification',
+					timestamp: Date.now(),
+					text:
+						n === 1
+							? '1 proposal was stale and stays pending — accept it individually to rebase it, or dismiss it.'
+							: `${n} proposals were stale and stay pending — accept them individually to rebase, or dismiss them.`,
+					priority: 'medium'
+				});
 			}
 			return { res, data };
 		} finally {
@@ -3490,6 +3517,7 @@
 								onRename={renameTabAction}
 								pendingTabs={mergedPendingTabs}
 								onDropFile={handleDropFiles}
+								missingTabs={missingFileTabs}
 							/>
 						</div>
 						{#if docLoaded && activeTabFilePath && !activeTabIsPdf}

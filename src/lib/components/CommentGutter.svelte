@@ -387,19 +387,17 @@
 			const range = editPos == null ? resolveThreadRange(editor, thread) : null;
 			const anchorPos = editPos ?? range?.from ?? null;
 			if (anchorPos == null) {
-				// Passage gone (neighboring accept wiped it) but the thread
-				// still has a stale proposal — park the card at the top so
-				// the user can click Accept and ask the agent to re-attach.
-				// Keep it parked while a stale Accept is in flight even if
-				// the pending row already dropped, so the thinking state stays.
-				if (threadEdits.length > 0 || isReapplyingThread(thread.id)) {
-					parked.push({
-						id: thread.id,
-						kind: 'comment',
-						expanded: thread.id === openThreadId || isReapplyingThread(thread.id),
-						editCount: threadEdits.length
-					});
-				}
+				// Passage gone (neighboring accept wiped it, external edit,
+				// whitespace-anchored insert) — park the card at the top so
+				// the thread stays visible and dismissable. A skipped card
+				// used to leave actionable state with no UI at all: a pending
+				// diff in the doc and nothing anywhere to click.
+				parked.push({
+					id: thread.id,
+					kind: 'comment',
+					expanded: thread.id === openThreadId || isReapplyingThread(thread.id),
+					editCount: threadEdits.length
+				});
 				continue;
 			}
 			try {
@@ -419,14 +417,14 @@
 			for (const round of looseEditRounds) {
 				const pos = resolveRoundAnchorPos(editor, round, baseline);
 				if (pos == null) {
-					if (round.stale || isReapplyingRound(round.id)) {
-						parked.push({
-							id: editCardId(round.id),
-							kind: 'edit',
-							expanded: isReapplyingRound(round.id),
-							editCount: 0
-						});
-					}
+					// Unpositionable — park, never skip: every pending round
+					// must render somewhere actionable (Reject at minimum).
+					parked.push({
+						id: editCardId(round.id),
+						kind: 'edit',
+						expanded: isReapplyingRound(round.id),
+						editCount: 0
+					});
 					continue;
 				}
 				try {
@@ -443,15 +441,15 @@
 				}
 			}
 		} else if (!muted) {
+			// No baseline to resolve positions against — park every loose
+			// round rather than hiding actionable state.
 			for (const round of looseEditRounds) {
-				if (round.stale || isReapplyingRound(round.id)) {
-					parked.push({
-						id: editCardId(round.id),
-						kind: 'edit',
-						expanded: isReapplyingRound(round.id),
-						editCount: 0
-					});
-				}
+				parked.push({
+					id: editCardId(round.id),
+					kind: 'edit',
+					expanded: isReapplyingRound(round.id),
+					editCount: 0
+				});
 			}
 		}
 		entries.sort((a, b) => a.top - b.top);
