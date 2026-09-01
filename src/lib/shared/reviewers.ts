@@ -3,9 +3,10 @@
  *
  * A reviewer is a named system prompt plus a mascot. Picking one from the
  * menu runs a single focused review pass over the active tab: the main
- * agent spawns a subagent with the reviewer's brief, and the subagent
- * files findings as comment threads (rationale first) with pending edits
- * where a concrete fix exists.
+ * agent adopts the reviewer's brief for that turn and files findings as
+ * comment threads (rationale first) with pending edits where a concrete
+ * fix exists. The pass never runs in a subagent — see buildCritiqueMessage
+ * in src/lib/server/reviewers.ts for why.
  *
  * Built-in reviewers live here so their prompts version with the app.
  * User-created reviewers live in the SQLite `reviewers` table (see
