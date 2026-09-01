@@ -15,6 +15,7 @@
  * round lands in the document's review map immediately; Accept later commits
  * the chosen `afterMd` into the live Y.Doc.
  */
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { dirname, isAbsolute, relative } from 'path';
 import * as Y from 'yjs';
@@ -209,6 +210,60 @@ export function currentProposalText(doc: Y.Doc): string {
  * `mutator` receives the current proposal text (latest pending `afterMd`, or
  * the committed live doc if no proposal is pending) and returns the next
  * proposal string, or null to abort. */
+/**
+ * Per-render state, held in an AsyncLocalStorage scope rather than at module
+ * scope. These three values are ambient inputs to `runTabWrite`,
+ * `createAgentEditThread`, `createAgentCommentThread` and
+ * `applyReplyToComment` — functions shared by every provider, so passing them
+ * as parameters would mean threading them through every call site.
+ *
+ * They MUST NOT be module globals: a second render starting while the first
+ * is still streaming would overwrite them, and whichever render finished
+ * first would clear all three to null. Concretely, that misattributed a
+ * critique pass's findings to another reviewer (or to none), and pointed a
+ * feedback-import reply at the wrong thread. This is the same bug class as
+ * the `docwriter-doc` MCP server once being a module singleton — per-render
+ * state kept at module scope.
+ *
+ * The scope flows through awaits, so every tool call the render makes reads
+ * its own values. Calls that arrive outside any render (a direct API route
+ * that has not opened a scope) fall back to a process-wide default.
+ */
+interface RenderScope {
+	feedbackThreadId: string | null;
+	reviewerId: string | null;
+	staleAcceptApply: StaleAcceptApply | null;
+}
+
+const renderScopeStore = new AsyncLocalStorage<RenderScope>();
+const fallbackScope: RenderScope = {
+	feedbackThreadId: null,
+	reviewerId: null,
+	staleAcceptApply: null
+};
+
+function renderScope(): RenderScope {
+	return renderScopeStore.getStore() ?? fallbackScope;
+}
+
+/** `{ reviewerId }` when a critique pass is running, `{}` otherwise. Spread
+ * onto review rounds and agent comments so the gutter can attribute them to
+ * the reviewer instead of the plain agent. */
+function reviewerStamp(): { reviewerId?: string } {
+	const id = renderScope().reviewerId;
+	return id ? { reviewerId: id } : {};
+}
+
+/** Run `fn` with its own isolated copy of the per-render state. Everything
+ * the render awaits inside sees these values and nothing outside can see or
+ * clobber them, so no explicit teardown is needed. */
+export function runWithRenderScope<T>(scope: Partial<RenderScope>, fn: () => T): T {
+	return renderScopeStore.run(
+		{ feedbackThreadId: null, reviewerId: null, staleAcceptApply: null, ...scope },
+		fn
+	);
+}
+
 /** Thread id the NEXT review round should attach to. Set transiently by
  * `edit_doc` for the duration of a single call when the agent passes an
  * explicit `thread_id` (and restored after), so attachment is per-edit and
@@ -216,9 +271,8 @@ export function currentProposalText(doc: Y.Doc): string {
  * opens its own fresh thread (`createAgentEditThread`). This is what lets a
  * thread revision and an unrelated directive edit in the same turn land in
  * different threads. */
-let activeFeedbackThreadId: string | null = null;
 export function setActiveFeedbackThreadId(id: string | null) {
-	activeFeedbackThreadId = id;
+	renderScope().feedbackThreadId = id;
 }
 
 /** The enforcement promise interpolated into the system prompt's "Announce
@@ -233,19 +287,17 @@ export const REPLY_BEFORE_EDIT_PROMPT_NOTE =
  * `activeFeedbackThreadId`) and stamped onto every review round and
  * agent-authored comment the pass creates, so the gutter can attribute
  * them to the reviewer instead of the plain agent. */
-let activeReviewerId: string | null = null;
 export function setActiveReviewerId(id: string | null) {
-	activeReviewerId = id;
+	renderScope().reviewerId = id;
 }
 
 /** Set for the duration of a stale-Accept / rebase render. The agent
  * still lands a pending review round (a visible diff), not a live commit. */
-let staleAcceptApply: StaleAcceptApply | null = null;
 export function setStaleAcceptApply(value: StaleAcceptApply | null) {
-	staleAcceptApply = value;
+	renderScope().staleAcceptApply = value;
 }
 export function getStaleAcceptApply(): StaleAcceptApply | null {
-	return staleAcceptApply;
+	return renderScope().staleAcceptApply;
 }
 
 function applyWriteToLiveFragment(doc: Y.Doc, operation: PendingReviewOperation): boolean {
@@ -342,7 +394,7 @@ export async function runTabWrite(
 			// because every provider path (MCP tools and tool-handlers.ts)
 			// surfaces it verbatim — which is also why it names no parameter
 			// syntax: the surfaces' reply_to_comment schemas differ.
-			const targetThreadId = activeFeedbackThreadId ?? undefined;
+			const targetThreadId = renderScope().feedbackThreadId ?? undefined;
 			if (targetThreadId) {
 				const thread = getThread(getCommentsMap(doc), targetThreadId);
 				if (thread?.resolved) {
@@ -363,7 +415,7 @@ export async function runTabWrite(
 				}
 			}
 			const reviewArr = getReviewArray(doc);
-			const threadIdExplicit = activeFeedbackThreadId ?? undefined;
+			const threadIdExplicit = renderScope().feedbackThreadId ?? undefined;
 			// Default op: an explicit edit as given, or a narrowed wholesale
 			// write. `baseForRound` is the text this op is anchored to.
 			let baseForRound = beforeMd;
@@ -442,7 +494,7 @@ export async function runTabWrite(
 					timestamp: Date.now(),
 					kind: classifyRoundKind(baseForRound, afterMd),
 					stepCount: 1,
-					...(activeReviewerId ? { reviewerId: activeReviewerId } : {})
+					...reviewerStamp()
 				};
 				// Revise-in-place: a new edit made for a feedback thread replaces
 				// any older still-pending edits for that same thread, so the
@@ -541,7 +593,7 @@ function createAgentEditThread(
 				author: 'agent',
 				text: 'Suggested an edit.',
 				timestamp: now,
-				...(activeReviewerId ? { reviewerId: activeReviewerId } : {})
+				...reviewerStamp()
 			}
 		],
 		resolved: false,
@@ -788,7 +840,7 @@ const editDocTool = tool(
 		// An explicit thread_id on the call wins over the render-level default
 		// (parsed from the triggering message). Restore the prior value after
 		// so a single edit's targeting can't leak into later edits this turn.
-		const priorThreadId = activeFeedbackThreadId;
+		const priorThreadId = renderScope().feedbackThreadId;
 		if (typeof thread_id === 'string' && thread_id) {
 			setActiveFeedbackThreadId(thread_id);
 		}
@@ -1061,7 +1113,7 @@ function createAgentCommentThread(
 				text: message,
 				timestamp: now,
 				...(isExternal ? { externalAuthor } : {}),
-				...(activeReviewerId ? { reviewerId: activeReviewerId } : {}),
+				...reviewerStamp(),
 				...(proposedEdit
 					? {
 							proposedEdit: {
@@ -1146,7 +1198,7 @@ export function applyReplyToComment(
 		author: 'agent',
 		text: message,
 		timestamp: now,
-		...(activeReviewerId ? { reviewerId: activeReviewerId } : {}),
+		...reviewerStamp(),
 		...(options?.proposedEdit
 			? {
 					proposedEdit: {

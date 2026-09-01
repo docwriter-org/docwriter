@@ -532,3 +532,75 @@ describe('server-side rel positions', () => {
 		doc.destroy();
 	});
 });
+
+describe('binary tabs never reach the CRDT log', () => {
+	it('appendUpdate refuses a binary tab even when something tries to write one', () => {
+		// onLoadDocument already refuses to HYDRATE a binary tab, but nothing
+		// stopped a write: a WebSocket sync on a PDF would have appended rows,
+		// and appendUpdate's own ensureDocument() creates the identity row, so
+		// the yjs_updates FK would not have caught it either. The gate belongs
+		// at the one chokepoint every CRDT write passes through.
+		const doc = seededDoc('Recommendation letter body.\n');
+		const update = Y.encodeStateAsUpdate(doc);
+		yp.appendUpdate(BINARY_TAB, update, 'user');
+		expect(updateRows(BINARY_TAB).length).toBe(0);
+
+		// The same write on a text tab still lands, so the gate is not a
+		// blanket refusal.
+		yp.appendUpdate('gate-control.md', update, 'user');
+		expect(updateRows('gate-control.md').length).toBe(1);
+		doc.destroy();
+	});
+});
+
+describe('per-render state is isolated between concurrent renders', () => {
+	it('one render cannot read, overwrite, or clear another render\'s scope', async () => {
+		// The field reports came from rapid-fire renders. These three values
+		// used to be module globals: a second render overwrote them mid-flight
+		// and whichever finished first cleared all three, which misattributed
+		// a critique pass's findings and pointed feedback replies at the wrong
+		// thread.
+		const seen: Record<string, unknown> = {};
+		const gate = { a: () => {}, b: () => {} };
+		const waitA = new Promise<void>((r) => (gate.a = r));
+		const waitB = new Promise<void>((r) => (gate.b = r));
+
+		const renderA = mcp.runWithRenderScope(
+			{ feedbackThreadId: 'thread_A', reviewerId: 'skeptic' },
+			async () => {
+				gate.b();
+				await waitA; // B runs to completion while A is suspended here.
+				seen.aStale = mcp.getStaleAcceptApply();
+				mcp.setActiveFeedbackThreadId('thread_A_revised');
+				return { thread: 'thread_A_revised' };
+			}
+		);
+
+		const renderB = mcp.runWithRenderScope(
+			{ feedbackThreadId: 'thread_B', reviewerId: 'copy-editor', staleAcceptApply: null },
+			async () => {
+				await waitB;
+				// B mutating and then leaving must not touch A's values.
+				mcp.setActiveReviewerId('fresh-eyes');
+				mcp.setActiveFeedbackThreadId(null);
+				mcp.setStaleAcceptApply({ tabId: 'other.md' } as never);
+				gate.a();
+				return { done: true };
+			}
+		);
+
+		await Promise.all([renderA, renderB]);
+		// A never saw B's stale-accept payload, despite B setting one while A
+		// was suspended.
+		expect(seen.aStale).toBeNull();
+		// And nothing leaked to callers outside any scope.
+		expect(mcp.getStaleAcceptApply()).toBeNull();
+	});
+
+	it('a call outside any render scope falls back instead of throwing', () => {
+		expect(mcp.getStaleAcceptApply()).toBeNull();
+		mcp.setActiveReviewerId('orphan');
+		expect(mcp.getStaleAcceptApply()).toBeNull();
+		mcp.setActiveReviewerId(null);
+	});
+});

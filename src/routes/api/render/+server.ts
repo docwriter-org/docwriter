@@ -38,9 +38,7 @@ import {
 	WRITE_DOC_TOOL_NAME,
 	COMMENT_DOC_TOOL_NAME,
 	REPLY_TO_COMMENT_TOOL_NAME,
-	setActiveFeedbackThreadId,
-	setActiveReviewerId,
-	setStaleAcceptApply,
+	runWithRenderScope,
 	REPLY_BEFORE_EDIT_PROMPT_NOTE
 } from '$lib/server/mcp-doc-tools';
 import type { StaleAcceptApply } from '$lib/shared/stale-accept';
@@ -1140,12 +1138,17 @@ export const POST: RequestHandler = async ({ request }) => {
 					}
 
 					const feedbackThreadId = message.match(/thread_id="([^"]+)"/)?.[1] ?? null;
-					setActiveFeedbackThreadId(feedbackThreadId);
-					setActiveReviewerId(critiqueReviewer?.id ?? null);
-					setStaleAcceptApply(
-						staleAccept && typeof staleAccept.tabId === 'string' ? staleAccept : null
-					);
-					try {
+					// Per-render state lives in a scope that flows through the
+					// awaits below, so a concurrent render cannot overwrite it
+					// or clear it out from under this one on its way out.
+					await runWithRenderScope(
+						{
+							feedbackThreadId,
+							reviewerId: critiqueReviewer?.id ?? null,
+							staleAcceptApply:
+								staleAccept && typeof staleAccept.tabId === 'string' ? staleAccept : null
+						},
+						async () => {
 					const firstOutcome = await runQueryRound(prompt, images);
 					if (
 						isImplicitWakeup &&
@@ -1166,11 +1169,8 @@ export const POST: RequestHandler = async ({ request }) => {
 						send('directive_retry', {});
 						await runQueryRound(retryPrompt);
 					}
-					} finally {
-						setActiveFeedbackThreadId(null);
-						setActiveReviewerId(null);
-						setStaleAcceptApply(null);
-					}
+						}
+					);
 				} catch (err) {
 					// Plan-mode aborts the controller from canUseTool once we've
 					// captured the plan — that surfaces as an AbortError here,

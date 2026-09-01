@@ -138,6 +138,16 @@ function detectExternalEdit(
 }
 
 export function appendUpdate(tabId: string, update: Uint8Array, origin: string) {
+	// The one chokepoint every CRDT write passes through, so the binary gate
+	// belongs here rather than only at the seeding paths. `onLoadDocument`
+	// refuses to hydrate a binary tab, but nothing stopped a write: an
+	// ill-advised WebSocket sync on a PDF would have appended rows, and
+	// `ensureDocument` below creates the identity row on demand, so the
+	// yjs_updates FK would not have caught it either.
+	if (isBinaryTabPath(tabId)) {
+		console.warn(`[docwriter] refusing CRDT write for binary tab "${tabId}" (${origin})`);
+		return;
+	}
 	ensureDocument(tabId);
 	getDb()
 		.prepare(`INSERT INTO yjs_updates (tab_id, payload, origin, created) VALUES (?, ?, ?, ?)`)

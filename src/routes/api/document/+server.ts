@@ -10,7 +10,7 @@ import {
 	setThreadResolution,
 	flushTabMarkdownNow
 } from '$lib/server/ws-server';
-import { setActiveFeedbackThreadId } from '$lib/server/mcp-doc-tools';
+import { runWithRenderScope } from '$lib/server/mcp-doc-tools';
 import { runTabWrite } from '$lib/server/mcp-doc-tools';
 
 function countOccurrences(haystack: string, needle: string): number {
@@ -171,10 +171,8 @@ export const POST: RequestHandler = async ({ request, url }) => {
 			// the gutter's grouped-card rendering can be exercised locally.
 			const fakeThreadId =
 				typeof body.feedbackThreadId === 'string' ? body.feedbackThreadId : null;
-			if (fakeThreadId) setActiveFeedbackThreadId(fakeThreadId);
-			let result;
-			try {
-				result = await runTabWrite(tabId, 'dev_fake_agent_edit', (currentMd) => {
+			const result = await runWithRenderScope({ feedbackThreadId: fakeThreadId }, async () => {
+				return runTabWrite(tabId, 'dev_fake_agent_edit', (currentMd) => {
 					const hits = countOccurrences(currentMd, oldString);
 					if (hits === 0) {
 						failure = 'oldString not found in current document';
@@ -189,9 +187,7 @@ export const POST: RequestHandler = async ({ request, url }) => {
 						afterMd: currentMd.replace(oldString, newString)
 					};
 				});
-			} finally {
-				if (fakeThreadId) setActiveFeedbackThreadId(null);
-			}
+			});
 			if ('error' in result) {
 				if (failure) {
 					return json({ error: failure }, { status: 409 });
