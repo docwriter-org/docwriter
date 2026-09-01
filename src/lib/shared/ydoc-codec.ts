@@ -409,15 +409,21 @@ function diffWordLevel(oldText: string, newText: string): Array<[number, string]
 	});
 }
 
-/** Transform `oldRuns` into `newText`, marking inserted text as AI-authored
- * and carrying the provenance of surviving text through unchanged. Uses the
- * word-level diff above, so an agent rewrite of half a sentence marks that
- * half as AI — never sub-word fragments, never the untouched remainder. */
-function diffRunsToText(oldRuns: ProvenanceRun[], newText: string): ProvenanceRun[] {
+/** Transform `oldRuns` into `newText`, marking inserted text with the
+ * `insertedAi` provenance (AI-authored by default — the callers are agent
+ * write paths) and carrying the provenance of surviving text through
+ * unchanged. Uses the word-level diff above, so an agent rewrite of half a
+ * sentence marks that half as AI — never sub-word fragments, never the
+ * untouched remainder. */
+function diffRunsToText(
+	oldRuns: ProvenanceRun[],
+	newText: string,
+	insertedAi = true
+): ProvenanceRun[] {
 	const oldText = oldRuns.map((r) => r.text).join('');
 	if (oldText === newText) return oldRuns;
 	if (!newText) return [];
-	if (!oldText) return [{ text: newText, ai: true }];
+	if (!oldText) return [{ text: newText, ai: insertedAi }];
 	const diffs = diffWordLevel(oldText, newText);
 	const out: ProvenanceRun[] = [];
 	let cursor = 0;
@@ -428,7 +434,7 @@ function diffRunsToText(oldRuns: ProvenanceRun[], newText: string): ProvenanceRu
 		} else if (op === -1) {
 			cursor += text.length;
 		} else {
-			out.push({ text, ai: true });
+			out.push({ text, ai: insertedAi });
 		}
 	}
 	return out;
@@ -601,6 +607,25 @@ export function replaceYDocTextWithAiProvenance(ydoc: Y.Doc, content: string): v
 	const paraRuns: ProvenanceRun[][] = [];
 	fragment.forEach((child) => paraRuns.push(paragraphRunsNormalized(child)));
 	const newRuns = diffRunsToText(joinParagraphRuns(paraRuns), normalizeTypography(content ?? ''));
+	if (fragment.length > 0) fragment.delete(0, fragment.length);
+	if (content) fragment.insert(0, buildParagraphsFromRuns(newRuns));
+}
+
+/** Replace the fragment's text with externally-authored content (a file
+ * edited outside DocWriter), preserving the provenance of everything that
+ * survives the diff and marking introduced text as human-authored. Used by
+ * the disk-wins reseed: the external edit lands as one more update on the
+ * live history instead of destroying it. Callers must wrap this in
+ * `ydoc.transact(..., origin)`. */
+export function replaceYDocTextFromExternal(ydoc: Y.Doc, content: string): void {
+	const fragment = getFragment(ydoc);
+	const paraRuns: ProvenanceRun[][] = [];
+	fragment.forEach((child) => paraRuns.push(paragraphRunsNormalized(child)));
+	const newRuns = diffRunsToText(
+		joinParagraphRuns(paraRuns),
+		normalizeTypography(content ?? ''),
+		false
+	);
 	if (fragment.length > 0) fragment.delete(0, fragment.length);
 	if (content) fragment.insert(0, buildParagraphsFromRuns(newRuns));
 }

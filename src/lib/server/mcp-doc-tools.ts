@@ -53,9 +53,12 @@ import type {
 	PendingReviewRound
 } from '$lib/types';
 import { formatListedThreads } from '$lib/shared/list-threads';
-import { isValidTabId, tabFile, WORKSPACE_ROOT } from './document-files';
+import { isValidTabId, isKnownTextExtension, tabFile, WORKSPACE_ROOT } from './document-files';
 import { resolveWorkspacePath } from './workspace-path';
-import { getRules, getTabsState, setTabsState } from './runtime-state';
+import { getRules } from './runtime-state';
+import { openDocument } from './documents-store';
+import { tabHasPersistedUpdates } from './ydoc-persistence';
+import { flushTabMarkdownNow } from './ws-server';
 import { writeTextAtomic } from './file-utils';
 import { findOverlappingFreeze, freezeQuoteFromRule } from '$lib/freeze';
 
@@ -279,6 +282,9 @@ export async function runTabWrite(
 	trigger: PendingReviewRound['trigger'],
 	mutator: (currentText: string) => RoundMutation | null
 ): Promise<TabWriteResult | { error: string }> {
+	if (!isKnownTextExtension(tabId)) {
+		return { error: `${tabId} is a binary file — it has no editable document.` };
+	}
 	const ws = getHocuspocus();
 	if (!ws) {
 		return { error: 'WebSocket server not initialized — Y.Doc sync is offline.' };
@@ -541,11 +547,24 @@ type EnsureTabResult =
  *    an error.
  *  - Invalid path / escapes sandbox / unsupported shape → error.
  */
+/** Binary files (PDFs, images, …) have no editable document: materializing
+ * a Y.Doc for one would seed the file's bytes into the CRDT log as UTF-8
+ * mojibake. Every doc tool rejects them with a pointer to the built-in
+ * Read, which handles PDFs and images natively. */
+export function binaryTabError(path: string): CallToolResult {
+	return toolError(
+		`${path} is a binary file — it has no editable document and no doc tools. Use the built-in Read tool to view it.`
+	);
+}
+
 export function ensureWorkspaceTabOpen(
 	path: string,
 	opts: { createIfMissing: boolean }
 ): EnsureTabResult {
 	const existingTabId = resolveTabFromPath(path);
+	if (existingTabId && !isKnownTextExtension(existingTabId)) {
+		return { ok: false, error: binaryTabError(path) };
+	}
 	if (existingTabId && isOpenTab(existingTabId)) {
 		return {
 			ok: true,
@@ -562,6 +581,9 @@ export function ensureWorkspaceTabOpen(
 				`${path} is not a valid workspace-relative path. Use a path inside the workspace (e.g. "drafts/chapter-1.md") or under .docwriter/agent/scratch/.`
 			)
 		};
+	}
+	if (!isKnownTextExtension(tabId)) {
+		return { ok: false, error: binaryTabError(path) };
 	}
 
 	let absPath: string;
@@ -586,7 +608,16 @@ export function ensureWorkspaceTabOpen(
 	if (!fileExists) {
 		try {
 			mkdirSync(dirname(absPath), { recursive: true });
-			writeTextAtomic(absPath, '');
+			if (tabHasPersistedUpdates(tabId)) {
+				// File vanished externally but its Y.Doc history survives —
+				// restore the file from the log instead of blanking both
+				// (create-empty over history also armed the disk-wins reseed
+				// on next load, since an empty file looks like an external
+				// edit).
+				flushTabMarkdownNow(tabId);
+			} else {
+				writeTextAtomic(absPath, '');
+			}
 		} catch (err) {
 			return {
 				ok: false,
@@ -595,16 +626,12 @@ export function ensureWorkspaceTabOpen(
 		}
 	}
 
-	const state = getTabsState();
-	if (!state.order.includes(tabId)) {
-		state.order.push(tabId);
-		// Deliberately do NOT set `state.active = tabId`. The user may be
-		// mid-sentence on another tab; silently yanking focus to a tab the
-		// agent just created is disorienting. The new tab shows up in the
-		// bar with a pulsing dot (driven by `freshAgentTabs` on the client)
-		// and the user opens it when they're ready.
-		setTabsState(state);
-	}
+	// Deliberately do NOT activate. The user may be mid-sentence on another
+	// tab; silently yanking focus to a tab the agent just created is
+	// disorienting. The new tab shows up in the bar with a pulsing dot
+	// (driven by `freshAgentTabs` on the client) and the user opens it when
+	// they're ready.
+	openDocument(tabId, { activate: false });
 
 	return { ok: true, tabId, existedOnDisk: fileExists };
 }
@@ -823,6 +850,9 @@ const readDocTool = tool(
 		// if any, else the committed Y.Doc text). This is the path that lets
 		// the agent see its own queued edits before they land.
 		const tabId = resolveTabFromPath(file_path);
+		if (tabId && !isKnownTextExtension(tabId)) {
+			return binaryTabError(file_path);
+		}
 		if (tabId && isOpenTab(tabId)) {
 			const ws = getHocuspocus();
 			if (!ws) {
@@ -1262,6 +1292,9 @@ const listThreadsTool = tool(
 			return toolError('list_threads cannot be used on scratch paths — only on workspace tab files.');
 		}
 		const tabId = resolveTabFromPath(file_path);
+		if (tabId && !isKnownTextExtension(tabId)) {
+			return binaryTabError(file_path);
+		}
 		if (!tabId || !isOpenTab(tabId)) {
 			return toolError(`${file_path} is not an open tab. Open it first via the file tree.`);
 		}

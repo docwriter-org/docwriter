@@ -9,9 +9,10 @@ import {
 	dbSetEditorSoftWrap,
 	dbSetEditorLineNumbers,
 	dbSetTheme,
-	dbUpsertTabs,
 	kvGet
 } from './db-writes';
+import { listOpenTabs, setOpenTabs } from './documents-store';
+import { actionIdForLabel } from '$lib/shared/stable-id';
 import { resolveThemeName } from '$lib/themes';
 import { DEFAULT_AGENT_SETTINGS, type AgentSettings, type Rule } from '$lib/types';
 import { getDb } from './db';
@@ -111,10 +112,14 @@ export function getRecentActions(): Array<{
 	color: string;
 }> {
 	const rows = getDb()
-		.prepare('SELECT rowid, label FROM recent_actions ORDER BY rowid ASC')
-		.all() as Array<{ rowid: number; label: string }>;
+		.prepare('SELECT label FROM recent_actions ORDER BY rowid ASC')
+		.all() as Array<{ label: string }>;
+	// Stable content-derived ids: `action_usage_counts` is keyed by these, so
+	// they must survive list rewrites and reorders. (They used to be
+	// `custom_<rowid>`, and rowids restart after a DELETE-all rewrite —
+	// reordering silently re-keyed every usage count onto a different action.)
 	return rows.map((row) => ({
-		id: `custom_${row.rowid}`,
+		id: actionIdForLabel(row.label),
 		label: row.label,
 		icon: 'message-square',
 		pinned: false,
@@ -209,21 +214,17 @@ export function setTheme(theme: string) {
 }
 
 export function getTabsState(): TabsState {
-	const rows = getDb()
-		.prepare(
-			'SELECT tab_id, order_index, is_active FROM tabs ORDER BY order_index ASC'
-		)
-		.all() as Array<{
-			tab_id: string;
-			order_index: number;
-			is_active: number;
-		}>;
-	if (rows.length === 0) return { ...DEFAULT_TABS };
-	const order = rows.map((row) => row.tab_id);
-	const active = rows.find((row) => row.is_active === 1)?.tab_id ?? null;
+	const { order, active } = listOpenTabs();
+	if (order.length === 0) return { ...DEFAULT_TABS };
 	return { order, active };
 }
 
+/** Replace the tab bar (order + active). Backed by the `documents` table:
+ * open documents missing from `order` are CLOSED, never deleted, so a stale
+ * or partial write can no longer destroy tab registrations — their history
+ * stays restorable. Lifecycle transitions (open/close/delete/rename) have
+ * dedicated functions in `documents-store.ts`; this remains for callers
+ * that genuinely mean "this is the whole bar now" (reorder, focus). */
 export function setTabsState(tabs: TabsState) {
-	dbUpsertTabs(tabs);
+	setOpenTabs(tabs);
 }

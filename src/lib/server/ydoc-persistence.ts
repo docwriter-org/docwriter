@@ -20,12 +20,14 @@ import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync } from 'fs
 import { dirname } from 'path';
 import * as Y from 'yjs';
 import { getDb } from './db';
-import { tabFile } from './document-files';
+import { tabFile, isKnownTextExtension } from './document-files';
+import { ensureDocument } from './documents-store';
+import { backupDocumentState } from './state-backup';
 import {
 	serializeYDoc,
 	seedYDoc,
 	normalizeTypography,
-	replaceYDocText,
+	replaceYDocTextFromExternal,
 	SYSTEM_ORIGIN
 } from '$lib/shared/ydoc-codec';
 
@@ -38,17 +40,26 @@ const EXTERNAL_EDIT_SKEW_MS = 2_000;
  * is applied with its original origin (preserved per row) so any origin-aware
  * observer sees the same origins it would live.
  *
- * If the workspace file was edited behind our back while the tab was
- * unloaded, disk wins — but the log is NOT thrown away. The external text is
- * applied as one more `system` update ON TOP of the replayed history, so the
- * tab's CRDT identity survives. That matters because a browser can outlive an
- * unload (a laptop sleeping drops the WebSocket without restarting the
- * server): when it reconnects it still holds the pre-unload items. Against a
- * doc that kept its identity, that reconnect is a no-op merge. Against a
- * freshly seeded doc — same text, brand-new item ids — Yjs has no way to know
- * the two copies are the same prose and keeps both, appending a second copy of
- * the document to itself on every wake. */
+ * External edits (the file's mtime beats the log and its normalized content
+ * differs) are folded IN as one more SYSTEM-origin update that replaces the
+ * text in place — an external edit is just an edit that arrived via disk.
+ * Comment threads, pending rounds and the provenance of surviving text ride
+ * through untouched, and no log rows are deleted (the old behavior purged
+ * the whole log — threads, rounds, provenance — and left permanent seq
+ * gaps; deletion is now reserved for explicit intent and compaction).
+ *
+ * Keeping the log also keeps the tab's CRDT IDENTITY, which is what stops
+ * the document duplicating itself: a browser can outlive an unload (a
+ * sleeping laptop drops the WebSocket without restarting the server), and on
+ * reconnect it still holds the pre-unload items. Against a doc that kept its
+ * identity that reconnect is a no-op merge; against a freshly seeded doc —
+ * same prose, brand-new item ids — Yjs cannot tell the two copies apart and
+ * keeps both, appending a second copy of the document on every wake.
+ *
+ * Binary tabs (PDFs, images) are never materialized: seeding one used to
+ * write the file's bytes into the log as UTF-8 mojibake. */
 export function replayUpdatesInto(ydoc: Y.Doc, tabId: string): void {
+	if (!isKnownTextExtension(tabId)) return;
 	const db = getDb();
 	const rows = db
 		.prepare(`SELECT payload, origin, created FROM yjs_updates WHERE tab_id = ? ORDER BY seq`)
@@ -58,19 +69,16 @@ export function replayUpdatesInto(ydoc: Y.Doc, tabId: string): void {
 		for (const row of rows) {
 			ydoc.transact(() => Y.applyUpdate(ydoc, new Uint8Array(row.payload)), row.origin);
 		}
-		const external = externalEditText(tabId, rows, ydoc);
-		if (external !== null) {
+		const externalContent = detectExternalEdit(tabId, rows, ydoc);
+		if (externalContent !== null) {
 			console.log(
-				`[docwriter] tab "${tabId}" was edited externally since last sync; disk wins, rebasing Y.Doc onto the file`
+				`[docwriter] tab "${tabId}" was edited externally since last sync; folding the disk content in as an update (threads and pending rounds preserved)`
 			);
+			backupDocumentState(tabId, 'external-edit-reseed', ydoc);
 			const before = Y.encodeStateVector(ydoc);
-			ydoc.transact(() => replaceYDocText(ydoc, external), SYSTEM_ORIGIN);
-			const update = Y.encodeStateAsUpdate(ydoc, before);
-			// Persist the adoption ourselves: this may be running inside
-			// Hocuspocus's `onLoadDocument`, before its own onChange listener
-			// is attached. If onChange does fire too, the extra row carries
-			// the same items and replays idempotently.
-			if (update.length > 0) appendUpdate(tabId, update, SYSTEM_ORIGIN);
+			ydoc.transact(() => replaceYDocTextFromExternal(ydoc, externalContent), SYSTEM_ORIGIN);
+			const delta = Y.encodeStateAsUpdate(ydoc, before);
+			if (delta.length > 0) appendUpdate(tabId, delta, SYSTEM_ORIGIN);
 		}
 		return;
 	}
@@ -82,6 +90,7 @@ export function replayUpdatesInto(ydoc: Y.Doc, tabId: string): void {
 		if (!content) return;
 		ydoc.transact(() => seedYDoc(ydoc, content), SYSTEM_ORIGIN);
 		const update = Y.encodeStateAsUpdate(ydoc);
+		ensureDocument(tabId);
 		db.prepare(
 			`INSERT INTO yjs_updates (tab_id, payload, origin, created) VALUES (?, ?, ?, ?)`
 		).run(tabId, Buffer.from(update), SYSTEM_ORIGIN, Date.now());
@@ -90,19 +99,20 @@ export function replayUpdatesInto(ydoc: Y.Doc, tabId: string): void {
 	}
 }
 
-/** The file's text when it was edited outside docwriter since the log's last
- * write, else null. `ydoc` must already hold the replayed log.
- *
- * Both sides are compared through `normalizeTypography`, the same
- * transformation the seeder and serializer apply. Without it a file holding
- * an em dash (or a curly quote, or an ellipsis) never matches its own Y.Doc —
- * the doc canonicalizes those to ASCII, the file keeps them — so every mtime
- * bump, including the content-free ones a cloud-sync client makes on wake,
- * would read as an external edit. */
-function externalEditText(
+/** Decide whether the workspace file was genuinely edited outside DocWriter
+ * since the log's last write. Returns the disk content to fold in when it
+ * was, null when the log is authoritative. Both sides are compared through
+ * `normalizeTypography` — the serializer normalizes on output, so an
+ * external copy with raw typography (e.g. a git pull bringing back an
+ * en-dash where the log serializes a hyphen) must NOT count as a
+ * divergence. The un-normalized comparison used to purge whole tab logs
+ * over a cosmetic dash plus an mtime blip — and it fired on the
+ * content-free mtime bumps a cloud-sync client makes on wake, so a file
+ * that had not changed at all still counted as an external edit. */
+function detectExternalEdit(
 	tabId: string,
 	rows: Array<{ created: number }>,
-	ydoc: Y.Doc
+	replayedDoc: Y.Doc
 ): string | null {
 	const workspacePath = tabFile(tabId);
 	if (!existsSync(workspacePath)) return null;
@@ -121,16 +131,27 @@ function externalEditText(
 	} catch {
 		return null;
 	}
-	const logContent = serializeYDoc(ydoc);
-	const diskText = normalizeTypography(diskContent);
-	if (logContent.replace(/\n$/, '') === diskText.replace(/\n$/, '')) return null;
+	const logContent = serializeYDoc(replayedDoc);
+	const diskNormalized = normalizeTypography(diskContent);
+	if (logContent.replace(/\n$/, '') === diskNormalized.replace(/\n$/, '')) return null;
 	return diskContent;
 }
 
 export function appendUpdate(tabId: string, update: Uint8Array, origin: string) {
+	ensureDocument(tabId);
 	getDb()
 		.prepare(`INSERT INTO yjs_updates (tab_id, payload, origin, created) VALUES (?, ?, ?, ?)`)
 		.run(tabId, Buffer.from(update), origin, Date.now());
+}
+
+/** True when SQLite holds any CRDT history for this tab. The tab-open paths
+ * use it to tell "brand-new file" apart from "file missing but history
+ * exists" — the latter is restored from the log, never truncated. */
+export function tabHasPersistedUpdates(tabId: string): boolean {
+	const row = getDb()
+		.prepare(`SELECT 1 AS present FROM yjs_updates WHERE tab_id = ? LIMIT 1`)
+		.get(tabId) as { present: number } | undefined;
+	return row !== undefined;
 }
 
 export function compactTab(tabId: string) {
@@ -199,11 +220,14 @@ function runFlushTick() {
 
 function writeTabFile(tabId: string, ydoc: Y.Doc) {
 	const content = serializeYDoc(ydoc);
+	const path = tabFile(tabId);
 	// Skip no-op rewrites: a pending review round dirties the tab without
 	// changing the committed text, and rewriting would bump mtime → CLI
 	// watcher reload → tab remount → the open comment thread closes.
-	if (lastWrittenContent.get(tabId) === content) return;
-	const path = tabFile(tabId);
+	// The existsSync guard keeps the skip from masking an external delete:
+	// if something removed the file since our last flush (git checkout,
+	// build tooling), the next flush must recreate it, not no-op.
+	if (lastWrittenContent.get(tabId) === content && existsSync(path)) return;
 	mkdirSync(dirname(path), { recursive: true });
 	writeFileSync(path, content);
 	lastWrittenContent.set(tabId, content);
@@ -239,12 +263,26 @@ export function clearDirty(tabId: string) {
 	dirtyTabs.delete(tabId);
 }
 
-/** Drop all persisted Yjs state for a tab. Called when the user deletes the
- * underlying file — otherwise the stale updates would replay on reopen and
- * resurrect the old content. */
-export function purgeTabUpdates(tabId: string) {
+/** Drop a tab's in-memory flush bookkeeping. Row deletion is the documents
+ * table's job (`deleteDocument` — the yjs_updates FK cascades); this clears
+ * only what lives in this module. */
+export function clearTabCaches(tabId: string) {
 	dirtyTabs.delete(tabId);
 	lastWrittenContent.delete(tabId);
 	lastWrittenByPath.delete(tabFile(tabId));
-	getDb().prepare(`DELETE FROM yjs_updates WHERE tab_id = ?`).run(tabId);
+}
+
+/** Re-key the in-memory flush bookkeeping after a file rename. The DB side
+ * (yjs_updates rows, last_seen) moves via the documents-store rename and
+ * the FK's ON UPDATE CASCADE. */
+export function migrateTabCaches(oldId: string, newId: string) {
+	if (oldId === newId) return;
+	dirtyTabs.delete(oldId);
+	const cached = lastWrittenContent.get(oldId);
+	lastWrittenContent.delete(oldId);
+	lastWrittenByPath.delete(tabFile(oldId));
+	if (cached !== undefined) {
+		lastWrittenContent.set(newId, cached);
+		lastWrittenByPath.set(tabFile(newId), cached);
+	}
 }

@@ -8,6 +8,7 @@ import { buildToolDefinitions, TOOL_NAMES } from '$lib/server/providers/tool-han
 import {
 	AGENT_SCRATCH_DIR,
 	isValidTabId,
+	isKnownTextExtension,
 	tabFile
 } from '$lib/server/document-files';
 import {
@@ -30,7 +31,7 @@ import { listStyleReferences } from '$lib/server/references';
 import { readStyleProfile } from '$lib/server/style-analysis/profile-store';
 import { publishedStylePropositions, type StyleProfile } from '$lib/style-profile';
 import { buildSkillsPromptBlock } from '$lib/server/skills-config';
-import { lastSeenKey, readTabMarkdownForAgent } from '$lib/server/last-seen';
+import { readLastSeen, writeLastSeen, readTabMarkdownForAgent } from '$lib/server/last-seen';
 import {
 	EDIT_DOC_TOOL_NAME,
 	READ_DOC_TOOL_NAME,
@@ -69,6 +70,38 @@ function readLiveTabMarkdown(tabId: string): string {
 		ydoc.destroy();
 	}
 }
+
+/** Open tabs the agent can read and edit as documents. Binary tabs (PDFs,
+ * images) are preview-only: materializing a Y.Doc for one used to seed the
+ * file's bytes into the CRDT log as UTF-8 mojibake — hundreds of KB per
+ * "document" — and their rebuilt-on-every-compile "diffs" then blew the
+ * prompt past the model's context limit. They are listed to the agent as
+ * preview tabs but never loaded, diffed, or baselined. */
+function splitTabsByKind(allTabIds: string[]): { textTabs: string[]; previewTabs: string[] } {
+	const textTabs: string[] = [];
+	const previewTabs: string[] = [];
+	for (const id of allTabIds) {
+		(isKnownTextExtension(id) ? textTabs : previewTabs).push(id);
+	}
+	return { textTabs, previewTabs };
+}
+
+function buildTabPromptInfos(textTabIds: string[]): TabPromptInfo[] {
+	return textTabIds.map((id) => ({
+		tabId: id,
+		currentMd: readLiveTabMarkdown(id),
+		lastSeenMd: readLastSeen(id),
+		commentThreads: readLiveTabCommentThreads(id),
+		pendingEditThreadIds: [...readLiveTabPendingEditThreadIds(id)]
+	}));
+}
+
+/** Above this many characters, a tab's prompt diff is summarized instead of
+ * inlined. An uncapped diff of a large external change (a whole-file `git
+ * pull`, a regenerated bibliography) can exceed the model's context limit
+ * outright — "Prompt is too long" — and compaction can't help because the
+ * payload is the fresh turn, not history. */
+const PROMPT_DIFF_CAP_CHARS = 8_000;
 
 /** Snapshot of a tab's comment threads. Prefer the Hocuspocus in-memory
  * Document; fall back to a throwaway doc hydrated from SQLite. */
@@ -550,7 +583,7 @@ function buildMultiTabPrompt(
 	activeTabId: string | null,
 	tabs: TabPromptInfo[],
 	userMessage: string,
-	opts: { isUserMessage?: boolean } = {}
+	opts: { isUserMessage?: boolean; previewTabs?: string[] } = {}
 ): string {
 	const meta = readMeta();
 	const currentRuleTexts = meta.rules.map((r) => r.text);
@@ -570,10 +603,21 @@ function buildMultiTabPrompt(
 	const styleProfile = readStyleProfile();
 	const currentRefsJson = snapshotRefs(styleProfile);
 
-	const tabSections = tabs.length === 0
+	const previewTabs = opts.previewTabs ?? [];
+	const openTabLine =
+		[
+			...tabs.map((t) => t.tabId + (t.tabId === activeTabId ? ' (active)' : '')),
+			...previewTabs.map(
+				(t) => t + (t === activeTabId ? ' (active, preview-only)' : ' (preview-only)')
+			)
+		].join(', ') +
+		(previewTabs.length > 0
+			? '\nPreview-only tabs are binary files (PDF, images): not editable, no document tools. Use the built-in Read if you need to look at one.'
+			: '');
+	const tabSections = tabs.length === 0 && previewTabs.length === 0
 		? 'No files are open as tabs. Use Read / Glob / Grep to explore the workspace; use edit_doc({ path, ... }) to edit, or write_doc({ path, ... }) to create a file (the path argument is the workspace-relative path).'
 		: 'Open tabs: ' +
-			tabs.map((t) => t.tabId + (t.tabId === activeTabId ? ' (active)' : '')).join(', ') +
+			openTabLine +
 			'\n\n' +
 			tabs
 				.map(({ tabId, currentMd, lastSeenMd, commentThreads, pendingEditThreadIds }) => {
@@ -585,7 +629,13 @@ function buildMultiTabPrompt(
 						return `${tabId}\nNew this session. Call read_doc("${tabId}") to read it.${threadBlock}`;
 					}
 					if (hasDiff) {
-						return `${tabId}\nChanged since your last turn:\n\`\`\`diff\n${unifiedLineDiff(lastSeenMd as string, currentMd)}\n\`\`\`${threadBlock}`;
+						const diff = unifiedLineDiff(lastSeenMd as string, currentMd);
+						if (diff.length > PROMPT_DIFF_CAP_CHARS) {
+							const added = (diff.match(/^\+/gm) ?? []).length;
+							const removed = (diff.match(/^-/gm) ?? []).length;
+							return `${tabId}\nChanged extensively since your last turn (+${added}/−${removed} diff lines — too large to inline). Call read_doc("${tabId}") for the current text.${threadBlock}`;
+						}
+						return `${tabId}\nChanged since your last turn:\n\`\`\`diff\n${diff}\n\`\`\`${threadBlock}`;
 					}
 					return `${tabId}\nUnchanged.${threadBlock}`;
 				})
@@ -823,17 +873,13 @@ export const POST: RequestHandler = async ({ request }) => {
 			throw error(400, 'No active tab and no message');
 		}
 
-		// Snapshot each tab's live authoritative content + its last-seen
-		// baseline from kv. The agent gets a prompt built off this snapshot
-		// and post-render we write each tab's (new) current content back
-		// into kv so the next render diffs cleanly.
-		const tabsForPrompt: TabPromptInfo[] = allTabIds.map((id) => ({
-			tabId: id,
-			currentMd: readLiveTabMarkdown(id),
-			lastSeenMd: kvGet(lastSeenKey(id)),
-			commentThreads: readLiveTabCommentThreads(id),
-			pendingEditThreadIds: [...readLiveTabPendingEditThreadIds(id)]
-		}));
+		// Snapshot each text tab's live authoritative content + its last-seen
+		// baseline. The agent gets a prompt built off this snapshot and
+		// post-render we write each tab's (new) current content back as the
+		// baseline so the next render diffs cleanly. Binary tabs are listed
+		// as preview-only and never materialized.
+		const { textTabs, previewTabs } = splitTabsByKind(allTabIds);
+		const tabsForPrompt: TabPromptInfo[] = buildTabPromptInfos(textTabs);
 
 		const currentSessionId = getSessionId();
 		const isImplicitWakeup = !userMessage && !warmup && !critiqueReviewer;
@@ -854,9 +900,11 @@ export const POST: RequestHandler = async ({ request }) => {
 				].join('\n')
 			: '';
 		const prompt = warmup
-			? `You are the user's writing collaborator. The user has files open as tabs. Say you are ready in one or two sentences. Do not edit anything.`
-			: buildMultiTabPrompt(active, tabsForPrompt, message, { isUserMessage: !!userMessage }) +
-				planModeInstruction;
+			? `You are my writing collaborator. I have files open as tabs. Say you are ready in one or two sentences. Do not edit anything.`
+			: buildMultiTabPrompt(active, tabsForPrompt, message, {
+					isUserMessage: !!userMessage,
+					previewTabs
+				}) + planModeInstruction;
 		const baseSystemPromptBlock = warmup ? undefined : buildSystemPrompt();
 		const skillsPromptBlock =
 			!warmup && providerId !== 'claude'
@@ -866,7 +914,10 @@ export const POST: RequestHandler = async ({ request }) => {
 			.filter(Boolean)
 			.join('\n\n') || undefined;
 		if (systemPromptBlock) setLastSystemPrompt(systemPromptBlock);
-		const openTabPaths = new Set(allTabIds.map((tabId) => normalizeToolPath(tabFile(tabId))));
+		// Only TEXT tabs are fenced off from the built-in tools (they must go
+		// through read_doc/edit_doc against the live Y.Doc). Binary tabs are
+		// exactly what the built-in Read is for.
+		const openTabPaths = new Set(textTabs.map((tabId) => normalizeToolPath(tabFile(tabId))));
 
 		const abortController = new AbortController();
 		request.signal.addEventListener('abort', () => abortController.abort());
@@ -1101,20 +1152,14 @@ export const POST: RequestHandler = async ({ request }) => {
 					) {
 						const retryPrompt = buildMultiTabPrompt(
 							active,
-							allTabIds.map((id) => ({
-								tabId: id,
-								currentMd: readLiveTabMarkdown(id),
-								lastSeenMd: kvGet(lastSeenKey(id)),
-								commentThreads: readLiveTabCommentThreads(id),
-								pendingEditThreadIds: [...readLiveTabPendingEditThreadIds(id)]
-							})),
+							buildTabPromptInfos(textTabs),
 							[
 								'You ended without proposing an edit, but the active tab still contains inline directives.',
 								'Handle one now if you can. You may read other files first if that helps.',
 								'If a directive cannot be completed yet, say why in a comment anchored to the directive text (comment_doc).',
 								'Do not end this retry with neither an edit nor a comment.'
 							].join('\n'),
-							{ isUserMessage: false }
+							{ isUserMessage: false, previewTabs }
 						);
 						send('directive_retry', {});
 						await runQueryRound(retryPrompt);
@@ -1135,18 +1180,18 @@ export const POST: RequestHandler = async ({ request }) => {
 					}
 				}
 
-				// Update `last_seen:<tabId>` for every tab the agent could
-				// have touched, using the NOW-authoritative content. The next
-				// render will diff against these baselines — so a tab the
-				// user edited mid-render gets its fresh content baked in,
-				// and a tab the agent edited gets its post-edit content.
+				// Update the last_seen baseline for every TEXT tab the agent
+				// could have touched, using the NOW-authoritative content. The
+				// next render will diff against these baselines — so a tab the
+				// user edited mid-render gets its fresh content baked in, and
+				// a tab the agent edited gets its post-edit content. Binary
+				// tabs carry no baseline (they are never diffed).
 				try {
-					for (const id of allTabIds) {
-						const now = readLiveTabMarkdown(id);
-						kvSet(lastSeenKey(id), now);
+					for (const id of textTabs) {
+						writeLastSeen(id, readLiveTabMarkdown(id));
 					}
 				} catch (err) {
-					send('error', { error: 'Failed to update last_seen kv: ' + String(err) });
+					send('error', { error: 'Failed to update last_seen baselines: ' + String(err) });
 				}
 
 				send('result', { activeTabId: active });
