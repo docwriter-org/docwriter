@@ -77,7 +77,7 @@ export function deleteReviewer(id: string): boolean {
 export function buildCritiqueMessage(reviewer: Reviewer, tabId: string): string {
 	return [
 		'<mode>',
-		`Critique pass. The user asked the reviewer "${reviewer.name}" to review ${tabId}.`,
+		`Critique pass. I asked the reviewer "${reviewer.name}" to review ${tabId}.`,
 		'Spawn exactly one subagent with the Agent tool and pass it the reviewer_brief below verbatim as its task, nothing else. Do not read, comment, or edit the document yourself this turn, and do not summarize the findings when the pass ends — they land on the document. If the Agent tool is unavailable, execute the brief yourself exactly as written.',
 		'</mode>',
 		'',

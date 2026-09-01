@@ -225,7 +225,7 @@ export function setActiveFeedbackThreadId(id: string | null) {
  * that enforces it, so the prompt and the enforcement can't drift apart —
  * change the gate's behavior and this sentence in the same place. */
 export const REPLY_BEFORE_EDIT_PROMPT_NOTE =
-	"This is enforced: while a thread's latest message is the user's, edit_doc and write_doc targeting it fail until you have replied.";
+	"This is enforced: while a thread's latest message is mine, edit_doc and write_doc targeting it fail until you have replied.";
 
 /** Reviewer running the current critique pass, if any. Set by /api/render
  * for the duration of a critique render (same lifecycle as
@@ -371,11 +371,11 @@ export async function runTabWrite(
 				if (lastMessage?.author === 'user') {
 					result = {
 						error:
-							`the user's latest message on thread "${targetThreadId}" has no reply yet, ` +
-							`so this proposal would land as a bare diff with no explanation. First reply ` +
-							`on that thread with reply_to_comment — one or two first-person sentences on ` +
-							`what you make of the user's feedback and what you are changing — then retry ` +
-							`this exact call.`
+							`the latest message on thread "${targetThreadId}" is the author's and has ` +
+							`no reply from you yet, so this proposal would land as a bare diff with no ` +
+							`explanation. First reply on that thread with reply_to_comment — one or two ` +
+							`first-person sentences, addressed to the author as "you", on what you make ` +
+							`of the feedback and what you are changing — then retry this exact call.`
 					};
 					return;
 				}
@@ -753,7 +753,7 @@ export function editScratch(
 
 const editDocTool = tool(
 	'edit_doc',
-	'Replace old_string with new_string in the given file. For a workspace file this creates or updates a pending review proposal. The document changes only when the user accepts it. For a path under .docwriter/agent/scratch/ it writes plain text. old_string must match exactly once. Pass replace_all: true to replace every occurrence in one proposal, which suits renames and consistent term changes.',
+	'Replace old_string with new_string in the given file. For a workspace file this creates or updates a pending review proposal. The document changes only when I accept it. For a path under .docwriter/agent/scratch/ it writes plain text. old_string must match exactly once. Pass replace_all: true to replace every occurrence in one proposal, which suits renames and consistent term changes.',
 	{
 		file_path: z
 			.string()
@@ -815,7 +815,7 @@ const editDocTool = tool(
 		const result = await runTabWrite(tabId, 'agent_edit_doc', (currentMd) => {
 			const hits = countOccurrences(currentMd, old_string);
 			if (hits === 0) {
-				failure = `old_string not found in ${file_path}. The user may have edited this area — read_doc to see the current state and retry.`;
+				failure = `old_string not found in ${file_path}. The text may have changed since your last read — read_doc to see the current state and retry.`;
 				return null;
 			}
 			if (hits > 1 && !replaceAll) {
@@ -858,7 +858,7 @@ const editDocTool = tool(
 		}
 		if (result.discarded) {
 			return toolText(
-				`Edit discarded for ${file_path}: the user resolved this feedback thread before the edit landed, so it was not applied. Do not retry.`
+				`Edit discarded for ${file_path}: this feedback thread was resolved before the edit landed, so it was not applied. Do not retry.`
 			);
 		}
 
@@ -877,8 +877,8 @@ const editDocTool = tool(
 		return toolText(
 			result.committed
 				? replaceAll
-					? `Edit applied and accepted on ${file_path} (replaced ${appliedHits} occurrence${appliedHits === 1 ? '' : 's'}). The user already clicked Accept — do not leave another proposal.`
-					: `Edit applied and accepted on ${file_path}. The user already clicked Accept — do not leave another proposal.`
+					? `Edit applied and accepted on ${file_path} (replaced ${appliedHits} occurrence${appliedHits === 1 ? '' : 's'}). Accept was already clicked on this edit — do not leave another proposal.`
+					: `Edit applied and accepted on ${file_path}. Accept was already clicked on this edit — do not leave another proposal.`
 				: replaceAll
 					? `Edit applied to ${file_path} (replaced ${appliedHits} occurrence${appliedHits === 1 ? '' : 's'}).`
 					: `Edit applied to ${file_path}.`
@@ -991,7 +991,7 @@ const writeDocTool = tool(
 		const verb = opened.existedOnDisk ? 'Wrote' : 'Created';
 		return toolText(
 			result.committed
-				? `${verb} and accepted ${content.length} chars on ${file_path}. The user already clicked Accept — do not leave another proposal.`
+				? `${verb} and accepted ${content.length} chars on ${file_path}. Accept was already clicked on this edit — do not leave another proposal.`
 				: `${verb} ${content.length} chars to ${file_path}.`
 		);
 	}
@@ -1187,7 +1187,7 @@ export function applyReplyToComment(
 
 const commentDocTool = tool(
 	'comment_doc',
-	'Create a new comment thread anchored to existing text in a workspace document. Use it, at any autonomy level, as the announce thread before an edit proposal (see "Announce edits on a thread" in your instructions). Unprompted observation comments are allowed only at Medium or High autonomy, or when the user asks for a comment; at Low autonomy you may otherwise only reply on threads the user opened. The comment appears in the document gutter and does not change document text.',
+	'Create a new comment thread anchored to existing text in a workspace document. Use it, at any autonomy level, as the announce thread before an edit proposal (see "Announce edits on a thread" in your instructions). Unprompted observation comments are allowed only at Medium or High autonomy, or when I ask for a comment; at Low autonomy you may otherwise only reply on threads I opened. The comment appears in the document gutter and does not change document text.',
 	{
 		file_path: z
 			.string()
@@ -1215,7 +1215,7 @@ const commentDocTool = tool(
 			})
 			.optional()
 			.describe(
-				'Optional concrete edit the user can approve from the comment. Do not use this at Medium autonomy unless the user directly asked for an edit.'
+				'Optional concrete edit I can approve from the comment. Do not use this at Medium autonomy unless I directly asked for an edit.'
 			),
 		external_author: z
 			.string()
@@ -1270,12 +1270,12 @@ const commentDocTool = tool(
 
 const replyToCommentTool = tool(
 	'reply_to_comment',
-	'Reply on an existing comment thread. Route per the "Where a response goes" rules in your instructions. Write in the first person and keep it to a few sentences. Pass optional anchor_text to move the thread onto a new passage (re-attach after the original text was replaced by another accepted edit). You may attach proposed_edit for the user to approve later. To start a new thread, use comment_doc.',
+	'Reply on an existing comment thread. Route per the "Where a response goes" rules in your instructions. Write in the first person and keep it to a few sentences. Pass optional anchor_text to move the thread onto a new passage (re-attach after the original text was replaced by another accepted edit). You may attach proposed_edit for me to approve later. To start a new thread, use comment_doc.',
 	{
 		file_path: z
 			.string()
 			.describe(
-				'Workspace-relative path (e.g. "drafts/chapter-1.md") or absolute path inside the workspace. Must be an existing file — comments can only be attached to a tab the user can open.'
+				'Workspace-relative path (e.g. "drafts/chapter-1.md") or absolute path inside the workspace. Must be an existing file — comments can only be attached to a tab I can open.'
 			),
 		thread_id: z
 			.string()
@@ -1291,7 +1291,7 @@ const replyToCommentTool = tool(
 			.string()
 			.optional()
 			.describe(
-				'Exact current document text to move this thread onto. Use when the original anchor was deleted (e.g. the user accepted a neighboring proposal) and you need to re-attach the conversation to the corresponding current passage. Prefer a short unique sentence or clause.'
+				'Exact current document text to move this thread onto. Use when the original anchor was deleted (e.g. I accepted a neighboring proposal) and you need to re-attach the conversation to the corresponding current passage. Prefer a short unique sentence or clause.'
 			),
 		occurrence_index: z
 			.number()
@@ -1308,7 +1308,7 @@ const replyToCommentTool = tool(
 			})
 			.optional()
 			.describe(
-				'Optional concrete edit you would propose if the user approves. `old_string` must match once in the current live markdown at the time of writing. The edit is NOT applied until the user clicks "Approve & propose edit" on your comment.'
+				'Optional concrete edit you would propose if I approve. `old_string` must match once in the current live markdown at the time of writing. The edit is NOT applied until I click "Approve & propose edit" on your comment.'
 			)
 	},
 	async ({ file_path, thread_id, message, proposed_edit, anchor_text, occurrence_index }) => {
@@ -1350,7 +1350,7 @@ const replyToCommentTool = tool(
  * put one back in the gutter. */
 const listThreadsTool = tool(
 	'list_threads',
-	'Return comment threads for a workspace tab, with every message in each. Defaults to open (visible) threads. The prompt shows only stubs. Set include_dismissed=true to read threads the user dismissed — they stay on the document, hidden from the gutter. Then review_action({ action: "reopen_thread", thread_id }) brings one back.',
+	'Return comment threads for a workspace tab, with every message in each. Defaults to open (visible) threads. The prompt shows only stubs. Set include_dismissed=true to read threads I dismissed — they stay on the document, hidden from the gutter. Then review_action({ action: "reopen_thread", thread_id }) brings one back.',
 	{
 		file_path: z
 			.string()
@@ -1359,7 +1359,7 @@ const listThreadsTool = tool(
 			.boolean()
 			.optional()
 			.describe(
-				'If true, also return dismissed (hidden) threads so you can reopen one. Use when the user asks about a thread that disappeared or wants one brought back.'
+				'If true, also return dismissed (hidden) threads so you can reopen one. Use when I ask about a thread that disappeared or want one brought back.'
 			)
 	},
 	async ({ file_path, include_dismissed }) => {

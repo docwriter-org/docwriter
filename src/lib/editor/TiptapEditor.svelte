@@ -568,8 +568,8 @@
 		// routing rules pointed at edit_doc.
 		const tag = `[mode: edit]`;
 		const prefix = isCustom
-			? `The user flagged this passage with feedback "${label}"`
-			: `The user flagged this passage as "${label}"`;
+			? `I flagged this passage with feedback "${label}"`
+			: `I flagged this passage as "${label}"`;
 		// The system prompt's "Where a response goes" rules carry the routing;
 		// the trigger only needs the facts (mode tag + thread id).
 		const threadHint = threadId ? ` A thread is open for this feedback (thread_id="${threadId}").` : '';
@@ -579,7 +579,7 @@
 		// as a comment above the pending-edit card.
 		const planHint =
 			feedbackMode === 'plan' && threadId
-				? ` Plan first: before proposing any edit, you MUST reply on thread_id="${threadId}" via reply_to_comment with your reflection. Explain, in complete sentences, why the user likely flagged this passage, what in the current text reads wrong, and what you intend to change. Write it as plain explanatory prose that carries your reasoning, the way you would explain it out loud. Do not compress it into label-led fragments or bullet points. Only after posting that reply, propose the edit via edit_doc with thread_id="${threadId}" so it attaches to the same thread.`
+				? ` Plan first: before proposing any edit, you MUST reply on thread_id="${threadId}" via reply_to_comment with your reflection. Explain, in complete sentences addressed to me, why I likely flagged this passage, what in the current text reads wrong, and what you intend to change. Write it as plain explanatory prose that carries your reasoning, the way you would explain it out loud. Do not compress it into label-led fragments or bullet points. Only after posting that reply, propose the edit via edit_doc with thread_id="${threadId}" so it attaches to the same thread.`
 				: '';
 		return `${prefix}. ${tag} Rewrite it: "${passage}"${threadHint}${planHint}`;
 	}
@@ -1717,19 +1717,26 @@
 					// when building the transcript.
 					const transcript = [
 						...t.messages.map(
-							(m) => `- [${m.author === 'agent' ? 'agent' : 'user'}] ${m.text}`
+							(m) =>
+								`- [${
+									m.author === 'agent'
+										? 'you'
+										: m.author === 'external'
+											? (m.externalAuthor ?? 'external reviewer')
+											: 'me'
+								}] ${m.text}`
 						),
-						`- [user] ${replyText}`
+						`- [me] ${replyText}`
 					].join('\n');
 					// Routing (revise the pending edit vs. reply in words) lives in
 					// the system prompt's "Where a response goes" rules; the trigger
 					// carries the facts only.
 					const hasPendingEdit = rounds.some((r) => r.feedbackThreadId === t.id);
 					const trigger =
-						`The user replied on comment thread thread_id="${t.id}" on this tab` +
+						`I replied on comment thread thread_id="${t.id}" on this tab` +
 						`${hasPendingEdit ? ' (it has a pending edit)' : ''}.\n` +
 						`Anchor passage: "${t.anchor.quote}"\n` +
-						`User's latest reply: "${replyText}"\n` +
+						`My latest reply: "${replyText}"\n` +
 						`Full thread (latest reply included):\n${transcript}`;
 					onSubmit?.(trigger);
 				}}

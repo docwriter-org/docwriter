@@ -47,13 +47,14 @@
 	 * prompt the agent actually receives, not a vague "Submitted". */
 	function shortDescription(trigger: string | undefined): string {
 		if (!trigger) return 'Review documents & see if there’s anything to do';
-		// `The user flagged this passage as|with feedback "…"` — show the
-		// feedback text itself, quoted (U+201C/U+201D), and ellipsized when
-		// long. The HistoryPane italicizes descriptions that start with the
-		// curly-open-quote so user-voiced turns read as the user's words,
-		// not a framework label.
+		// `I flagged this passage as|with feedback "…"` — show the feedback
+		// text itself, quoted (U+201C/U+201D), and ellipsized when long. The
+		// HistoryPane italicizes descriptions that start with the
+		// curly-open-quote so user-voiced turns read as the author's words,
+		// not a framework label. Matchers accept BOTH voices: persisted
+		// rounds/history may carry the old third-person triggers.
 		const feedbackMatch = trigger.match(
-			/^The user flagged this passage (?:as|with feedback) "([^"]+)"/
+			/^(?:The user|I) flagged this passage (?:as|with feedback) "([^"]+)"/
 		);
 		if (feedbackMatch) {
 			const text = feedbackMatch[1];
@@ -64,13 +65,12 @@
 		if (/^Review the open files? against the following rules/.test(trigger)) {
 			return 'Apply rules';
 		}
-		// Reject-and-reconsider trigger starts with "The user just rejected"
-		if (/^The user clicked Accept on your previous edit/.test(trigger)) {
+		if (/^(?:The user|I) clicked Accept on your previous edit/.test(trigger)) {
 			return 'Rebase stale proposal';
 		}
-		if (/^The user just rejected/.test(trigger)) {
+		if (/^(?:The user|I) just rejected/.test(trigger)) {
 			const retryFeedbackMatch = trigger.match(
-				/The user explained why they rejected it:\n\n```text\n([\s\S]*?)\n```/
+				/(?:The user|I) explained why (?:they|I) rejected it:\n\n```text\n([\s\S]*?)\n```/
 			);
 			if (retryFeedbackMatch) {
 				const feedback = retryFeedbackMatch[1].trim().replace(/\s+/g, ' ');
@@ -694,7 +694,7 @@
 		await removeTab(id, /* deleteFile */ true);
 		// Wake the agent so it can react — e.g. drop references to the
 		// deleted file from whatever's still open.
-		void submit(`The user deleted the file "${id}". Update any open files that referenced it.`);
+		void submit(`I deleted the file "${id}". Update any open files that referenced it.`);
 	}
 
 	/** No open tabs: tear down review/editor state and show the empty pane. */
@@ -996,10 +996,10 @@
 
 	function buildAudienceChangeMessage(audience: string): string {
 		if (!audience) {
-			return 'The user cleared the intended audience. Stop targeting a specific reader from now on.';
+			return 'I cleared the intended audience. Stop targeting a specific reader from now on.';
 		}
 		return (
-			`The user set the intended audience to: "${audience}". ` +
+			`I set the intended audience to: "${audience}". ` +
 			`Write for that reader from now on. Review the open documents with that audience in mind. ` +
 			`If a useful edit or comment follows, make it; otherwise keep the response brief.`
 		);
@@ -1151,7 +1151,7 @@
 		// If this is a feedback trigger, pull out the passage so the history
 		// entry shows both the label and what it was applied to.
 		const feedbackQuoteMatch = trigger?.match(
-			/^The user flagged this passage (?:as|with feedback) "[^"]+"\. Rewrite it to address that: "([\s\S]+)"$/
+			/^(?:The user|I) flagged this passage (?:as|with feedback) "[^"]+"\. Rewrite it to address that: "([\s\S]+)"$/
 		);
 		pushHistory({
 			type: 'user_action',
@@ -1686,7 +1686,7 @@
 		const oldString = stale.operation?.type === 'edit' ? stale.operation.oldString : undefined;
 		const newString = intendedReplacement(stale);
 		const lines: string[] = [
-			`The user clicked Accept on your previous edit to \`${tabId}\`. Rebase it onto the current text and leave a pending reviewable diff — do not apply it to the live document. It could not be accepted as-is because it became stale:`,
+			`I clicked Accept on your previous edit to \`${tabId}\`. Rebase it onto the current text and leave a pending reviewable diff — do not apply it to the live document. It could not be accepted as-is because it became stale:`,
 			'',
 			`> ${reason}`,
 			'',
@@ -1707,7 +1707,7 @@
 		}
 		lines.push(
 			'',
-			'Find the current passage that now corresponds to that old_string — match on intent and nearby wording, not a string-equal match. Then call edit_doc with that current passage as old_string and the intended new_string (adapt it only if the surrounding sentence requires it). Leave that edit as a pending proposal so the user can see the rebased diff and Accept it.'
+			'Find the current passage that now corresponds to that old_string — match on intent and nearby wording, not a string-equal match. Then call edit_doc with that current passage as old_string and the intended new_string (adapt it only if the surrounding sentence requires it). Leave that edit as a pending proposal so I can see the rebased diff and Accept it.'
 		);
 		if (thread) {
 			const transcript = thread.messages
@@ -2075,18 +2075,18 @@
 	): string {
 		const rejectedDiff = unifiedLineDiff(rejected.beforeMd, rejected.afterMd, 1);
 		const lines: string[] = [
-			`The user just rejected your previous edit on \`${tabId}\`:`,
+			`I just rejected your previous edit on \`${tabId}\`:`,
 			'',
 			'```diff',
 			rejectedDiff,
 			'```',
 			'',
-			"Do not make that same change again. Take this rejection as feedback on what the user wants different in that area of the file."
+			'Do not make that same change again. Take this rejection as feedback on what I want different in that area of the file.'
 		];
 		if (feedback) {
 			lines.push(
 				'',
-				'User provided this feedback:',
+				'I explained why I rejected it:',
 				'',
 				'```text',
 				feedback,
@@ -2353,7 +2353,7 @@
 			'',
 			proposal.plan,
 			'',
-			'The user rejected it with this feedback:',
+			'I rejected it with this feedback:',
 			'',
 			feedback,
 			'',

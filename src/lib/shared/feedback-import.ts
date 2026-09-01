@@ -6,7 +6,7 @@ export function buildFeedbackImportMessage(
 ): string {
 	const lines = [
 		'<mode>',
-		`Feedback import. The user imported ${comments.length} comment${comments.length === 1 ? '' : 's'} from external reviewers. Process each comment.`,
+		`Feedback import. I imported ${comments.length} comment${comments.length === 1 ? '' : 's'} from external reviewers. Process each comment.`,
 		'',
 		'For each comment:',
 		`1. Call read_doc("${tabId}") if you have not already.`,
@@ -44,7 +44,7 @@ export function buildFeedbackImportMessage(
 export function buildRawFeedbackMessage(rawText: string, tabId: string): string {
 	return [
 		'<mode>',
-		'Feedback import. The user pasted raw feedback from collaborators. Read it carefully, identify each distinct piece of feedback, and process them one at a time.',
+		'Feedback import. I pasted raw feedback from collaborators. Read it carefully, identify each distinct piece of feedback, and process them one at a time.',
 		'',
 		'For each piece of feedback you identify:',
 		`1. Call read_doc("${tabId}") if you have not already.`,
