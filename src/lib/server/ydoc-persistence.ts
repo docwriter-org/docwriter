@@ -5,7 +5,10 @@
  *   - `replayUpdatesInto(ydoc, tabId)` hydrates a fresh Y.Doc from SQLite.
  *     If no rows exist and a workspace file does, seeds the Y.Doc from the
  *     file's content and persists the seed as one `system` row so subsequent
- *     loads skip the disk read.
+ *     loads skip the disk read. If the file changed behind our back, the
+ *     replayed doc is rebased onto it with one more `system` update — the
+ *     log is never purged, so the tab's CRDT identity is stable across
+ *     unloads.
  *   - `markTabDirty(tabId)` queues a tab for the next global flush.
  *   - `flushMarkdownNow(tabId, ydoc)` force-flushes one tab synchronously.
  *
@@ -18,7 +21,13 @@ import { dirname } from 'path';
 import * as Y from 'yjs';
 import { getDb } from './db';
 import { tabFile } from './document-files';
-import { serializeYDoc, seedYDoc, SYSTEM_ORIGIN } from '$lib/shared/ydoc-codec';
+import {
+	serializeYDoc,
+	seedYDoc,
+	normalizeTypography,
+	replaceYDocText,
+	SYSTEM_ORIGIN
+} from '$lib/shared/ydoc-codec';
 
 /** Filesystem mtime can lag our `Date.now()` row-insert by a few hundred ms
  * (and HFS+ quantizes to 1s), so we require a couple seconds of slack before
@@ -27,24 +36,41 @@ const EXTERNAL_EDIT_SKEW_MS = 2_000;
 
 /** Hydrate a fresh Y.Doc from SQLite by replaying its update log. Each update
  * is applied with its original origin (preserved per row) so any origin-aware
- * observer sees the same origins it would live. */
+ * observer sees the same origins it would live.
+ *
+ * If the workspace file was edited behind our back while the tab was
+ * unloaded, disk wins — but the log is NOT thrown away. The external text is
+ * applied as one more `system` update ON TOP of the replayed history, so the
+ * tab's CRDT identity survives. That matters because a browser can outlive an
+ * unload (a laptop sleeping drops the WebSocket without restarting the
+ * server): when it reconnects it still holds the pre-unload items. Against a
+ * doc that kept its identity, that reconnect is a no-op merge. Against a
+ * freshly seeded doc — same text, brand-new item ids — Yjs has no way to know
+ * the two copies are the same prose and keeps both, appending a second copy of
+ * the document to itself on every wake. */
 export function replayUpdatesInto(ydoc: Y.Doc, tabId: string): void {
 	const db = getDb();
-	let rows = db
+	const rows = db
 		.prepare(`SELECT payload, origin, created FROM yjs_updates WHERE tab_id = ? ORDER BY seq`)
 		.all(tabId) as Array<{ payload: Buffer; origin: string; created: number }>;
-
-	if (rows.length > 0 && diskNewerThanLog(tabId, rows)) {
-		console.log(
-			`[docwriter] tab "${tabId}" was edited externally since last sync; disk wins, purging stale Y.Doc log`
-		);
-		db.prepare(`DELETE FROM yjs_updates WHERE tab_id = ?`).run(tabId);
-		rows = [];
-	}
 
 	if (rows.length > 0) {
 		for (const row of rows) {
 			ydoc.transact(() => Y.applyUpdate(ydoc, new Uint8Array(row.payload)), row.origin);
+		}
+		const external = externalEditText(tabId, rows, ydoc);
+		if (external !== null) {
+			console.log(
+				`[docwriter] tab "${tabId}" was edited externally since last sync; disk wins, rebasing Y.Doc onto the file`
+			);
+			const before = Y.encodeStateVector(ydoc);
+			ydoc.transact(() => replaceYDocText(ydoc, external), SYSTEM_ORIGIN);
+			const update = Y.encodeStateAsUpdate(ydoc, before);
+			// Persist the adoption ourselves: this may be running inside
+			// Hocuspocus's `onLoadDocument`, before its own onChange listener
+			// is attached. If onChange does fire too, the extra row carries
+			// the same items and replays idempotently.
+			if (update.length > 0) appendUpdate(tabId, update, SYSTEM_ORIGIN);
 		}
 		return;
 	}
@@ -64,37 +90,41 @@ export function replayUpdatesInto(ydoc: Y.Doc, tabId: string): void {
 	}
 }
 
-function diskNewerThanLog(
+/** The file's text when it was edited outside docwriter since the log's last
+ * write, else null. `ydoc` must already hold the replayed log.
+ *
+ * Both sides are compared through `normalizeTypography`, the same
+ * transformation the seeder and serializer apply. Without it a file holding
+ * an em dash (or a curly quote, or an ellipsis) never matches its own Y.Doc —
+ * the doc canonicalizes those to ASCII, the file keeps them — so every mtime
+ * bump, including the content-free ones a cloud-sync client makes on wake,
+ * would read as an external edit. */
+function externalEditText(
 	tabId: string,
-	rows: Array<{ payload: Buffer; origin: string; created: number }>
-): boolean {
+	rows: Array<{ created: number }>,
+	ydoc: Y.Doc
+): string | null {
 	const workspacePath = tabFile(tabId);
-	if (!existsSync(workspacePath)) return false;
+	if (!existsSync(workspacePath)) return null;
 	let st;
 	try {
 		st = statSync(workspacePath);
 	} catch {
-		return false;
+		return null;
 	}
 	const maxCreated = rows.reduce((max, r) => (r.created > max ? r.created : max), 0);
-	if (st.mtimeMs <= maxCreated + EXTERNAL_EDIT_SKEW_MS) return false;
+	if (st.mtimeMs <= maxCreated + EXTERNAL_EDIT_SKEW_MS) return null;
 
 	let diskContent: string;
 	try {
 		diskContent = readFileSync(workspacePath, 'utf-8');
 	} catch {
-		return false;
+		return null;
 	}
-	const scratch = new Y.Doc();
-	try {
-		for (const row of rows) {
-			scratch.transact(() => Y.applyUpdate(scratch, new Uint8Array(row.payload)), row.origin);
-		}
-		const logContent = serializeYDoc(scratch);
-		return logContent.replace(/\n$/, '') !== diskContent.replace(/\n$/, '');
-	} finally {
-		scratch.destroy();
-	}
+	const logContent = serializeYDoc(ydoc);
+	const diskText = normalizeTypography(diskContent);
+	if (logContent.replace(/\n$/, '') === diskText.replace(/\n$/, '')) return null;
+	return diskContent;
 }
 
 export function appendUpdate(tabId: string, update: Uint8Array, origin: string) {
