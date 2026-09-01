@@ -45,7 +45,7 @@
 		newRule = '';
 		// Wake the agent so it can revise the open files against the new rule
 		// without the user having to click "Apply rules" separately.
-		onSubmit?.(`The user added a new writing rule: "${text}". Revise the open files to comply.`);
+		onSubmit?.(`I added a new writing rule: "${text}". Revise the open files to comply.`);
 	}
 
 	function applyRules() {
@@ -75,7 +75,7 @@
 			if (isFreezeRule(rule)) {
 				const quote = freezeQuoteFromRule(rule);
 				onSubmit?.(
-					`The user unlocked a previously frozen passage — you may edit it again if needed:\n"${quote}"`
+					`I unlocked a previously frozen passage — you may edit it again if needed:\n"${quote}"`
 				);
 			}
 		}

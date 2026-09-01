@@ -993,7 +993,7 @@ export const POST: RequestHandler = async ({ request }) => {
 							abortController.abort();
 							return {
 								behavior: 'deny' as const,
-								message: 'Plan sent to the user for review. Stop — do not execute.'
+								message: 'Plan sent for review. Stop — do not execute.'
 							};
 						}
 						if (!warmup) {

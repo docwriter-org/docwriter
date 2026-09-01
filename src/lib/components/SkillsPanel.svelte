@@ -98,10 +98,10 @@
 		const text = source.trim();
 		if (!text || !onSubmit) return;
 		onSubmit([
-			`The user typed this into the DocWriter Settings > Skills add box: "${text}".`,
+			`I typed this into the DocWriter Settings > Skills add box: "${text}".`,
 			'Treat it as a request to add or create an Agent Skill.',
 			'If it is a GitHub URL, GitHub owner/repo shorthand, local skill directory, or SKILL.md path, call `add_skill` with the resolved source.',
-			'If it is just a name or vague description, ask the user for the GitHub URL or local path, or identify a likely public skill source before calling `add_skill`.',
+			'If it is just a name or vague description, ask me for the GitHub URL or local path, or identify a likely public skill source before calling `add_skill`.',
 			'Do not edit `.docwriter/skills.json`, `.claude/skills`, or `.agents/skills` directly.'
 		].join('\n'));
 		source = '';

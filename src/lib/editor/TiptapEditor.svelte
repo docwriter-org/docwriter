@@ -1127,7 +1127,7 @@
 		closeFeedbackPopup({ preserveSelection: false, refocusEditor: true });
 		// Wake the agent so it knows this passage is off-limits going forward.
 		onSubmit?.(
-			`The user froze this passage — do not edit it (a Freeze rule was added):\n"${quote}"`
+			`I froze this passage — do not edit it (a Freeze rule was added):\n"${quote}"`
 		);
 	}
 
@@ -1156,7 +1156,7 @@
 		if (editor) setFreezeOverlayState(editor, { rules: next });
 		if (wakeAgent) {
 			onSubmit?.(
-				`The user unlocked a previously frozen passage — you may edit it again if needed:\n"${quote}"`
+				`I unlocked a previously frozen passage — you may edit it again if needed:\n"${quote}"`
 			);
 		}
 	}
@@ -1704,8 +1704,8 @@
 						.map((m) => `- [${m.author === 'agent' ? 'agent' : 'user'}] ${m.text}`)
 						.join('\n');
 					const trigger = suggestion
-						? `The user approved the suggestion in comment thread "${t.id}" on this tab. Apply this edit via edit_doc with thread_id="${t.id}" so it attaches to this thread:\n\nold_string: "${suggestion.oldString}"\nnew_string: "${suggestion.newString}"\n\nAnchor passage: "${t.anchor.quote}"\nFull thread:\n${transcript}`
-						: `The user approved comment thread "${t.id}" on this tab. Apply the edit you described via edit_doc with thread_id="${t.id}" so it attaches to this thread.\n\nAnchor passage: "${t.anchor.quote}"\nFull thread:\n${transcript}`;
+						? `I approved the suggestion in comment thread "${t.id}" on this tab. Apply this edit via edit_doc with thread_id="${t.id}" so it attaches to this thread:\n\nold_string: "${suggestion.oldString}"\nnew_string: "${suggestion.newString}"\n\nAnchor passage: "${t.anchor.quote}"\nFull thread:\n${transcript}`
+						: `I approved comment thread "${t.id}" on this tab. Apply the edit you described via edit_doc with thread_id="${t.id}" so it attaches to this thread.\n\nAnchor passage: "${t.anchor.quote}"\nFull thread:\n${transcript}`;
 					onSubmit?.(trigger);
 					openCommentThreadId.set(null);
 				}}

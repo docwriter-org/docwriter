@@ -963,12 +963,12 @@
 		conservative: {
 			label: 'Low',
 			instruction:
-				'Low autonomy means you should act only when the user asks, or when something is clearly broken. Do not create proactive comments or edits.'
+				'Low autonomy means you should act only when I ask, or when something is clearly broken. Do not create proactive comments or edits.'
 		},
 		balanced: {
 			label: 'Medium',
 			instruction:
-				'Medium autonomy means you may proactively create new comment threads. Do not edit unless the user asks.'
+				'Medium autonomy means you may proactively create new comment threads. Do not edit unless I ask.'
 		},
 		aggressive: {
 			label: 'High',

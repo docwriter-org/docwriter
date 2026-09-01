@@ -1391,11 +1391,24 @@ const listThreadsTool = tool(
 	}
 );
 
-export const docToolsMcp = createSdkMcpServer({
-	name: 'docwriter-doc',
-	version: '0.0.1',
-	tools: [editDocTool, readDocTool, writeDocTool, commentDocTool, replyToCommentTool, listThreadsTool]
-});
+/** Build a FRESH `docwriter-doc` MCP server for one `query()` call.
+ *
+ * This must NOT be a module-level singleton. An in-process SDK MCP server
+ * binds to the query that connects it, so sharing one instance across
+ * overlapping renders leaves the second render without any document tools:
+ * `edit_doc` / `read_doc` / `comment_doc` and friends silently vanish from
+ * its tool list. The agent then falls back to the built-in `Edit`, which
+ * writes straight to the workspace file with no review round, no thread and
+ * no diff card — the user's document changes with nothing to accept or
+ * reject. (Its sibling `buildDocwriterMcp()` was already per-call, which is
+ * why only these six tools disappeared.) */
+export function buildDocToolsMcp() {
+	return createSdkMcpServer({
+		name: 'docwriter-doc',
+		version: '0.0.1',
+		tools: [editDocTool, readDocTool, writeDocTool, commentDocTool, replyToCommentTool, listThreadsTool]
+	});
+}
 
 /** SDK-namespaced tool names (what appears in stream events). */
 export const EDIT_DOC_TOOL_NAME = 'mcp__docwriter-doc__edit_doc';

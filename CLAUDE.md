@@ -316,6 +316,17 @@ the disposition from `discussed` to `applied`.
   `setThreadResolved` / `setThreadAnchor`. Legacy threads migrate on doc
   load. Client observers must `observeDeep` — nested mutations don't fire
   shallow map observers.
+- **Agent tool availability is per-render.** `buildDocToolsMcp()` builds a
+  FRESH `docwriter-doc` MCP server for every `query()`. It must never become
+  a module singleton again: an in-process SDK MCP server binds to the query
+  that connects it, so a shared instance leaves a second, overlapping render
+  with no `edit_doc` / `read_doc` / `comment_doc` at all. Paired with that,
+  `permissionMode` is `'default'`, NOT `'acceptEdits'` — `acceptEdits`
+  auto-approves built-in file mutation and skips `canUseTool`, so the
+  "built-in Edit / Write are restricted to your scratch directory" gate
+  never ran and a tool-less agent would rewrite the workspace file with no
+  review round, no thread and no diff card. `agent-voice.test.ts` and the
+  live gate message are the guards.
 - **Injected transcript voice.** The transcript is the author and the agent
   talking: injected user turns speak as "I", the system prompt is the
   author's briefing, and the agent addresses the author as "you" — never

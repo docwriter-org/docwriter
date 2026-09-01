@@ -215,7 +215,7 @@ function examplesMarkdown(profile: StyleProfile, sentenceIndex = makeSentenceInd
 function skillMarkdown(skillName: string, profileBody: string, skillVersion: number): string {
 	return `---
 name: ${skillName}
-description: Apply the writing style learned from this workspace's references. Use when drafting or revising prose for this workspace unless the user requests a different style. Do not use reference facts or claims as content.
+description: Apply the writing style learned from this workspace's references. Use when drafting or revising prose for this workspace unless I request a different style. Do not use reference facts or claims as content.
 ---
 
 # Apply the learned author style
@@ -228,7 +228,7 @@ Preserve the meaning, facts, citations, and requested format of the document you
 
 Read \`references/examples.md\` when an instruction is unclear and you want to see more of the author's own prose. Read \`references/metrics.json\` or \`references/propositions.json\` only when this profile is insufficient.
 
-The user's rules come first. Anything here that conflicts with a rule, or with what the user asked for this turn, loses.
+My rules come first. Anything here that conflicts with a rule, or with what I asked for this turn, loses.
 
 ${profileBody}
 
