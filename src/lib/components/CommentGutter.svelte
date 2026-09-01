@@ -106,7 +106,7 @@
 	/** Vertical space the batch bar claims at the top of the gutter, so the
 	 * first card can be pushed clear of it: `top` + `height` on
 	 * `.gutter-batch-bar`. */
-	const BATCH_BAR_HEIGHT = 6 + 24;
+	const BATCH_BAR_HEIGHT = 6 + 26;
 	let showBatchBar = $derived(!muted && rounds.length > 0 && !!(onAcceptAll || onRejectAll));
 	let reapply = $derived($staleAcceptUi?.tabId === tabId ? $staleAcceptUi : null);
 	function isReapplyingThread(threadId: string): boolean {
@@ -998,18 +998,15 @@
 		overflow: visible;
 		font-family: 'Inter', -apple-system, sans-serif;
 	}
-	/* Two quiet buttons, right-aligned to the cards' edge — no label, no
-	 * container. The count lives inside each button (GitHub's "Commit
-	 * suggestions (3)"), which is what finally removed the shape problem:
-	 * a separate count meant three fragments needing a container to group
-	 * them and a gap in the middle, and every container made this compete
-	 * with the AI-provenance pill above it.
+	/* Two real buttons, right-aligned to the cards' edge. No container: a
+	 * solid primary anchors the pair, so neither button floats on the
+	 * column's grey the way loose text did. Every container tried here
+	 * either stranded the actions across a gap of its own background or
+	 * stacked a second competing pill under the editor chrome.
 	 *
-	 * Deliberately understated. Google Docs hides accept-all behind Tools >
-	 * Review suggested edits and Notion doesn't offer one at all, because
-	 * bulk-accepting edits to your own prose is the risky move. The cards
-	 * are the objects here; this is an escape hatch, so it stays faint and
-	 * only picks up the accent on hover. */
+	 * The count lives inside each button rather than in a separate label
+	 * (GitHub's batched "Commit suggestions"), which is what removed the
+	 * third fragment that kept needing somewhere to live. */
 	.gutter-batch-bar {
 		position: absolute;
 		top: 6px;
@@ -1017,33 +1014,50 @@
 		z-index: 4;
 		display: flex;
 		align-items: center;
-		gap: 2px;
-		height: 24px;
+		gap: 6px;
+		height: 26px;
 	}
 	.batch-btn {
 		display: inline-flex;
 		align-items: center;
-		gap: 4px;
-		padding: 0 8px;
-		height: 24px;
-		border: none;
-		border-radius: 6px;
-		background: transparent;
+		gap: 5px;
+		height: 26px;
+		padding: 0 10px 0 8px;
+		border-radius: 7px;
 		font: inherit;
 		font-size: 12px;
 		font-weight: 500;
-		color: var(--text-faint);
 		white-space: nowrap;
 		cursor: pointer;
-		transition: background 120ms ease, color 120ms ease;
+		transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
 	}
-	.batch-btn:hover:not(:disabled) {
-		background: var(--bg-hover);
+	/* Secondary: the same treatment as the AI-provenance pill, so it reads as
+	 * a sibling control rather than a stray bit of text. */
+	.batch-btn.reject {
+		color: var(--text-faint);
+		background: var(--bg-elevated);
+		border: 1px solid var(--border-light);
+		box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+	}
+	.batch-btn.reject:hover:not(:disabled) {
 		color: var(--text);
+		background: var(--bg-hover);
+		border-color: var(--border);
+	}
+	/* Primary: solid accent, matching `.accept-all-btn` inside a thread card.
+	 * Accepting a batch is a real action people want to reach for, so it gets
+	 * a real button — the app already spells "accept all" this way one level
+	 * down, and a faint version of it just disappeared into the column. */
+	.batch-btn.accept {
+		color: #fff;
+		font-weight: 600;
+		background: var(--accent);
+		border: 1px solid var(--accent);
+		box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
 	}
 	.batch-btn.accept:hover:not(:disabled) {
-		background: color-mix(in srgb, var(--accent) 12%, transparent);
-		color: var(--accent);
+		background: color-mix(in srgb, var(--accent) 88%, black);
+		border-color: color-mix(in srgb, var(--accent) 88%, black);
 	}
 	.batch-btn:disabled {
 		opacity: 0.5;
