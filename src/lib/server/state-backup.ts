@@ -17,9 +17,6 @@ const BACKUPS_DIR = join(DOCWRITER_DIR, 'backups');
 /** Keep the most recent N backup files; older ones are pruned on write. */
 const MAX_BACKUPS = 40;
 
-export function backupsDir(): string {
-	return BACKUPS_DIR;
-}
 
 /** Snapshot a document's text + threads + pending rounds. `reason` names
  * the transition (e.g. 'delete-file', 'external-edit-reseed'). Returns the

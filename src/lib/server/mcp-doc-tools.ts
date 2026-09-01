@@ -35,6 +35,7 @@ import {
 	appendThreadMessage,
 	setThreadResolved,
 	setThreadAnchor,
+	resolveEmptyEditThreads,
 	getFragment,
 	AGENT_ORIGIN,
 	USER_ORIGIN,
@@ -277,25 +278,6 @@ function dropMatchingReviewRounds(
 		reviewArr.delete(i, 1);
 	}
 	return droppedThreadIds;
-}
-
-function resolveEmptyEditThreads(ydoc: Y.Doc, threadIds: Iterable<string>): void {
-	const ids = new Set([...threadIds].filter((id): id is string => !!id));
-	if (ids.size === 0) return;
-	const commentsMap = getCommentsMap(ydoc);
-	const stillReferenced = new Set(
-		getReviewArray(ydoc)
-			.toArray()
-			.map((r) => r.feedbackThreadId)
-			.filter((id): id is string => typeof id === 'string')
-	);
-	for (const tid of ids) {
-		const thread = getThread(commentsMap, tid);
-		if (!thread || thread.resolved) continue;
-		if (stillReferenced.has(tid)) continue;
-		if (thread.messages.some((m) => m.author === 'user')) continue;
-		setThreadResolved(commentsMap, tid, true);
-	}
 }
 
 /** Apply an agent write to the live fragment and drop the stale/superseded

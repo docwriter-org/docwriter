@@ -150,17 +150,15 @@ export function setOpenTabs(state: { order: string[]; active: string | null }) {
 				ensure.run(id, now, now);
 				position.run(i, id === state.active ? 1 : 0, now, id);
 			}
-			if (state.order.length === 0) {
-				db.prepare(
-					`UPDATE documents SET status = 'closed', order_index = NULL, is_active = 0
-					 WHERE status = 'open'`
-				).run();
-			} else {
-				db.prepare(
-					`UPDATE documents SET status = 'closed', order_index = NULL, is_active = 0
-					 WHERE status = 'open' AND tab_id NOT IN (${state.order.map(() => '?').join(',')})`
-				).run(...state.order);
-			}
+			// `NOT IN ()` is a syntax error with zero placeholders, so the
+			// clause is omitted when the bar is empty.
+			const keep = state.order.length
+				? ` AND tab_id NOT IN (${state.order.map(() => '?').join(',')})`
+				: '';
+			db.prepare(
+				`UPDATE documents SET status = 'closed', order_index = NULL, is_active = 0
+				 WHERE status = 'open'${keep}`
+			).run(...state.order);
 		})();
 	} catch (err) {
 		logDbError('setOpenTabs', err);
@@ -329,12 +327,3 @@ export function clearMissing(tabId: string) {
 	}
 }
 
-export function touchActivity(tabId: string, ts = Date.now()) {
-	try {
-		getDb()
-			.prepare(`UPDATE documents SET last_activity = ? WHERE tab_id = ?`)
-			.run(ts, tabId);
-	} catch (err) {
-		logDbError('touchActivity', err);
-	}
-}

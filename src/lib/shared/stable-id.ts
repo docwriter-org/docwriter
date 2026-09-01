@@ -7,7 +7,7 @@
  * rowids, which restart after a DELETE-all rewrite — reordering the list
  * silently re-keyed every usage count onto a different action.
  */
-export function stableIdHash(input: string): string {
+function stableIdHash(input: string): string {
 	let hash = 5381;
 	for (let i = 0; i < input.length; i++) {
 		hash = ((hash << 5) + hash + input.charCodeAt(i)) | 0;

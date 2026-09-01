@@ -23,6 +23,7 @@ import {
 	getCommentsMap,
 	getThread,
 	setThreadResolved,
+	resolveEmptyEditThreads,
 	migrateLegacyThreads,
 	getFragment,
 	readReviewRounds,
@@ -195,37 +196,6 @@ async function withLiveDoc<T>(
 	if (update.length > 0) appendUpdate(tabId, update, USER_ORIGIN);
 	ydoc.destroy();
 	return result;
-}
-
-/** After rounds are accepted/rejected, tidy up any comment threads they
- * were attached to. An *edit-only* thread — one the system auto-opened to
- * wrap a spontaneous agent edit, so it carries no real conversation (no
- * user message) — has nothing left to show once its edit is gone, so we
- * auto-resolve it (the card disappears). A thread with genuine back-and-
- * forth (any user message) is left open: the edit row clears but the
- * conversation stays, and the user dismisses it manually via the card's
- * Dismiss button. Runs inside the caller's transaction so the dismiss
- * lands in the same Yjs delta as the round removal.
- *
- * `threadIds` are the feedbackThreadIds of the just-removed rounds. */
-function resolveEmptyEditThreads(ydoc: Y.Doc, threadIds: Set<string>): void {
-	if (threadIds.size === 0) return;
-	const commentsMap = getCommentsMap(ydoc);
-	const stillReferenced = new Set(
-		getReviewArray(ydoc)
-			.toArray()
-			.map((r) => r.feedbackThreadId)
-			.filter((id): id is string => typeof id === 'string')
-	);
-	for (const tid of threadIds) {
-		const thread = getThread(commentsMap, tid);
-		if (!thread || thread.resolved) continue;
-		// Keep the thread if it still has a pending edit, or if it holds a
-		// real conversation (any user message).
-		if (stillReferenced.has(tid)) continue;
-		if (thread.messages.some((m) => m.author === 'user')) continue;
-		setThreadResolved(commentsMap, tid, true);
-	}
 }
 
 export async function acceptTabRounds(

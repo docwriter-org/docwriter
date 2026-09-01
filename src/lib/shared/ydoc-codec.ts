@@ -390,6 +390,32 @@ export function setThreadAnchor(
 	return true;
 }
 
+/** After rounds are removed (accepted or rejected), auto-resolve the threads
+ * that only existed to announce them. An announce thread carries no real
+ * conversation — no user message — so once its edit is gone it has nothing
+ * left to show. A thread with genuine back-and-forth stays open for the
+ * author to dismiss, and so does one that still has another pending round.
+ * Callers run inside their own transact so the dismiss lands in the same
+ * delta as the round removal. */
+export function resolveEmptyEditThreads(ydoc: Y.Doc, threadIds: Iterable<string>): void {
+	const ids = new Set([...threadIds].filter(Boolean));
+	if (ids.size === 0) return;
+	const commentsMap = getCommentsMap(ydoc);
+	const stillReferenced = new Set(
+		getReviewArray(ydoc)
+			.toArray()
+			.map((r) => r.feedbackThreadId)
+			.filter((id): id is string => typeof id === 'string')
+	);
+	for (const tid of ids) {
+		const thread = getThread(commentsMap, tid);
+		if (!thread || thread.resolved) continue;
+		if (stillReferenced.has(tid)) continue;
+		if (thread.messages.some((m) => m.author === 'user')) continue;
+		setThreadResolved(commentsMap, tid, true);
+	}
+}
+
 /** Upgrade every legacy plain-object thread in the doc to nested form, in
  * one SYSTEM-origin transaction. Returns how many were converted. Run this
  * only on the authoritative load path (the delta must be persisted);
