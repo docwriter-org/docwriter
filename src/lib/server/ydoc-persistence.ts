@@ -20,7 +20,7 @@ import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync } from 'fs
 import { dirname } from 'path';
 import * as Y from 'yjs';
 import { getDb } from './db';
-import { tabFile, isKnownTextExtension } from './document-files';
+import { tabFile, isBinaryTabPath } from './document-files';
 import { ensureDocument } from './documents-store';
 import { backupDocumentState } from './state-backup';
 import {
@@ -59,7 +59,7 @@ const EXTERNAL_EDIT_SKEW_MS = 2_000;
  * Binary tabs (PDFs, images) are never materialized: seeding one used to
  * write the file's bytes into the log as UTF-8 mojibake. */
 export function replayUpdatesInto(ydoc: Y.Doc, tabId: string): void {
-	if (!isKnownTextExtension(tabId)) return;
+	if (isBinaryTabPath(tabId)) return;
 	const db = getDb();
 	const rows = db
 		.prepare(`SELECT payload, origin, created FROM yjs_updates WHERE tab_id = ? ORDER BY seq`)

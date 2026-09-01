@@ -42,7 +42,7 @@ import {
 	compactTab,
 	setLiveDocResolver
 } from './ydoc-persistence';
-import { isKnownTextExtension } from './document-files';
+import { isBinaryTabPath } from './document-files';
 import { ensureDocument, deleteDocument } from './documents-store';
 import { backupDocumentState } from './state-backup';
 import { scrubFeedbackThreads } from './feedback-import';
@@ -81,7 +81,7 @@ export function createWsServer(port: number): Server {
 			// Binary tabs (PDFs, images) are preview-only: never seed or sync
 			// a Y.Doc for one — the old path decoded the file's bytes as UTF-8
 			// into the CRDT log.
-			if (!isKnownTextExtension(tabId)) return document;
+			if (isBinaryTabPath(tabId)) return document;
 			// Register the identity row before any update rows exist — the
 			// yjs_updates FK requires it, which turns what used to be a silent
 			// orphan into a loud error.

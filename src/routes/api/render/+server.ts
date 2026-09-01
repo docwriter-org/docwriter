@@ -8,7 +8,7 @@ import { buildToolDefinitions, TOOL_NAMES } from '$lib/server/providers/tool-han
 import {
 	AGENT_SCRATCH_DIR,
 	isValidTabId,
-	isKnownTextExtension,
+	isBinaryTabPath,
 	tabFile
 } from '$lib/server/document-files';
 import {
@@ -81,7 +81,7 @@ function splitTabsByKind(allTabIds: string[]): { textTabs: string[]; previewTabs
 	const textTabs: string[] = [];
 	const previewTabs: string[] = [];
 	for (const id of allTabIds) {
-		(isKnownTextExtension(id) ? textTabs : previewTabs).push(id);
+		(isBinaryTabPath(id) ? previewTabs : textTabs).push(id);
 	}
 	return { textTabs, previewTabs };
 }

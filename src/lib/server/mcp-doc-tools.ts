@@ -61,7 +61,7 @@ import type {
 	PendingReviewRound
 } from '$lib/types';
 import { formatListedThreads } from '$lib/shared/list-threads';
-import { isValidTabId, isKnownTextExtension, tabFile, WORKSPACE_ROOT } from './document-files';
+import { isValidTabId, isBinaryTabPath, tabFile, WORKSPACE_ROOT } from './document-files';
 import { resolveWorkspacePath } from './workspace-path';
 import { getRules } from './runtime-state';
 import { openDocument } from './documents-store';
@@ -324,7 +324,7 @@ export async function runTabWrite(
 	trigger: PendingReviewRound['trigger'],
 	mutator: (currentText: string) => RoundMutation | null
 ): Promise<TabWriteResult | { error: string }> {
-	if (!isKnownTextExtension(tabId)) {
+	if (isBinaryTabPath(tabId)) {
 		return { error: `${tabId} is a binary file — it has no editable document.` };
 	}
 	const ws = getHocuspocus();
@@ -615,7 +615,7 @@ export function ensureWorkspaceTabOpen(
 	opts: { createIfMissing: boolean }
 ): EnsureTabResult {
 	const existingTabId = resolveTabFromPath(path);
-	if (existingTabId && !isKnownTextExtension(existingTabId)) {
+	if (existingTabId && isBinaryTabPath(existingTabId)) {
 		return { ok: false, error: binaryTabError(path) };
 	}
 	if (existingTabId && isOpenTab(existingTabId)) {
@@ -635,7 +635,7 @@ export function ensureWorkspaceTabOpen(
 			)
 		};
 	}
-	if (!isKnownTextExtension(tabId)) {
+	if (isBinaryTabPath(tabId)) {
 		return { ok: false, error: binaryTabError(path) };
 	}
 
@@ -903,7 +903,7 @@ const readDocTool = tool(
 		// if any, else the committed Y.Doc text). This is the path that lets
 		// the agent see its own queued edits before they land.
 		const tabId = resolveTabFromPath(file_path);
-		if (tabId && !isKnownTextExtension(tabId)) {
+		if (tabId && isBinaryTabPath(tabId)) {
 			return binaryTabError(file_path);
 		}
 		if (tabId && isOpenTab(tabId)) {
@@ -1367,7 +1367,7 @@ const listThreadsTool = tool(
 			return toolError('list_threads cannot be used on scratch paths — only on workspace tab files.');
 		}
 		const tabId = resolveTabFromPath(file_path);
-		if (tabId && !isKnownTextExtension(tabId)) {
+		if (tabId && isBinaryTabPath(tabId)) {
 			return binaryTabError(file_path);
 		}
 		if (!tabId || !isOpenTab(tabId)) {

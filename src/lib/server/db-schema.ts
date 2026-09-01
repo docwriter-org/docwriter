@@ -16,7 +16,7 @@
  * inspection (v13's backfill/repair does).
  */
 import type { Database } from 'better-sqlite3';
-import { isKnownTextExtension } from './document-files';
+import { isBinaryTabPath } from './document-files';
 import { actionIdForLabel } from '$lib/shared/stable-id';
 
 type Migration =
@@ -289,7 +289,7 @@ const MIGRATIONS: Migration[] = [
 			const deleteKv = db.prepare(`DELETE FROM kv WHERE key = ?`);
 			let purgedBinary = 0;
 			for (const { tab_id } of distinct) {
-				if (isKnownTextExtension(tab_id)) continue;
+				if (!isBinaryTabPath(tab_id)) continue;
 				purgedBinary += (deleteRows.run(tab_id).changes as number) ?? 0;
 				deleteKv.run(`last_seen:${tab_id}`);
 			}
