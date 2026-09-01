@@ -3475,7 +3475,12 @@
 	{/snippet}
 
 	{#snippet workspacePanelSnippet()}
-		<WorkspacePanel onApplied={applyWorkspaceUiReset} onTabsChanged={loadTabs} />
+		<WorkspacePanel
+			onApplied={applyWorkspaceUiReset}
+			onTabsChanged={() => {
+				void loadTabs();
+			}}
+		/>
 	{/snippet}
 
 	<div class="toolbar">
