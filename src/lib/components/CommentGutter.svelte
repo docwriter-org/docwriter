@@ -104,9 +104,9 @@
 	}: Props = $props();
 
 	/** Vertical space the batch bar claims at the top of the gutter, so the
-	 * first card can be pushed clear of it: `top` (8) + `height` (30) + its
-	 * 1px borders. Mirrors `.gutter-batch-bar`. */
-	const BATCH_BAR_HEIGHT = 8 + 30 + 2;
+	 * first card can be pushed clear of it: `top` + `height` on
+	 * `.gutter-batch-bar`. */
+	const BATCH_BAR_HEIGHT = 6 + 24;
 	let showBatchBar = $derived(!muted && rounds.length > 0 && !!(onAcceptAll || onRejectAll));
 	let reapply = $derived($staleAcceptUi?.tabId === tabId ? $staleAcceptUi : null);
 	function isReapplyingThread(threadId: string): boolean {
@@ -633,27 +633,24 @@
 <div class="comment-gutter" bind:this={gutterEl}>
 	{#if showBatchBar}
 		<div class="gutter-batch-bar">
-			<span class="batch-count">{rounds.length} suggestion{rounds.length === 1 ? '' : 's'}</span>
-			<div class="batch-actions">
-				<button
-					class="batch-btn reject"
-					type="button"
-					onclick={() => onRejectAll?.()}
-					disabled={!onRejectAll}
-					use:tooltip={`Reject all ${rounds.length} pending suggestion${rounds.length === 1 ? '' : 's'}`}
-				>
-					<X size={11} /> Reject all
-				</button>
-				<button
-					class="batch-btn accept"
-					type="button"
-					onclick={() => onAcceptAll?.()}
-					disabled={!onAcceptAll}
-					use:tooltip={`Accept all ${rounds.length} pending suggestion${rounds.length === 1 ? '' : 's'}`}
-				>
-					<Check size={11} /> Accept all
-				</button>
-			</div>
+			<button
+				class="batch-btn reject"
+				type="button"
+				onclick={() => onRejectAll?.()}
+				disabled={!onRejectAll}
+				use:tooltip={`Reject all ${rounds.length} pending suggestion${rounds.length === 1 ? '' : 's'}`}
+			>
+				<X size={11} /> Reject {rounds.length}
+			</button>
+			<button
+				class="batch-btn accept"
+				type="button"
+				onclick={() => onAcceptAll?.()}
+				disabled={!onAcceptAll}
+				use:tooltip={`Accept all ${rounds.length} pending suggestion${rounds.length === 1 ? '' : 's'}`}
+			>
+				<Check size={11} /> Accept {rounds.length}
+			</button>
 		</div>
 	{/if}
 	{#each visibleThreads as thread (thread.id)}
@@ -1001,49 +998,34 @@
 		overflow: visible;
 		font-family: 'Inter', -apple-system, sans-serif;
 	}
-	/* The header of the card stack, not a second piece of chrome. It takes
-	 * the cards' exact geometry and surface (same left/right edges, radius,
-	 * border, shadow) so it groups with what it acts on instead of competing
-	 * with the AI-provenance pill above it. Two earlier shapes failed for the
-	 * same underlying reason — no container meant the count, the buttons and
-	 * the accent chip floated on bare grey with a gap between them and
-	 * nothing to align to; shrink-wrapping it into its own pill fixed the
-	 * floating but left two mismatched pills stacked in the corner. Anchored
-	 * to the stack, a label-left/actions-right toolbar is just a toolbar. */
+	/* Two quiet buttons, right-aligned to the cards' edge — no label, no
+	 * container. The count lives inside each button (GitHub's "Commit
+	 * suggestions (3)"), which is what finally removed the shape problem:
+	 * a separate count meant three fragments needing a container to group
+	 * them and a gap in the middle, and every container made this compete
+	 * with the AI-provenance pill above it.
+	 *
+	 * Deliberately understated. Google Docs hides accept-all behind Tools >
+	 * Review suggested edits and Notion doesn't offer one at all, because
+	 * bulk-accepting edits to your own prose is the risky move. The cards
+	 * are the objects here; this is an escape hatch, so it stays faint and
+	 * only picks up the accent on hover. */
 	.gutter-batch-bar {
 		position: absolute;
-		top: 8px;
-		left: 10px;
+		top: 6px;
 		right: 10px;
 		z-index: 4;
 		display: flex;
 		align-items: center;
-		justify-content: space-between;
-		gap: 8px;
-		height: 30px;
-		padding: 0 4px 0 11px;
-		background: var(--bg-elevated);
-		border: 1px solid var(--border-light);
-		border-radius: 10px;
-		box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
-	}
-	.batch-count {
-		font-size: 12px;
-		font-weight: 500;
-		color: var(--text-faint);
-		white-space: nowrap;
-	}
-	.batch-actions {
-		display: flex;
-		align-items: center;
 		gap: 2px;
+		height: 24px;
 	}
 	.batch-btn {
 		display: inline-flex;
 		align-items: center;
 		gap: 4px;
-		padding: 0 7px;
-		height: 22px;
+		padding: 0 8px;
+		height: 24px;
 		border: none;
 		border-radius: 6px;
 		background: transparent;
@@ -1059,15 +1041,8 @@
 		background: var(--bg-hover);
 		color: var(--text);
 	}
-	/* Accept is the primary action, so it carries the accent — as a tint it
-	 * reads as the default without shouting over the cards it applies to. */
-	.batch-btn.accept {
-		color: var(--accent);
-		font-weight: 600;
-		background: color-mix(in srgb, var(--accent) 10%, transparent);
-	}
 	.batch-btn.accept:hover:not(:disabled) {
-		background: color-mix(in srgb, var(--accent) 18%, transparent);
+		background: color-mix(in srgb, var(--accent) 12%, transparent);
 		color: var(--accent);
 	}
 	.batch-btn:disabled {
