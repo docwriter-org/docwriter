@@ -109,21 +109,23 @@ export function getRecentActions(): Array<{
 	icon: string;
 	pinned: boolean;
 	color: string;
+	usedAt: number;
 }> {
 	const rows = getDb()
-		.prepare('SELECT rowid, label FROM recent_actions ORDER BY rowid ASC')
-		.all() as Array<{ rowid: number; label: string }>;
+		.prepare('SELECT rowid, label, used_at FROM recent_actions ORDER BY rowid ASC')
+		.all() as Array<{ rowid: number; label: string; used_at: number }>;
 	return rows.map((row) => ({
 		id: `custom_${row.rowid}`,
 		label: row.label,
 		icon: 'message-square',
 		pinned: false,
-		color: '#7c3aed'
+		color: '#7c3aed',
+		usedAt: row.used_at
 	}));
 }
 
 export function setRecentActions(
-	actions: Array<{ label: string }> | undefined
+	actions: Array<{ label: string; usedAt?: number }> | undefined
 ) {
 	dbReplaceRecentActions(actions);
 }

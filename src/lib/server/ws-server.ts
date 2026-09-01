@@ -27,7 +27,8 @@ import {
 	applyEditToFragment
 } from '$lib/shared/ydoc-codec';
 import { applyPendingReviewRound } from '$lib/review-rounds';
-import { touchLastSeen } from '$lib/server/last-seen';
+import { deleteLastSeen, touchLastSeen } from '$lib/server/last-seen';
+import { isBinaryOrPreviewPath } from '$lib/shared/file-kinds';
 import {
 	appendUpdate,
 	replayUpdatesInto,
@@ -68,6 +69,7 @@ export function createWsServer(port: number): Server {
 			throw new Error('server-instance-mismatch');
 		},
 		async onLoadDocument({ documentName: tabId, document }) {
+			if (isBinaryOrPreviewPath(tabId)) return document;
 			const ydoc = document as unknown as Y.Doc;
 			const fragment = ydoc.getXmlFragment(FRAGMENT_NAME);
 			if (fragment.length === 0) {
@@ -407,29 +409,36 @@ export async function setThreadResolution(
 
 // ── Tab destruction ──────────────────────────────────────────────────────
 
+/** Close WS clients and drop the in-memory Hocuspocus Document without
+ * deleting SQLite history. Used after a rename so the new path hydrates
+ * from the migrated `yjs_updates` rows. */
+export async function unloadTabDocument(tabId: string): Promise<void> {
+	const server = globalHolder().__docwriterWsServer;
+	if (!server?.hocuspocus) return;
+	try {
+		server.hocuspocus.closeConnections(tabId);
+	} catch (err) {
+		console.error(`[docwriter] closeConnections failed for "${tabId}":`, err);
+	}
+	const doc = server.hocuspocus.documents.get(tabId);
+	if (doc) {
+		try {
+			await server.hocuspocus.unloadDocument(doc);
+		} catch (err) {
+			console.error(`[docwriter] unloadDocument failed for "${tabId}":`, err);
+		}
+		server.hocuspocus.documents.delete(tabId);
+	}
+}
+
 /** Fully tear down server-side state for a tab whose file was just deleted:
  * disconnect any WS clients, unload the Hocuspocus Document, and drop the
  * persisted CRDT log. Without this, reopening the same path would replay
  * stale updates from SQLite and silently resurrect the deleted content. */
 export async function destroyTabState(tabId: string): Promise<void> {
-	const server = globalHolder().__docwriterWsServer;
-	if (server?.hocuspocus) {
-		try {
-			server.hocuspocus.closeConnections(tabId);
-		} catch (err) {
-			console.error(`[docwriter] closeConnections failed for "${tabId}":`, err);
-		}
-		const doc = server.hocuspocus.documents.get(tabId);
-		if (doc) {
-			try {
-				await server.hocuspocus.unloadDocument(doc);
-			} catch (err) {
-				console.error(`[docwriter] unloadDocument failed for "${tabId}":`, err);
-			}
-			server.hocuspocus.documents.delete(tabId);
-		}
-	}
+	await unloadTabDocument(tabId);
 	purgeTabUpdates(tabId);
+	deleteLastSeen(tabId);
 }
 
 // Re-export so legacy imports resolve.

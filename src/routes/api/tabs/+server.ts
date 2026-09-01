@@ -10,14 +10,16 @@ import {
 import { getTabsState, setTabsState } from '$lib/server/runtime-state';
 import { writeTextAtomic } from '$lib/server/file-utils';
 import { destroyTabState } from '$lib/server/ws-server';
+import { migrateRenamedTab } from '$lib/server/tab-rename';
+import { resolveTabRename, visibleTabsState } from '$lib/shared/tab-reconcile';
 
 /** GET /api/tabs  →  { order, active, tabs: string[] }
  *
- * The tabs list is the source of truth now (was: scan notes/). If a
- * tab's file no longer exists on disk (user deleted it externally), we
- * drop it from the list. */
+ * Hide tabs whose files are currently missing. Do not persist that filter:
+ * a compile/sync/rename race used to DELETE the `tabs` row while thousands
+ * of `yjs_updates` stayed behind. */
 export const GET: RequestHandler = async () => {
-	const state = reconcileTabsState();
+	const state = visibleOpenTabs();
 	return json({
 		order: state.order,
 		active: state.active,
@@ -47,12 +49,12 @@ export const POST: RequestHandler = async ({ request }) => {
 		await destroyTabState(id);
 	}
 
-	const state = reconcileTabsState();
+	const state = getTabsState();
 	if (!state.order.includes(id)) state.order.push(id);
 	state.active = id;
 	setTabsState(state);
 
-	return json({ ok: true, id, active: id, order: state.order });
+	return json({ ok: true, id, active: id, order: visibleOpenTabs().order });
 };
 
 /** DELETE /api/tabs?id=<path>[&deleteFile=true]
@@ -83,58 +85,56 @@ export const DELETE: RequestHandler = async ({ url }) => {
 	let active = stored.active === id ? null : stored.active;
 	if (!active && order.length > 0) active = order[0];
 	setTabsState({ order, active });
-	return json({ ok: true, order, active });
+	const visible = visibleOpenTabs();
+	return json({ ok: true, order: visible.order, active: visible.active });
 };
 
 /** PATCH /api/tabs  body: { id, newId? , active? }  →  rename or focus.
  *
- * `active: true` just switches focus. `newId` renames the file, the
- * agent shadow (if present), and updates order + active pointer. */
+ * `active: true` just switches focus. `newId` renames the file and
+ * migrates the CRDT log + last_seen key so the tab does not vanish. */
 export const PATCH: RequestHandler = async ({ request }) => {
 	const body = await request.json();
 	const id = String(body?.id || '').trim();
 	if (!isValidTabId(id)) throw error(400, 'Invalid tab id');
 
-	let state = reconcileTabsState();
-
 	if (body?.newId) {
 		const newId = String(body.newId).trim();
 		if (!isValidTabId(newId)) throw error(400, 'Invalid new tab id');
-		if (id === newId) return json({ ok: true, id, order: state.order, active: state.active });
+		if (id === newId) {
+			const visible = visibleOpenTabs();
+			return json({ ok: true, id, order: visible.order, active: visible.active });
+		}
 		const from = tabFile(id);
 		const to = tabFile(newId);
-		if (!existsSync(from)) throw error(404, `Tab "${id}" not found`);
-		if (existsSync(to)) throw error(409, `"${newId}" already exists.`);
-		mkdirSync(dirname(to), { recursive: true });
-		renameSync(from, to);
+		const resolution = resolveTabRename(existsSync(from), existsSync(to));
+		if (resolution === 'source-missing') throw error(404, `Tab "${id}" not found`);
+		if (resolution === 'target-exists') throw error(409, `"${newId}" already exists.`);
+		if (resolution === 'rename') {
+			mkdirSync(dirname(to), { recursive: true });
+			renameSync(from, to);
+		}
+		await migrateRenamedTab(id, newId);
+		const state = getTabsState();
 		state.order = state.order.map((t) => (t === id ? newId : t));
+		if (!state.order.includes(newId)) state.order.push(newId);
 		if (state.active === id) state.active = newId;
 		setTabsState(state);
-		return json({ ok: true, id: newId, order: state.order, active: state.active });
+		const visible = visibleOpenTabs();
+		return json({ ok: true, id: newId, order: visible.order, active: visible.active });
 	}
 
 	if (body?.active === true) {
+		const state = getTabsState();
 		if (!state.order.includes(id)) throw error(404, `Tab "${id}" not found`);
 		state.active = id;
 		setTabsState(state);
 	}
 
-	return json({ ok: true, id, order: state.order, active: state.active });
+	const visible = visibleOpenTabs();
+	return json({ ok: true, id, order: visible.order, active: visible.active });
 };
 
-/** Reconcile the persisted tabs list against what's on disk. Drops any
- * entry whose file no longer exists (e.g. the user deleted it in their
- * terminal); resolves a dangling `active` pointer. */
-function reconcileTabsState() {
-	const stored = getTabsState();
-	const order = stored.order.filter((id) => existsSync(tabFile(id)));
-	let active = stored.active && order.includes(stored.active) ? stored.active : null;
-	if (!active && order.length > 0) active = order[0];
-
-	const cleaned = { order, active };
-	const changed =
-		cleaned.order.join('|') !== stored.order.join('|') ||
-		cleaned.active !== stored.active;
-	if (changed) setTabsState(cleaned);
-	return cleaned;
+function visibleOpenTabs() {
+	return visibleTabsState(getTabsState(), (id) => existsSync(tabFile(id)));
 }

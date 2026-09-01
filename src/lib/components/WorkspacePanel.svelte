@@ -9,10 +9,21 @@
 		yjsUpdate: string | null;
 	}
 
+	interface LeftoverTab {
+		tabId: string;
+		kind: 'closed' | 'missing';
+		hasUpdates: boolean;
+		hasLastSeen: boolean;
+		listed: boolean;
+		updateCount: number;
+		lastActivity: number | null;
+	}
+
 	interface Props {
 		onApplied?: (tabs: TabResetResult[]) => void;
+		onTabsChanged?: () => void | Promise<void>;
 	}
-	let { onApplied }: Props = $props();
+	let { onApplied, onTabsChanged }: Props = $props();
 
 	interface WorkspaceInfo {
 		root: string;
@@ -20,18 +31,22 @@
 		name: string;
 		cwd: string;
 		warning: string | null;
+		leftovers?: LeftoverTab[];
 	}
 
 	let info = $state<WorkspaceInfo | null>(null);
+	let leftovers = $state<LeftoverTab[]>([]);
 	let error = $state<string | null>(null);
 	let status = $state<string | null>(null);
-	let busy = $state<'reviews' | 'comments' | 'both' | null>(null);
+	let busy = $state<'reviews' | 'comments' | 'both' | string | null>(null);
 
 	async function load() {
 		try {
 			const res = await fetch('/api/workspace');
 			if (!res.ok) throw new Error(`Failed to load workspace (${res.status})`);
-			info = (await res.json()) as WorkspaceInfo;
+			const data = (await res.json()) as WorkspaceInfo;
+			info = data;
+			leftovers = data.leftovers ?? [];
 			error = null;
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);
@@ -93,6 +108,56 @@
 		} finally {
 			busy = null;
 		}
+	}
+
+	async function leftoverAction(kind: 'reopen_tab' | 'purge_tab', tabId: string) {
+		if (kind === 'purge_tab') {
+			const ok = await showConfirm(
+				`Remove leftover DocWriter state for "${tabId}"? The workspace file stays if it is still on disk. Comments, pending reviews, and the CRDT history for this path are deleted.`,
+				{ title: 'Purge leftover tab', confirmLabel: 'Purge', danger: true }
+			);
+			if (!ok) return;
+		}
+		busy = `${kind}:${tabId}`;
+		error = null;
+		status = null;
+		try {
+			const res = await fetch('/api/workspace', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ action: kind, tabId })
+			});
+			const data = (await res.json().catch(() => ({}))) as {
+				ok?: boolean;
+				error?: string;
+				leftovers?: LeftoverTab[];
+			};
+			if (!res.ok || !data.ok) {
+				throw new Error(data.error || `Request failed (${res.status})`);
+			}
+			leftovers = data.leftovers ?? [];
+			await onTabsChanged?.();
+			status =
+				kind === 'reopen_tab'
+					? `Reopened ${tabId}.`
+					: `Purged leftover state for ${tabId}.`;
+		} catch (e) {
+			error = e instanceof Error ? e.message : String(e);
+		} finally {
+			busy = null;
+		}
+	}
+
+	function leftoverHint(item: LeftoverTab): string {
+		const updates =
+			item.updateCount === 1 ? '1 saved update' : `${item.updateCount} saved updates`;
+		if (item.kind === 'closed') {
+			return `File is still on disk. ${updates}.`;
+		}
+		if (item.listed) {
+			return `Listed as a tab, but the file is missing. ${updates}.`;
+		}
+		return `Not in the tab list and the file is missing. ${updates}.`;
 	}
 </script>
 
@@ -179,10 +244,83 @@
 				</button>
 			</div>
 		</div>
+
+		<div class="settings-section">
+			<div class="setting-label">Leftover tab state</div>
+			<div class="setting-hint">
+				Closing a tab keeps its edit history so you can reopen it. If a
+				tab disappeared from the list while the file is still here —
+				often after a rename or a brief missing-file race — reopen it
+				from this list. Purge only when you want to forget that
+				history.
+			</div>
+			{#if leftovers.length === 0}
+				<div class="muted">No leftover tab state.</div>
+			{:else}
+				<ul class="leftover-list">
+					{#each leftovers as item (item.tabId)}
+						<li class="leftover">
+							<div class="leftover-path" title={item.tabId}>{item.tabId}</div>
+							<div class="leftover-meta">{leftoverHint(item)}</div>
+							<div class="leftover-actions">
+								{#if item.kind === 'closed'}
+									<button
+										class="btn"
+										type="button"
+										disabled={busy !== null}
+										onclick={() => void leftoverAction('reopen_tab', item.tabId)}
+									>
+										{busy === `reopen_tab:${item.tabId}` ? 'Opening…' : 'Reopen'}
+									</button>
+								{/if}
+								<button
+									class="btn danger"
+									type="button"
+									disabled={busy !== null}
+									onclick={() => void leftoverAction('purge_tab', item.tabId)}
+								>
+									{busy === `purge_tab:${item.tabId}` ? 'Purging…' : 'Purge'}
+								</button>
+							</div>
+						</li>
+					{/each}
+				</ul>
+			{/if}
+		</div>
 	{/if}
 </div>
 
 <style>
+	.leftover-list {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+	.leftover {
+		border: 1px solid var(--border-light);
+		border-radius: 6px;
+		padding: 8px;
+		background: var(--bg-surface);
+	}
+	.leftover-path {
+		font-family: ui-monospace, monospace;
+		font-size: 11.5px;
+		word-break: break-all;
+		margin-bottom: 3px;
+	}
+	.leftover-meta {
+		font-size: 11.5px;
+		color: var(--text-muted);
+		line-height: 1.4;
+		margin-bottom: 6px;
+	}
+	.leftover-actions {
+		display: flex;
+		gap: 6px;
+	}
 	.settings-panel {
 		width: 360px;
 		max-width: calc(100vw - 32px);

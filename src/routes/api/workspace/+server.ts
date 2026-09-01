@@ -1,10 +1,10 @@
 /**
  * Workspace identity and review-UI recovery.
  *
- *   GET  — folder currently open, where `.docwriter` lives, and a warning
- *          when the invoke cwd has a different `.docwriter`.
- *   POST — clear pending reviews and/or comment threads without deleting
- *          the database or workspace files.
+ *   GET  — folder currently open, where `.docwriter` lives, leftover tab
+ *          state, and a warning when the invoke cwd has a different
+ *          `.docwriter`.
+ *   POST — reset_ui / reopen_tab / purge_tab.
  */
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
@@ -12,17 +12,43 @@ import { isValidTabId } from '$lib/server/document-files';
 import { getWorkspaceInfo } from '$lib/server/workspace-identity';
 import { resetWorkspaceUiState } from '$lib/server/reset-ui-state';
 import { getTabsState } from '$lib/server/runtime-state';
+import { listLeftoverTabs, purgeLeftoverTab, reopenLeftoverTab } from '$lib/server/leftover-tabs';
 
 export const GET: RequestHandler = async () => {
 	return json({
 		...getWorkspaceInfo(),
-		activeTabId: getTabsState().active
+		activeTabId: getTabsState().active,
+		leftovers: listLeftoverTabs()
 	});
 };
 
 export const POST: RequestHandler = async ({ request }) => {
 	const body = await request.json().catch(() => ({}));
-	if (body?.action !== 'reset_ui') {
+	const action = typeof body?.action === 'string' ? body.action : '';
+
+	if (action === 'reopen_tab') {
+		const tabId = String(body?.tabId || '').trim();
+		if (!isValidTabId(tabId)) throw error(400, 'Invalid tab id');
+		try {
+			const state = reopenLeftoverTab(tabId);
+			return json({ ok: true, ...state, leftovers: listLeftoverTabs() });
+		} catch (err) {
+			throw error(400, err instanceof Error ? err.message : String(err));
+		}
+	}
+
+	if (action === 'purge_tab') {
+		const tabId = String(body?.tabId || '').trim();
+		if (!isValidTabId(tabId)) throw error(400, 'Invalid tab id');
+		try {
+			const state = await purgeLeftoverTab(tabId);
+			return json({ ok: true, ...state, leftovers: listLeftoverTabs() });
+		} catch (err) {
+			throw error(400, err instanceof Error ? err.message : String(err));
+		}
+	}
+
+	if (action !== 'reset_ui') {
 		throw error(400, 'Unknown workspace action');
 	}
 	const reviews = body.reviews !== false;
@@ -40,5 +66,5 @@ export const POST: RequestHandler = async ({ request }) => {
 		tabId = body.tabId;
 	}
 	const result = await resetWorkspaceUiState({ reviews, comments, tabId });
-	return json({ ok: true, ...result });
+	return json({ ok: true, leftovers: listLeftoverTabs(), ...result });
 };

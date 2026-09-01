@@ -7,6 +7,7 @@
  */
 import * as Y from 'yjs';
 import { applyUiReset, type UiResetOptions, type UiResetResult } from '$lib/shared/reset-ui-state';
+import { isBinaryOrPreviewPath } from '$lib/shared/file-kinds';
 import { listPersistedTabIds } from './ydoc-persistence';
 import { getTabsState } from './runtime-state';
 import { withLiveDoc } from './ws-server';
@@ -42,11 +43,14 @@ export async function resetWorkspaceUiState(
 ): Promise<WorkspaceUiResetResult> {
 	const tabIds = options.tabId
 		? [options.tabId]
-		: [...new Set([...listPersistedTabIds(), ...getTabsState().order])].sort();
+		: [...new Set([...listPersistedTabIds(), ...getTabsState().order])]
+				.filter((id) => !isBinaryOrPreviewPath(id))
+				.sort();
 	const tabs: TabUiResetResult[] = [];
 	let reviewsCleared = 0;
 	let commentsCleared = 0;
 	for (const tabId of tabIds) {
+		if (isBinaryOrPreviewPath(tabId)) continue;
 		const result = await resetTabUiState(tabId, options);
 		tabs.push(result);
 		reviewsCleared += result.reviewsCleared;

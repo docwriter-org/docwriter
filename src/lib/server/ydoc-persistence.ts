@@ -18,6 +18,7 @@ import { dirname } from 'path';
 import * as Y from 'yjs';
 import { getDb } from './db';
 import { tabFile } from './document-files';
+import { isBinaryOrPreviewPath, looksLikeBinaryText } from '$lib/shared/file-kinds';
 import { serializeYDoc, seedYDoc, SYSTEM_ORIGIN } from '$lib/shared/ydoc-codec';
 
 /** Filesystem mtime can lag our `Date.now()` row-insert by a few hundred ms
@@ -29,6 +30,8 @@ const EXTERNAL_EDIT_SKEW_MS = 2_000;
  * is applied with its original origin (preserved per row) so any origin-aware
  * observer sees the same origins it would live. */
 export function replayUpdatesInto(ydoc: Y.Doc, tabId: string): void {
+	if (isBinaryOrPreviewPath(tabId)) return;
+
 	const db = getDb();
 	let rows = db
 		.prepare(`SELECT payload, origin, created FROM yjs_updates WHERE tab_id = ? ORDER BY seq`)
@@ -53,7 +56,7 @@ export function replayUpdatesInto(ydoc: Y.Doc, tabId: string): void {
 		const workspacePath = tabFile(tabId);
 		if (!existsSync(workspacePath)) return;
 		const content = readFileSync(workspacePath, 'utf-8');
-		if (!content) return;
+		if (!content || looksLikeBinaryText(content)) return;
 		ydoc.transact(() => seedYDoc(ydoc, content), SYSTEM_ORIGIN);
 		const update = Y.encodeStateAsUpdate(ydoc);
 		db.prepare(
@@ -68,6 +71,7 @@ function diskNewerThanLog(
 	tabId: string,
 	rows: Array<{ payload: Buffer; origin: string; created: number }>
 ): boolean {
+	if (isBinaryOrPreviewPath(tabId)) return false;
 	const workspacePath = tabFile(tabId);
 	if (!existsSync(workspacePath)) return false;
 	let st;
@@ -168,6 +172,7 @@ function runFlushTick() {
 }
 
 function writeTabFile(tabId: string, ydoc: Y.Doc) {
+	if (isBinaryOrPreviewPath(tabId)) return;
 	const content = serializeYDoc(ydoc);
 	// Skip no-op rewrites: a pending review round dirties the tab without
 	// changing the committed text, and rewriting would bump mtime → CLI
@@ -217,6 +222,56 @@ export function purgeTabUpdates(tabId: string) {
 	lastWrittenContent.delete(tabId);
 	lastWrittenByPath.delete(tabFile(tabId));
 	getDb().prepare(`DELETE FROM yjs_updates WHERE tab_id = ?`).run(tabId);
+}
+
+/** Move the CRDT log and flush cache when a tab path changes. Target rows
+ * (a race that opened the new path first) are dropped so the original
+ * history wins. */
+export function renameTabUpdates(fromId: string, toId: string): void {
+	if (fromId === toId) return;
+	const db = getDb();
+	const fromCount = (
+		db.prepare(`SELECT COUNT(*) AS n FROM yjs_updates WHERE tab_id = ?`).get(fromId) as {
+			n: number;
+		}
+	).n;
+	if (fromCount === 0) return;
+	db.transaction(() => {
+		db.prepare(`DELETE FROM yjs_updates WHERE tab_id = ?`).run(toId);
+		db.prepare(`UPDATE yjs_updates SET tab_id = ? WHERE tab_id = ?`).run(toId, fromId);
+	})();
+	dirtyTabs.delete(fromId);
+	const content = lastWrittenContent.get(fromId);
+	if (content !== undefined) {
+		lastWrittenContent.set(toId, content);
+		lastWrittenContent.delete(fromId);
+	}
+	const fromPath = tabFile(fromId);
+	const written = lastWrittenByPath.get(fromPath);
+	if (written !== undefined) {
+		lastWrittenByPath.set(tabFile(toId), written);
+		lastWrittenByPath.delete(fromPath);
+	}
+}
+
+export function listYjsTabIds(): string[] {
+	return (
+		getDb()
+			.prepare(`SELECT DISTINCT tab_id FROM yjs_updates ORDER BY tab_id`)
+			.all() as Array<{ tab_id: string }>
+	).map((row) => row.tab_id);
+}
+
+export function yjsTabStats(tabId: string): { updateCount: number; lastActivity: number | null } {
+	const row = getDb()
+		.prepare(
+			`SELECT COUNT(*) AS updateCount, MAX(created) AS lastActivity FROM yjs_updates WHERE tab_id = ?`
+		)
+		.get(tabId) as { updateCount: number; lastActivity: number | null };
+	return {
+		updateCount: row?.updateCount ?? 0,
+		lastActivity: row?.lastActivity ?? null
+	};
 }
 
 /** Tab ids that have a CRDT log and/or an open-tabs row. Recovery walks

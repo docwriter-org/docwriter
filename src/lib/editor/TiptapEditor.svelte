@@ -649,7 +649,8 @@
 		const relSnapshot = snapshotFeedbackRelPositions();
 		trackActionUsage(action.label);
 		if (!action.pinned) {
-			recentActions.update((prev) => [action, ...prev.filter((x) => x.id !== action.id)].slice(0, 6));
+			const used = { ...action, usedAt: Date.now() };
+			recentActions.update((prev) => [used, ...prev.filter((x) => x.id !== used.id)].slice(0, 6));
 		}
 		closeFeedbackPopup();
 		// Restore the mode for the trigger build — closeFeedbackPopup reset
@@ -679,7 +680,8 @@
 			label: fb,
 			icon: 'message-square',
 			pinned: false,
-			color: '#7c3aed'
+			color: '#7c3aed',
+			usedAt: Date.now()
 		};
 		trackActionUsage(customAction.label);
 		recentActions.update((prev) => [customAction, ...prev.filter((x) => x.label !== customAction.label)].slice(0, 6));

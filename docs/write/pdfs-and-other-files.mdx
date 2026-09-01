@@ -37,6 +37,6 @@ You can preview PDF, HTML, SVG, common image formats, Markdown, and plain text. 
 
 ## Large and binary files
 
-DocWriter copies imported binary data without decoding it as text, so importing a large image or PDF does not change its contents. When the agent or another tool reads a text file through DocWriter, each response is limited to 2 MB. You will see a notice when the response contains only part of the file.
+DocWriter copies imported binary data without decoding it as text, so importing a large image or PDF does not change its contents. Opening a PDF or other preview file does not store that file as a text document in saved DocWriter state. When the agent or another tool reads a text file through DocWriter, each response is limited to 2 MB. You will see a notice when the response contains only part of the file.
 
 Read [Generated previews](/customize/generated-previews) for hook output matching and live reload.

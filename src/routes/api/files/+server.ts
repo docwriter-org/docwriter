@@ -22,6 +22,9 @@ import { join, dirname } from 'path';
 import { resolveWorkspacePath } from '$lib/server/workspace-path';
 import { getTabsState, setTabsState } from '$lib/server/runtime-state';
 import { destroyTabState } from '$lib/server/ws-server';
+import { migrateTabsUnderPath } from '$lib/server/tab-rename';
+import { listLastSeenTabIds } from '$lib/server/last-seen';
+import { listYjsTabIds } from '$lib/server/ydoc-persistence';
 
 /** Names we always hide from the tree — noise that obscures the writing
  * workspace. `.docwriter/` is intentionally NOT here; the user wants to
@@ -119,6 +122,7 @@ export const PATCH: RequestHandler = async ({ request }) => {
 	if (existsSync(absTo)) throw error(409, `Target exists: ${to}`);
 	mkdirSync(dirname(absTo), { recursive: true });
 	renameSync(absFrom, absTo);
+	await migrateTabsUnderPath(from, to);
 	return json({ ok: true, from, to });
 };
 
@@ -137,8 +141,11 @@ export const DELETE: RequestHandler = async ({ url }) => {
 	// recreating the same path later resurrects the deleted content from
 	// the stale yjs_updates log.
 	const prefix = wasDir ? `${relPath}/` : null;
+	const matches = (id: string) => id === relPath || (prefix !== null && id.startsWith(prefix));
 	const state = getTabsState();
-	const doomed = state.order.filter((id) => id === relPath || (prefix && id.startsWith(prefix)));
+	const doomed = [
+		...new Set([...state.order, ...listYjsTabIds(), ...listLastSeenTabIds()].filter(matches))
+	];
 	if (doomed.length > 0) {
 		for (const id of doomed) {
 			await destroyTabState(id);

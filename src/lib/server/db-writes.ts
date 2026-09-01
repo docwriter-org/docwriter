@@ -211,7 +211,7 @@ export function dbClearSessionState() {
 }
 
 export function dbReplaceRecentActions(
-	actions: Array<{ label: string }> | undefined
+	actions: Array<{ label: string; usedAt?: number }> | undefined
 ) {
 	try {
 		const db = getDb();
@@ -222,7 +222,11 @@ export function dbReplaceRecentActions(
 			const insert = db.prepare(
 				'INSERT INTO recent_actions (label, used_at) VALUES (?, ?)'
 			);
-			for (const a of actions) insert.run(a.label, now);
+			for (const a of actions) {
+				const usedAt =
+					typeof a.usedAt === 'number' && Number.isFinite(a.usedAt) ? a.usedAt : now;
+				insert.run(a.label, usedAt);
+			}
 		})();
 	} catch (err) {
 		logDbError('replaceRecentActions', err);
@@ -279,6 +283,23 @@ export function kvDelete(key: string) {
 	} catch (err) {
 		logDbError('kvDelete:' + key, err);
 	}
+}
+
+/** Keys in `kv` that start with `prefix`, in key order. */
+export function kvKeysWithPrefix(prefix: string): string[] {
+	try {
+		const rows = getDb()
+			.prepare(`SELECT key FROM kv WHERE key LIKE ? ESCAPE '\\' ORDER BY key`)
+			.all(escapeLikePrefix(prefix) + '%') as Array<{ key: string }>;
+		return rows.map((row) => row.key);
+	} catch (err) {
+		logDbError('kvKeysWithPrefix:' + prefix, err);
+		return [];
+	}
+}
+
+function escapeLikePrefix(prefix: string): string {
+	return prefix.replace(/[\\%_]/g, (ch) => `\\${ch}`);
 }
 
 export function dbAppendConversationEvent(

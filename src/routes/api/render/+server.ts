@@ -24,6 +24,7 @@ import { readCommentThreads, readReviewRounds } from '$lib/shared/ydoc-codec';
 import type { CommentThread } from '$lib/types';
 import { formatDismissedThreadsHint } from '$lib/shared/list-threads';
 import { replayUpdatesInto } from '$lib/server/ydoc-persistence';
+import { isBinaryOrPreviewPath } from '$lib/shared/file-kinds';
 import { registerPendingAskUser } from '$lib/server/ask-user-state';
 import { unifiedLineDiff } from '$lib/diff';
 import { listStyleReferences } from '$lib/server/references';
@@ -51,6 +52,7 @@ import type { Reviewer } from '$lib/shared/reviewers';
  * Document (what clients are synced to); falls back to a throwaway Y.Doc
  * hydrated from SQLite when no client is connected. */
 function readLiveTabMarkdown(tabId: string): string {
+	if (isBinaryOrPreviewPath(tabId)) return '';
 	const holder = globalThis as unknown as {
 		__docwriterWsServer?: {
 			hocuspocus?: { documents?: { get(name: string): unknown } };
@@ -73,6 +75,7 @@ function readLiveTabMarkdown(tabId: string): string {
 /** Snapshot of a tab's comment threads. Prefer the Hocuspocus in-memory
  * Document; fall back to a throwaway doc hydrated from SQLite. */
 function readLiveTabCommentThreads(tabId: string): CommentThread[] {
+	if (isBinaryOrPreviewPath(tabId)) return [];
 	const holder = globalThis as unknown as {
 		__docwriterWsServer?: {
 			hocuspocus?: { documents?: { get(name: string): unknown } };
@@ -95,6 +98,7 @@ function readLiveTabCommentThreads(tabId: string): CommentThread[] {
  * the agent knows a reply there is feedback on an edit it should *revise*,
  * not a discussion to chat back on. */
 function readLiveTabPendingEditThreadIds(tabId: string): Set<string> {
+	if (isBinaryOrPreviewPath(tabId)) return new Set();
 	const holder = globalThis as unknown as {
 		__docwriterWsServer?: {
 			hocuspocus?: { documents?: { get(name: string): unknown } };
@@ -827,7 +831,8 @@ export const POST: RequestHandler = async ({ request }) => {
 		// baseline from kv. The agent gets a prompt built off this snapshot
 		// and post-render we write each tab's (new) current content back
 		// into kv so the next render diffs cleanly.
-		const tabsForPrompt: TabPromptInfo[] = allTabIds.map((id) => ({
+		const textTabIds = allTabIds.filter((id) => !isBinaryOrPreviewPath(id));
+		const tabsForPrompt: TabPromptInfo[] = textTabIds.map((id) => ({
 			tabId: id,
 			currentMd: readLiveTabMarkdown(id),
 			lastSeenMd: kvGet(lastSeenKey(id)),
@@ -1101,7 +1106,7 @@ export const POST: RequestHandler = async ({ request }) => {
 					) {
 						const retryPrompt = buildMultiTabPrompt(
 							active,
-							allTabIds.map((id) => ({
+							textTabIds.map((id) => ({
 								tabId: id,
 								currentMd: readLiveTabMarkdown(id),
 								lastSeenMd: kvGet(lastSeenKey(id)),
@@ -1141,7 +1146,7 @@ export const POST: RequestHandler = async ({ request }) => {
 				// user edited mid-render gets its fresh content baked in,
 				// and a tab the agent edited gets its post-edit content.
 				try {
-					for (const id of allTabIds) {
+					for (const id of textTabIds) {
 						const now = readLiveTabMarkdown(id);
 						kvSet(lastSeenKey(id), now);
 					}

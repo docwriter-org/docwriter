@@ -85,7 +85,14 @@ const TEXT_EXTENSIONS = new Set([
 	'conf',
 	'gitignore',
 	'gitattributes',
-	'rst'
+	'rst',
+	'tex',
+	'ltx',
+	'latex',
+	'bib',
+	'bibtex',
+	'sty',
+	'cls'
 ]);
 
 /** A tab id is a workspace-relative path (e.g. "drafts/chapter-1.md" or

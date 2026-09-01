@@ -36,9 +36,22 @@ Reply in the related thread or send a new Chat request to ask for a proposal bas
 
 ## A deleted file still appears
 
-Reload DocWriter so it can remove tabs for files that no longer exist. Removing a missing tab from the list only updates what you see. Your workspace file stays unchanged.
+A file that is briefly missing — for example during a compile or a rename — no longer removes that tab from saved state. The tab is hidden until the file is back. Your workspace file stays unchanged.
 
 When you delete a file inside DocWriter, you also lose its comments, pending reviews, and saved AI authorship markers. Browser undo history lasts only while the tab is loaded. Restore the project file and `.docwriter` folder from a backup if you need this information.
+
+## A tab vanished but the file is still there
+
+The most-edited file can disappear from the tab list while its edit history remains in `.docwriter/docwriter.db`. That happens when the tab row was dropped without cleaning up saved updates — for example after an older missing-file cleanup, or after a rename that did not move the history to the new path.
+
+Open **Settings**, then **Workspace**, and look under **Leftover tab state**.
+
+- **Reopen** puts the file back in the tab list and keeps its comments, pending reviews, and edit history.
+- **Purge** forgets that leftover history. The workspace file stays if it is still on disk.
+
+Closing a tab on purpose also leaves history so you can reopen the file later. Use **Purge** only when you want to discard that saved state.
+
+SQLite sequence numbers in `yjs_updates` are global, not per file. Small gaps of one or two numbers are normal after a tab is purged or a short log is replaced. They do not mean the database file is corrupt.
 
 ## A review card will not accept or dismiss
 

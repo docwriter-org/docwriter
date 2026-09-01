@@ -832,12 +832,15 @@
 		}
 	}
 
-	/** Reconcile open tabs after a FileTree rename. */
+	/** Reconcile open tabs after a FileTree rename or folder move. */
 	async function onFileTreeRenamed(fromPath: string, toPath: string) {
 		const existing = getCurrentTabList();
-		if (existing.includes(fromPath)) {
+		const prefix = `${fromPath}/`;
+		const affected = existing.filter((id) => id === fromPath || id.startsWith(prefix));
+		for (const id of affected) {
+			const newId = id === fromPath ? toPath : `${toPath}${id.slice(fromPath.length)}`;
 			try {
-				await renameTabAction(fromPath, toPath);
+				await renameTabAction(id, newId);
 			} catch (e) {
 				console.error('Renaming open tab failed:', e);
 			}
@@ -3472,7 +3475,7 @@
 	{/snippet}
 
 	{#snippet workspacePanelSnippet()}
-		<WorkspacePanel onApplied={applyWorkspaceUiReset} />
+		<WorkspacePanel onApplied={applyWorkspaceUiReset} onTabsChanged={loadTabs} />
 	{/snippet}
 
 	<div class="toolbar">

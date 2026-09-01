@@ -39,6 +39,7 @@ const pageFeatures = {
 		['Workspace', 'Open and restore tabs', C, 'Tabs'],
 		['Workspace', 'Rename a tab, copy its path, or delete its file', T, 'Tabs omits context menu actions'],
 		['Workspace', 'Close a tab without deleting its file', C, 'Tabs'],
+		['Workspace', 'Reopen or purge leftover tab state', C, 'Files and tabs'],
 		['Workspace', 'See a combined pending work badge on tabs', T, 'Tabs covers pending edits but not unresolved comments'],
 		['Workspace', 'Edit Markdown and other text files', C, 'Editor and Tabs'],
 		['Workspace', 'Keep .docwriter visible in the file tree', T, 'Tabs mentions obsolete state.json examples']
@@ -222,7 +223,8 @@ const pageFeatures = {
 		['Reference', 'Restart automatically after a server crash', C, 'CLI'],
 		['Reference', 'Recover from a server restart or WebSocket mismatch', M, 'No troubleshooting page'],
 		['Reference', 'Use the agent scratch workspace until a new session', M, 'No page'],
-		['Workspace', 'Clear stuck pending reviews and comment threads without deleting the database', C, 'Recovery']
+		['Workspace', 'Clear stuck pending reviews and comment threads without deleting the database', C, 'Recovery'],
+		['Workspace', 'Recover a vanished tab from leftover saved state', C, 'Recovery']
 	],
 	'help/privacy-and-safety': [
 		['Workspace', 'Block paths and symlinks outside the workspace', T, 'Tabs mentions the boundary without a safety page'],

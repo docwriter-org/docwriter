@@ -134,6 +134,9 @@ export interface Action {
 	icon: string; // lucide icon name
 	pinned: boolean;
 	color: string;
+	/** When the action was last used. Persisted so a full-list rewrite
+	 * does not flatten every row to the same timestamp. */
+	usedAt?: number;
 }
 
 /** Threaded comment anchored to a passage in a tab.

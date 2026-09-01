@@ -1,5 +1,5 @@
 {
-  "featureCount": 158,
+  "featureCount": 160,
   "unassignedCount": 0,
   "features": [
     {
@@ -125,17 +125,23 @@
     {
       "id": "write-files-and-tabs-07",
       "area": "Workspace",
-      "feature": "See a combined pending work badge on tabs",
+      "feature": "Reopen or purge leftover tab state",
       "targetPage": "write/files-and-tabs"
     },
     {
       "id": "write-files-and-tabs-08",
       "area": "Workspace",
-      "feature": "Edit Markdown and other text files",
+      "feature": "See a combined pending work badge on tabs",
       "targetPage": "write/files-and-tabs"
     },
     {
       "id": "write-files-and-tabs-09",
+      "area": "Workspace",
+      "feature": "Edit Markdown and other text files",
+      "targetPage": "write/files-and-tabs"
+    },
+    {
+      "id": "write-files-and-tabs-10",
       "area": "Workspace",
       "feature": "Keep .docwriter visible in the file tree",
       "targetPage": "write/files-and-tabs"
@@ -912,6 +918,12 @@
       "id": "help-recovery-04",
       "area": "Workspace",
       "feature": "Clear stuck pending reviews and comment threads without deleting the database",
+      "targetPage": "help/recovery"
+    },
+    {
+      "id": "help-recovery-05",
+      "area": "Workspace",
+      "feature": "Recover a vanished tab from leftover saved state",
       "targetPage": "help/recovery"
     },
     {

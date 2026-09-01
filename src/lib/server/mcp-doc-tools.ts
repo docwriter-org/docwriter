@@ -54,6 +54,7 @@ import type {
 } from '$lib/types';
 import { formatListedThreads } from '$lib/shared/list-threads';
 import { isValidTabId, tabFile, WORKSPACE_ROOT } from './document-files';
+import { isBinaryOrPreviewPath } from '$lib/shared/file-kinds';
 import { resolveWorkspacePath } from './workspace-path';
 import { getRules, getTabsState, setTabsState } from './runtime-state';
 import { writeTextAtomic } from './file-utils';
@@ -547,6 +548,14 @@ export function ensureWorkspaceTabOpen(
 ): EnsureTabResult {
 	const existingTabId = resolveTabFromPath(path);
 	if (existingTabId && isOpenTab(existingTabId)) {
+		if (isBinaryOrPreviewPath(existingTabId)) {
+			return {
+				ok: false,
+				error: toolError(
+					`${path} is a preview or binary file. Open it in the PDF or image viewer; do not edit it with write_doc or edit_doc.`
+				)
+			};
+		}
 		return {
 			ok: true,
 			tabId: existingTabId,
@@ -560,6 +569,14 @@ export function ensureWorkspaceTabOpen(
 			ok: false,
 			error: toolError(
 				`${path} is not a valid workspace-relative path. Use a path inside the workspace (e.g. "drafts/chapter-1.md") or under .docwriter/agent/scratch/.`
+			)
+		};
+	}
+	if (isBinaryOrPreviewPath(tabId)) {
+		return {
+			ok: false,
+			error: toolError(
+				`${path} is a preview or binary file. Open it in the PDF or image viewer; do not edit it with write_doc or edit_doc.`
 			)
 		};
 	}
