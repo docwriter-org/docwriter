@@ -10,9 +10,13 @@ npm run dev          # Start Vite dev server (hot reload)
 npm run build        # Production build
 npm run check        # TypeScript + Svelte type checking
 npm run check:watch  # Watch mode type checking
+npm run test:unit    # vitest (src/**/*.test.ts)
+npm run doctor       # docwriter doctor — inspect/repair .docwriter state
 ```
 
-No test framework is configured. Use `npm run check` for validation.
+Validate changes with `npm run check` AND `npm run test:unit`. The
+lifecycle/consistency invariants live in
+`src/lib/server/state-consistency.test.ts`.
 
 ## What DocWriter is
 
@@ -46,15 +50,37 @@ project-root/
                          server Y.Doc; git-friendly)
   drafts/chapter-1.md  ← any workspace file can be an open tab
   .docwriter/
-    docwriter.db       ← SQLite: yjs_updates, tabs, rules, reviewers,
+    docwriter.db       ← SQLite: documents, yjs_updates, rules, reviewers,
                          recent_actions, action_usage_counts,
                          provider_session_entries, conversation_events,
-                         kv (sessionId, agentSettings, last_seen:<tabId>,
-                             feedbackImport…)
+                         kv (sessionId, agentSettings, feedbackImport…)
+    workspace.json     ← stamp naming the workspace this state dir belongs
+                         to (written on boot; warns if the folder moved)
+    backups/           ← JSON snapshots written before any destructive
+                         transition (file delete, external-edit reseed,
+                         doctor repairs); pruned to the newest 40
     hooks.json         ← user-defined shell hooks (read by hooks-config.ts)
     agent/scratch/     ← agent scratch workspace (lazy-created on first
                          scratch write; cleared on "New session")
 ```
+
+**`documents` is the identity table** (schema v13): one row per document
+the app holds CRDT state for — lifecycle `status` (`open` in the tab bar /
+`closed` but restorable), tab-bar order, the agent's `last_seen` diff
+baseline (was kv `last_seen:<tabId>`), and the missing-file grace stamp.
+`yjs_updates.tab_id` has a FOREIGN KEY to it with ON DELETE/UPDATE CASCADE:
+deleting a document deletes its log in the same statement, renaming re-keys
+it, and an orphaned log row is structurally impossible. The old `tabs`
+table is gone; all access goes through `documents-store.ts` (never
+DELETE-all + INSERT for identity tables). Closing a tab is a status flip —
+reopening replays text, threads, pending rounds, and provenance. A missing
+file badges the tab (grace window; history-backed docs self-heal from the
+log) instead of deleting it. External file edits fold in as one appended
+SYSTEM update (normalized comparison — typography-only diffs don't count);
+log rows are deleted only by explicit delete, `docwriter doctor`, or
+compaction (>500 rows on unload), always after a backup. Binary tabs
+(`isBinaryTabPath` — a DENYLIST; LaTeX/Typst/BibTeX are text) are
+preview-only and never touch the CRDT.
 
 SQLite is the single source of truth for runtime state — there is no
 `state.json` JSON mirror (it was removed; only stale comments referenced it).
@@ -94,7 +120,7 @@ first `synced` event — on localhost this is sub-20ms.
 `/api/render` streams a single `query()` call over SSE:
 
 1. Build a multi-tab prompt:
-   - Every tab: header (path + active marker) + diff vs `kv['last_seen:<tabId>']` if it changed, else "unchanged" note. No tab content is ever inlined; the agent calls `read_doc(file_path)` on demand.
+   - Every text tab: header (path + active marker) + diff vs the document's `last_seen` baseline (a `documents` column) if it changed, else "unchanged" note. Diffs above ~8KB are summarized (`+X/−Y lines — call read_doc`) instead of inlined. Binary tabs are listed as preview-only, never materialized. No tab content is ever inlined; the agent calls `read_doc(file_path)` on demand.
    - First-render tab (no `last_seen`): path only — agent must `read_doc` to see content.
    Agency guidance (`conservative` / `balanced` / `aggressive`) rewires
    the "how to decide whether to edit" section.
@@ -119,7 +145,7 @@ first `synced` event — on localhost this is sub-20ms.
 5. SSE stream emits `tool_call_start`, `tool_call`, `assistant_text`,
    `result` — drives the HistoryPane. The `result` event does NOT carry
    markdown anymore; there's nothing to apply on the client.
-6. After render completes, update `kv['last_seen:<tabId>']` to the current
+6. After render completes, update each text tab's `last_seen` column to the current
    markdown for every tab the agent saw, so the next render's diff block
    reflects what changed since.
 
@@ -137,7 +163,10 @@ server-side UndoManager). Reject removes the round from the review
 `Y.Array`; the doc fragment isn't touched. Accept walks each accepted
 round and applies its `edit` op via `applyEditToFragment` (in
 `ydoc-codec.ts`), which deletes + reinserts only the paragraphs the edit
-covers. `write` ops fall back to wholesale `replaceYDocText`. Both paths
+covers. `write` ops fall back to wholesale `replaceYDocText`. Batch
+accepts SKIP stale rounds and report them (`skippedStale`) instead of
+409ing everything; only single-round accepts throw the
+StalePendingReviewError that drives the client's rebase flow. Both paths
 run in a single `ydoc.transact(..., USER_ORIGIN)` along with the
 `reviewArr.delete`.
 
@@ -276,6 +305,24 @@ the disposition from `discussed` to `applied`.
   to MUTATE a tab MUST go through
   `hocuspocus.openDirectConnection(...)` (see `getHocuspocus` in
   `mcp-doc-tools.ts`) — never mutate a replayed throwaway doc.
+- **Comment threads are nested Y types.** Each thread is a `Y.Map`
+  (id/anchor/resolved/createdAt) holding a `Y.Array` of messages, so
+  concurrent writes merge (a Dismiss racing an agent reply keeps both).
+  NEVER `commentsMap.set(id, {...})` a whole plain object — that reverts to
+  last-writer-wins and one side's write silently vanishes (the original
+  dismissed-thread-resurrects / reply-disappears bug). Read via
+  `readThreadValue`/`getThread`/`readCommentThreads` (they also accept the
+  legacy plain shape); write via `putThread` / `appendThreadMessage` /
+  `setThreadResolved` / `setThreadAnchor`. Legacy threads migrate on doc
+  load. Client observers must `observeDeep` — nested mutations don't fire
+  shallow map observers.
+- **Injected transcript voice.** The transcript is the author and the agent
+  talking: injected user turns speak as "I", the system prompt is the
+  author's briefing, and the agent addresses the author as "you" — never
+  "the user" in anything a person reads. Trigger-string MATCHERS
+  (`stale-accept.ts`, `+page.svelte` shortDescription) accept both the old
+  third-person and new first-person forms because persisted rounds carry
+  old triggers; keep them in lockstep when templates change.
 - **`Y.XmlText.toString()` is not plain text.** Once a text node carries a
   format attribute (the `ai` provenance attribute), `toString()` serializes
   formatted ranges as XML tags (`a <ai>b</ai>`). All text extraction in

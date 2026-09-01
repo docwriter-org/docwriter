@@ -154,7 +154,7 @@ const NARROW_MAX_CONTEXT = 4_096;
  * CRDT log during agent revision bursts. A pure insertion (the most common
  * revise-in-place shape) now costs its own size plus a few dozen context
  * chars. */
-function narrowWriteOperation(
+export function narrowWriteOperation(
 	beforeMd: string,
 	afterMd: string
 ): PendingReviewOperation | null {
