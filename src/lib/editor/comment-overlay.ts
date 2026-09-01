@@ -14,6 +14,7 @@ import {
 } from '$lib/editor-extensions';
 import {
 	getCommentsMap,
+	setThreadAnchor,
 	SYSTEM_ORIGIN,
 	captureAnchorContext,
 	matchCommentAnchor,
@@ -383,11 +384,15 @@ export const CommentOverlay = Extension.create({
 						// trackedOrigins is {ySyncPluginKey, USER_ORIGIN}. Otherwise the
 						// first backfill after loading a legacy/agent thread would plant
 						// a phantom undo step the user could Cmd+Z into.
+						//
+						// ANCHOR-ONLY write: server-created threads now arrive with rel
+						// positions stamped, so this fires for legacy threads only —
+						// and it touches nothing but the anchor field, so it can never
+						// swallow a concurrent reply or dismiss (the old whole-object
+						// rewrite was last-writer-wins per thread).
 						binding.doc.transact(() => {
 							for (const u of updates) {
-								// Re-check existence before writing — the thread may have
-								// been deleted between our read and this transact.
-								if (commentsMap.has(u.id)) commentsMap.set(u.id, u.thread);
+								setThreadAnchor(commentsMap, u.id, u.thread.anchor);
 							}
 						}, SYSTEM_ORIGIN);
 					};

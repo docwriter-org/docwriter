@@ -17,9 +17,13 @@ import * as Y from 'yjs';
 import type { PendingReviewRound } from '$lib/types';
 import {
 	USER_ORIGIN,
+	SYSTEM_ORIGIN,
 	FRAGMENT_NAME,
 	getReviewArray,
 	getCommentsMap,
+	getThread,
+	setThreadResolved,
+	migrateLegacyThreads,
 	getFragment,
 	readReviewRounds,
 	serializeYDoc,
@@ -86,6 +90,14 @@ export function createWsServer(port: number): Server {
 			const fragment = ydoc.getXmlFragment(FRAGMENT_NAME);
 			if (fragment.length === 0) {
 				replayUpdatesInto(ydoc, tabId);
+			}
+			// Upgrade legacy plain-object threads to nested Y form on the
+			// authoritative load. onChange isn't attached yet, so the delta
+			// is persisted manually (same pattern as the file seed).
+			const before = Y.encodeStateVector(ydoc);
+			if (migrateLegacyThreads(ydoc) > 0) {
+				const delta = Y.encodeStateAsUpdate(ydoc, before);
+				if (delta.length > 0) appendUpdate(tabId, delta, SYSTEM_ORIGIN);
 			}
 			return document;
 		},
@@ -206,13 +218,13 @@ function resolveEmptyEditThreads(ydoc: Y.Doc, threadIds: Set<string>): void {
 			.filter((id): id is string => typeof id === 'string')
 	);
 	for (const tid of threadIds) {
-		const thread = commentsMap.get(tid);
+		const thread = getThread(commentsMap, tid);
 		if (!thread || thread.resolved) continue;
 		// Keep the thread if it still has a pending edit, or if it holds a
 		// real conversation (any user message).
 		if (stillReferenced.has(tid)) continue;
 		if (thread.messages.some((m) => m.author === 'user')) continue;
-		commentsMap.set(tid, { ...thread, resolved: true });
+		setThreadResolved(commentsMap, tid, true);
 	}
 }
 
@@ -438,12 +450,12 @@ export async function setThreadResolution(
 ): Promise<{ ok: boolean; yjsUpdate: string | null }> {
 	return withLiveDoc(tabId, (ydoc) => {
 		const commentsMap = getCommentsMap(ydoc);
-		const thread = commentsMap.get(threadId);
+		const thread = getThread(commentsMap, threadId);
 		if (!thread) return { ok: false, yjsUpdate: null };
 		const reviewArr = getReviewArray(ydoc);
 		const beforeStateVector = Y.encodeStateVector(ydoc);
 		ydoc.transact(() => {
-			commentsMap.set(threadId, { ...thread, resolved });
+			setThreadResolved(commentsMap, threadId, resolved);
 			if (resolved) {
 				const arr = reviewArr.toArray();
 				for (let i = arr.length - 1; i >= 0; i--) {

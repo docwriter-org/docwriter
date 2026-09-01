@@ -3,6 +3,7 @@ import * as Y from 'yjs';
 import {
 	buildThreadAnchor,
 	getCommentsMap,
+	getThread,
 	getReviewArray,
 	readReviewRounds,
 	seedYDoc,
@@ -84,7 +85,9 @@ describe('stale proposal + thread re-attach', () => {
 		expect(result.ok).toBe(true);
 		if (result.ok) expect(result.reanchored).toBe(true);
 
-		const updated = getCommentsMap(doc).get('thread_orphan');
+		// The reply also upgrades the legacy plain-object thread to nested Y
+		// form in place; getThread reads both shapes.
+		const updated = getThread(getCommentsMap(doc), 'thread_orphan');
 		expect(updated?.resolved).toBe(false);
 		expect(updated?.anchor.quote).toBe(
 			'A data-systems course on architecture and concurrency.'

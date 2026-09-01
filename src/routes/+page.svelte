@@ -35,7 +35,9 @@
 	import { isStaleAcceptFollowup } from '$lib/shared/stale-accept';
 	import {
 		serializeFragment as plainTextFromFragment,
-		matchCommentAnchor
+		matchCommentAnchor,
+		readThreadValue,
+		type CommentsMap
 	} from '$lib/shared/ydoc-codec';
 
 	/** Turn a submit trigger into a compact description for the history
@@ -438,14 +440,17 @@
 	} | null = null;
 	let activeCommentsObserver: {
 		tabId: string;
-		map: Y.Map<CommentThread>;
+		map: CommentsMap;
 		handler: () => void;
 	} | null = null;
 
 	function syncActiveCommentThreads(tabId: string) {
 		if (tabId !== getCurrentActiveTab()) return;
 		const list: CommentThread[] = [];
-		getCommentsMapForTab(tabId).forEach((thread) => list.push(thread));
+		getCommentsMapForTab(tabId).forEach((value) => {
+			const thread = readThreadValue(value);
+			if (thread) list.push(thread);
+		});
 		list.sort((a, b) => a.createdAt - b.createdAt);
 		commentThreads.set(list);
 		syncAllTabsState();
@@ -466,8 +471,9 @@
 			// and counts/renders again.
 			const tabText = currentTabText(id);
 			const threads: CommentThread[] = [];
-			getCommentsMapForTab(id).forEach((t) => {
-				if (t.resolved) return;
+			getCommentsMapForTab(id).forEach((value) => {
+				const t = readThreadValue(value);
+				if (!t || t.resolved) return;
 				if (!t.messages.some((m) => m.author === 'agent')) return;
 				if (!anchorPresentInText(t.anchor, tabText)) return;
 				threads.push(t);
@@ -501,7 +507,7 @@
 			activeReviewObserver = null;
 		}
 		if (activeCommentsObserver?.tabId === tabId) {
-			activeCommentsObserver.map.unobserve(activeCommentsObserver.handler);
+			activeCommentsObserver.map.unobserveDeep(activeCommentsObserver.handler);
 			activeCommentsObserver = null;
 			commentThreads.set([]);
 			openCommentThreadId.set(null);
@@ -536,7 +542,10 @@
 
 		const commentsMap = getCommentsMapForTab(tabId);
 		const commentsHandler = () => syncActiveCommentThreads(tabId);
-		commentsMap.observe(commentsHandler);
+		// Deep: threads are nested Y.Maps now, so a message append or a
+		// resolved-flag flip mutates a CHILD type — a shallow observer only
+		// fires on top-level key changes and would miss them.
+		commentsMap.observeDeep(commentsHandler);
 		activeCommentsObserver = { tabId, map: commentsMap, handler: commentsHandler };
 		syncActiveCommentThreads(tabId);
 	}
@@ -552,7 +561,7 @@
 		const commentsMap = getCommentsMapForTab(tabId);
 		const handler = () => syncAllTabsState();
 		arr.observe(handler);
-		commentsMap.observe(handler);
+		commentsMap.observeDeep(handler);
 		bgTabObservers.set(tabId, { arr, commentsMap, arrHandler: handler, commentsHandler: handler });
 	}
 
@@ -560,7 +569,7 @@
 		const obs = bgTabObservers.get(tabId);
 		if (!obs) return;
 		obs.arr.unobserve(obs.arrHandler);
-		obs.commentsMap.unobserve(obs.commentsHandler);
+		obs.commentsMap.unobserveDeep(obs.commentsHandler);
 		bgTabObservers.delete(tabId);
 	}
 

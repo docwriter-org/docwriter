@@ -28,7 +28,13 @@ import {
 	serializeYDoc,
 	getReviewArray,
 	readReviewRounds,
+	readCommentThreads,
 	getCommentsMap,
+	getThread,
+	putThread,
+	appendThreadMessage,
+	setThreadResolved,
+	setThreadAnchor,
 	getFragment,
 	AGENT_ORIGIN,
 	USER_ORIGIN,
@@ -284,11 +290,11 @@ function resolveEmptyEditThreads(ydoc: Y.Doc, threadIds: Iterable<string>): void
 			.filter((id): id is string => typeof id === 'string')
 	);
 	for (const tid of ids) {
-		const thread = commentsMap.get(tid);
+		const thread = getThread(commentsMap, tid);
 		if (!thread || thread.resolved) continue;
 		if (stillReferenced.has(tid)) continue;
 		if (thread.messages.some((m) => m.author === 'user')) continue;
-		commentsMap.set(tid, { ...thread, resolved: true });
+		setThreadResolved(commentsMap, tid, true);
 	}
 }
 
@@ -356,7 +362,7 @@ export async function runTabWrite(
 			// syntax: the surfaces' reply_to_comment schemas differ.
 			const targetThreadId = activeFeedbackThreadId ?? undefined;
 			if (targetThreadId) {
-				const thread = getCommentsMap(doc).get(targetThreadId);
+				const thread = getThread(getCommentsMap(doc), targetThreadId);
 				if (thread?.resolved) {
 					result = { beforeMd, afterMd: beforeMd, discarded: true };
 					return;
@@ -559,7 +565,7 @@ function createAgentEditThread(
 		resolved: false,
 		createdAt: now
 	};
-	getCommentsMap(doc).set(threadId, thread);
+	putThread(getCommentsMap(doc), thread);
 	return threadId;
 }
 
@@ -1087,7 +1093,7 @@ function createAgentCommentThread(
 		resolved: false,
 		createdAt: now
 	};
-	doc.transact(() => getCommentsMap(doc).set(threadId, thread), AGENT_ORIGIN);
+	doc.transact(() => putThread(getCommentsMap(doc), thread), AGENT_ORIGIN);
 
 	if (isExternal) {
 		const commentId = matchImportedComment(externalAuthor, message);
@@ -1114,7 +1120,7 @@ export function applyReplyToComment(
 	}
 ): { ok: true; reanchored: boolean } | { ok: false; error: string } {
 	const commentsMap = getCommentsMap(doc);
-	const existing = commentsMap.get(threadId);
+	const existing = getThread(commentsMap, threadId);
 	if (!existing) {
 		return { ok: false, error: `Thread "${threadId}" does not exist on ${filePath}.` };
 	}
@@ -1168,15 +1174,14 @@ export function applyReplyToComment(
 				}
 			: {})
 	};
-	const updated: CommentThread = {
-		...existing,
-		anchor: nextAnchor,
-		// Re-opening via a new reply un-resolves the thread so the user
-		// sees the new message (and a re-attached orphan).
-		resolved: false,
-		messages: [...existing.messages, newMessage]
-	};
-	doc.transact(() => commentsMap.set(threadId, updated), AGENT_ORIGIN);
+	// Field-level writes: the reply appends, the re-anchor touches only the
+	// anchor, and re-opening flips only the resolved flag — none of them can
+	// clobber a concurrent write to the rest of the thread.
+	doc.transact(() => {
+		appendThreadMessage(commentsMap, threadId, newMessage, { reopen: true });
+		setThreadResolved(commentsMap, threadId, false);
+		if (reanchored) setThreadAnchor(commentsMap, threadId, nextAnchor);
+	}, AGENT_ORIGIN);
 	return { ok: true, reanchored };
 }
 
@@ -1376,9 +1381,7 @@ const listThreadsTool = tool(
 		let result = '';
 		try {
 			await direct.transact((document) => {
-				const commentsMap = getCommentsMap(document as unknown as Y.Doc);
-				const threads: CommentThread[] = [];
-				commentsMap.forEach((t) => threads.push(t));
+				const threads = readCommentThreads(document as unknown as Y.Doc);
 				result = formatListedThreads(file_path, threads, include_dismissed === true);
 			});
 		} finally {

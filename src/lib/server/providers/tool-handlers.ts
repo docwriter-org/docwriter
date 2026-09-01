@@ -29,6 +29,8 @@ import * as Y from 'yjs';
 import {
 	serializeYDoc,
 	getCommentsMap,
+	putThread,
+	readCommentThreads,
 	AGENT_ORIGIN,
 	normalizeTypography,
 	captureAnchorContext,
@@ -506,7 +508,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
 						resolved: false,
 						createdAt: now
 					};
-					doc.transact(() => commentsMap.set(threadId, thread), AGENT_ORIGIN);
+					doc.transact(() => putThread(commentsMap, thread), AGENT_ORIGIN);
 
 					if (isExternal && external_author) {
 						const commentId = matchImportedComment(external_author, trimmedMessage);
@@ -619,9 +621,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
 				let result = '';
 				try {
 					await direct.transact((document) => {
-						const commentsMap = getCommentsMap(document as unknown as Y.Doc);
-						const threads: CommentThread[] = [];
-						commentsMap.forEach((t) => threads.push(t));
+						const threads = readCommentThreads(document as unknown as Y.Doc);
 						result = formatListedThreads(path, threads, include_dismissed === true);
 					});
 				} finally {

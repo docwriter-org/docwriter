@@ -11,7 +11,7 @@
  */
 import * as Y from 'yjs';
 import DiffMatchPatch from 'diff-match-patch';
-import type { CommentThread, PendingReviewRound } from '$lib/types';
+import type { CommentMessage, CommentThread, PendingReviewRound } from '$lib/types';
 
 /**
  * Normalize typographic characters to their ASCII equivalents. Applied at
@@ -249,14 +249,165 @@ export function getReviewArray(ydoc: Y.Doc): Y.Array<PendingReviewRound> {
 	return ydoc.getArray<PendingReviewRound>(REVIEW_ARRAY_NAME);
 }
 
-export function getCommentsMap(ydoc: Y.Doc): Y.Map<CommentThread> {
-	return ydoc.getMap<CommentThread>(COMMENTS_MAP_NAME);
+// ── Comment threads: nested Y storage ─────────────────────────────────────
+//
+// A thread lives in the `comments` Y.Map as a NESTED Y.Map:
+//
+//   id: string · anchor: CommentThreadAnchor (plain value) ·
+//   resolved: boolean · createdAt: number ·
+//   messages: Y.Array<CommentMessage> (plain values, append-only)
+//
+// Fields merge per-key and messages merge by append, so a Dismiss racing an
+// agent reply keeps BOTH. The previous storage — one plain JSON object per
+// thread — was last-writer-wins per key: whichever of two concurrent
+// writers lost had its whole write silently swallowed (dismissed threads
+// "resurrected", replies vanished, anchor backfills erased messages), and
+// every touch re-encoded the entire thread into the update log. Legacy
+// plain-object values remain readable everywhere via `readThreadValue`; any
+// write upgrades them in place, and `migrateLegacyThreads` converts a whole
+// doc at load time.
+
+export type CommentsMap = Y.Map<unknown>;
+
+export function getCommentsMap(ydoc: Y.Doc): CommentsMap {
+	return ydoc.getMap<unknown>(COMMENTS_MAP_NAME);
+}
+
+/** Materialize a stored thread value — nested Y.Map or legacy plain object
+ * — into a plain CommentThread snapshot. Null for anything malformed. */
+export function readThreadValue(value: unknown): CommentThread | null {
+	if (value instanceof Y.Map) {
+		const id = value.get('id');
+		const anchor = value.get('anchor') as CommentThread['anchor'] | undefined;
+		if (typeof id !== 'string' || !anchor || typeof anchor !== 'object') return null;
+		const messages = value.get('messages');
+		const createdAt = value.get('createdAt');
+		return {
+			id,
+			anchor,
+			messages:
+				messages instanceof Y.Array ? (messages.toArray() as CommentMessage[]) : [],
+			resolved: value.get('resolved') === true,
+			createdAt: typeof createdAt === 'number' ? createdAt : 0
+		};
+	}
+	if (
+		value &&
+		typeof value === 'object' &&
+		typeof (value as CommentThread).id === 'string' &&
+		Array.isArray((value as CommentThread).messages)
+	) {
+		return value as CommentThread;
+	}
+	return null;
+}
+
+export function getThread(map: CommentsMap, threadId: string): CommentThread | null {
+	return readThreadValue(map.get(threadId));
 }
 
 export function readCommentThreads(ydoc: Y.Doc): CommentThread[] {
 	const out: CommentThread[] = [];
-	getCommentsMap(ydoc).forEach((thread) => out.push(thread));
+	getCommentsMap(ydoc).forEach((value) => {
+		const thread = readThreadValue(value);
+		if (thread) out.push(thread);
+	});
 	return out.sort((a, b) => a.createdAt - b.createdAt);
+}
+
+/** Write `thread` into the map in nested form (creating or replacing).
+ * Callers run inside their own `ydoc.transact(..., origin)`. */
+export function putThread(map: CommentsMap, thread: CommentThread): void {
+	const m = new Y.Map<unknown>();
+	m.set('id', thread.id);
+	m.set('anchor', { ...thread.anchor });
+	m.set('resolved', thread.resolved);
+	m.set('createdAt', thread.createdAt);
+	const arr = new Y.Array<CommentMessage>();
+	if (thread.messages.length > 0) arr.push(thread.messages.map((msg) => ({ ...msg })));
+	m.set('messages', arr);
+	map.set(thread.id, m);
+}
+
+/** The nested Y.Map for a thread, upgrading a legacy plain value in place
+ * first. Null when the thread doesn't exist (or is malformed). Callers run
+ * inside a transact. */
+function ensureNestedThread(map: CommentsMap, threadId: string): Y.Map<unknown> | null {
+	const value = map.get(threadId);
+	if (value instanceof Y.Map) return value;
+	const legacy = readThreadValue(value);
+	if (!legacy) return null;
+	putThread(map, legacy);
+	return map.get(threadId) as Y.Map<unknown>;
+}
+
+/** Append one message. `reopen` also clears the resolved flag (a user reply
+ * on a dismissed thread brings it back). Returns false when the thread
+ * doesn't exist. Callers run inside a transact. */
+export function appendThreadMessage(
+	map: CommentsMap,
+	threadId: string,
+	message: CommentMessage,
+	opts: { reopen?: boolean } = {}
+): boolean {
+	const m = ensureNestedThread(map, threadId);
+	if (!m) return false;
+	let messages = m.get('messages');
+	if (!(messages instanceof Y.Array)) {
+		messages = new Y.Array<CommentMessage>();
+		m.set('messages', messages);
+	}
+	(messages as Y.Array<CommentMessage>).push([{ ...message }]);
+	if (opts.reopen && m.get('resolved') === true) m.set('resolved', false);
+	return true;
+}
+
+/** Set the resolved flag. Returns false when the thread doesn't exist.
+ * Callers run inside a transact. */
+export function setThreadResolved(
+	map: CommentsMap,
+	threadId: string,
+	resolved: boolean
+): boolean {
+	const m = ensureNestedThread(map, threadId);
+	if (!m) return false;
+	if (m.get('resolved') !== resolved) m.set('resolved', resolved);
+	return true;
+}
+
+/** Replace the anchor (re-attach / rel-position backfill). Only this field
+ * is written, so an anchor update can never clobber concurrent messages or
+ * a concurrent dismiss. Returns false when the thread doesn't exist.
+ * Callers run inside a transact. */
+export function setThreadAnchor(
+	map: CommentsMap,
+	threadId: string,
+	anchor: CommentThread['anchor']
+): boolean {
+	const m = ensureNestedThread(map, threadId);
+	if (!m) return false;
+	m.set('anchor', { ...anchor });
+	return true;
+}
+
+/** Upgrade every legacy plain-object thread in the doc to nested form, in
+ * one SYSTEM-origin transaction. Returns how many were converted. Run this
+ * only on the authoritative load path (the delta must be persisted);
+ * throwaway readers stay read-only via `readThreadValue`. */
+export function migrateLegacyThreads(ydoc: Y.Doc): number {
+	const map = getCommentsMap(ydoc);
+	const legacyIds: string[] = [];
+	map.forEach((value, id) => {
+		if (!(value instanceof Y.Map) && readThreadValue(value)) legacyIds.push(id);
+	});
+	if (legacyIds.length === 0) return 0;
+	ydoc.transact(() => {
+		for (const id of legacyIds) {
+			const thread = readThreadValue(map.get(id));
+			if (thread) putThread(map, thread);
+		}
+	}, SYSTEM_ORIGIN);
+	return legacyIds.length;
 }
 
 export function readReviewRounds(ydoc: Y.Doc): PendingReviewRound[] {
