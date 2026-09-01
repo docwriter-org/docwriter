@@ -103,7 +103,7 @@
 		newAwaitingThreadId
 	}: Props = $props();
 
-	const BATCH_BAR_HEIGHT = 36;
+	const BATCH_BAR_HEIGHT = 28;
 	let showBatchBar = $derived(!muted && rounds.length > 0 && !!(onAcceptAll || onRejectAll));
 	let reapply = $derived($staleAcceptUi?.tabId === tabId ? $staleAcceptUi : null);
 	function isReapplyingThread(threadId: string): boolean {
@@ -998,6 +998,10 @@
 		overflow: visible;
 		font-family: 'Inter', -apple-system, sans-serif;
 	}
+	/* A toolbar, not a card. The cards below are the objects in this column;
+	 * giving this row the same elevated-panel treatment stacked a second
+	 * pill under the editor chrome and read as a competing card. It is a
+	 * label and two text buttons on the column's own ground. */
 	.gutter-batch-bar {
 		position: absolute;
 		top: 0;
@@ -1008,35 +1012,32 @@
 		align-items: center;
 		justify-content: space-between;
 		gap: 8px;
-		height: 32px;
-		padding: 0 8px;
-		background: var(--bg-elevated);
-		border: 1px solid var(--border-light);
-		border-radius: 8px;
-		box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+		height: 28px;
+		padding: 0 2px;
 	}
 	.batch-count {
 		font-size: 11px;
-		font-weight: 600;
+		font-weight: 500;
 		color: var(--text-faint);
 		white-space: nowrap;
+		letter-spacing: 0.01em;
 	}
 	.batch-actions {
 		display: flex;
 		align-items: center;
-		gap: 4px;
+		gap: 2px;
 	}
 	.batch-btn {
 		display: inline-flex;
 		align-items: center;
-		gap: 3px;
-		padding: 3px 8px;
+		gap: 4px;
+		padding: 4px 8px;
 		font: inherit;
 		font-size: 11px;
 		font-weight: 500;
-		border-radius: 5px;
+		border-radius: 6px;
 		cursor: pointer;
-		border: 1px solid var(--border-light);
+		border: none;
 		background: transparent;
 		color: var(--text-secondary);
 		white-space: nowrap;
@@ -1045,14 +1046,17 @@
 		background: var(--bg-hover);
 		color: var(--text);
 	}
+	/* Accept is the primary action, so it carries the accent — as a tint it
+	 * still leads the eye without a saturated block outshouting the prose
+	 * it is offering to change. */
 	.batch-btn.accept {
-		background: var(--accent);
-		border-color: var(--accent);
-		color: #fff;
+		color: var(--accent);
+		font-weight: 600;
+		background: color-mix(in srgb, var(--accent) 10%, transparent);
 	}
 	.batch-btn.accept:hover:not(:disabled) {
-		background: color-mix(in srgb, var(--accent) 88%, black);
-		color: #fff;
+		background: color-mix(in srgb, var(--accent) 18%, transparent);
+		color: var(--accent);
 	}
 	.batch-btn:disabled {
 		opacity: 0.5;
