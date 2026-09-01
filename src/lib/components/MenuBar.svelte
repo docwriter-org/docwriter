@@ -47,6 +47,8 @@
 
 <script lang="ts">
 	import { Check, ChevronRight } from 'lucide-svelte';
+	import { get } from 'svelte/store';
+	import { dialogQueue } from '$lib/dialogs';
 
 	interface Props {
 		menus: MenuSpec[];
@@ -124,9 +126,13 @@
 	$effect(() => {
 		if (openMenu === null) return;
 		function onDown(e: MouseEvent) {
+			// A confirm dialog is rendered at document root. Clicks on it
+			// must not dismiss the Settings panel that opened it.
+			if (get(dialogQueue).length > 0) return;
 			if (menuBarEl && !menuBarEl.contains(e.target as Node)) closeAll();
 		}
 		function onKey(e: KeyboardEvent) {
+			if (get(dialogQueue).length > 0) return;
 			if (e.key === 'Escape') closeAll();
 		}
 		document.addEventListener('mousedown', onDown);
