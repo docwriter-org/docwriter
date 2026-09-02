@@ -109,7 +109,10 @@
 	 * height would let the first card slide under it. */
 	const BATCH_BAR_TOP = 6;
 	let batchBarHeight = $state(0);
-	let showBatchBar = $derived(!muted && rounds.length > 0 && !!(onAcceptAll || onRejectAll));
+	/** The batch bar earns its place only from two suggestions up: a single
+	 * card already carries its own Accept and Reject, so "Accept all (1)"
+	 * above it is a second button for the same action. */
+	let showBatchBar = $derived(!muted && rounds.length > 1 && !!(onAcceptAll || onRejectAll));
 	let reapply = $derived($staleAcceptUi?.tabId === tabId ? $staleAcceptUi : null);
 	function isReapplyingThread(threadId: string): boolean {
 		return !!reapply?.threadId && reapply.threadId === threadId;
