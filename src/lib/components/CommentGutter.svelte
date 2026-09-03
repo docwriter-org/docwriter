@@ -234,6 +234,42 @@
 			awaitTimers.delete(threadId);
 		}
 	}
+	/** Scroll the editor so a card is not hidden under the fixed agent dock.
+	 * The dock floats over the lower part of the gutter column, so a card
+	 * anchored to a passage in the lower half of the view — or the edits
+	 * section and reply box of an open card — can sit fully behind it while
+	 * every other signal (the agent's log entry, the tab badge) says a
+	 * proposal is there. Runs after layout settles. */
+	function revealCard(cardId: string) {
+		if (typeof window === 'undefined') return;
+		requestAnimationFrame(() =>
+			requestAnimationFrame(() => {
+				if (!gutterEl) return;
+				const el = gutterEl.querySelector<HTMLElement>(`[data-card-id="${CSS.escape(cardId)}"]`);
+				const wrapper = gutterEl.closest<HTMLElement>('.tiptap-wrapper');
+				if (!el || !wrapper) return;
+				const reserved =
+					parseFloat(
+						getComputedStyle(document.documentElement).getPropertyValue('--dock-reserved-bottom')
+					) || 0;
+				const wrapperRect = wrapper.getBoundingClientRect();
+				const dockTop = window.innerHeight - reserved;
+				const visibleBottom = Math.min(wrapperRect.bottom, dockTop);
+				const rect = el.getBoundingClientRect();
+				if (rect.bottom > visibleBottom && rect.height < visibleBottom - wrapperRect.top) {
+					wrapper.scrollTop += rect.bottom - visibleBottom + 12;
+				} else if (rect.top < wrapperRect.top) {
+					wrapper.scrollTop -= wrapperRect.top - rect.top + 12;
+				}
+			})
+		);
+	}
+	// An open card must be readable end to end: its edits section and reply
+	// box sit below the messages, which is exactly the part the dock covers.
+	$effect(() => {
+		if (openThreadId) revealCard(openThreadId);
+	});
+
 	let renderWasActive = false;
 	const unsubscribeRendering = isRendering.subscribe((value) => {
 		if (value) {
@@ -261,7 +297,34 @@
 				(m) => m.author === 'agent' && !base.msgIds.has(m.id)
 			);
 			const newRound = (roundsByThread.get(tid) ?? []).some((r) => !base.roundIds.has(r.id));
-			if (newAgentMsg || newRound) clearAwaiting(tid);
+			if (newAgentMsg || newRound) {
+				clearAwaiting(tid);
+				// The author sent feedback here and is waiting for exactly this.
+				if (newRound) revealCard(tid);
+			}
+		}
+	});
+	// A proposal that lands on a thread the author is not looking at (the
+	// agent opened its own announce thread instead of using the feedback
+	// thread) stacks below the open card, where the dock hides it. Bring it
+	// into view when it arrives during a turn the author is waiting on.
+	const seenRoundIds = new Set<string>();
+	let seenRoundsPrimed = false;
+	$effect(() => {
+		const current = rounds;
+		if (!seenRoundsPrimed) {
+			for (const r of current) seenRoundIds.add(r.id);
+			seenRoundsPrimed = true;
+			return;
+		}
+		const waiting = Object.values(awaitingAgent).some(Boolean);
+		for (const r of current) {
+			if (seenRoundIds.has(r.id)) continue;
+			seenRoundIds.add(r.id);
+			const tid = r.feedbackThreadId;
+			if (!waiting || !tid || awaitingAgent[tid]) continue;
+			if (document.activeElement instanceof HTMLTextAreaElement) continue;
+			revealCard(openThreadIds.has(tid) ? tid : editCardId(r.id));
 		}
 	});
 	$effect(() => {

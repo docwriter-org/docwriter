@@ -581,7 +581,11 @@
 			feedbackMode === 'plan' && threadId
 				? ` Plan first: before proposing any edit, you MUST reply on thread_id="${threadId}" via reply_to_comment with your reflection. Explain, in complete sentences addressed to me, why I likely flagged this passage, what in the current text reads wrong, and what you intend to change. Write it as plain explanatory prose that carries your reasoning, the way you would explain it out loud. Do not compress it into label-led fragments or bullet points. Only after posting that reply, propose the edit via edit_doc with thread_id="${threadId}" so it attaches to the same thread.`
 				: '';
-		return `${prefix}. ${tag} Rewrite it: "${passage}"${threadHint}${planHint}`;
+		// The quote is the CURRENT text. Saying `Rewrite it: "…"` let the
+		// agent read the quoted passage as the rewrite being asked for; it
+		// then compared that "rewrite" with the document, found them
+		// identical, and replied that nothing needed changing.
+		return `${prefix}. ${tag} Current text of the passage, quoted verbatim from the document: "${passage}". That quote is what is there now, not what I want. Rewrite it so it addresses my feedback.${threadHint}${planHint}`;
 	}
 
 	/** Open a comment thread with the user's feedback as the first message,

@@ -1152,7 +1152,7 @@
 		// If this is a feedback trigger, pull out the passage so the history
 		// entry shows both the label and what it was applied to.
 		const feedbackQuoteMatch = trigger?.match(
-			/^(?:The user|I) flagged this passage (?:as|with feedback) "[^"]+"\. Rewrite it to address that: "([\s\S]+)"$/
+			/^(?:The user|I) flagged this passage (?:as|with feedback) "[^"]+"\. (?:\[mode: \w+\] )?(?:Rewrite it to address that: |Rewrite it: |Current text of the passage, quoted verbatim from the document: )"([\s\S]+?)"(?:\. That quote is what is there now|$)/
 		);
 		pushHistory({
 			type: 'user_action',

@@ -46,3 +46,36 @@ describe('a reply that names a change comes with the edit, not an approve button
 		expect(read('src/lib/shared/list-threads.ts')).not.toMatch(/proposedEdit/);
 	});
 });
+
+describe('a feedback turn that asks for a change ends with a diff or a retry', () => {
+	// `Rewrite it: "<passage>"` read as "rewrite it TO this"; the agent
+	// compared the quote with the document, found them identical, and
+	// replied that nothing needed changing.
+	it('the feedback trigger says the quoted passage is the current text', () => {
+		const src = read('src/lib/editor/TiptapEditor.svelte');
+		expect(src).toMatch(/Current text of the passage, quoted verbatim from the document/);
+		expect(src).toMatch(/That quote is what is there now, not what I want/);
+		expect(src).not.toMatch(/Rewrite it: "\$\{passage\}"/);
+	});
+
+	it('the retry fires only for an edit-mode feedback turn that landed no round', async () => {
+		const { feedbackRetryPrompt } = await import('$lib/server/feedback-retry');
+		const message =
+			'I flagged this passage with feedback "too vague". [mode: edit] Current text of the passage, quoted verbatim from the document: "Each dataset is very unique." That quote is what is there now, not what I want. Rewrite it so it addresses my feedback. A thread is open for this feedback (thread_id="thread_1").';
+		const before = new Set(['r0']);
+		expect(feedbackRetryPrompt({ message, tabId: 'essay.md', roundsBefore: before, roundsAfter: new Set(['r0']) })).toMatch(
+			/no pending diff landed on essay\.md/
+		);
+		expect(feedbackRetryPrompt({ message, tabId: 'essay.md', roundsBefore: before, roundsAfter: new Set(['r0']) })).toMatch(
+			/thread_id="thread_1"/
+		);
+		// A round landed: no retry.
+		expect(feedbackRetryPrompt({ message, tabId: 'essay.md', roundsBefore: before, roundsAfter: new Set(['r0', 'r1']) })).toBeNull();
+		// Discuss mode asked for words, not a diff.
+		expect(feedbackRetryPrompt({ message: message.replace('[mode: edit]', '[mode: discuss]'), tabId: 'essay.md', roundsBefore: before, roundsAfter: before })).toBeNull();
+		// A reply on a thread is not a feedback trigger.
+		expect(feedbackRetryPrompt({ message: 'I replied on comment thread thread_id="thread_1" on this tab.', tabId: 'essay.md', roundsBefore: before, roundsAfter: before })).toBeNull();
+		// No active tab: nothing to check against.
+		expect(feedbackRetryPrompt({ message, tabId: null, roundsBefore: before, roundsAfter: before })).toBeNull();
+	});
+});

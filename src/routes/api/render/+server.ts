@@ -22,6 +22,7 @@ import { getSessionId, setSessionId, setLastSystemPrompt, getTabsState } from '$
 import { readMeta } from '$lib/server/document-io';
 import { kvGet, kvSet, dbAppendConversationEvent } from '$lib/server/db-writes';
 import { readCommentThreads, readReviewRounds } from '$lib/shared/ydoc-codec';
+import { feedbackRetryPrompt } from '$lib/server/feedback-retry';
 import type { CommentThread } from '$lib/types';
 import { formatDismissedThreadsHint } from '$lib/shared/list-threads';
 import { replayUpdatesInto } from '$lib/server/ydoc-persistence';
@@ -125,7 +126,7 @@ function readLiveTabCommentThreads(tabId: string): CommentThread[] {
  * round tagged with that thread's id). Lets the prompt flag those threads so
  * the agent knows a reply there is feedback on an edit it should *revise*,
  * not a discussion to chat back on. */
-function readLiveTabPendingEditThreadIds(tabId: string): Set<string> {
+function readLiveTabRounds<T>(tabId: string, collect: (doc: Y.Doc) => T): T {
 	const holder = globalThis as unknown as {
 		__docwriterWsServer?: {
 			hocuspocus?: { documents?: { get(name: string): unknown } };
@@ -133,12 +134,6 @@ function readLiveTabPendingEditThreadIds(tabId: string): Set<string> {
 	};
 	const hp = holder.__docwriterWsServer?.hocuspocus;
 	const liveDoc = hp?.documents?.get(tabId) as Y.Doc | undefined;
-	const collect = (doc: Y.Doc) =>
-		new Set(
-			readReviewRounds(doc)
-				.map((r) => r.feedbackThreadId)
-				.filter((id): id is string => typeof id === 'string')
-		);
 	if (liveDoc) return collect(liveDoc);
 	const ydoc = new Y.Doc();
 	try {
@@ -148,6 +143,26 @@ function readLiveTabPendingEditThreadIds(tabId: string): Set<string> {
 		ydoc.destroy();
 	}
 }
+
+function readLiveTabPendingEditThreadIds(tabId: string): Set<string> {
+	return readLiveTabRounds(
+		tabId,
+		(doc) =>
+			new Set(
+				readReviewRounds(doc)
+					.map((r) => r.feedbackThreadId)
+					.filter((id): id is string => typeof id === 'string')
+			)
+	);
+}
+
+/** Ids of the pending rounds on a tab right now. The feedback retry compares
+ * this before and after a turn to know whether a proposal actually landed,
+ * which is the fact that matters — not whether edit_doc was called. */
+function readLiveTabRoundIds(tabId: string): Set<string> {
+	return readLiveTabRounds(tabId, (doc) => new Set(readReviewRounds(doc).map((r) => r.id)));
+}
+
 
 const GENERIC_WAKEUP_MESSAGE =
 	'I clicked Wake-up without a specific request. Decide what, if anything, to do per the Autonomy section of your instructions.';
@@ -1138,6 +1153,7 @@ export const POST: RequestHandler = async ({ request }) => {
 					// Per-render state lives in a scope that flows through the
 					// awaits below, so a concurrent render cannot overwrite it
 					// or clear it out from under this one on its way out.
+					const roundsBeforeTurn = active ? readLiveTabRoundIds(active) : new Set<string>();
 					await runWithRenderScope(
 						{
 							feedbackThreadId,
@@ -1147,6 +1163,24 @@ export const POST: RequestHandler = async ({ request }) => {
 						},
 						async () => {
 					const firstOutcome = await runQueryRound(prompt, images);
+					if (!warmup && !planMode && !critiqueReviewer && userMessage) {
+						const retry = feedbackRetryPrompt({
+							message: userMessage,
+							tabId: active,
+							roundsBefore: roundsBeforeTurn,
+							roundsAfter: active ? readLiveTabRoundIds(active) : new Set<string>()
+						});
+						if (retry) {
+							const retryPrompt = buildMultiTabPrompt(
+								active,
+								buildTabPromptInfos(textTabs),
+								retry,
+								{ isUserMessage: false, previewTabs }
+							);
+							send('directive_retry', {});
+							await runQueryRound(retryPrompt);
+						}
+					}
 					if (
 						isImplicitWakeup &&
 						activeInlineDirectives.length > 0 &&

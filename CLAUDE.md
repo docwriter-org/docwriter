@@ -143,6 +143,18 @@ first `synced` event — on localhost this is sub-20ms.
    button are gone; `CommentMessage.proposedEdit` survives as legacy data
    on older threads and renders as plain text.
    `comment-then-edit.test.ts` guards the contract.
+   The feedback trigger quotes the passage as "Current text of the
+   passage, quoted verbatim from the document" — the earlier
+   `Rewrite it: "<passage>"` read as "rewrite it TO this", and the agent
+   compared the quote with the document and declared nothing to change.
+   An edit-mode feedback turn that ends with no new round on the tab gets
+   one harness retry (`feedbackRetryPrompt` in the render route) naming
+   the fact; it stands down only if the agent already said no change is
+   needed or asked a question on the thread.
+   The fixed agent dock floats over the lower gutter column, so
+   `CommentGutter` scrolls a card into view (`revealCard`) when it opens
+   and when the proposal an author is waiting on lands — its edits
+   section and reply box are exactly the part the dock covers.
 3. Agent calls `edit_doc`: server finds the single `old_string` match in
    the live markdown, then in one `document.transact(..., AGENT_ORIGIN)`
    both rebuilds the XmlFragment via a headless Collaboration editor and
