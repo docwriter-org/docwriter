@@ -9,6 +9,8 @@ import {
 	runTabWrite,
 	runCommentWrite,
 	setActiveFeedbackThreadId,
+	getActiveFeedbackThreadId,
+	describeTabWrite,
 	countOccurrences,
 	getHocuspocus,
 	ensureWorkspaceTabOpen,
@@ -164,6 +166,10 @@ export function buildToolDefinitions(): ToolDefinition[] {
 				if (!opened.ok) return toToolResult(opened.error);
 				const tabId = opened.tabId;
 
+				// An explicit thread_id wins over the render-level default for
+				// this one call; restore the prior value after so the targeting
+				// cannot leak into (or blank out for) later edits this turn.
+				const priorThreadId = getActiveFeedbackThreadId();
 				if (typeof thread_id === 'string' && thread_id) {
 					setActiveFeedbackThreadId(thread_id);
 				}
@@ -189,7 +195,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
 					};
 				});
 				if (typeof thread_id === 'string' && thread_id) {
-					setActiveFeedbackThreadId(null);
+					setActiveFeedbackThreadId(priorThreadId);
 				}
 				if (failure) return { isError: true, content: [{ type: 'text' as const, text: failure }] };
 				if ('error' in result) {
@@ -201,13 +207,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
 				return {
 					content: [{
 						type: 'text' as const,
-						text: result.committed
-							? replaceAll
-								? `Edit applied and accepted on ${path} (replaced ${appliedHits} occurrence${appliedHits === 1 ? '' : 's'}). Accept was already clicked on this edit — do not leave another proposal.`
-								: `Edit applied and accepted on ${path}. Accept was already clicked on this edit — do not leave another proposal.`
-							: replaceAll
-								? `Edit applied to ${path} (replaced ${appliedHits} occurrence${appliedHits === 1 ? '' : 's'}).`
-								: `Edit applied to ${path}.`
+						text: describeTabWrite(path, result, { kind: 'edit', replaceAll, hits: appliedHits })
 					}]
 				};
 			}
@@ -293,9 +293,11 @@ export function buildToolDefinitions(): ToolDefinition[] {
 				return {
 					content: [{
 						type: 'text' as const,
-						text: result.committed
-							? `${opened.existedOnDisk ? 'Wrote' : 'Created'} and accepted ${content.length} chars on ${path}. Accept was already clicked on this edit — do not leave another proposal.`
-							: `${opened.existedOnDisk ? 'Wrote' : 'Created'} ${content.length} chars to ${path}.`
+						text: describeTabWrite(path, result, {
+							kind: 'write',
+							created: !opened.existedOnDisk,
+							chars: content.length
+						})
 					}]
 				};
 			}

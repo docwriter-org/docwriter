@@ -1,5 +1,5 @@
 import * as Y from 'yjs';
-import { HocuspocusProvider } from '@hocuspocus/provider';
+import { HocuspocusProvider, WebSocketStatus } from '@hocuspocus/provider';
 import { env } from '$env/dynamic/public';
 import {
 	COMMENTS_MAP_NAME,
@@ -108,14 +108,62 @@ function handleInstanceMismatch(): void {
 	window.location.reload();
 }
 
+/** Tabs whose provider is deliberately offline for the Accept/Reject
+ * transport (`pauseTabSync`). Their disconnects are expected and must not
+ * be reported as a lost connection. */
+const pausedTabs = new Set<string>();
+
+type SyncConnectionListener = (event: { tabId: string; connected: boolean }) => void;
+const syncConnectionListeners = new Set<SyncConnectionListener>();
+/** How long a tab may sit disconnected (outside a pause) before it counts
+ * as a lost connection. Reconnects normally take milliseconds. */
+const LOST_CONNECTION_GRACE_MS = 5_000;
+const lostTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const reportedLost = new Set<string>();
+
+/** Be told when a tab's WebSocket has been down for longer than a normal
+ * reconnect, and when it comes back. A silently dead provider is invisible
+ * otherwise: keystrokes stop reaching the server and the agent's proposals
+ * stop arriving, while every button still looks alive. */
+export function onSyncConnectionChange(listener: SyncConnectionListener): () => void {
+	syncConnectionListeners.add(listener);
+	return () => syncConnectionListeners.delete(listener);
+}
+
+function trackConnection(provider: HocuspocusProvider, tabId: string): void {
+	provider.on('status', ({ status }: { status: WebSocketStatus }) => {
+		if (status === WebSocketStatus.Connected) {
+			const timer = lostTimers.get(tabId);
+			if (timer) clearTimeout(timer);
+			lostTimers.delete(tabId);
+			if (reportedLost.delete(tabId)) {
+				for (const l of syncConnectionListeners) l({ tabId, connected: true });
+			}
+			return;
+		}
+		if (pausedTabs.has(tabId) || lostTimers.has(tabId) || reportedLost.has(tabId)) return;
+		lostTimers.set(
+			tabId,
+			setTimeout(() => {
+				lostTimers.delete(tabId);
+				if (pausedTabs.has(tabId) || provider.configuration.websocketProvider.status === WebSocketStatus.Connected) return;
+				reportedLost.add(tabId);
+				for (const l of syncConnectionListeners) l({ tabId, connected: false });
+			}, LOST_CONNECTION_GRACE_MS)
+		);
+	});
+}
+
 function createProvider(ydoc: Y.Doc, tabId: string): HocuspocusProvider {
-	return new HocuspocusProvider({
+	const provider = new HocuspocusProvider({
 		url: wsUrl(),
 		name: tabId,
 		document: ydoc,
 		token: currentInstanceToken,
 		onAuthenticationFailed: handleInstanceMismatch
 	});
+	trackConnection(provider, tabId);
+	return provider;
 }
 
 /** Get or create the local Y.Doc + Hocuspocus provider for `tabId`. */
@@ -171,11 +219,23 @@ export function pauseTabSync(tabId: string): () => void {
 	const doc = registry.get(tabId);
 	const provider = doc?.wsProvider;
 	if (!provider) return () => {};
+	pausedTabs.add(tabId);
 	provider.disconnect();
 	let resumed = false;
 	return () => {
 		if (resumed) return;
 		resumed = true;
+		pausedTabs.delete(tabId);
+		// `disconnect()` only STARTS the close handshake. If the server's
+		// HTTP reply beats the close frame back, the socket still reports
+		// Connected here, and the provider's `connect()` returns early
+		// without re-arming `shouldConnect` — so when the close completes
+		// a moment later nothing reconnects, and this tab is silently
+		// offline for the rest of the session: keystrokes stop syncing and
+		// the agent's next proposals never arrive. Re-arm the flag first;
+		// the provider's own close handler then reconnects in that case,
+		// and `connect()` handles the already-closed case as before.
+		provider.configuration.websocketProvider.shouldConnect = true;
 		void provider.connect();
 	};
 }

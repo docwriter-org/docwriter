@@ -126,6 +126,13 @@ interface TabWriteResult {
 	/** True when a stale Accept committed this write to the live document
 	 * instead of leaving another pending review round. */
 	committed?: boolean;
+	/** True when the write left the text identical (after typography
+	 * normalization), so no review round was created. The tool result must
+	 * say so: reporting it as applied is how the agent ends up telling the
+	 * author an edit landed when nothing changed. */
+	noop?: boolean;
+	/** The comment thread the pending round was attached to. */
+	threadId?: string;
 }
 
 interface RoundMutation {
@@ -274,6 +281,42 @@ export function runWithRenderScope<T>(scope: Partial<RenderScope>, fn: () => T):
 export function setActiveFeedbackThreadId(id: string | null) {
 	renderScope().feedbackThreadId = id;
 }
+export function getActiveFeedbackThreadId(): string | null {
+	return renderScope().feedbackThreadId;
+}
+
+/** The text every provider hands back for a write on an open tab. One
+ * source so the wording stays honest everywhere: an edit_doc / write_doc
+ * call lands a PENDING proposal, never a change to the document, and a
+ * replacement that leaves the text identical lands nothing at all. The
+ * old "Edit applied to X." made the agent tell the author the edit was in
+ * when the author still had to Accept it — or when nothing had happened. */
+export function describeTabWrite(
+	filePath: string,
+	result: TabWriteResult,
+	opts: { kind: 'edit' | 'write'; replaceAll?: boolean; hits?: number; created?: boolean; chars?: number }
+): string {
+	const hits = opts.hits ?? 1;
+	const occurrences = `${hits} occurrence${hits === 1 ? '' : 's'}`;
+	if (result.noop) {
+		return opts.kind === 'edit'
+			? `No change proposed for ${filePath}: new_string leaves the text identical to old_string once typography is normalized (curly quotes, dashes and ellipses are stored as plain ASCII), so there is nothing for me to review. Nothing is pending. Do not report this as an edit; propose a different replacement if you meant to change something.`
+			: `No change proposed for ${filePath}: the content is identical to the current document once typography is normalized, so there is nothing for me to review. Nothing is pending.`;
+	}
+	if (result.committed) {
+		return opts.kind === 'edit'
+			? `Edit applied and accepted on ${filePath}${opts.replaceAll ? ` (replaced ${occurrences})` : ''}. Accept was already clicked on this edit — do not leave another proposal.`
+			: `${opts.created ? 'Created' : 'Wrote'} and accepted ${opts.chars ?? 0} chars on ${filePath}. Accept was already clicked on this edit — do not leave another proposal.`;
+	}
+	const thread = result.threadId ? ` on thread ${result.threadId}` : '';
+	const tail = ` It changes the document only when I accept it in the gutter, so do not tell me it has been applied.`;
+	if (opts.kind === 'edit') {
+		return `Proposed the edit as a pending diff${thread} in ${filePath}${opts.replaceAll ? ` (${occurrences} replaced)` : ''}.${tail}`;
+	}
+	return opts.created
+		? `Created ${filePath} and proposed its content (${opts.chars ?? 0} chars) as a pending diff${thread}.${tail}`
+		: `Proposed a rewrite of ${filePath} (${opts.chars ?? 0} chars) as a pending diff${thread}.${tail}`;
+}
 
 /** The enforcement promise interpolated into the system prompt's "Announce
  * edits on a thread" section. Defined here, beside the runTabWrite gate
@@ -378,8 +421,9 @@ export async function runTabWrite(
 			}
 			const { operation, afterMd } = mutation;
 			if (afterMd === beforeMd) {
-				// No-op write. Still succeeds, but don't emit a review round.
-				result = { beforeMd, afterMd };
+				// No-op write: nothing to review, so no round. Flag it so the
+				// tool result can say "no change" instead of "applied".
+				result = { beforeMd, afterMd, noop: true };
 				return;
 			}
 			// Edits targeting a feedback thread pass two gates. (1) The user
@@ -452,6 +496,7 @@ export async function runTabWrite(
 				}
 			}
 
+			let landedThreadId = threadIdExplicit;
 			doc.transact(() => {
 				// No explicit thread → open one so EVERY edit lives under a
 				// thread (the thread is the parent; there are no standalone edit
@@ -481,6 +526,7 @@ export async function runTabWrite(
 					}
 					threadId = createAgentEditThread(doc, anchorQuote, occIdx, baseForRound);
 				}
+				landedThreadId = threadId;
 
 				const round: PendingReviewRound = {
 					id: cryptoRandomId(),
@@ -510,7 +556,7 @@ export async function runTabWrite(
 				}
 				reviewArr.push([round]);
 			}, AGENT_ORIGIN);
-			result = { beforeMd, afterMd };
+			result = { beforeMd, afterMd, threadId: landedThreadId };
 		});
 	} finally {
 		await direct.disconnect();
@@ -908,15 +954,7 @@ const editDocTool = tool(
 			}
 		}
 
-		return toolText(
-			result.committed
-				? replaceAll
-					? `Edit applied and accepted on ${file_path} (replaced ${appliedHits} occurrence${appliedHits === 1 ? '' : 's'}). Accept was already clicked on this edit — do not leave another proposal.`
-					: `Edit applied and accepted on ${file_path}. Accept was already clicked on this edit — do not leave another proposal.`
-				: replaceAll
-					? `Edit applied to ${file_path} (replaced ${appliedHits} occurrence${appliedHits === 1 ? '' : 's'}).`
-					: `Edit applied to ${file_path}.`
-		);
+		return toolText(describeTabWrite(file_path, result, { kind: 'edit', replaceAll, hits: appliedHits }));
 	}
 );
 
@@ -1022,11 +1060,12 @@ const writeDocTool = tool(
 		if ('error' in result) {
 			return toolError(`write_doc failed for ${file_path}: ${result.error}`);
 		}
-		const verb = opened.existedOnDisk ? 'Wrote' : 'Created';
 		return toolText(
-			result.committed
-				? `${verb} and accepted ${content.length} chars on ${file_path}. Accept was already clicked on this edit — do not leave another proposal.`
-				: `${verb} ${content.length} chars to ${file_path}.`
+			describeTabWrite(file_path, result, {
+				kind: 'write',
+				created: !opened.existedOnDisk,
+				chars: content.length
+			})
 		);
 	}
 );

@@ -38,6 +38,7 @@ let yp: typeof import('$lib/server/ydoc-persistence');
 let codec: typeof import('$lib/shared/ydoc-codec');
 let reconcile: typeof import('$lib/server/tabs-reconcile');
 let mcp: typeof import('$lib/server/mcp-doc-tools');
+let ws: typeof import('$lib/server/ws-server');
 let fi: typeof import('$lib/server/feedback-import');
 let stableId: typeof import('$lib/shared/stable-id');
 let tabsRoute: typeof import('../../routes/api/tabs/+server');
@@ -128,6 +129,7 @@ beforeAll(async () => {
 	codec = await import('$lib/shared/ydoc-codec');
 	reconcile = await import('$lib/server/tabs-reconcile');
 	mcp = await import('$lib/server/mcp-doc-tools');
+	ws = await import('$lib/server/ws-server');
 	fi = await import('$lib/server/feedback-import');
 	stableId = await import('$lib/shared/stable-id');
 	tabsRoute = await import('../../routes/api/tabs/+server');
@@ -602,5 +604,75 @@ describe('per-render state is isolated between concurrent renders', () => {
 		mcp.setActiveReviewerId('orphan');
 		expect(mcp.getStaleAcceptApply()).toBeNull();
 		mcp.setActiveReviewerId(null);
+	});
+});
+
+describe('tool results never claim an edit was applied', () => {
+	// The agent repeats its tool results to the author. "Edit applied to
+	// X." had it announcing an edit as done while the author still had to
+	// Accept the pending diff — or while nothing had happened at all.
+	const pending = { beforeMd: 'a', afterMd: 'b', threadId: 'thread_1' };
+
+	it('an edit lands as a pending proposal on its thread, not as a change', () => {
+		const text = mcp.describeTabWrite('essay.md', pending, { kind: 'edit', hits: 1 });
+		expect(text).toMatch(/^Proposed the edit as a pending diff on thread thread_1 in essay\.md\./);
+		expect(text).toMatch(/only when I accept it/);
+		expect(text).toMatch(/do not tell me it has been applied/);
+		expect(text).not.toMatch(/^Edit applied/);
+	});
+
+	it('a replacement that changes nothing says so instead of succeeding', () => {
+		const noop = { beforeMd: 'a', afterMd: 'a', noop: true };
+		const text = mcp.describeTabWrite('essay.md', noop, { kind: 'edit', hits: 1 });
+		expect(text).toMatch(/^No change proposed for essay\.md/);
+		expect(text).toMatch(/Nothing is pending/);
+		expect(text).not.toMatch(/applied|Proposed the edit/);
+	});
+
+	it('write_doc distinguishes a created file from a rewrite, both pending', () => {
+		expect(
+			mcp.describeTabWrite('notes.md', pending, { kind: 'write', created: true, chars: 12 })
+		).toMatch(/^Created notes\.md and proposed its content \(12 chars\) as a pending diff on thread thread_1\./);
+		expect(
+			mcp.describeTabWrite('notes.md', pending, { kind: 'write', created: false, chars: 12 })
+		).toMatch(/^Proposed a rewrite of notes\.md \(12 chars\) as a pending diff on thread thread_1\./);
+	});
+
+	it('the stale-Accept commit path keeps its "already accepted" wording', () => {
+		const committed = { beforeMd: 'a', afterMd: 'b', committed: true };
+		expect(mcp.describeTabWrite('essay.md', committed, { kind: 'edit', hits: 1 })).toMatch(
+			/^Edit applied and accepted on essay\.md\. Accept was already clicked/
+		);
+	});
+});
+
+describe('unloading a live doc flushes what the tick had not written yet', () => {
+	// The 500ms flush tick resolves a tab's LIVE doc; a tab that unloads
+	// inside that window (the browser's Accept/Reject pause closes its only
+	// connection) used to have its dirty flag dropped instead, so the file
+	// lagged the CRDT until the next edit.
+	const TAB = 'unload-flush.md';
+
+	it('replays the log into the workspace file when the tab was still dirty', () => {
+		const doc = seededDoc('Written before the unload.\n');
+		yp.appendUpdate(TAB, Y.encodeStateAsUpdate(doc), codec.USER_ORIGIN);
+		yp.markTabDirty(TAB);
+		expect(yp.isTabDirty(TAB)).toBe(true);
+		expect(existsSync(join(root, TAB))).toBe(false);
+
+		ws.onTabUnloaded(TAB);
+
+		expect(yp.isTabDirty(TAB)).toBe(false);
+		expect(readFileSync(join(root, TAB), 'utf-8')).toBe('Written before the unload.\n');
+	});
+
+	it('a clean tab is left alone', () => {
+		const before = readFileSync(join(root, TAB), 'utf-8');
+		writeFileSync(join(root, TAB), 'Edited outside, not yet reconciled.\n');
+		expect(yp.isTabDirty(TAB)).toBe(false);
+		ws.onTabUnloaded(TAB);
+		// No dirty flag → no replay → the external content is not clobbered.
+		expect(readFileSync(join(root, TAB), 'utf-8')).toBe('Edited outside, not yet reconciled.\n');
+		writeFileSync(join(root, TAB), before);
 	});
 });

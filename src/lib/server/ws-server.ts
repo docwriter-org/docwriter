@@ -39,6 +39,7 @@ import {
 	markTabDirty,
 	flushMarkdownNow,
 	clearDirty,
+	isTabDirty,
 	clearTabCaches,
 	compactTab,
 	setLiveDocResolver
@@ -103,8 +104,7 @@ export function createWsServer(port: number): Server {
 			return document;
 		},
 		async afterUnloadDocument({ documentName: tabId }) {
-			clearDirty(tabId);
-			maybeCompactTab(tabId);
+			onTabUnloaded(tabId);
 		},
 		async onChange({ documentName: tabId, update, transactionOrigin }) {
 			const origin = typeof transactionOrigin === 'string' ? transactionOrigin : USER_ORIGIN;
@@ -122,6 +122,25 @@ export function createWsServer(port: number): Server {
 
 	globalHolder().__docwriterWsServer = server;
 	return server;
+}
+
+/** A tab's live doc just left memory (its last connection closed — the
+ * browser's Accept/Reject pause, a tab switch, a dropped socket). A change
+ * still waiting for the 500ms flush tick would otherwise never reach the
+ * workspace file: the tick resolves the live doc, finds none, and skips the
+ * tab, so `document.md` lagged the CRDT until the next edit (and a reader
+ * of the file — git, the agent's built-in Read — saw stale text). Replay
+ * the log and write the file now instead. */
+export function onTabUnloaded(tabId: string) {
+	if (isTabDirty(tabId)) {
+		try {
+			flushTabMarkdownNow(tabId);
+		} catch (err) {
+			console.error(`[docwriter] flush on unload failed for "${tabId}":`, err);
+		}
+	}
+	clearDirty(tabId);
+	maybeCompactTab(tabId);
 }
 
 /** Above this many log rows, a tab's history is merged into one snapshot

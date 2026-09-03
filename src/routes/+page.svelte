@@ -93,7 +93,8 @@
 		renameTab,
 		reconcileServerInstance,
 		applyUpdateToTab,
-		pauseTabSync
+		pauseTabSync,
+		onSyncConnectionChange
 	} from '$lib/yjs-doc';
 	import type { Editor } from '@tiptap/core';
 	import {
@@ -2703,6 +2704,7 @@
 	let fileTreeHeight = $state(280);
 	let leftPaneInnerEl: HTMLDivElement | null = $state(null);
 	let removeSidebarResizeListener = () => {};
+	let stopSyncConnectionWatch: () => void = () => {};
 	let didInitFileTreeHeight = false;
 
 	function maxFileTreeHeight() {
@@ -2830,6 +2832,21 @@
 			window.removeEventListener('resize', clampSidebarPanels);
 		};
 
+		// A tab whose WebSocket stays down is otherwise invisible: every
+		// button still works, but keystrokes stop reaching the server and the
+		// agent's proposals never arrive — the agent reports an edit that the
+		// document never shows. Say so where the author is looking.
+		stopSyncConnectionWatch = onSyncConnectionChange(({ tabId, connected }) => {
+			pushHistory({
+				type: 'notification',
+				timestamp: Date.now(),
+				text: connected
+					? `Reconnected to the server for ${tabId}.`
+					: `Lost the live connection to the server for ${tabId}. Typing and the agent's proposals will not sync until it reconnects — check the terminal running DocWriter, then reload if this persists.`,
+				priority: connected ? 'low' : 'high'
+			});
+		});
+
 		// HMR safety: if the module was hot-reloaded during a render, the
 		// store could still say we're rendering. Clamp it to false so the
 		// submit button unlocks.
@@ -2932,6 +2949,7 @@
 	});
 
 	onDestroy(() => {
+		stopSyncConnectionWatch();
 		if (activeReviewObserver) {
 			activeReviewObserver.arr.unobserve(activeReviewObserver.handler);
 			activeReviewObserver = null;

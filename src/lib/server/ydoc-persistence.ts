@@ -273,6 +273,11 @@ export function clearDirty(tabId: string) {
 	dirtyTabs.delete(tabId);
 }
 
+/** True while a change is waiting for the next flush tick. */
+export function isTabDirty(tabId: string): boolean {
+	return dirtyTabs.has(tabId);
+}
+
 /** Drop a tab's in-memory flush bookkeeping. Row deletion is the documents
  * table's job (`deleteDocument` — the yjs_updates FK cascades); this clears
  * only what lives in this module. */

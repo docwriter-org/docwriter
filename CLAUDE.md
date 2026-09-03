@@ -149,6 +149,15 @@ first `synced` event — on localhost this is sub-20ms.
    markdown for every tab the agent saw, so the next render's diff block
    reflects what changed since.
 
+Tool results for `edit_doc` / `write_doc` come from one helper,
+`describeTabWrite` in `mcp-doc-tools.ts`, shared by the MCP tools and the
+provider handlers. They say the edit was *proposed* as a pending diff on
+its thread, never *applied*: the document changes only when the author
+Accepts, and the old "Edit applied to X." had the agent telling the author
+an edit was in when it was still pending. A replacement that leaves the
+text identical after typography normalization creates no round and says
+"No change proposed" instead of succeeding silently.
+
 ## Agent reconciliation
 
 There is none — in the old sense. Agent edits flow as CRDT ops directly
@@ -290,6 +299,22 @@ the disposition from `discussed` to `applied`.
 
 ## Gotchas
 
+- **Accept/Reject pause the WebSocket, and the resume must re-arm it.**
+  `pauseTabSync` disconnects the provider so the HTTP response's delta is
+  applied locally with `USER_ORIGIN` (undo contract). `disconnect()` only
+  starts the close handshake; if the HTTP reply lands before the close
+  completes, the provider's `connect()` returns early without setting
+  `shouldConnect`, and the later close never reconnects — a silently dead
+  tab (keystrokes stop syncing, the agent's next proposals never arrive).
+  The resume sets `websocketProvider.shouldConnect = true` before
+  `connect()`. `onSyncConnectionChange` reports a tab that stays
+  disconnected outside a pause for 5 s; the page turns it into a history
+  notification.
+- **Unloading a live doc flushes it.** `afterUnloadDocument` runs
+  `onTabUnloaded`: a tab still dirty from the 500 ms flush window is
+  replayed from the log and written to its file before the dirty flag is
+  dropped, so `document.md` never lags the CRDT because the last browser
+  disconnected mid-window.
 - **`globalThis.__docwriterWsServer` singleton.** Vite HMR re-executes
   `hooks.server.ts` on save; the module-scope guard keeps us from
   double-binding the Hocuspocus port (`ECONNREFUSED`-via-reconnect). The
