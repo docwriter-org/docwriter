@@ -1697,18 +1697,6 @@
 						return n;
 					})}
 				onHoverEdit={(roundId) => setHoverFlash(roundId)}
-				onApprove={(t, msgId) => {
-					const msg = t.messages.find((m) => m.id === msgId);
-					const suggestion = msg?.proposedEdit;
-					const transcript = t.messages
-						.map((m) => `- [${m.author === 'agent' ? 'agent' : 'user'}] ${m.text}`)
-						.join('\n');
-					const trigger = suggestion
-						? `I approved the suggestion in comment thread "${t.id}" on this tab. Apply this edit via edit_doc with thread_id="${t.id}" so it attaches to this thread:\n\nold_string: "${suggestion.oldString}"\nnew_string: "${suggestion.newString}"\n\nAnchor passage: "${t.anchor.quote}"\nFull thread:\n${transcript}`
-						: `I approved comment thread "${t.id}" on this tab. Apply the edit you described via edit_doc with thread_id="${t.id}" so it attaches to this thread.\n\nAnchor passage: "${t.anchor.quote}"\nFull thread:\n${transcript}`;
-					onSubmit?.(trigger);
-					openCommentThreadId.set(null);
-				}}
 				onReply={(t, replyText) => {
 					// User replied on a thread — wake the agent to respond.
 					// The post-reply thread `t` doesn't yet include the just-

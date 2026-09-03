@@ -192,9 +192,10 @@ export interface CommentMessage {
 	author: CommentAuthor;
 	text: string;
 	timestamp: number;
-	/** Optional edit the agent sketched in this reply. When present, the
-	 * thread popover shows an "Approve & propose edit" button that asks
-	 * the agent to apply it via `edit_doc` in the next render. */
+	/** Legacy. Older threads may carry a sketched edit from the removed
+	 * "Approve & propose edit" flow. Nothing writes it any more: an agent
+	 * reply that names a change is followed by an edit_doc proposal on the
+	 * same thread, and the gutter renders these messages as plain text. */
 	proposedEdit?: { oldString: string; newString: string };
 	/** Reviewer agent that wrote this message during a critique pass.
 	 * Only meaningful when author is 'agent'; the gutter renders the

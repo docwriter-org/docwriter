@@ -47,7 +47,6 @@
 		openThreadId: string | null;
 		onOpen: (threadId: string) => void;
 		onClose: () => void;
-		onApprove: (thread: CommentThread, messageId: string) => void;
 		/** Fires after a user reply is successfully posted to a thread. Used
 		 * by TiptapEditor to wake the agent so it can respond on the same
 		 * thread. The thread argument is the *post-reply* state. */
@@ -88,7 +87,6 @@
 		openThreadId,
 		onOpen,
 		onClose,
-		onApprove,
 		onReply,
 		onAcceptRound,
 		onRejectRound,
@@ -734,15 +732,6 @@
 								<span class="timestamp">{formatTimestamp(message.timestamp)}</span>
 							</span>
 							<div class="message-body">{@html renderMarkdown(message.text)}</div>
-							{#if message.author === 'agent' && message.proposedEdit}
-								<button
-									class="approve-btn"
-									onclick={() => onApprove(thread, message.id)}
-								>
-									<Sparkles size={11} />
-									Approve & propose edit
-								</button>
-							{/if}
 						</div>
 					{/each}
 				</div>
@@ -1279,26 +1268,6 @@
 	}
 	.message-body :global(.md-bullet) {
 		display: block;
-	}
-	.approve-btn {
-		grid-column: 1 / 3;
-		justify-self: start;
-		display: inline-flex;
-		align-items: center;
-		gap: 4px;
-		margin-top: 5px;
-		padding: 3px 7px;
-		font: inherit;
-		font-size: 10.5px;
-		font-weight: 500;
-		background: var(--accent);
-		color: white;
-		border: 1px solid var(--accent);
-		border-radius: 4px;
-		cursor: pointer;
-	}
-	.approve-btn:hover {
-		background: color-mix(in srgb, var(--accent) 88%, black);
 	}
 	.reply-input {
 		resize: none;

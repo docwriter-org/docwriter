@@ -1129,7 +1129,6 @@ function createAgentCommentThread(
 	anchorText: string,
 	occurrenceIndex: number,
 	message: string,
-	proposedEdit?: { old_string: string; new_string: string },
 	externalAuthor?: string
 ): string {
 	const threadId = 'thread_' + cryptoRandomId();
@@ -1152,15 +1151,7 @@ function createAgentCommentThread(
 				text: message,
 				timestamp: now,
 				...(isExternal ? { externalAuthor } : {}),
-				...reviewerStamp(),
-				...(proposedEdit
-					? {
-							proposedEdit: {
-								oldString: proposedEdit.old_string,
-								newString: proposedEdit.new_string
-							}
-						}
-					: {})
+				...reviewerStamp()
 			}
 		],
 		resolved: false,
@@ -1187,7 +1178,6 @@ export function applyReplyToComment(
 	filePath: string,
 	message: string,
 	options?: {
-		proposedEdit?: { old_string: string; new_string: string };
 		anchorText?: string;
 		occurrenceIndex?: number;
 	}
@@ -1237,15 +1227,7 @@ export function applyReplyToComment(
 		author: 'agent',
 		text: message,
 		timestamp: now,
-		...reviewerStamp(),
-		...(options?.proposedEdit
-			? {
-					proposedEdit: {
-						oldString: options.proposedEdit.old_string,
-						newString: options.proposedEdit.new_string
-					}
-				}
-			: {})
+		...reviewerStamp()
 	};
 	// Field-level writes: the reply appends, the re-anchor touches only the
 	// anchor, and re-opening flips only the resolved flag — none of them can
@@ -1281,15 +1263,6 @@ const commentDocTool = tool(
 			.describe(
 				'Zero-based occurrence to anchor when anchor_text appears more than once. Omit only when anchor_text is unique.'
 			),
-		proposed_edit: z
-			.object({
-				old_string: z.string(),
-				new_string: z.string()
-			})
-			.optional()
-			.describe(
-				'Optional concrete edit I can approve from the comment. Do not use this at Medium autonomy unless I directly asked for an edit.'
-			),
 		external_author: z
 			.string()
 			.optional()
@@ -1297,7 +1270,7 @@ const commentDocTool = tool(
 				'Name of an external commenter when importing feedback from outside the system. When set, the comment is attributed to that person rather than the agent.'
 			)
 	},
-	async ({ file_path, anchor_text, message, occurrence_index, proposed_edit, external_author }) => {
+	async ({ file_path, anchor_text, message, occurrence_index, external_author }) => {
 		if (isScratchPath(file_path)) {
 			return toolError('comment_doc cannot be used on scratch paths — only on workspace files.');
 		}
@@ -1332,7 +1305,7 @@ const commentDocTool = tool(
 					error: `occurrence_index ${occurrence} is out of range; anchor_text appears ${hits} time${hits === 1 ? '' : 's'}.`
 				};
 			}
-			threadId = createAgentCommentThread(doc, anchorText, occurrence, trimmedMessage, proposed_edit, external_author);
+			threadId = createAgentCommentThread(doc, anchorText, occurrence, trimmedMessage, external_author);
 			return { ok: true };
 		});
 
@@ -1343,7 +1316,7 @@ const commentDocTool = tool(
 
 const replyToCommentTool = tool(
 	'reply_to_comment',
-	'Reply on an existing comment thread. Route per the "Where a response goes" rules in your instructions. Write in the first person and keep it to a few sentences. Pass optional anchor_text to move the thread onto a new passage (re-attach after the original text was replaced by another accepted edit). You may attach proposed_edit for me to approve later. To start a new thread, use comment_doc.',
+	'Reply on an existing comment thread. Route per the "Where a response goes" rules in your instructions. Write in the first person and keep it to a few sentences. When the reply says what you would change, propose that change with edit_doc on the same thread in this turn; a reply is never a substitute for the diff, and there is no separate approval step. Pass optional anchor_text to move the thread onto a new passage (re-attach after the original text was replaced by another accepted edit). To start a new thread, use comment_doc.',
 	{
 		file_path: z
 			.string()
@@ -1373,18 +1346,9 @@ const replyToCommentTool = tool(
 			.optional()
 			.describe(
 				'Zero-based occurrence to anchor when anchor_text appears more than once. Required only when anchor_text is not unique.'
-			),
-		proposed_edit: z
-			.object({
-				old_string: z.string(),
-				new_string: z.string()
-			})
-			.optional()
-			.describe(
-				'Optional concrete edit you would propose if I approve. `old_string` must match once in the current live markdown at the time of writing. The edit is NOT applied until I click "Approve & propose edit" on your comment.'
 			)
 	},
-	async ({ file_path, thread_id, message, proposed_edit, anchor_text, occurrence_index }) => {
+	async ({ file_path, thread_id, message, anchor_text, occurrence_index }) => {
 		if (isScratchPath(file_path)) {
 			return toolError(
 				'reply_to_comment cannot be used on scratch paths — only on workspace tab files.'
@@ -1399,7 +1363,6 @@ const replyToCommentTool = tool(
 		let reanchored = false;
 		const outcome = await runCommentWrite(opened.tabId, (doc) => {
 			const result = applyReplyToComment(doc, thread_id, file_path, trimmedMessage, {
-				proposedEdit: proposed_edit,
 				anchorText: anchor_text,
 				occurrenceIndex: occurrence_index
 			});

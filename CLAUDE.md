@@ -135,6 +135,14 @@ first `synced` event — on localhost this is sub-20ms.
    Built-in `Edit` / `Write` / `Read` remain available for files outside
    the open-tab set; the prompt explicitly routes open-tab work through
    the custom tools.
+   There is no approve-a-suggestion step: a reply that names a change is
+   followed by `edit_doc` on the same thread in the same turn, and the
+   diff lands under the explanation. Only genuine uncertainty about the
+   change itself (rare) earns a reply with no proposal. The old
+   `proposed_edit` parameter and the gutter's "Approve & propose edit"
+   button are gone; `CommentMessage.proposedEdit` survives as legacy data
+   on older threads and renders as plain text.
+   `comment-then-edit.test.ts` guards the contract.
 3. Agent calls `edit_doc`: server finds the single `old_string` match in
    the live markdown, then in one `document.transact(..., AGENT_ORIGIN)`
    both rebuilds the XmlFragment via a headless Collaboration editor and

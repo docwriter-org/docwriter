@@ -419,7 +419,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
 		{
 			name: 'comment_doc',
 			description:
-				'Create a new agent comment thread anchored to existing text in a workspace document. It does not change document text. In Medium autonomy, use this to create comment threads on your own, but do not propose edits unless asked.',
+				'Create a new agent comment thread anchored to existing text in a workspace document. It does not change document text. Use it as the announce thread before an edit proposal; unprompted observations are allowed at Medium or High autonomy.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -427,13 +427,6 @@ export function buildToolDefinitions(): ToolDefinition[] {
 					anchor_text: { type: 'string', description: 'Exact current document text to anchor the comment to.' },
 					message: { type: 'string', description: 'The comment text.' },
 					occurrence_index: { type: 'number', description: 'Zero-based occurrence when anchor_text appears more than once.' },
-					proposed_edit: {
-						type: 'object',
-						description:
-							'Optional concrete edit I can approve. Use only when I directly asked for an edit or autonomy is High.',
-						properties: { old_string: { type: 'string' }, new_string: { type: 'string' } },
-						required: ['old_string', 'new_string']
-					},
 					external_author: {
 						type: 'string',
 						description: 'Name of an external commenter when importing feedback. When set, the comment is attributed to that person.'
@@ -442,12 +435,11 @@ export function buildToolDefinitions(): ToolDefinition[] {
 				required: ['file_path', 'anchor_text', 'message']
 			},
 			execute: async (input) => {
-				const { file_path: path, anchor_text, message: msg, occurrence_index, proposed_edit, external_author } = input as {
+				const { file_path: path, anchor_text, message: msg, occurrence_index, external_author } = input as {
 					file_path: string;
 					anchor_text: string;
 					message: string;
 					occurrence_index?: number;
-					proposed_edit?: { old_string: string; new_string: string };
 					external_author?: string;
 				};
 				if (!path) {
@@ -497,15 +489,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
 							author: isExternal ? 'external' : 'agent',
 							text: trimmedMessage,
 							timestamp: now,
-							...(isExternal ? { externalAuthor: external_author } : {}),
-							...(proposed_edit
-								? {
-										proposedEdit: {
-											oldString: proposed_edit.old_string,
-											newString: proposed_edit.new_string
-										}
-									}
-								: {})
+							...(isExternal ? { externalAuthor: external_author } : {})
 						}],
 						resolved: false,
 						createdAt: now
@@ -528,7 +512,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
 		{
 			name: 'reply_to_comment',
 			description:
-				'Reply on an existing comment thread. Include proposed_edit only when I directly asked for an edit or autonomy is High. Pass optional anchor_text to re-attach the thread to a new passage after the original text was replaced.',
+				'Reply on an existing comment thread. When the reply says what you would change, propose that change with edit_doc on the same thread in this turn; a reply is never a substitute for the diff, and there is no separate approval step. Pass optional anchor_text to re-attach the thread to a new passage after the original text was replaced.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -543,19 +527,13 @@ export function buildToolDefinitions(): ToolDefinition[] {
 					occurrence_index: {
 						type: 'number',
 						description: 'Zero-based occurrence when anchor_text appears more than once.'
-					},
-					proposed_edit: {
-						type: 'object',
-						properties: { old_string: { type: 'string' }, new_string: { type: 'string' } },
-						required: ['old_string', 'new_string']
 					}
 				},
 				required: ['file_path', 'thread_id', 'message']
 			},
 			execute: async (input) => {
-				const { file_path: path, thread_id, message: msg, proposed_edit, anchor_text, occurrence_index } = input as {
+				const { file_path: path, thread_id, message: msg, anchor_text, occurrence_index } = input as {
 					file_path: string; thread_id: string; message: string;
-					proposed_edit?: { old_string: string; new_string: string };
 					anchor_text?: string;
 					occurrence_index?: number;
 				};
@@ -570,7 +548,6 @@ export function buildToolDefinitions(): ToolDefinition[] {
 				let reanchored = false;
 				const outcome = await runCommentWrite(opened.tabId, (doc) => {
 					const result = applyReplyToComment(doc, thread_id, path, trimmedMessage, {
-						proposedEdit: proposed_edit,
 						anchorText: anchor_text,
 						occurrenceIndex: occurrence_index
 					});
