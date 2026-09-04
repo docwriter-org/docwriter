@@ -268,7 +268,7 @@ the mascot card).
 ## Critique passes (reviewer agents)
 
 Settings → **Critique pass** lists reviewer agents — built-ins (PhD
-Advisor, Copy Editor, Skeptic, Fresh Eyes) from
+Advisor, Skeptic, Fresh Eyes, Gricean Maxims) from
 `src/lib/shared/reviewers.ts`, custom ones from the SQLite `reviewers`
 table (`/api/reviewers` CRUD; created via `ReviewerEditorDialog`, which
 collects name, mascot, color, and the reviewer's system prompt). Picking
