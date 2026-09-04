@@ -161,7 +161,7 @@ first `synced` event — on localhost this is sub-20ms.
    passage, quoted verbatim from the document" — the earlier
    `Rewrite it: "<passage>"` read as "rewrite it TO this", and the agent
    compared the quote with the document and declared nothing to change.
-   An edit-mode feedback turn that ends with no new round on the tab gets
+   An edit-mode feedback turn, or a reply on a thread, that ends with no new round on the tab gets
    one harness retry (`feedbackRetryPrompt` in the render route) naming
    the fact; it stands down only if the agent already said no change is
    needed or asked a question on the thread.
