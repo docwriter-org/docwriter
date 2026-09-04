@@ -124,6 +124,20 @@ first `synced` event — on localhost this is sub-20ms.
    - First-render tab (no `last_seen`): path only — agent must `read_doc` to see content.
    Agency guidance (`conservative` / `balanced` / `aggressive`) rewires
    the "how to decide whether to edit" section.
+   The `<author_style>` block (`src/lib/server/style-block.ts`) carries the
+   learned style's full instruction list only when the transcript has not
+   seen the current list: the first turn of a session, or a turn where the
+   published propositions changed. Every other turn gets a one-line
+   reminder naming the skill, so no turn runs with nothing saying a style
+   exists (an earlier delta-only version had that hole) and the author's
+   words no longer sit under the same bullets every turn. "First turn of a
+   session" is tracked by `last_render:session`, the session id the
+   `last_render:*` snapshots were sent in: a turn that resumes a different
+   session, or none (New session, a provider switch, the first real turn
+   after a warmup, which mints the session without building this prompt),
+   treats every snapshot as absent and sends the full rules, refs, agency,
+   audience and style. Clearing the snapshots on New session was not enough
+   for the warmup case.
 2. `query()` runs with two MCP servers:
    - `docwriter` — `propose_rule` / `propose_hook` (user-review tools).
    - `docwriter-doc` — `edit_doc` / `read_doc` / `write_doc` /

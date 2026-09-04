@@ -19,6 +19,7 @@ import {
 } from '$lib/server/hooks-config';
 import { runHookCommand, type HookRunEmitter } from '$lib/server/hook-runner';
 import { getSessionId, setSessionId, setLastSystemPrompt, getTabsState } from '$lib/server/runtime-state';
+import { buildStyleBlock } from '$lib/server/style-block';
 import { readMeta } from '$lib/server/document-io';
 import { kvGet, kvSet, dbAppendConversationEvent } from '$lib/server/db-writes';
 import { readCommentThreads, readReviewRounds } from '$lib/shared/ydoc-codec';
@@ -180,6 +181,10 @@ const KV_LAST_RULES = 'last_render:rules';
 const KV_LAST_REFS = 'last_render:refs';
 const KV_LAST_AGENCY = 'last_render:agency';
 const KV_LAST_AUDIENCE = 'last_render:audience';
+const KV_LAST_STYLE = 'last_render:style';
+/** The session id the `last_render:*` snapshots were sent in. A turn that
+ * starts a different session has a transcript that has seen none of them. */
+const KV_LAST_SESSION = 'last_render:session';
 
 function normalizeToolPath(pathLike: string): string {
 	return normalize(resolve(WORKSPACE_ROOT, pathLike));
@@ -387,7 +392,7 @@ Every edit proposal needs a comment thread that says what is about to happen, so
 Each turn may contain these blocks, in this order.
 
 - <workspace_state>: the open tabs, a diff of what changed in each since your last turn, and comment-thread stubs (open threads plus a count of dismissed ones). Unchanged tabs say "Unchanged". Tab content is never inlined. Call read_doc(file_path) when you need it. Calls are cheap because the server holds the document in memory, so read what you need, not every tab.
-- <author_style>: how I write, learned from my own writing. Present on every turn once a style has been learned. Follow it whenever you draft or revise prose, unless I ask for something different this turn.
+- <author_style>: how I write, learned from my own writing. Present on every turn once a style has been learned: the full instructions on the first turn of a session and whenever they change, a one-line reminder otherwise. Follow it whenever you draft or revise prose, unless I ask for something different this turn.
 - <session_state>: rules, style references, the agency level, and the intended audience. Sent in full on the first turn, then only when something changed. If the block is absent, nothing changed.
 - <mode>: present only in special modes, such as plan-first.
 - <user_message>: my words, verbatim.
@@ -566,31 +571,6 @@ function buildRefsBlock(profile: StyleProfile | null): string | null {
 	return lines.join('\n');
 }
 
-/**
- * The learned author style, sent with every turn.
- *
- * This was one line in the session-state delta, which emits only on the render
- * where the profile changed, so every turn after that ran with nothing saying a
- * style existed — and on the claude provider that was the only mention at all,
- * since the skills block is skipped there. It lives in the turn prompt rather
- * than the system prompt because almost every render resumes a session, and the
- * SDK does not promise a new system prompt is reapplied when it does. The
- * instructions are short enough to inline; the skill keeps the passages.
- */
-function buildStyleBlock(profile: StyleProfile | null): string | null {
-	const active = publishedStylePropositions(profile);
-	if (active.length === 0) return null;
-	return [
-		'How I write, learned from a handful of pieces I wrote. Follow this whenever you draft or revise prose here, unless I ask for something different this turn.',
-		'',
-		...active.map((proposition) => `- ${proposition.instruction}`),
-		'',
-		'These are tendencies, not rules. Follow the ones that fit and skip the rest. They govern how you write, not what about: take no facts or subject matter from the references. My rules come first.',
-		'',
-		`Read the \`${profile?.skillId ?? 'author-style'}\` skill before you write. It holds the passages behind each instruction.`
-	].join('\n');
-}
-
 function buildMultiTabPrompt(
 	activeTabId: string | null,
 	tabs: TabPromptInfo[],
@@ -602,12 +582,20 @@ function buildMultiTabPrompt(
 	const currentAgency = meta.agentSettings.agency;
 	const currentAudience = (meta.agentSettings.intendedAudience ?? '').trim();
 
-	// Read prior snapshots so we can emit only the deltas. First render of a
-	// session (snapshot absent) shows the full state — agent needs it once.
-	const priorRulesJson = kvGet(KV_LAST_RULES);
-	const priorRefsJson = kvGet(KV_LAST_REFS);
-	const priorAgency = kvGet(KV_LAST_AGENCY);
-	const priorAudience = kvGet(KV_LAST_AUDIENCE);
+	// Read prior snapshots so we can emit only the deltas. They describe what
+	// the transcript has already been told, so they count only when this turn
+	// resumes the session they were sent in. A fresh session (New session, a
+	// provider switch, the first turn after a warmup, which mints the session
+	// without building this prompt) gets the full state. Resetting the
+	// snapshots on New session was not enough for exactly that warmup case.
+	const resumingId = getSessionId() || '';
+	const priorSession = kvGet(KV_LAST_SESSION) ?? '';
+	const fresh = !resumingId || priorSession !== resumingId;
+	const priorRulesJson = fresh ? null : kvGet(KV_LAST_RULES);
+	const priorRefsJson = fresh ? null : kvGet(KV_LAST_REFS);
+	const priorAgency = fresh ? null : kvGet(KV_LAST_AGENCY);
+	const priorAudience = fresh ? null : kvGet(KV_LAST_AUDIENCE);
+	const priorStyle = fresh ? null : kvGet(KV_LAST_STYLE);
 
 	const currentRulesJson = snapshotRules(meta.rules);
 	// Read once: three blocks below all describe the same profile, and parsing
@@ -658,10 +646,11 @@ function buildMultiTabPrompt(
 	// words last. session_state is omitted entirely when nothing changed.
 	const sections: string[] = [`<workspace_state>\n${tabSections}\n</workspace_state>`];
 
-	// Not delta-gated: the style is the point of the feature, so it goes in
-	// every turn rather than only the one where it changed.
-	const styleBlock = buildStyleBlock(styleProfile);
-	if (styleBlock) sections.push(`<author_style>\n${styleBlock}\n</author_style>`);
+	// Full instructions when the transcript has not seen the current ones
+	// (fresh session, or the profile changed); a one-line reminder otherwise,
+	// so no turn runs with nothing saying a style exists.
+	const style = buildStyleBlock({ profile: styleProfile, prior: priorStyle, fresh });
+	if (style.text) sections.push(`<author_style>\n${style.text}\n</author_style>`);
 
 	const sessionParts: string[] = [];
 	const rulesDelta = buildRulesDelta(currentRuleTexts, priorRulesJson);
@@ -707,6 +696,10 @@ function buildMultiTabPrompt(
 		kvSet(KV_LAST_REFS, currentRefsJson);
 		kvSet(KV_LAST_AGENCY, currentAgency);
 		kvSet(KV_LAST_AUDIENCE, currentAudience);
+		kvSet(KV_LAST_STYLE, style.snapshot);
+		// Empty for a session that has no id yet; the render adopts the id
+		// once the provider mints it (see the session event handler).
+		kvSet(KV_LAST_SESSION, resumingId);
 	} catch (err) {
 		console.error('[render] failed to persist prompt-state snapshot:', err);
 	}
@@ -1121,6 +1114,15 @@ export const POST: RequestHandler = async ({ request }) => {
 							// lands in the same bucket /api/history reads back.
 							if (event.type === 'session') {
 								setSessionId(event.sessionId);
+								// The prompt this turn was built for a session with no
+								// id yet; bind its snapshots to the id the provider
+								// minted, so the next turn sends deltas instead of the
+								// full state again. A warmup builds no prompt, so its
+								// session stays unbound and the first real turn sends
+								// everything.
+								if (!warmup && !currentSessionId && kvGet(KV_LAST_SESSION) === '') {
+									kvSet(KV_LAST_SESSION, event.sessionId);
+								}
 								if (providerId !== 'claude' && userMessage && !userMsgPersisted) {
 									userMsgPersisted = true;
 									dbAppendConversationEvent(event.sessionId, providerId, 'user_message', JSON.stringify({

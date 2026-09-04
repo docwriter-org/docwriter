@@ -30,6 +30,7 @@ const AGENT_FACING = [
 	'src/lib/server/reviewers.ts',
 	'src/lib/server/claude-memory.ts',
 	'src/lib/server/skills-config.ts',
+	'src/lib/server/style-block.ts',
 	'src/lib/server/style-analysis/skill-compiler.ts',
 	'src/lib/server/style-analysis/calibration.ts',
 	'src/lib/shared/feedback-import.ts',
