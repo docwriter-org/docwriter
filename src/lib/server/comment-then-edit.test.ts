@@ -87,9 +87,26 @@ describe('a feedback turn that asks for a change ends with a diff or a retry', (
 		expect(feedbackRetryPrompt({ message, tabId: 'essay.md', roundsBefore: before, roundsAfter: new Set(['r0', 'r1']) })).toBeNull();
 		// Discuss mode asked for words, not a diff.
 		expect(feedbackRetryPrompt({ message: message.replace('[mode: edit]', '[mode: discuss]'), tabId: 'essay.md', roundsBefore: before, roundsAfter: before })).toBeNull();
-		// A reply on a thread is not a feedback trigger.
-		expect(feedbackRetryPrompt({ message: 'I replied on comment thread thread_id="thread_1" on this tab.', tabId: 'essay.md', roundsBefore: before, roundsAfter: before })).toBeNull();
 		// No active tab: nothing to check against.
 		expect(feedbackRetryPrompt({ message, tabId: null, roundsBefore: before, roundsAfter: before })).toBeNull();
+	});
+
+	it('the retry fires for a thread reply that landed no round', async () => {
+		const { feedbackRetryPrompt } = await import('$lib/server/feedback-retry');
+		const replyMsg =
+			'I replied on comment thread thread_id="thread_1" on this tab.\n' +
+			'Anchor passage: "Each dataset is very unique."\n' +
+			'My latest reply: "say things like a reviewer can ...."\n' +
+			'Full thread (latest reply included):\n- [you] The passage overexplains\n- [me] say things like a reviewer can ....';
+		const before = new Set(['r0']);
+		// No round landed → retry.
+		expect(feedbackRetryPrompt({ message: replyMsg, tabId: 'essay.md', roundsBefore: before, roundsAfter: new Set(['r0']) })).toMatch(
+			/did not propose an edit/
+		);
+		expect(feedbackRetryPrompt({ message: replyMsg, tabId: 'essay.md', roundsBefore: before, roundsAfter: new Set(['r0']) })).toMatch(
+			/thread_id="thread_1"/
+		);
+		// A round landed → no retry.
+		expect(feedbackRetryPrompt({ message: replyMsg, tabId: 'essay.md', roundsBefore: before, roundsAfter: new Set(['r0', 'r1']) })).toBeNull();
 	});
 });

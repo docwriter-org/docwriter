@@ -297,12 +297,15 @@
 			if (awaitingAgent[tid]) clearAwaiting(tid);
 		}
 	});
-	// Clear the waiting indicator as soon as the agent's response lands — a new
-	// agent-authored message in the thread, or a new edit grouped under it.
+	// Clear the waiting indicator when the agent's edit lands on the thread.
+	// While a render is active, an agent *message* alone doesn't clear: the
+	// agent replies first (explanation), then calls edit_doc (the proposal).
+	// Clearing on the reply hides the spinner while the edit is still in
+	// flight. The render-end handler (above) sweeps any remaining awaiting.
 	$effect(() => {
-		// Touch reactive inputs so this re-runs when the thread or its edits change.
 		threads;
 		roundsByThread;
+		const rendering = get(isRendering);
 		for (const tid of Object.keys(awaitingAgent)) {
 			if (!awaitingAgent[tid]) continue;
 			const base = awaitBaseline.get(tid);
@@ -312,10 +315,11 @@
 				(m) => m.author === 'agent' && !base.msgIds.has(m.id)
 			);
 			const newRound = (roundsByThread.get(tid) ?? []).some((r) => !base.roundIds.has(r.id));
-			if (newAgentMsg || newRound) {
+			if (newRound) {
 				clearAwaiting(tid);
-				// The author sent feedback here and is waiting for exactly this.
-				if (newRound) revealCard(tid);
+				revealCard(tid);
+			} else if (newAgentMsg && !rendering) {
+				clearAwaiting(tid);
 			}
 		}
 	});
@@ -637,7 +641,10 @@
 		const track = ({ id, count }: { id: string; count: number }) => {
 			const prev = seenMsgCounts.get(id);
 			seenMsgCounts.set(id, count);
-			if (prev !== undefined && count > prev) {
+			if (prev === undefined) {
+				// First open: jump to the bottom so the latest message is visible.
+				requestAnimationFrame(() => { node.scrollTop = node.scrollHeight; });
+			} else if (count > prev) {
 				requestAnimationFrame(() =>
 					node.scrollTo({ top: node.scrollHeight, behavior: 'smooth' })
 				);

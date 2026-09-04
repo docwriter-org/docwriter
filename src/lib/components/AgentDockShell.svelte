@@ -169,7 +169,7 @@
 							<Cat size={16} strokeWidth={1.8} />
 						{/if}
 					</span>
-					<span class="dock-label">{$activeReviewer && !paused ? $activeReviewer.name : 'Agent'}</span>
+					<span class="dock-label">Agent</span>
 					<span class="header-status" aria-hidden="true">
 						{#if paused}
 							<span class="paused-label">Paused</span>

@@ -15,12 +15,30 @@ export function feedbackRetryPrompt(opts: {
 	roundsAfter: Set<string>;
 }): string | null {
 	const threadId = opts.message.match(/thread_id="([^"]+)"/)?.[1] ?? null;
-	const mode = opts.message.match(/\[mode: (auto|edit|discuss)\]/)?.[1] ?? null;
-	if (!threadId || mode !== 'edit' || !opts.tabId) return null;
-	if (!/^I flagged this passage/.test(opts.message)) return null;
+	if (!threadId || !opts.tabId) return null;
+
+	// Initial feedback trigger: "I flagged this passage … [mode: edit]"
+	const isFeedbackTrigger = /^I flagged this passage/.test(opts.message);
+	const isEditMode = /\[mode: edit\]/.test(opts.message);
+
+	// Thread reply: "I replied on comment thread thread_id=…"
+	const isReply = /^I replied on comment thread/.test(opts.message);
+
+	// Only retry edit-mode feedback triggers and thread replies.
+	// Discuss-mode triggers and other messages aren't expected to land edits.
+	if (!(isFeedbackTrigger && isEditMode) && !isReply) return null;
+
 	let landed = false;
 	for (const id of opts.roundsAfter) if (!opts.roundsBefore.has(id)) landed = true;
 	if (landed) return null;
+
+	if (isReply) {
+		return [
+			`You replied on thread_id="${threadId}" but did not propose an edit. My reply on that thread was feedback asking for a change, and no pending diff landed on ${opts.tabId}.`,
+			`If you understood the feedback and described what you would change, follow through now: call read_doc to see the current text, then call edit_doc with thread_id="${threadId}" to propose the edit.`,
+			`Do nothing only if you explicitly told me on the thread that the passage needs no change, or you asked me a question and are waiting for my answer.`
+		].join('\n');
+	}
 	return [
 		`You ended this turn without proposing an edit, but my feedback on thread_id="${threadId}" asked for a change ([mode: edit]), and no pending diff landed on ${opts.tabId}.`,
 		`If an edit_doc call failed, call read_doc, copy old_string exactly from the current text (including its line breaks), and call edit_doc again with thread_id="${threadId}".`,
