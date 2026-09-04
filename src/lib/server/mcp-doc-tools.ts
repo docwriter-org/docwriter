@@ -46,8 +46,7 @@ import {
 	buildThreadAnchor,
 	applyEditToFragment,
 	replaceYDocTextWithAiProvenance,
-	serializeFragmentRaw,
-	computeFragmentRelRange
+	relRangeForQuote
 } from '$lib/shared/ydoc-codec';
 import type { StaleAcceptApply } from '$lib/shared/stale-accept';
 import { isScratchPath, resolveTabFromPath, isOpenTab } from './path-router';
@@ -1102,28 +1101,6 @@ export async function runCommentWrite(
  * Mirrors the thread shape used by `reply_to_comment`; writes under
  * AGENT_ORIGIN so the update is classified as an agent change (never on the
  * user's undo stack). Runs inside the caller's `runCommentWrite` transaction. */
-/** CRDT rel positions for the `occurrenceIndex`-th occurrence of `quote`
- * in the LIVE fragment, stamped at thread creation so server-created
- * threads arrive fully anchored (the client's render-time backfill write
- * is legacy-only). Searches the fragment's RAW text — offsets there map
- * 1:1 onto Y.XmlText indices, which the normalized serialization doesn't
- * guarantee. Empty when the quote isn't present in the committed text
- * (e.g. it only exists in a pending proposal) — the quote/context anchor
- * still applies and the client backfills if the text lands later. */
-function relRangeForQuote(
-	doc: Y.Doc,
-	quote: string,
-	occurrenceIndex: number
-): { relStart: string; relEnd: string } | Record<string, never> {
-	if (!quote) return {};
-	const fragment = getFragment(doc);
-	const rawText = serializeFragmentRaw(fragment);
-	let idx = nthIndexOf(rawText, quote, occurrenceIndex);
-	if (idx < 0) idx = nthIndexOf(rawText, quote, 0);
-	if (idx < 0) return {};
-	return computeFragmentRelRange(fragment, idx, quote.length) ?? {};
-}
-
 function createAgentCommentThread(
 	doc: Y.Doc,
 	anchorText: string,

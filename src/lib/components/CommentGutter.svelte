@@ -129,6 +129,10 @@
 	// ── Group an agent's edits under the feedback thread that triggered them ──
 	// Rounds tagged with `feedbackThreadId` matching an open thread are shown
 	// INSIDE that thread's card (numbered), not as separate edit cards.
+	/** Cards whose passage is no longer in the document, pinned at the top
+	 * of the gutter by the layout effect. The card says so, because a card
+	 * far from any text otherwise reads as a bug. */
+	let parkedIds = $state<Set<string>>(new Set());
 	let openThreadIds = $derived(new Set(threads.filter((t) => !t.resolved).map((t) => t.id)));
 	let roundsByThread = $derived.by(() => {
 		const m = new Map<string, MaterializedPendingReviewRound[]>();
@@ -522,6 +526,7 @@
 			}
 		}
 		entries.sort((a, b) => a.top - b.top);
+		parkedIds = new Set(parked.map((c) => c.id));
 		// Collision stack: each card claims [top, top + height + gap]; if
 		// the next card's natural top falls inside that, push it down to
 		// sit right below the previous one. Reserve room for the batch bar.
@@ -744,6 +749,9 @@
 				onOpen(thread.id);
 			}}
 		>
+			{#if parkedIds.has(thread.id)}
+				<div class="parked-note">This passage is no longer in the document.</div>
+			{/if}
 			{#if isOpen}
 				{@const tEdits = editsForThread(thread.id)}
 				{#if tEdits.length > 0}
@@ -1233,6 +1241,14 @@
 		border: 1px solid var(--border-light);
 		padding: 0 6px;
 		border-radius: 9px;
+	}
+	.parked-note {
+		margin-bottom: 8px;
+		padding: 3px 8px;
+		font-size: 11px;
+		color: var(--text-muted);
+		background: var(--bg-surface);
+		border-radius: 6px;
 	}
 	.card-messages {
 		max-height: 300px;

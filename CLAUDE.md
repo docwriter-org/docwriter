@@ -209,6 +209,15 @@ StalePendingReviewError that drives the client's rebase flow. Both paths
 run in a single `ydoc.transact(..., USER_ORIGIN)` along with the
 `reviewArr.delete`.
 
+Accept also moves the threads behind the accepted rounds
+(`followAcceptedEdits` in `ydoc-codec.ts`, same transaction): a thread
+whose quote the edit replaced is re-anchored to the first line the edit
+added, and one whose edit only removed text resolves. Threads whose
+passage survived, or that still have another pending round, are left
+alone. Without this every round of accepts left the feedback threads
+parked at the top of the gutter as orphans. A parked card says "This
+passage is no longer in the document."
+
 Because Accept's blast radius is bounded to the affected paragraphs,
 the client doesn't need to disconnect + remount the editor to avoid
 clobbering concurrent typing — the Yjs sync delivers the surgical

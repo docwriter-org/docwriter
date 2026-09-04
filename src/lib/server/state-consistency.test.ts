@@ -676,3 +676,88 @@ describe('unloading a live doc flushes what the tick had not written yet', () =>
 		writeFileSync(join(root, TAB), before);
 	});
 });
+
+describe('accepting a thread\'s edit moves the thread with the text', () => {
+	// After a round of accepts, threads whose passages the edits replaced
+	// parked at the top of the gutter as orphans ("so many dangling
+	// threads"). The conversation belongs with the text the edit produced.
+	const P1 = 'Consider a shopper who asks for a refund.';
+	const P2 = 'The application must not rely on the model.';
+	const CODE = 'tools = [get_order, issue_refund]';
+	const P1NEW = 'The agent handles a request like returning a yellow shirt.';
+
+	function seed(threadQuote: string, round: Omit<import('$lib/types').PendingReviewRound, 'id' | 'timestamp'>) {
+		const doc = seededDoc(`${P1}\n\n${P2}\n\n${CODE}\n`);
+		const suffix = Math.random().toString(36).slice(2, 8);
+		const tab = `follow-accept-${suffix}.md`;
+		const threadId = 'thread_follow_' + suffix;
+		doc.transact(() => {
+			codec.putThread(codec.getCommentsMap(doc), {
+				id: threadId,
+				anchor: { quote: threadQuote, occurrenceIndex: 0 },
+				messages: [
+					{ id: 'm1', author: 'user', text: 'Too abstract.', timestamp: 1 },
+					{ id: 'm2', author: 'agent', text: 'I will rewrite and move it.', timestamp: 2 }
+				],
+				resolved: false,
+				createdAt: 1
+			});
+			codec.getReviewArray(doc).push([{ ...round, id: 'round_' + threadId, timestamp: 3, feedbackThreadId: threadId }]);
+		}, codec.USER_ORIGIN);
+		yp.appendUpdate(tab, Y.encodeStateAsUpdate(doc), codec.USER_ORIGIN);
+		return { tab, threadId, roundId: 'round_' + threadId };
+	}
+
+	function readThread(tab: string, threadId: string) {
+		const doc = new Y.Doc();
+		yp.replayUpdatesInto(doc, tab);
+		return {
+			thread: codec.getThread(codec.getCommentsMap(doc), threadId),
+			text: codec.serializeYDoc(doc)
+		};
+	}
+
+	it('a move past a code block re-anchors the thread to the moved text', async () => {
+		const { tab, threadId, roundId } = seed(P1, {
+			operation: {
+				type: 'edit',
+				oldString: `${P1}\n\n${P2}\n\n${CODE}`,
+				newString: `${P2}\n\n${CODE}\n\n${P1NEW}`
+			},
+			trigger: 'agent_edit_doc',
+			feedbackThreadId: 'placeholder'
+		});
+		const result = await ws.acceptTabRounds(tab, roundId);
+		expect(result.acceptedCount).toBe(1);
+		const { thread, text } = readThread(tab, threadId);
+		expect(text).toContain(P1NEW);
+		expect(text).not.toContain(P1);
+		expect(thread?.resolved).toBe(false);
+		expect(thread?.anchor.quote).toBe(P1NEW);
+		expect(thread?.anchor.relStart).toBeTruthy();
+	});
+
+	it('an edit that only removes the passage resolves the thread', async () => {
+		const { tab, threadId, roundId } = seed(P1, {
+			operation: { type: 'edit', oldString: `${P1}\n\n`, newString: '' },
+			trigger: 'agent_edit_doc',
+			feedbackThreadId: 'placeholder'
+		});
+		await ws.acceptTabRounds(tab, roundId);
+		const { thread, text } = readThread(tab, threadId);
+		expect(text).not.toContain(P1);
+		expect(thread?.resolved).toBe(true);
+	});
+
+	it('a thread whose passage survived is left alone', async () => {
+		const { tab, threadId, roundId } = seed(P2, {
+			operation: { type: 'edit', oldString: CODE, newString: 'tools = [get_order]' },
+			trigger: 'agent_edit_doc',
+			feedbackThreadId: 'placeholder'
+		});
+		await ws.acceptTabRounds(tab, roundId);
+		const { thread } = readThread(tab, threadId);
+		expect(thread?.resolved).toBe(false);
+		expect(thread?.anchor.quote).toBe(P2);
+	});
+});

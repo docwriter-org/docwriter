@@ -11,6 +11,7 @@
  */
 import * as Y from 'yjs';
 import DiffMatchPatch from 'diff-match-patch';
+import { diffLines } from 'diff';
 import type { CommentMessage, CommentThread, PendingReviewRound } from '$lib/types';
 
 /**
@@ -413,6 +414,164 @@ export function resolveEmptyEditThreads(ydoc: Y.Doc, threadIds: Iterable<string>
 		if (stillReferenced.has(tid)) continue;
 		if (thread.messages.some((m) => m.author === 'user')) continue;
 		setThreadResolved(commentsMap, tid, true);
+	}
+}
+
+/** CRDT rel positions for the `occurrenceIndex`-th occurrence of `quote`
+ * in the LIVE fragment, stamped at thread creation so server-created
+ * threads arrive fully anchored (the client's render-time backfill write
+ * is legacy-only). Searches the fragment's RAW text — offsets there map
+ * 1:1 onto Y.XmlText indices, which the normalized serialization doesn't
+ * guarantee. Empty when the quote isn't present in the committed text
+ * (e.g. it only exists in a pending proposal) — the quote/context anchor
+ * still applies and the client backfills if the text lands later. */
+export function relRangeForQuote(
+	doc: Y.Doc,
+	quote: string,
+	occurrenceIndex: number
+): { relStart: string; relEnd: string } | Record<string, never> {
+	if (!quote) return {};
+	const fragment = getFragment(doc);
+	const rawText = serializeFragmentRaw(fragment);
+	let idx = nthIndexOf(rawText, quote, occurrenceIndex);
+	if (idx < 0) idx = nthIndexOf(rawText, quote, 0);
+	if (idx < 0) return {};
+	return computeFragmentRelRange(fragment, idx, quote.length) ?? {};
+}
+
+/** A round accepted in one `acceptTabRounds` call, with the document text
+ * it was applied against (the previous round's output in a batch). The
+ * text matters only for whole-document `write` rounds, whose "what changed"
+ * is the diff of the two full texts; an `edit` round carries its own
+ * before/after in the operation. */
+export interface AcceptedRound {
+	round: PendingReviewRound;
+	textBefore?: string;
+}
+
+/** Where the text a round introduced now sits: the first non-empty line
+ * its diff added, located in `textAfter` (the document as serialized once
+ * the round landed). `added: false` means the round removed text without
+ * adding any — there is nothing left to anchor to. `idx: -1` means the
+ * round added text that cannot be found in the document, which should not
+ * happen for a round that just applied but is reported rather than guessed
+ * at. */
+export function locateAddedText(
+	{ round, textBefore }: AcceptedRound,
+	textAfter: string
+): { added: boolean; line: string; idx: number; occurrenceIndex: number } {
+	const op = round.operation;
+	let before: string;
+	let after: string;
+	if (op?.type === 'edit') {
+		before = normalizeTypography(op.oldString);
+		after = normalizeTypography(op.newString);
+	} else if (op?.type === 'write') {
+		before = normalizeTypography(textBefore ?? round.beforeMd ?? '');
+		after = normalizeTypography(op.content);
+	} else {
+		before = normalizeTypography(textBefore ?? round.beforeMd ?? '');
+		after = normalizeTypography(round.afterMd ?? '');
+	}
+	const none = { added: false, line: '', idx: -1, occurrenceIndex: 0 };
+	if (!after) return none;
+	// Diff whole lines. Both sides get a trailing newline so a last line
+	// that merely gained a newline (text appended after it) is not reported
+	// as removed-and-re-added; that made a move anchor to the line BEFORE
+	// the moved text.
+	const endLine = (s: string) => (s.endsWith('\n') ? s : s + '\n');
+	// Walk the diff keeping the offset into `after` so the added line can be
+	// found at the spot the edit landed, not at an unrelated earlier
+	// occurrence of the same string.
+	let offset = 0;
+	let line = '';
+	let lineOffset = -1;
+	let sawAddition = false;
+	for (const part of diffLines(endLine(before), endLine(after))) {
+		if (part.removed) continue;
+		if (part.added && lineOffset < 0) {
+			sawAddition = true;
+			let local = 0;
+			for (const candidate of part.value.split('\n')) {
+				if (candidate.trim()) {
+					line = candidate;
+					lineOffset = offset + local;
+					break;
+				}
+				local += candidate.length + 1;
+			}
+		}
+		offset += part.value.length;
+	}
+	if (lineOffset < 0) return { ...none, added: sawAddition };
+	let idx = -1;
+	const editIdx = textAfter.indexOf(after);
+	if (editIdx >= 0 && textAfter.startsWith(line, editIdx + lineOffset)) {
+		idx = editIdx + lineOffset;
+	} else {
+		idx = textAfter.indexOf(line);
+	}
+	if (idx < 0) return { added: true, line, idx: -1, occurrenceIndex: 0 };
+	let occurrenceIndex = 0;
+	let scan = textAfter.indexOf(line);
+	while (scan >= 0 && scan < idx) {
+		occurrenceIndex += 1;
+		scan = textAfter.indexOf(line, scan + line.length);
+	}
+	return { added: true, line, idx, occurrenceIndex };
+}
+
+/** After rounds are accepted, carry each round's feedback thread along with
+ * the text the round produced. A thread whose anchored passage the edit
+ * replaced is re-anchored to the first line the edit added — the
+ * conversation belongs with the rewritten text — and a thread whose edit
+ * only removed its passage resolves, because the author has just agreed
+ * there is nothing left to discuss. Threads whose passage still matches
+ * are left alone, and a thread that still has another pending round is
+ * never resolved (its card still has work under it). Without this, every
+ * round of accepts left the feedback threads parked at the top of the
+ * gutter as orphans. Callers run inside the accept's transact so the move
+ * lands in the same delta as the round removal. */
+export function followAcceptedEdits(
+	ydoc: Y.Doc,
+	accepted: readonly AcceptedRound[],
+	textAfter: string
+): void {
+	const commentsMap = getCommentsMap(ydoc);
+	const stillReferenced = new Set(
+		getReviewArray(ydoc)
+			.toArray()
+			.map((r) => r.feedbackThreadId)
+			.filter((id): id is string => typeof id === 'string')
+	);
+	const seen = new Set<string>();
+	for (const entry of accepted) {
+		const tid = entry.round.feedbackThreadId;
+		if (!tid || seen.has(tid)) continue;
+		seen.add(tid);
+		const thread = getThread(commentsMap, tid);
+		if (!thread || thread.resolved) continue;
+		if (matchCommentAnchor(textAfter, thread.anchor)) continue;
+		// The thread's passage is gone. Of this thread's rounds in the batch,
+		// the last one that added text decides where the thread goes.
+		let target: ReturnType<typeof locateAddedText> | null = null;
+		let addedAnything = false;
+		for (const e of accepted) {
+			if (e.round.feedbackThreadId !== tid) continue;
+			const located = locateAddedText(e, textAfter);
+			if (located.added) addedAnything = true;
+			if (located.idx >= 0) target = located;
+		}
+		if (target) {
+			setThreadAnchor(commentsMap, tid, {
+				quote: target.line,
+				occurrenceIndex: target.occurrenceIndex,
+				...captureAnchorContext(textAfter, target.idx, target.line.length),
+				...relRangeForQuote(ydoc, target.line, target.occurrenceIndex)
+			});
+		} else if (!addedAnything && !stillReferenced.has(tid)) {
+			setThreadResolved(commentsMap, tid, true);
+		}
 	}
 }
 

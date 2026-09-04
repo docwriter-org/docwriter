@@ -29,7 +29,8 @@ import {
 	readReviewRounds,
 	serializeYDoc,
 	replaceYDocTextWithAiProvenance,
-	applyEditToFragment
+	applyEditToFragment,
+	followAcceptedEdits
 } from '$lib/shared/ydoc-codec';
 import { applyPendingReviewRound } from '$lib/review-rounds';
 import { touchLastSeen } from '$lib/server/last-seen';
@@ -262,6 +263,10 @@ export async function acceptTabRounds(
 		const singleMode = typeof roundId === 'string';
 		let staleCheck = serializeYDoc(ydoc);
 		const accepted: PendingReviewRound[] = [];
+		// The text each round applied against (the previous round's output
+		// in a batch), for `followAcceptedEdits` to diff whole-document
+		// writes.
+		const textBeforeById = new Map<string, string>();
 		const skippedStale: Array<{ id: string; reason: string }> = [];
 		for (const round of requested) {
 			const applied = applyPendingReviewRound(staleCheck, round);
@@ -283,6 +288,7 @@ export async function acceptTabRounds(
 				skippedStale.push({ id: round.id, reason });
 				continue;
 			}
+			textBeforeById.set(round.id, staleCheck);
 			staleCheck = applied.nextText;
 			accepted.push(round);
 		}
@@ -363,6 +369,15 @@ export async function acceptTabRounds(
 						.map((r) => r.feedbackThreadId)
 						.filter((id): id is string => typeof id === 'string')
 				)
+			);
+			// The threads behind these edits follow the text they produced
+			// (or resolve when the edit only removed text) instead of parking
+			// at the top of the gutter as orphans. Runs after the announce
+			// threads resolved, so it only moves threads that still show.
+			followAcceptedEdits(
+				ydoc,
+				accepted.map((round) => ({ round, textBefore: textBeforeById.get(round.id) })),
+				serializeYDoc(ydoc)
 			);
 		}, USER_ORIGIN);
 
