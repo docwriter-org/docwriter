@@ -155,6 +155,11 @@ first `synced` event — on localhost this is sub-20ms.
    `CommentGutter` scrolls a card into view (`revealCard`) when it opens
    and when the proposal an author is waiting on lands — its edits
    section and reply box are exactly the part the dock covers.
+   A comment the author makes opens its card (`openFeedbackThread` in
+   `TiptapEditor.svelte` sets `openCommentThreadId` before the thread
+   has synced back; the gutter reveals it on arrival). Cards render
+   collapsed by default, and the author used to have to click the card
+   they had just written to see the reply and the proposal.
    A card's message list is capped at 300px and scrolls; it opens at its
    END (newest reply, then the edits section below), because a long first
    comment used to fill the box and hide the agent's answer and the

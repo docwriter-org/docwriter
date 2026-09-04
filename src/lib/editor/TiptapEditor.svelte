@@ -660,10 +660,7 @@
 		// it to `edit`, but we want to honor what the user picked.
 		feedbackMode = modeSnapshot;
 		const threadId = await maybeOpenThreadForFeedback(action.label, text, relSnapshot);
-		if (threadId) {
-			newAwaitingThreadId = threadId;
-			tick().then(() => { newAwaitingThreadId = null; });
-		}
+		if (threadId) openFeedbackThread(threadId);
 		const trigger = buildFeedbackTrigger(action.label, text, false, threadId);
 		feedbackMode = 'edit';
 		if (onSubmit) onSubmit(trigger);
@@ -690,10 +687,7 @@
 		closeFeedbackPopup();
 		feedbackMode = modeSnapshot;
 		const threadId = await maybeOpenThreadForFeedback(fb, text, relSnapshot);
-		if (threadId) {
-			newAwaitingThreadId = threadId;
-			tick().then(() => { newAwaitingThreadId = null; });
-		}
+		if (threadId) openFeedbackThread(threadId);
 		const trigger = buildFeedbackTrigger(fb, text, true, threadId);
 		feedbackMode = 'edit';
 		if (onSubmit) onSubmit(trigger);
@@ -769,6 +763,16 @@
 		tick().then(() => {
 			newAwaitingThreadId = null;
 		});
+	}
+
+	/** A comment the author just made opens its card and shows the agent
+	 * thinking on it. Cards render collapsed by default, so without this
+	 * the author had to click the card they had just written to see the
+	 * reply and the proposal land under it. The card may not have synced
+	 * back from the server yet; the gutter expands it on arrival. */
+	function openFeedbackThread(threadId: string): void {
+		openCommentThreadId.set(threadId);
+		markThreadAwaiting(threadId);
 	}
 
 	export async function flushAutosave(): Promise<boolean> {

@@ -270,8 +270,19 @@
 	}
 	// An open card must be readable end to end: its edits section and reply
 	// box sit below the messages, which is exactly the part the dock covers.
+	// The open id can precede its thread: a comment the author just made is
+	// opened before the server's thread syncs back, so the reveal waits for
+	// the thread and runs once per opening.
+	let revealedOpenId: string | null = null;
 	$effect(() => {
-		if (openThreadId) revealCard(openThreadId);
+		if (!openThreadId) {
+			revealedOpenId = null;
+			return;
+		}
+		if (revealedOpenId === openThreadId) return;
+		if (!threads.some((t) => t.id === openThreadId)) return;
+		revealedOpenId = openThreadId;
+		revealCard(openThreadId);
 	});
 
 	let renderWasActive = false;

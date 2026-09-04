@@ -51,6 +51,20 @@ describe('a feedback turn that asks for a change ends with a diff or a retry', (
 	// `Rewrite it: "<passage>"` read as "rewrite it TO this"; the agent
 	// compared the quote with the document, found them identical, and
 	// replied that nothing needed changing.
+	it('a comment the author makes opens its card', () => {
+		// Cards render collapsed by default; the author had to click the card
+		// they had just written to see the agent's reply and proposal.
+		const src = read('src/lib/editor/TiptapEditor.svelte');
+		const helper = src.match(/function openFeedbackThread\(threadId: string\): void \{([\s\S]*?)\n\t\}/);
+		expect(helper?.[1]).toMatch(/openCommentThreadId\.set\(threadId\)/);
+		expect(helper?.[1]).toMatch(/markThreadAwaiting\(threadId\)/);
+		for (const fn of ['sendFeedback', 'sendCustomFeedback']) {
+			const body = src.slice(src.indexOf(`async function ${fn}(`));
+			const submit = body.slice(0, body.indexOf('onSubmit(trigger)'));
+			expect(submit, fn).toMatch(/if \(threadId\) openFeedbackThread\(threadId\);/);
+		}
+	});
+
 	it('the feedback trigger says the quoted passage is the current text', () => {
 		const src = read('src/lib/editor/TiptapEditor.svelte');
 		expect(src).toMatch(/Current text of the passage, quoted verbatim from the document/);
