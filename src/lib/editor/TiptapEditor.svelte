@@ -2194,6 +2194,28 @@
 		transform-origin: top;
 		animation: diffSlideIn 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
 	}
+	/* "Proposed text moves below ↓": sits under a struck passage whose
+	 * replacement the same round inserts elsewhere, so red-only never reads
+	 * as a plain deletion. A button, so it is keyboard-reachable. */
+	.tiptap-editor :global(.diff-moved-note) {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		margin: 2px 0 6px;
+		padding: 2px 8px;
+		font: inherit;
+		font-size: 11.5px;
+		line-height: 1.4;
+		color: var(--diff-added-color);
+		background: var(--diff-added-bg);
+		border: 1px solid color-mix(in srgb, var(--diff-added-color) 30%, transparent);
+		border-radius: 999px;
+		cursor: pointer;
+		user-select: none;
+	}
+	.tiptap-editor :global(.diff-moved-note:hover) {
+		background: color-mix(in srgb, var(--diff-added-color) 16%, var(--bg-elevated, #fff));
+	}
 	/* Hover copy affordance on proposed lines. */
 	.tiptap-editor :global(.proposal-copy-btn) {
 		position: absolute;

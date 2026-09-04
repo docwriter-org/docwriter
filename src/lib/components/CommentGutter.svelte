@@ -609,11 +609,13 @@
 	);
 
 	// Keep the newest message visible: attached to the open card's message
-	// list (use:followNewMessages), scroll to the bottom when a message
-	// lands — the user's own reply syncing back, or the agent's response.
-	// Counts are remembered per thread across open/close so the first open
-	// of a card doesn't jump; only growth after that (including messages
-	// that arrived while the card was closed) scrolls.
+	// list (use:followNewMessages). The list is capped in height and
+	// scrolls, so a card opens showing its END — the latest reply and the
+	// edits section below it — not the oldest message; a long first comment
+	// (a reviewer's paragraph) used to fill the whole box and hide the
+	// agent's answer and the proposal. The open-time scroll is instant;
+	// growth after that (a reply syncing back, the agent's response,
+	// messages that arrived while the card was closed) scrolls smoothly.
 	const seenMsgCounts = new Map<string, number>();
 	function followNewMessages(node: HTMLElement, params: { id: string; count: number }) {
 		const track = ({ id, count }: { id: string; count: number }) => {
@@ -626,6 +628,9 @@
 			}
 		};
 		track(params);
+		requestAnimationFrame(() => {
+			node.scrollTop = node.scrollHeight;
+		});
 		return { update: track };
 	}
 

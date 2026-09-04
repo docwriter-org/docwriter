@@ -155,6 +155,16 @@ first `synced` event — on localhost this is sub-20ms.
    `CommentGutter` scrolls a card into view (`revealCard`) when it opens
    and when the proposal an author is waiting on lands — its edits
    section and reply box are exactly the part the dock covers.
+   A card's message list is capped at 300px and scrolls; it opens at its
+   END (newest reply, then the edits section below), because a long first
+   comment used to fill the box and hide the agent's answer and the
+   proposal. Growth after that scrolls smoothly (`followNewMessages`).
+   A round that moves text (one diff block only strikes, another block
+   of the same round only adds) gets a "Proposed text moves below ↓"
+   button under the struck passage (`createMovedNote` in
+   `diff-overlay.ts`); red alone read as a deletion while the green sat
+   off-screen past a code block. Clicking it scrolls the insertion into
+   view.
 3. Agent calls `edit_doc`: server finds the single `old_string` match in
    the live markdown, then in one `document.transact(..., AGENT_ORIGIN)`
    both rebuilds the XmlFragment via a headless Collaboration editor and
