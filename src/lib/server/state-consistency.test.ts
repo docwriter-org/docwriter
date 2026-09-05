@@ -579,7 +579,7 @@ describe('per-render state is isolated between concurrent renders', () => {
 		);
 
 		const renderB = mcp.runWithRenderScope(
-			{ feedbackThreadId: 'thread_B', reviewerId: 'copy-editor', staleAcceptApply: null },
+			{ feedbackThreadId: 'thread_B', reviewerId: 'gricean-maxims', staleAcceptApply: null },
 			async () => {
 				await waitB;
 				// B mutating and then leaving must not touch A's values.
