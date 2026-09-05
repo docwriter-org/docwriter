@@ -568,8 +568,8 @@
 		// routing rules pointed at edit_doc.
 		const tag = `[mode: edit]`;
 		const prefix = isCustom
-			? `The user flagged this passage with feedback "${label}"`
-			: `The user flagged this passage as "${label}"`;
+			? `I flagged this passage with feedback "${label}"`
+			: `I flagged this passage as "${label}"`;
 		// The system prompt's "Where a response goes" rules carry the routing;
 		// the trigger only needs the facts (mode tag + thread id).
 		const threadHint = threadId ? ` A thread is open for this feedback (thread_id="${threadId}").` : '';
@@ -579,9 +579,13 @@
 		// as a comment above the pending-edit card.
 		const planHint =
 			feedbackMode === 'plan' && threadId
-				? ` Plan first: before proposing any edit, you MUST reply on thread_id="${threadId}" via reply_to_comment with your reflection. Explain, in complete sentences, why the user likely flagged this passage, what in the current text reads wrong, and what you intend to change. Write it as plain explanatory prose that carries your reasoning, the way you would explain it out loud. Do not compress it into label-led fragments or bullet points. Only after posting that reply, propose the edit via edit_doc with thread_id="${threadId}" so it attaches to the same thread.`
+				? ` Plan first: before proposing any edit, you MUST reply on thread_id="${threadId}" via reply_to_comment with your reflection. Explain, in complete sentences addressed to me, why I likely flagged this passage, what in the current text reads wrong, and what you intend to change. Write it as plain explanatory prose that carries your reasoning, the way you would explain it out loud. Do not compress it into label-led fragments or bullet points. Only after posting that reply, propose the edit via edit_doc with thread_id="${threadId}" so it attaches to the same thread.`
 				: '';
-		return `${prefix}. ${tag} Rewrite it: "${passage}"${threadHint}${planHint}`;
+		// The quote is the CURRENT text. Saying `Rewrite it: "…"` let the
+		// agent read the quoted passage as the rewrite being asked for; it
+		// then compared that "rewrite" with the document, found them
+		// identical, and replied that nothing needed changing.
+		return `${prefix}. ${tag} Current text of the passage, quoted verbatim from the document: "${passage}". That quote is what is there now, not what I want. Rewrite it so it addresses my feedback.${threadHint}${planHint}`;
 	}
 
 	/** Open a comment thread with the user's feedback as the first message,
@@ -656,10 +660,7 @@
 		// it to `edit`, but we want to honor what the user picked.
 		feedbackMode = modeSnapshot;
 		const threadId = await maybeOpenThreadForFeedback(action.label, text, relSnapshot);
-		if (threadId) {
-			newAwaitingThreadId = threadId;
-			tick().then(() => { newAwaitingThreadId = null; });
-		}
+		if (threadId) openFeedbackThread(threadId);
 		const trigger = buildFeedbackTrigger(action.label, text, false, threadId);
 		feedbackMode = 'edit';
 		if (onSubmit) onSubmit(trigger);
@@ -686,10 +687,7 @@
 		closeFeedbackPopup();
 		feedbackMode = modeSnapshot;
 		const threadId = await maybeOpenThreadForFeedback(fb, text, relSnapshot);
-		if (threadId) {
-			newAwaitingThreadId = threadId;
-			tick().then(() => { newAwaitingThreadId = null; });
-		}
+		if (threadId) openFeedbackThread(threadId);
 		const trigger = buildFeedbackTrigger(fb, text, true, threadId);
 		feedbackMode = 'edit';
 		if (onSubmit) onSubmit(trigger);
@@ -765,6 +763,16 @@
 		tick().then(() => {
 			newAwaitingThreadId = null;
 		});
+	}
+
+	/** A comment the author just made opens its card and shows the agent
+	 * thinking on it. Cards render collapsed by default, so without this
+	 * the author had to click the card they had just written to see the
+	 * reply and the proposal land under it. The card may not have synced
+	 * back from the server yet; the gutter expands it on arrival. */
+	function openFeedbackThread(threadId: string): void {
+		openCommentThreadId.set(threadId);
+		markThreadAwaiting(threadId);
 	}
 
 	export async function flushAutosave(): Promise<boolean> {
@@ -1127,7 +1135,7 @@
 		closeFeedbackPopup({ preserveSelection: false, refocusEditor: true });
 		// Wake the agent so it knows this passage is off-limits going forward.
 		onSubmit?.(
-			`The user froze this passage — do not edit it (a Freeze rule was added):\n"${quote}"`
+			`I froze this passage — do not edit it (a Freeze rule was added):\n"${quote}"`
 		);
 	}
 
@@ -1156,7 +1164,7 @@
 		if (editor) setFreezeOverlayState(editor, { rules: next });
 		if (wakeAgent) {
 			onSubmit?.(
-				`The user unlocked a previously frozen passage — you may edit it again if needed:\n"${quote}"`
+				`I unlocked a previously frozen passage — you may edit it again if needed:\n"${quote}"`
 			);
 		}
 	}
@@ -1697,18 +1705,6 @@
 						return n;
 					})}
 				onHoverEdit={(roundId) => setHoverFlash(roundId)}
-				onApprove={(t, msgId) => {
-					const msg = t.messages.find((m) => m.id === msgId);
-					const suggestion = msg?.proposedEdit;
-					const transcript = t.messages
-						.map((m) => `- [${m.author === 'agent' ? 'agent' : 'user'}] ${m.text}`)
-						.join('\n');
-					const trigger = suggestion
-						? `The user approved the suggestion in comment thread "${t.id}" on this tab. Apply this edit via edit_doc with thread_id="${t.id}" so it attaches to this thread:\n\nold_string: "${suggestion.oldString}"\nnew_string: "${suggestion.newString}"\n\nAnchor passage: "${t.anchor.quote}"\nFull thread:\n${transcript}`
-						: `The user approved comment thread "${t.id}" on this tab. Apply the edit you described via edit_doc with thread_id="${t.id}" so it attaches to this thread.\n\nAnchor passage: "${t.anchor.quote}"\nFull thread:\n${transcript}`;
-					onSubmit?.(trigger);
-					openCommentThreadId.set(null);
-				}}
 				onReply={(t, replyText) => {
 					// User replied on a thread — wake the agent to respond.
 					// The post-reply thread `t` doesn't yet include the just-
@@ -1717,19 +1713,26 @@
 					// when building the transcript.
 					const transcript = [
 						...t.messages.map(
-							(m) => `- [${m.author === 'agent' ? 'agent' : 'user'}] ${m.text}`
+							(m) =>
+								`- [${
+									m.author === 'agent'
+										? 'you'
+										: m.author === 'external'
+											? (m.externalAuthor ?? 'external reviewer')
+											: 'me'
+								}] ${m.text}`
 						),
-						`- [user] ${replyText}`
+						`- [me] ${replyText}`
 					].join('\n');
 					// Routing (revise the pending edit vs. reply in words) lives in
 					// the system prompt's "Where a response goes" rules; the trigger
 					// carries the facts only.
 					const hasPendingEdit = rounds.some((r) => r.feedbackThreadId === t.id);
 					const trigger =
-						`The user replied on comment thread thread_id="${t.id}" on this tab` +
+						`I replied on comment thread thread_id="${t.id}" on this tab` +
 						`${hasPendingEdit ? ' (it has a pending edit)' : ''}.\n` +
 						`Anchor passage: "${t.anchor.quote}"\n` +
-						`User's latest reply: "${replyText}"\n` +
+						`My latest reply: "${replyText}"\n` +
 						`Full thread (latest reply included):\n${transcript}`;
 					onSubmit?.(trigger);
 				}}
@@ -2194,6 +2197,28 @@
 		user-select: text;
 		transform-origin: top;
 		animation: diffSlideIn 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
+	}
+	/* "Proposed text moves below ↓": sits under a struck passage whose
+	 * replacement the same round inserts elsewhere, so red-only never reads
+	 * as a plain deletion. A button, so it is keyboard-reachable. */
+	.tiptap-editor :global(.diff-moved-note) {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		margin: 2px 0 6px;
+		padding: 2px 8px;
+		font: inherit;
+		font-size: 11.5px;
+		line-height: 1.4;
+		color: var(--diff-added-color);
+		background: var(--diff-added-bg);
+		border: 1px solid color-mix(in srgb, var(--diff-added-color) 30%, transparent);
+		border-radius: 999px;
+		cursor: pointer;
+		user-select: none;
+	}
+	.tiptap-editor :global(.diff-moved-note:hover) {
+		background: color-mix(in srgb, var(--diff-added-color) 16%, var(--bg-elevated, #fff));
 	}
 	/* Hover copy affordance on proposed lines. */
 	.tiptap-editor :global(.proposal-copy-btn) {

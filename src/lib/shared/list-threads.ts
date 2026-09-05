@@ -13,11 +13,6 @@ function formatOneThread(thread: CommentThread, dismissed: boolean): string {
 					? (msg.externalAuthor ?? 'reviewer')
 					: 'user';
 		lines.push(`  [${role}] ${msg.text}`);
-		if (msg.proposedEdit) {
-			lines.push(
-				`    proposed_edit: "${msg.proposedEdit.oldString}" → "${msg.proposedEdit.newString}"`
-			);
-		}
 	}
 	return lines.join('\n');
 }

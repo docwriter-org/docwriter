@@ -645,6 +645,40 @@ export const DiffOverlay = Extension.create({
 												);
 											}
 										}
+										// A move: this block only strikes text, and the same
+										// round adds its replacement somewhere else (a paragraph
+										// carried past a code block, say). All the reader sees
+										// here is red, and the green sits off-screen, so it
+										// looks like the proposal deleted the passage. Say where
+										// the text went, and jump there on click.
+										if (
+											expanded &&
+											block.removedParagraphIdxs.length > 0 &&
+											block.addedLines.length === 0
+										) {
+											const landing = blocks.find(
+												(b) =>
+													b !== block &&
+													b.roundId === block.roundId &&
+													b.addedLines.length > 0 &&
+													b.removedParagraphIdxs.length === 0
+											);
+											if (landing) {
+												const targetPos = landing.insertionPos;
+												const below = targetPos > block.insertionPos;
+												decorations.push(
+													Decoration.widget(
+														block.insertionPos,
+														(view) => createMovedNote(view, targetPos, below, block.threadId),
+														{
+															side: 1,
+															ignoreSelection: true,
+															key: `moved:${block.id}:${targetPos}`
+														}
+													)
+												);
+											}
+										}
 									}
 
 									// ── Modified-in-place paragraphs ───────────────
@@ -1112,6 +1146,44 @@ function createProposalCopyButton(text: string): HTMLElement {
 		setTimeout(() => button.classList.remove('copied'), 900);
 	});
 	return button;
+}
+
+/** "Proposed text moves below ↓" under a struck passage whose replacement
+ * the same round inserts elsewhere. Clicking scrolls the editor so the
+ * green block lands in the upper third of the view. */
+function createMovedNote(
+	view: EditorView,
+	targetPos: number,
+	below: boolean,
+	threadId?: string | null
+): HTMLElement {
+	const note = document.createElement('button');
+	note.className = 'diff-moved-note';
+	note.type = 'button';
+	note.textContent = below ? 'Proposed text moves below \u2193' : 'Proposed text moves above \u2191';
+	note.title = 'Jump to where this text goes';
+	note.setAttribute('contenteditable', 'false');
+	if (threadId) note.setAttribute('data-thread-id', threadId);
+	const jump = (event: Event) => {
+		event.preventDefault();
+		event.stopPropagation();
+		const wrapper = view.dom.closest<HTMLElement>('.tiptap-wrapper');
+		if (!wrapper) return;
+		let top: number;
+		try {
+			top = view.coordsAtPos(Math.min(targetPos, view.state.doc.content.size)).top;
+		} catch {
+			return;
+		}
+		const rect = wrapper.getBoundingClientRect();
+		wrapper.scrollBy({ top: top - rect.top - rect.height / 3, behavior: 'smooth' });
+	};
+	note.addEventListener('mousedown', jump);
+	note.addEventListener('click', (event) => {
+		event.preventDefault();
+		event.stopPropagation();
+	});
+	return note;
 }
 
 function createThreadButton(view: EditorView, threadId: string, stackIdx: number): HTMLElement {

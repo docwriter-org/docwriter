@@ -1,21 +1,21 @@
 ---
 name: plain-writing
 description: >-
-  Write and edit prose in the user's plain style: simple everyday words,
+  Write and edit prose in my plain style: simple everyday words,
   complete sentences, no dashes, no jargon, no analogies, no filler, and full
-  clear explanations. Use this whenever you draft or revise any prose for the
-  user, such as documents, Notion pages, reports, summaries, README files,
+  clear explanations. Use this whenever you draft or revise any prose for me,
+  such as documents, Notion pages, reports, summaries, README files,
   research notes, proposals, slide text, emails, or commit and PR descriptions.
-  Also use it whenever the user asks to simplify, clean up, tighten, reword, or
+  Also use it whenever I ask to simplify, clean up, tighten, reword, or
   make writing clearer or easier to read. Default to this style for prose
-  written for the user unless they ask for a different one. Do not apply it to
+  written for me unless I ask for a different one. Do not apply it to
   code itself, only to the words around it.
 ---
 
 # Plain writing
 
-The plain writing skill captures how the user wants written prose to read. The
-goal is text that anyone can read once and understand. The user has asked for the
+The plain writing skill captures how I want written prose to read. The
+goal is text that anyone can read once and understand. I have asked for the
 plain style repeatedly and corrects writing that does not follow it, so apply it
 by default when you write prose for them.
 
@@ -118,7 +118,7 @@ to build the optional revision file.
     After: The parser reads the file, and the validator checks the fields. The
     writer then saves the record.
 
-12. **Prefer long, explanatory sentences over short, punchy ones.** The user
+12. **Prefer long, explanatory sentences over short, punchy ones.** I
     writes the way people explain things out loud, in longer sentences with
     commas and one or two related clauses that carry the reasoning along. A
     sentence should end because the thought is complete, not because a short
@@ -151,7 +151,7 @@ to build the optional revision file.
 
 15. **Use a colon only to introduce a list.** Do not use a colon to join clauses
     or to set up a point. A colon used for a point invites the clever phrasing
-    the user does not want.
+    I do not want.
     Before: Read for the schema: the feature fires.
     After: Read for the schema. The feature fires.
 
@@ -247,7 +247,7 @@ seeing the text for the first time would understand every sentence.
 ## The revision artifact
 
 When the second pass removes or rewrites anything, also make a small HTML file
-so the user can see what changed. Skip the file for tiny edits where the second
+so I can see what changed. Skip the file for tiny edits where the second
 pass did not cut or rewrite anything.
 
 Build a list of the changes at the level of whole sentences. Group the entries
@@ -278,11 +278,11 @@ Then take the template at `assets/revision_template.html`, replace the exact
 line `const DATA = __DATA__;` with `const DATA = <json>;`, and save it to a new
 file in `/tmp`, e.g., `/tmp/revision-<short-name>.html`. Do not write
 it into the skill folder. Check that no `__DATA__` text remains in the saved
-file. Tell the user where the file is. The file has three tabs:
+file. Tell me where the file is. The file has three tabs:
 
 - First draft
 - Second draft
 - Diff
 
 In the Diff tab the removed text is red and the rewritten text is green. The
-reason for each change appears when the user hovers the colored text.
+reason for each change appears when I hover the colored text.

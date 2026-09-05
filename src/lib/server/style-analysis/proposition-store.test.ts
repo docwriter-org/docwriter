@@ -43,7 +43,7 @@ describe('style proposition persistence', () => {
 			lastRun: { id: 'run-1' },
 			propositions: [{ id: 'style-1' }]
 		});
-		expect(getDb().pragma('user_version', { simple: true })).toBe(12);
+		expect(getDb().pragma('user_version', { simple: true })).toBe(13);
 	});
 
 	it('replaces a retry from the same agent without duplicating propositions', () => {

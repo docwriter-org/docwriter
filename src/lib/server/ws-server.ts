@@ -17,14 +17,20 @@ import * as Y from 'yjs';
 import type { PendingReviewRound } from '$lib/types';
 import {
 	USER_ORIGIN,
+	SYSTEM_ORIGIN,
 	FRAGMENT_NAME,
 	getReviewArray,
 	getCommentsMap,
+	getThread,
+	setThreadResolved,
+	resolveEmptyEditThreads,
+	migrateLegacyThreads,
 	getFragment,
 	readReviewRounds,
 	serializeYDoc,
 	replaceYDocTextWithAiProvenance,
-	applyEditToFragment
+	applyEditToFragment,
+	followAcceptedEdits
 } from '$lib/shared/ydoc-codec';
 import { applyPendingReviewRound } from '$lib/review-rounds';
 import { touchLastSeen } from '$lib/server/last-seen';
@@ -34,9 +40,16 @@ import {
 	markTabDirty,
 	flushMarkdownNow,
 	clearDirty,
-	purgeTabUpdates,
+	isTabDirty,
+	clearTabCaches,
+	compactTab,
 	setLiveDocResolver
 } from './ydoc-persistence';
+import { isBinaryTabPath } from './document-files';
+import { ensureDocument, deleteDocument } from './documents-store';
+import { backupDocumentState } from './state-backup';
+import { scrubFeedbackThreads } from './feedback-import';
+import { getDb } from './db';
 
 function globalHolder() {
 	return globalThis as unknown as { __docwriterWsServer?: Server };
@@ -68,15 +81,31 @@ export function createWsServer(port: number): Server {
 			throw new Error('server-instance-mismatch');
 		},
 		async onLoadDocument({ documentName: tabId, document }) {
+			// Binary tabs (PDFs, images) are preview-only: never seed or sync
+			// a Y.Doc for one — the old path decoded the file's bytes as UTF-8
+			// into the CRDT log.
+			if (isBinaryTabPath(tabId)) return document;
+			// Register the identity row before any update rows exist — the
+			// yjs_updates FK requires it, which turns what used to be a silent
+			// orphan into a loud error.
+			ensureDocument(tabId);
 			const ydoc = document as unknown as Y.Doc;
 			const fragment = ydoc.getXmlFragment(FRAGMENT_NAME);
 			if (fragment.length === 0) {
 				replayUpdatesInto(ydoc, tabId);
 			}
+			// Upgrade legacy plain-object threads to nested Y form on the
+			// authoritative load. onChange isn't attached yet, so the delta
+			// is persisted manually (same pattern as the file seed).
+			const before = Y.encodeStateVector(ydoc);
+			if (migrateLegacyThreads(ydoc) > 0) {
+				const delta = Y.encodeStateAsUpdate(ydoc, before);
+				if (delta.length > 0) appendUpdate(tabId, delta, SYSTEM_ORIGIN);
+			}
 			return document;
 		},
 		async afterUnloadDocument({ documentName: tabId }) {
-			clearDirty(tabId);
+			onTabUnloaded(tabId);
 		},
 		async onChange({ documentName: tabId, update, transactionOrigin }) {
 			const origin = typeof transactionOrigin === 'string' ? transactionOrigin : USER_ORIGIN;
@@ -94,6 +123,45 @@ export function createWsServer(port: number): Server {
 
 	globalHolder().__docwriterWsServer = server;
 	return server;
+}
+
+/** A tab's live doc just left memory (its last connection closed — the
+ * browser's Accept/Reject pause, a tab switch, a dropped socket). A change
+ * still waiting for the 500ms flush tick would otherwise never reach the
+ * workspace file: the tick resolves the live doc, finds none, and skips the
+ * tab, so `document.md` lagged the CRDT until the next edit (and a reader
+ * of the file — git, the agent's built-in Read — saw stale text). Replay
+ * the log and write the file now instead. */
+export function onTabUnloaded(tabId: string) {
+	if (isTabDirty(tabId)) {
+		try {
+			flushTabMarkdownNow(tabId);
+		} catch (err) {
+			console.error(`[docwriter] flush on unload failed for "${tabId}":`, err);
+		}
+	}
+	clearDirty(tabId);
+	maybeCompactTab(tabId);
+}
+
+/** Above this many log rows, a tab's history is merged into one snapshot
+ * row when its live doc unloads. Compaction is the ONE sanctioned source of
+ * seq gaps (AUTOINCREMENT never reuses); replay cost and log size stay
+ * bounded on heavily-edited documents. */
+const COMPACT_THRESHOLD_ROWS = 500;
+
+function maybeCompactTab(tabId: string) {
+	try {
+		const row = getDb()
+			.prepare(`SELECT COUNT(*) AS n FROM yjs_updates WHERE tab_id = ?`)
+			.get(tabId) as { n: number } | undefined;
+		if ((row?.n ?? 0) > COMPACT_THRESHOLD_ROWS) {
+			compactTab(tabId);
+			console.log(`[docwriter] compacted "${tabId}" (${row!.n} rows → 1)`);
+		}
+	} catch (err) {
+		console.error(`[docwriter] compaction check failed for "${tabId}":`, err);
+	}
 }
 
 function getLiveDocument(tabId: string): Y.Doc | null {
@@ -150,41 +218,15 @@ async function withLiveDoc<T>(
 	return result;
 }
 
-/** After rounds are accepted/rejected, tidy up any comment threads they
- * were attached to. An *edit-only* thread — one the system auto-opened to
- * wrap a spontaneous agent edit, so it carries no real conversation (no
- * user message) — has nothing left to show once its edit is gone, so we
- * auto-resolve it (the card disappears). A thread with genuine back-and-
- * forth (any user message) is left open: the edit row clears but the
- * conversation stays, and the user dismisses it manually via the card's
- * Dismiss button. Runs inside the caller's transaction so the dismiss
- * lands in the same Yjs delta as the round removal.
- *
- * `threadIds` are the feedbackThreadIds of the just-removed rounds. */
-function resolveEmptyEditThreads(ydoc: Y.Doc, threadIds: Set<string>): void {
-	if (threadIds.size === 0) return;
-	const commentsMap = getCommentsMap(ydoc);
-	const stillReferenced = new Set(
-		getReviewArray(ydoc)
-			.toArray()
-			.map((r) => r.feedbackThreadId)
-			.filter((id): id is string => typeof id === 'string')
-	);
-	for (const tid of threadIds) {
-		const thread = commentsMap.get(tid);
-		if (!thread || thread.resolved) continue;
-		// Keep the thread if it still has a pending edit, or if it holds a
-		// real conversation (any user message).
-		if (stillReferenced.has(tid)) continue;
-		if (thread.messages.some((m) => m.author === 'user')) continue;
-		commentsMap.set(tid, { ...thread, resolved: true });
-	}
-}
-
 export async function acceptTabRounds(
 	tabId: string,
 	roundId?: string | string[]
-): Promise<{ acceptedCount: number; rounds: PendingReviewRound[]; yjsUpdate: string | null }> {
+): Promise<{
+	acceptedCount: number;
+	rounds: PendingReviewRound[];
+	yjsUpdate: string | null;
+	skippedStale: Array<{ id: string; reason: string }>;
+}> {
 	return withLiveDoc(tabId, (ydoc) => {
 		const reviewArr = getReviewArray(ydoc);
 		const current = reviewArr.toArray();
@@ -194,49 +236,67 @@ export async function acceptTabRounds(
 		// roundId given (string) → accept ONLY that round, leave the rest.
 		// roundId given (array) → accept that SET of rounds (e.g. all edits
 		// for one feedback thread), preserving oldest-first order so they
-		// apply in sequence. Rounds are independent unless their text
-		// overlaps; the stale check below surfaces a 409 if accepting this
-		// subset alone would leave one inapplicable.
-		let accepted: PendingReviewRound[];
-		let remaining: PendingReviewRound[];
+		// apply in sequence.
+		let requested: PendingReviewRound[];
 		if (!roundId) {
-			if (current.length === 0) return { acceptedCount: 0, rounds: [], yjsUpdate: null };
-			accepted = current;
-			remaining = [];
+			if (current.length === 0)
+				return { acceptedCount: 0, rounds: [], yjsUpdate: null, skippedStale: [] };
+			requested = current;
 		} else if (Array.isArray(roundId)) {
 			const idSet = new Set(roundId);
-			accepted = current.filter((r) => idSet.has(r.id));
-			remaining = current.filter((r) => !idSet.has(r.id));
-			if (accepted.length === 0) return { acceptedCount: 0, rounds: current, yjsUpdate: null };
+			requested = current.filter((r) => idSet.has(r.id));
+			if (requested.length === 0)
+				return { acceptedCount: 0, rounds: current, yjsUpdate: null, skippedStale: [] };
 		} else {
 			const idx = current.findIndex((r) => r.id === roundId);
-			if (idx < 0) return { acceptedCount: 0, rounds: current, yjsUpdate: null };
-			accepted = [current[idx]];
-			remaining = current.slice(0, idx).concat(current.slice(idx + 1));
+			if (idx < 0)
+				return { acceptedCount: 0, rounds: current, yjsUpdate: null, skippedStale: [] };
+			requested = [current[idx]];
 		}
 
-		// Stale check first: walk the ops as a string transform to verify each
-		// round can still apply. Only after every round passes do we commit
-		// to mutating the live fragment — otherwise a stale round mid-batch
-		// would leave the doc in a half-applied state. (We intentionally
-		// re-do this work inside the transact below; this pre-pass exists
-		// solely to throw before any mutation lands.)
+		// Stale walk: verify each round as a string transform before touching
+		// the live fragment. Batch accepts (everything / a set) SKIP stale
+		// rounds and land the rest — one stuck proposal must not block every
+		// other accept (it used to 409 the whole batch). A single-round
+		// accept still throws so the client's stale-rescue flow (re-queue
+		// the agent to rebase this exact round) can take over.
+		const singleMode = typeof roundId === 'string';
 		let staleCheck = serializeYDoc(ydoc);
-		for (const round of accepted) {
+		const accepted: PendingReviewRound[] = [];
+		// The text each round applied against (the previous round's output
+		// in a batch), for `followAcceptedEdits` to diff whole-document
+		// writes.
+		const textBeforeById = new Map<string, string>();
+		const skippedStale: Array<{ id: string; reason: string }> = [];
+		for (const round of requested) {
 			const applied = applyPendingReviewRound(staleCheck, round);
 			if (applied.stale) {
-				const err = new Error(
+				const reason =
 					round.staleReason ??
-						applied.staleReason ??
-						'This proposal is stale and needs to be regenerated before it can be accepted.'
-				) as Error & { staleRoundId?: string; staleRound?: PendingReviewRound };
-				err.name = 'StalePendingReviewError';
-				err.staleRoundId = round.id;
-				err.staleRound = round;
-				throw err;
+					applied.staleReason ??
+					'This proposal is stale and needs to be regenerated before it can be accepted.';
+				if (singleMode) {
+					const err = new Error(reason) as Error & {
+						staleRoundId?: string;
+						staleRound?: PendingReviewRound;
+					};
+					err.name = 'StalePendingReviewError';
+					err.staleRoundId = round.id;
+					err.staleRound = round;
+					throw err;
+				}
+				skippedStale.push({ id: round.id, reason });
+				continue;
 			}
+			textBeforeById.set(round.id, staleCheck);
 			staleCheck = applied.nextText;
+			accepted.push(round);
 		}
+		if (accepted.length === 0) {
+			return { acceptedCount: 0, rounds: current, yjsUpdate: null, skippedStale };
+		}
+		const acceptedIdSet = new Set(accepted.map((r) => r.id));
+		const remaining = current.filter((r) => !acceptedIdSet.has(r.id));
 
 		// Capture state vector before mutation so we can compute the exact
 		// delta to send back to the client in the HTTP response. The client
@@ -310,6 +370,15 @@ export async function acceptTabRounds(
 						.filter((id): id is string => typeof id === 'string')
 				)
 			);
+			// The threads behind these edits follow the text they produced
+			// (or resolve when the edit only removed text) instead of parking
+			// at the top of the gutter as orphans. Runs after the announce
+			// threads resolved, so it only moves threads that still show.
+			followAcceptedEdits(
+				ydoc,
+				accepted.map((round) => ({ round, textBefore: textBeforeById.get(round.id) })),
+				serializeYDoc(ydoc)
+			);
 		}, USER_ORIGIN);
 
 		// Encode the exact Yjs delta so the client can apply it immediately
@@ -319,7 +388,7 @@ export async function acceptTabRounds(
 
 		touchLastSeen(tabId, ydoc);
 
-		return { acceptedCount: accepted.length, rounds: remaining, yjsUpdate };
+		return { acceptedCount: accepted.length, rounds: remaining, yjsUpdate, skippedStale };
 	});
 }
 
@@ -385,12 +454,12 @@ export async function setThreadResolution(
 ): Promise<{ ok: boolean; yjsUpdate: string | null }> {
 	return withLiveDoc(tabId, (ydoc) => {
 		const commentsMap = getCommentsMap(ydoc);
-		const thread = commentsMap.get(threadId);
+		const thread = getThread(commentsMap, threadId);
 		if (!thread) return { ok: false, yjsUpdate: null };
 		const reviewArr = getReviewArray(ydoc);
 		const beforeStateVector = Y.encodeStateVector(ydoc);
 		ydoc.transact(() => {
-			commentsMap.set(threadId, { ...thread, resolved });
+			setThreadResolved(commentsMap, threadId, resolved);
 			if (resolved) {
 				const arr = reviewArr.toArray();
 				for (let i = arr.length - 1; i >= 0; i--) {
@@ -407,29 +476,54 @@ export async function setThreadResolution(
 
 // ── Tab destruction ──────────────────────────────────────────────────────
 
-/** Fully tear down server-side state for a tab whose file was just deleted:
- * disconnect any WS clients, unload the Hocuspocus Document, and drop the
- * persisted CRDT log. Without this, reopening the same path would replay
- * stale updates from SQLite and silently resurrect the deleted content. */
-export async function destroyTabState(tabId: string): Promise<void> {
+/** Disconnect any WS clients and drop the in-memory Hocuspocus Document for
+ * a tab, WITHOUT touching its persisted state. The next load replays from
+ * SQLite. Used by the rename path (the log is migrated to the new id, not
+ * discarded) and as the first half of `destroyTabState`. */
+export async function unloadTabDoc(tabId: string): Promise<void> {
 	const server = globalHolder().__docwriterWsServer;
-	if (server?.hocuspocus) {
-		try {
-			server.hocuspocus.closeConnections(tabId);
-		} catch (err) {
-			console.error(`[docwriter] closeConnections failed for "${tabId}":`, err);
-		}
-		const doc = server.hocuspocus.documents.get(tabId);
-		if (doc) {
-			try {
-				await server.hocuspocus.unloadDocument(doc);
-			} catch (err) {
-				console.error(`[docwriter] unloadDocument failed for "${tabId}":`, err);
-			}
-			server.hocuspocus.documents.delete(tabId);
-		}
+	if (!server?.hocuspocus) return;
+	try {
+		server.hocuspocus.closeConnections(tabId);
+	} catch (err) {
+		console.error(`[docwriter] closeConnections failed for "${tabId}":`, err);
 	}
-	purgeTabUpdates(tabId);
+	const doc = server.hocuspocus.documents.get(tabId);
+	if (doc) {
+		try {
+			await server.hocuspocus.unloadDocument(doc);
+		} catch (err) {
+			console.error(`[docwriter] unloadDocument failed for "${tabId}":`, err);
+		}
+		server.hocuspocus.documents.delete(tabId);
+	}
+}
+
+/** Fully tear down state for a document whose file was just deleted:
+ * snapshot a JSON backup, disconnect WS clients, unload the live Document,
+ * and delete the identity row — the yjs_updates FK cascades the whole log
+ * in the same statement. Without the delete, reopening the same path would
+ * replay stale updates and silently resurrect the deleted content. */
+export async function destroyTabState(tabId: string): Promise<void> {
+	// Snapshot before destruction (invariant: no deletion without a backup),
+	// and collect the doomed thread ids so the feedback-import ledger drops
+	// its references instead of pointing at threads that no longer exist.
+	try {
+		const live = getLiveDocument(tabId);
+		const ydoc = live ?? new Y.Doc();
+		if (!live) replayUpdatesInto(ydoc, tabId);
+		const threadIds = [...getCommentsMap(ydoc).keys()];
+		if (serializeYDoc(ydoc).length > 0 || threadIds.length > 0) {
+			backupDocumentState(tabId, 'delete-file', ydoc);
+		}
+		scrubFeedbackThreads(threadIds);
+		if (!live) ydoc.destroy();
+	} catch (err) {
+		console.error(`[docwriter] pre-delete backup failed for "${tabId}":`, err);
+	}
+	await unloadTabDoc(tabId);
+	deleteDocument(tabId);
+	clearTabCaches(tabId);
 }
 
 // Re-export so legacy imports resolve.

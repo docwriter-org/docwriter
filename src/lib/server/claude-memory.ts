@@ -33,7 +33,7 @@ function renderManagedBlock(rules: Rule[]): string {
 	lines.push('# Writing rules');
 	lines.push('');
 	lines.push(
-		'These are the user\'s standing writing preferences for this workspace. They are auto-synced from the docwriter rules panel — do not edit by hand (edits will be overwritten on the next rule change).'
+		'These are my standing writing preferences for this workspace. They are auto-synced from the docwriter rules panel — do not edit by hand (edits will be overwritten on the next rule change).'
 	);
 	lines.push('');
 	if (rules.length === 0) {

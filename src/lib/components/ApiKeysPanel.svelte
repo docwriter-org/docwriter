@@ -239,13 +239,6 @@
 		line-height: 1.45;
 		margin-bottom: 8px;
 	}
-	.alt-note code {
-		font-family: ui-monospace, monospace;
-		font-size: 11px;
-		background: var(--bg-surface);
-		padding: 1px 4px;
-		border-radius: 4px;
-	}
 	.key-input {
 		display: flex;
 		gap: 6px;

@@ -11,7 +11,8 @@
  */
 import * as Y from 'yjs';
 import DiffMatchPatch from 'diff-match-patch';
-import type { CommentThread, PendingReviewRound } from '$lib/types';
+import { diffLines } from 'diff';
+import type { CommentMessage, CommentThread, PendingReviewRound } from '$lib/types';
 
 /**
  * Normalize typographic characters to their ASCII equivalents. Applied at
@@ -249,14 +250,349 @@ export function getReviewArray(ydoc: Y.Doc): Y.Array<PendingReviewRound> {
 	return ydoc.getArray<PendingReviewRound>(REVIEW_ARRAY_NAME);
 }
 
-export function getCommentsMap(ydoc: Y.Doc): Y.Map<CommentThread> {
-	return ydoc.getMap<CommentThread>(COMMENTS_MAP_NAME);
+// ── Comment threads: nested Y storage ─────────────────────────────────────
+//
+// A thread lives in the `comments` Y.Map as a NESTED Y.Map:
+//
+//   id: string · anchor: CommentThreadAnchor (plain value) ·
+//   resolved: boolean · createdAt: number ·
+//   messages: Y.Array<CommentMessage> (plain values, append-only)
+//
+// Fields merge per-key and messages merge by append, so a Dismiss racing an
+// agent reply keeps BOTH. The previous storage — one plain JSON object per
+// thread — was last-writer-wins per key: whichever of two concurrent
+// writers lost had its whole write silently swallowed (dismissed threads
+// "resurrected", replies vanished, anchor backfills erased messages), and
+// every touch re-encoded the entire thread into the update log. Legacy
+// plain-object values remain readable everywhere via `readThreadValue`; any
+// write upgrades them in place, and `migrateLegacyThreads` converts a whole
+// doc at load time.
+
+export type CommentsMap = Y.Map<unknown>;
+
+export function getCommentsMap(ydoc: Y.Doc): CommentsMap {
+	return ydoc.getMap<unknown>(COMMENTS_MAP_NAME);
+}
+
+/** Materialize a stored thread value — nested Y.Map or legacy plain object
+ * — into a plain CommentThread snapshot. Null for anything malformed. */
+export function readThreadValue(value: unknown): CommentThread | null {
+	if (value instanceof Y.Map) {
+		const id = value.get('id');
+		const anchor = value.get('anchor') as CommentThread['anchor'] | undefined;
+		if (typeof id !== 'string' || !anchor || typeof anchor !== 'object') return null;
+		const messages = value.get('messages');
+		const createdAt = value.get('createdAt');
+		return {
+			id,
+			anchor,
+			messages:
+				messages instanceof Y.Array ? (messages.toArray() as CommentMessage[]) : [],
+			resolved: value.get('resolved') === true,
+			createdAt: typeof createdAt === 'number' ? createdAt : 0
+		};
+	}
+	if (
+		value &&
+		typeof value === 'object' &&
+		typeof (value as CommentThread).id === 'string' &&
+		Array.isArray((value as CommentThread).messages)
+	) {
+		return value as CommentThread;
+	}
+	return null;
+}
+
+export function getThread(map: CommentsMap, threadId: string): CommentThread | null {
+	return readThreadValue(map.get(threadId));
 }
 
 export function readCommentThreads(ydoc: Y.Doc): CommentThread[] {
 	const out: CommentThread[] = [];
-	getCommentsMap(ydoc).forEach((thread) => out.push(thread));
+	getCommentsMap(ydoc).forEach((value) => {
+		const thread = readThreadValue(value);
+		if (thread) out.push(thread);
+	});
 	return out.sort((a, b) => a.createdAt - b.createdAt);
+}
+
+/** Write `thread` into the map in nested form (creating or replacing).
+ * Callers run inside their own `ydoc.transact(..., origin)`. */
+export function putThread(map: CommentsMap, thread: CommentThread): void {
+	const m = new Y.Map<unknown>();
+	m.set('id', thread.id);
+	m.set('anchor', { ...thread.anchor });
+	m.set('resolved', thread.resolved);
+	m.set('createdAt', thread.createdAt);
+	const arr = new Y.Array<CommentMessage>();
+	if (thread.messages.length > 0) arr.push(thread.messages.map((msg) => ({ ...msg })));
+	m.set('messages', arr);
+	map.set(thread.id, m);
+}
+
+/** The nested Y.Map for a thread, upgrading a legacy plain value in place
+ * first. Null when the thread doesn't exist (or is malformed). Callers run
+ * inside a transact. */
+function ensureNestedThread(map: CommentsMap, threadId: string): Y.Map<unknown> | null {
+	const value = map.get(threadId);
+	if (value instanceof Y.Map) return value;
+	const legacy = readThreadValue(value);
+	if (!legacy) return null;
+	putThread(map, legacy);
+	return map.get(threadId) as Y.Map<unknown>;
+}
+
+/** Append one message. `reopen` also clears the resolved flag (a user reply
+ * on a dismissed thread brings it back). Returns false when the thread
+ * doesn't exist. Callers run inside a transact. */
+export function appendThreadMessage(
+	map: CommentsMap,
+	threadId: string,
+	message: CommentMessage,
+	opts: { reopen?: boolean } = {}
+): boolean {
+	const m = ensureNestedThread(map, threadId);
+	if (!m) return false;
+	let messages = m.get('messages');
+	if (!(messages instanceof Y.Array)) {
+		messages = new Y.Array<CommentMessage>();
+		m.set('messages', messages);
+	}
+	(messages as Y.Array<CommentMessage>).push([{ ...message }]);
+	if (opts.reopen && m.get('resolved') === true) m.set('resolved', false);
+	return true;
+}
+
+/** Set the resolved flag. Returns false when the thread doesn't exist.
+ * Callers run inside a transact. */
+export function setThreadResolved(
+	map: CommentsMap,
+	threadId: string,
+	resolved: boolean
+): boolean {
+	const m = ensureNestedThread(map, threadId);
+	if (!m) return false;
+	if (m.get('resolved') !== resolved) m.set('resolved', resolved);
+	return true;
+}
+
+/** Replace the anchor (re-attach / rel-position backfill). Only this field
+ * is written, so an anchor update can never clobber concurrent messages or
+ * a concurrent dismiss. Returns false when the thread doesn't exist.
+ * Callers run inside a transact. */
+export function setThreadAnchor(
+	map: CommentsMap,
+	threadId: string,
+	anchor: CommentThread['anchor']
+): boolean {
+	const m = ensureNestedThread(map, threadId);
+	if (!m) return false;
+	m.set('anchor', { ...anchor });
+	return true;
+}
+
+/** After rounds are removed (accepted or rejected), auto-resolve the threads
+ * that only existed to announce them. An announce thread carries no real
+ * conversation — no user message — so once its edit is gone it has nothing
+ * left to show. A thread with genuine back-and-forth stays open for the
+ * author to dismiss, and so does one that still has another pending round.
+ * Callers run inside their own transact so the dismiss lands in the same
+ * delta as the round removal. */
+export function resolveEmptyEditThreads(ydoc: Y.Doc, threadIds: Iterable<string>): void {
+	const ids = new Set([...threadIds].filter(Boolean));
+	if (ids.size === 0) return;
+	const commentsMap = getCommentsMap(ydoc);
+	const stillReferenced = new Set(
+		getReviewArray(ydoc)
+			.toArray()
+			.map((r) => r.feedbackThreadId)
+			.filter((id): id is string => typeof id === 'string')
+	);
+	for (const tid of ids) {
+		const thread = getThread(commentsMap, tid);
+		if (!thread || thread.resolved) continue;
+		if (stillReferenced.has(tid)) continue;
+		if (thread.messages.some((m) => m.author === 'user')) continue;
+		setThreadResolved(commentsMap, tid, true);
+	}
+}
+
+/** CRDT rel positions for the `occurrenceIndex`-th occurrence of `quote`
+ * in the LIVE fragment, stamped at thread creation so server-created
+ * threads arrive fully anchored (the client's render-time backfill write
+ * is legacy-only). Searches the fragment's RAW text — offsets there map
+ * 1:1 onto Y.XmlText indices, which the normalized serialization doesn't
+ * guarantee. Empty when the quote isn't present in the committed text
+ * (e.g. it only exists in a pending proposal) — the quote/context anchor
+ * still applies and the client backfills if the text lands later. */
+export function relRangeForQuote(
+	doc: Y.Doc,
+	quote: string,
+	occurrenceIndex: number
+): { relStart: string; relEnd: string } | Record<string, never> {
+	if (!quote) return {};
+	const fragment = getFragment(doc);
+	const rawText = serializeFragmentRaw(fragment);
+	let idx = nthIndexOf(rawText, quote, occurrenceIndex);
+	if (idx < 0) idx = nthIndexOf(rawText, quote, 0);
+	if (idx < 0) return {};
+	return computeFragmentRelRange(fragment, idx, quote.length) ?? {};
+}
+
+/** A round accepted in one `acceptTabRounds` call, with the document text
+ * it was applied against (the previous round's output in a batch). The
+ * text matters only for whole-document `write` rounds, whose "what changed"
+ * is the diff of the two full texts; an `edit` round carries its own
+ * before/after in the operation. */
+export interface AcceptedRound {
+	round: PendingReviewRound;
+	textBefore?: string;
+}
+
+/** Where the text a round introduced now sits: the first non-empty line
+ * its diff added, located in `textAfter` (the document as serialized once
+ * the round landed). `added: false` means the round removed text without
+ * adding any — there is nothing left to anchor to. `idx: -1` means the
+ * round added text that cannot be found in the document, which should not
+ * happen for a round that just applied but is reported rather than guessed
+ * at. */
+export function locateAddedText(
+	{ round, textBefore }: AcceptedRound,
+	textAfter: string
+): { added: boolean; line: string; idx: number; occurrenceIndex: number } {
+	const op = round.operation;
+	let before: string;
+	let after: string;
+	if (op?.type === 'edit') {
+		before = normalizeTypography(op.oldString);
+		after = normalizeTypography(op.newString);
+	} else if (op?.type === 'write') {
+		before = normalizeTypography(textBefore ?? round.beforeMd ?? '');
+		after = normalizeTypography(op.content);
+	} else {
+		before = normalizeTypography(textBefore ?? round.beforeMd ?? '');
+		after = normalizeTypography(round.afterMd ?? '');
+	}
+	const none = { added: false, line: '', idx: -1, occurrenceIndex: 0 };
+	if (!after) return none;
+	// Diff whole lines. Both sides get a trailing newline so a last line
+	// that merely gained a newline (text appended after it) is not reported
+	// as removed-and-re-added; that made a move anchor to the line BEFORE
+	// the moved text.
+	const endLine = (s: string) => (s.endsWith('\n') ? s : s + '\n');
+	// Walk the diff keeping the offset into `after` so the added line can be
+	// found at the spot the edit landed, not at an unrelated earlier
+	// occurrence of the same string.
+	let offset = 0;
+	let line = '';
+	let lineOffset = -1;
+	let sawAddition = false;
+	for (const part of diffLines(endLine(before), endLine(after))) {
+		if (part.removed) continue;
+		if (part.added && lineOffset < 0) {
+			sawAddition = true;
+			let local = 0;
+			for (const candidate of part.value.split('\n')) {
+				if (candidate.trim()) {
+					line = candidate;
+					lineOffset = offset + local;
+					break;
+				}
+				local += candidate.length + 1;
+			}
+		}
+		offset += part.value.length;
+	}
+	if (lineOffset < 0) return { ...none, added: sawAddition };
+	let idx = -1;
+	const editIdx = textAfter.indexOf(after);
+	if (editIdx >= 0 && textAfter.startsWith(line, editIdx + lineOffset)) {
+		idx = editIdx + lineOffset;
+	} else {
+		idx = textAfter.indexOf(line);
+	}
+	if (idx < 0) return { added: true, line, idx: -1, occurrenceIndex: 0 };
+	let occurrenceIndex = 0;
+	let scan = textAfter.indexOf(line);
+	while (scan >= 0 && scan < idx) {
+		occurrenceIndex += 1;
+		scan = textAfter.indexOf(line, scan + line.length);
+	}
+	return { added: true, line, idx, occurrenceIndex };
+}
+
+/** After rounds are accepted, carry each round's feedback thread along with
+ * the text the round produced. A thread whose anchored passage the edit
+ * replaced is re-anchored to the first line the edit added — the
+ * conversation belongs with the rewritten text — and a thread whose edit
+ * only removed its passage resolves, because the author has just agreed
+ * there is nothing left to discuss. Threads whose passage still matches
+ * are left alone, and a thread that still has another pending round is
+ * never resolved (its card still has work under it). Without this, every
+ * round of accepts left the feedback threads parked at the top of the
+ * gutter as orphans. Callers run inside the accept's transact so the move
+ * lands in the same delta as the round removal. */
+export function followAcceptedEdits(
+	ydoc: Y.Doc,
+	accepted: readonly AcceptedRound[],
+	textAfter: string
+): void {
+	const commentsMap = getCommentsMap(ydoc);
+	const stillReferenced = new Set(
+		getReviewArray(ydoc)
+			.toArray()
+			.map((r) => r.feedbackThreadId)
+			.filter((id): id is string => typeof id === 'string')
+	);
+	const seen = new Set<string>();
+	for (const entry of accepted) {
+		const tid = entry.round.feedbackThreadId;
+		if (!tid || seen.has(tid)) continue;
+		seen.add(tid);
+		const thread = getThread(commentsMap, tid);
+		if (!thread || thread.resolved) continue;
+		if (matchCommentAnchor(textAfter, thread.anchor)) continue;
+		// The thread's passage is gone. Of this thread's rounds in the batch,
+		// the last one that added text decides where the thread goes.
+		let target: ReturnType<typeof locateAddedText> | null = null;
+		let addedAnything = false;
+		for (const e of accepted) {
+			if (e.round.feedbackThreadId !== tid) continue;
+			const located = locateAddedText(e, textAfter);
+			if (located.added) addedAnything = true;
+			if (located.idx >= 0) target = located;
+		}
+		if (target) {
+			setThreadAnchor(commentsMap, tid, {
+				quote: target.line,
+				occurrenceIndex: target.occurrenceIndex,
+				...captureAnchorContext(textAfter, target.idx, target.line.length),
+				...relRangeForQuote(ydoc, target.line, target.occurrenceIndex)
+			});
+		} else if (!addedAnything && !stillReferenced.has(tid)) {
+			setThreadResolved(commentsMap, tid, true);
+		}
+	}
+}
+
+/** Upgrade every legacy plain-object thread in the doc to nested form, in
+ * one SYSTEM-origin transaction. Returns how many were converted. Run this
+ * only on the authoritative load path (the delta must be persisted);
+ * throwaway readers stay read-only via `readThreadValue`. */
+export function migrateLegacyThreads(ydoc: Y.Doc): number {
+	const map = getCommentsMap(ydoc);
+	const legacyIds: string[] = [];
+	map.forEach((value, id) => {
+		if (!(value instanceof Y.Map) && readThreadValue(value)) legacyIds.push(id);
+	});
+	if (legacyIds.length === 0) return 0;
+	ydoc.transact(() => {
+		for (const id of legacyIds) {
+			const thread = readThreadValue(map.get(id));
+			if (thread) putThread(map, thread);
+		}
+	}, SYSTEM_ORIGIN);
+	return legacyIds.length;
 }
 
 export function readReviewRounds(ydoc: Y.Doc): PendingReviewRound[] {
@@ -409,15 +745,21 @@ function diffWordLevel(oldText: string, newText: string): Array<[number, string]
 	});
 }
 
-/** Transform `oldRuns` into `newText`, marking inserted text as AI-authored
- * and carrying the provenance of surviving text through unchanged. Uses the
- * word-level diff above, so an agent rewrite of half a sentence marks that
- * half as AI — never sub-word fragments, never the untouched remainder. */
-function diffRunsToText(oldRuns: ProvenanceRun[], newText: string): ProvenanceRun[] {
+/** Transform `oldRuns` into `newText`, marking inserted text with the
+ * `insertedAi` provenance (AI-authored by default — the callers are agent
+ * write paths) and carrying the provenance of surviving text through
+ * unchanged. Uses the word-level diff above, so an agent rewrite of half a
+ * sentence marks that half as AI — never sub-word fragments, never the
+ * untouched remainder. */
+function diffRunsToText(
+	oldRuns: ProvenanceRun[],
+	newText: string,
+	insertedAi = true
+): ProvenanceRun[] {
 	const oldText = oldRuns.map((r) => r.text).join('');
 	if (oldText === newText) return oldRuns;
 	if (!newText) return [];
-	if (!oldText) return [{ text: newText, ai: true }];
+	if (!oldText) return [{ text: newText, ai: insertedAi }];
 	const diffs = diffWordLevel(oldText, newText);
 	const out: ProvenanceRun[] = [];
 	let cursor = 0;
@@ -428,7 +770,7 @@ function diffRunsToText(oldRuns: ProvenanceRun[], newText: string): ProvenanceRu
 		} else if (op === -1) {
 			cursor += text.length;
 		} else {
-			out.push({ text, ai: true });
+			out.push({ text, ai: insertedAi });
 		}
 	}
 	return out;
@@ -571,6 +913,104 @@ export function applyEditToFragment(
 	return true;
 }
 
+/** The fragment's RAW text (no typography normalization): paragraphs joined
+ * by '\n', hardBreak as '\n'. Character offsets into this string map 1:1
+ * onto Y.XmlText indices, which `serializeFragment`'s normalized output
+ * does not guarantee (an ellipsis normalizes 1 char → 3). Used to compute
+ * CRDT relative positions server-side. */
+export function serializeFragmentRaw(fragment: Y.XmlFragment): string {
+	const lines: string[] = [];
+	fragment.forEach((child) => lines.push(textOf(child)));
+	return lines.join('\n');
+}
+
+/** Compute base64-encoded Yjs relative positions for the character range
+ * [rawIdx, rawIdx + len) of the fragment's RAW text (see
+ * `serializeFragmentRaw`). Returns null when the range doesn't land inside
+ * text nodes (offset out of range, or it falls on structural boundaries).
+ *
+ * This is what lets SERVER-created comment threads (announce threads,
+ * comment_doc, feedback import) arrive fully anchored: rel positions are
+ * plain Yjs — no ProseMirror needed — so the client's render-time backfill
+ * write becomes a legacy-only path instead of a per-render writer racing
+ * the agent. */
+export function computeFragmentRelRange(
+	fragment: Y.XmlFragment,
+	rawIdx: number,
+	len: number
+): { relStart: string; relEnd: string } | null {
+	if (rawIdx < 0 || len < 0) return null;
+	const endIdx = rawIdx + len;
+	let cursor = 0;
+	let start: Y.RelativePosition | null = null;
+	let end: Y.RelativePosition | null = null;
+
+	const visitText = (node: Y.XmlText) => {
+		let textLen = 0;
+		for (const d of node.toDelta() as Array<{ insert?: unknown }>) {
+			if (typeof d.insert === 'string') textLen += d.insert.length;
+		}
+		const nodeStart = cursor;
+		const nodeEnd = cursor + textLen;
+		if (start === null && rawIdx >= nodeStart && rawIdx <= nodeEnd) {
+			start = Y.createRelativePositionFromTypeIndex(node, rawIdx - nodeStart);
+		}
+		if (end === null && endIdx >= nodeStart && endIdx <= nodeEnd) {
+			// assoc -1 binds the end position to the character BEFORE it, so
+			// text appended right at the range end doesn't grow the anchor.
+			end = Y.createRelativePositionFromTypeIndex(node, endIdx - nodeStart, -1);
+		}
+		cursor = nodeEnd;
+	};
+
+	const visitElement = (el: Y.XmlElement | Y.XmlFragment) => {
+		el.forEach((child: unknown) => {
+			if (child instanceof Y.XmlText) {
+				visitText(child);
+				return;
+			}
+			if (child instanceof Y.XmlElement) {
+				if (child.nodeName === 'hardBreak') {
+					cursor += 1;
+					return;
+				}
+				visitElement(child);
+			}
+		});
+	};
+
+	let first = true;
+	fragment.forEach((child) => {
+		if (!first) cursor += 1; // the '\n' joining paragraphs
+		first = false;
+		if (child instanceof Y.XmlElement) visitElement(child);
+	});
+
+	if (!start || !end) return null;
+	return { relStart: encodeRelPosition(start), relEnd: encodeRelPosition(end) };
+}
+
+/** Base64 encode/decode for storing a Y.RelativePosition (a Uint8Array) in
+ * a JSON-friendly Y.Map value. btoa/atob are global in both the browser
+ * and Node 16+, so one implementation serves client and server. */
+export function encodeRelPosition(rp: Y.RelativePosition): string {
+	const bytes = Y.encodeRelativePosition(rp);
+	let bin = '';
+	for (let i = 0; i < bytes.length; i += 1) bin += String.fromCharCode(bytes[i]);
+	return btoa(bin);
+}
+
+export function decodeRelPosition(s: string): Y.RelativePosition | null {
+	try {
+		const bin = atob(s);
+		const bytes = new Uint8Array(bin.length);
+		for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+		return Y.decodeRelativePosition(bytes);
+	} catch {
+		return null;
+	}
+}
+
 /** Seed an EMPTY Y.Doc's fragment from a content string. No-op if non-empty
  * (seeding a populated fragment produces merge garbage). Does NOT wrap in a
  * transact — callers pick their own origin. */
@@ -601,6 +1041,25 @@ export function replaceYDocTextWithAiProvenance(ydoc: Y.Doc, content: string): v
 	const paraRuns: ProvenanceRun[][] = [];
 	fragment.forEach((child) => paraRuns.push(paragraphRunsNormalized(child)));
 	const newRuns = diffRunsToText(joinParagraphRuns(paraRuns), normalizeTypography(content ?? ''));
+	if (fragment.length > 0) fragment.delete(0, fragment.length);
+	if (content) fragment.insert(0, buildParagraphsFromRuns(newRuns));
+}
+
+/** Replace the fragment's text with externally-authored content (a file
+ * edited outside DocWriter), preserving the provenance of everything that
+ * survives the diff and marking introduced text as human-authored. Used by
+ * the disk-wins reseed: the external edit lands as one more update on the
+ * live history instead of destroying it. Callers must wrap this in
+ * `ydoc.transact(..., origin)`. */
+export function replaceYDocTextFromExternal(ydoc: Y.Doc, content: string): void {
+	const fragment = getFragment(ydoc);
+	const paraRuns: ProvenanceRun[][] = [];
+	fragment.forEach((child) => paraRuns.push(paragraphRunsNormalized(child)));
+	const newRuns = diffRunsToText(
+		joinParagraphRuns(paraRuns),
+		normalizeTypography(content ?? ''),
+		false
+	);
 	if (fragment.length > 0) fragment.delete(0, fragment.length);
 	if (content) fragment.insert(0, buildParagraphsFromRuns(newRuns));
 }

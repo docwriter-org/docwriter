@@ -15,6 +15,7 @@
  * round lands in the document's review map immediately; Accept later commits
  * the chosen `afterMd` into the live Y.Doc.
  */
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { dirname, isAbsolute, relative } from 'path';
 import * as Y from 'yjs';
@@ -28,7 +29,14 @@ import {
 	serializeYDoc,
 	getReviewArray,
 	readReviewRounds,
+	readCommentThreads,
 	getCommentsMap,
+	getThread,
+	putThread,
+	appendThreadMessage,
+	setThreadResolved,
+	setThreadAnchor,
+	resolveEmptyEditThreads,
 	getFragment,
 	AGENT_ORIGIN,
 	USER_ORIGIN,
@@ -37,7 +45,8 @@ import {
 	nthIndexOf,
 	buildThreadAnchor,
 	applyEditToFragment,
-	replaceYDocTextWithAiProvenance
+	replaceYDocTextWithAiProvenance,
+	relRangeForQuote
 } from '$lib/shared/ydoc-codec';
 import type { StaleAcceptApply } from '$lib/shared/stale-accept';
 import { isScratchPath, resolveTabFromPath, isOpenTab } from './path-router';
@@ -53,9 +62,12 @@ import type {
 	PendingReviewRound
 } from '$lib/types';
 import { formatListedThreads } from '$lib/shared/list-threads';
-import { isValidTabId, tabFile, WORKSPACE_ROOT } from './document-files';
+import { isValidTabId, isBinaryTabPath, tabFile, WORKSPACE_ROOT } from './document-files';
 import { resolveWorkspacePath } from './workspace-path';
-import { getRules, getTabsState, setTabsState } from './runtime-state';
+import { getRules } from './runtime-state';
+import { openDocument } from './documents-store';
+import { tabHasPersistedUpdates } from './ydoc-persistence';
+import { flushTabMarkdownNow } from './ws-server';
 import { writeTextAtomic } from './file-utils';
 import { findOverlappingFreeze, freezeQuoteFromRule } from '$lib/freeze';
 
@@ -113,6 +125,13 @@ interface TabWriteResult {
 	/** True when a stale Accept committed this write to the live document
 	 * instead of leaving another pending review round. */
 	committed?: boolean;
+	/** True when the write left the text identical (after typography
+	 * normalization), so no review round was created. The tool result must
+	 * say so: reporting it as applied is how the agent ends up telling the
+	 * author an edit landed when nothing changed. */
+	noop?: boolean;
+	/** The comment thread the pending round was attached to. */
+	threadId?: string;
 }
 
 interface RoundMutation {
@@ -120,7 +139,30 @@ interface RoundMutation {
 	afterMd: string;
 }
 
-function narrowWriteOperation(
+/** A narrowed span must not balloon into "most of the document as an edit
+ * op" — past this share of the doc, storing the round as a wholesale write
+ * is smaller and clearer. */
+const NARROW_MAX_DOC_SHARE = 0.5;
+/** How far context expansion will reach on each side while hunting for a
+ * unique anchor. */
+const NARROW_MAX_CONTEXT = 4_096;
+
+/** Reduce a wholesale write (beforeMd → afterMd) to a minimal `edit` op.
+ *
+ * The changed core is the text between the common prefix and suffix. When
+ * that core is empty (a pure insertion) or not unique in the document, the
+ * span is EXPANDED with surrounding context — taken equally from the
+ * common prefix/suffix, so old and new strings share it — until it matches
+ * exactly once. Returns null only when no reasonable unique span exists
+ * (the change genuinely rewrites most of the document).
+ *
+ * This matters far beyond aesthetics: a round physically embeds its op's
+ * strings, so the old fallback-to-write path stored the ENTIRE document
+ * per revision — the 20–35 KB "metadata-only" updates that bloated the
+ * CRDT log during agent revision bursts. A pure insertion (the most common
+ * revise-in-place shape) now costs its own size plus a few dozen context
+ * chars. */
+export function narrowWriteOperation(
 	beforeMd: string,
 	afterMd: string
 ): PendingReviewOperation | null {
@@ -144,15 +186,26 @@ function narrowWriteOperation(
 		afterTail -= 1;
 	}
 
-	const oldString = beforeMd.slice(prefix, beforeTail + 1);
-	const newString = afterMd.slice(prefix, afterTail + 1);
-	if (!oldString) return null;
-	if (countOccurrences(beforeMd, oldString) !== 1) return null;
-	return {
-		type: 'edit',
-		oldString,
-		newString
-	};
+	const coreOldEnd = beforeTail + 1;
+	const coreNewEnd = afterTail + 1;
+
+	for (let radius = 0; ; radius = radius === 0 ? 16 : radius * 4) {
+		const start = Math.max(0, prefix - radius);
+		const oldEnd = Math.min(beforeMd.length, coreOldEnd + radius);
+		const oldString = beforeMd.slice(start, oldEnd);
+		if (oldString && countOccurrences(beforeMd, oldString) === 1) {
+			if (oldString.length > Math.max(64, beforeMd.length * NARROW_MAX_DOC_SHARE)) {
+				return null;
+			}
+			// The expansion is common prefix/suffix text, identical in both
+			// strings — mirror it onto the new side.
+			const suffixExt = oldEnd - coreOldEnd;
+			const newString = afterMd.slice(start, coreNewEnd + suffixExt);
+			return { type: 'edit', oldString, newString };
+		}
+		const exhausted = start === 0 && oldEnd === beforeMd.length;
+		if (exhausted || radius >= NARROW_MAX_CONTEXT) return null;
+	}
 }
 
 export function currentProposalText(doc: Y.Doc): string {
@@ -163,6 +216,60 @@ export function currentProposalText(doc: Y.Doc): string {
  * `mutator` receives the current proposal text (latest pending `afterMd`, or
  * the committed live doc if no proposal is pending) and returns the next
  * proposal string, or null to abort. */
+/**
+ * Per-render state, held in an AsyncLocalStorage scope rather than at module
+ * scope. These three values are ambient inputs to `runTabWrite`,
+ * `createAgentEditThread`, `createAgentCommentThread` and
+ * `applyReplyToComment` — functions shared by every provider, so passing them
+ * as parameters would mean threading them through every call site.
+ *
+ * They MUST NOT be module globals: a second render starting while the first
+ * is still streaming would overwrite them, and whichever render finished
+ * first would clear all three to null. Concretely, that misattributed a
+ * critique pass's findings to another reviewer (or to none), and pointed a
+ * feedback-import reply at the wrong thread. This is the same bug class as
+ * the `docwriter-doc` MCP server once being a module singleton — per-render
+ * state kept at module scope.
+ *
+ * The scope flows through awaits, so every tool call the render makes reads
+ * its own values. Calls that arrive outside any render (a direct API route
+ * that has not opened a scope) fall back to a process-wide default.
+ */
+interface RenderScope {
+	feedbackThreadId: string | null;
+	reviewerId: string | null;
+	staleAcceptApply: StaleAcceptApply | null;
+}
+
+const renderScopeStore = new AsyncLocalStorage<RenderScope>();
+const fallbackScope: RenderScope = {
+	feedbackThreadId: null,
+	reviewerId: null,
+	staleAcceptApply: null
+};
+
+function renderScope(): RenderScope {
+	return renderScopeStore.getStore() ?? fallbackScope;
+}
+
+/** `{ reviewerId }` when a critique pass is running, `{}` otherwise. Spread
+ * onto review rounds and agent comments so the gutter can attribute them to
+ * the reviewer instead of the plain agent. */
+function reviewerStamp(): { reviewerId?: string } {
+	const id = renderScope().reviewerId;
+	return id ? { reviewerId: id } : {};
+}
+
+/** Run `fn` with its own isolated copy of the per-render state. Everything
+ * the render awaits inside sees these values and nothing outside can see or
+ * clobber them, so no explicit teardown is needed. */
+export function runWithRenderScope<T>(scope: Partial<RenderScope>, fn: () => T): T {
+	return renderScopeStore.run(
+		{ feedbackThreadId: null, reviewerId: null, staleAcceptApply: null, ...scope },
+		fn
+	);
+}
+
 /** Thread id the NEXT review round should attach to. Set transiently by
  * `edit_doc` for the duration of a single call when the agent passes an
  * explicit `thread_id` (and restored after), so attachment is per-edit and
@@ -170,9 +277,44 @@ export function currentProposalText(doc: Y.Doc): string {
  * opens its own fresh thread (`createAgentEditThread`). This is what lets a
  * thread revision and an unrelated directive edit in the same turn land in
  * different threads. */
-let activeFeedbackThreadId: string | null = null;
 export function setActiveFeedbackThreadId(id: string | null) {
-	activeFeedbackThreadId = id;
+	renderScope().feedbackThreadId = id;
+}
+export function getActiveFeedbackThreadId(): string | null {
+	return renderScope().feedbackThreadId;
+}
+
+/** The text every provider hands back for a write on an open tab. One
+ * source so the wording stays honest everywhere: an edit_doc / write_doc
+ * call lands a PENDING proposal, never a change to the document, and a
+ * replacement that leaves the text identical lands nothing at all. The
+ * old "Edit applied to X." made the agent tell the author the edit was in
+ * when the author still had to Accept it — or when nothing had happened. */
+export function describeTabWrite(
+	filePath: string,
+	result: TabWriteResult,
+	opts: { kind: 'edit' | 'write'; replaceAll?: boolean; hits?: number; created?: boolean; chars?: number }
+): string {
+	const hits = opts.hits ?? 1;
+	const occurrences = `${hits} occurrence${hits === 1 ? '' : 's'}`;
+	if (result.noop) {
+		return opts.kind === 'edit'
+			? `No change proposed for ${filePath}: new_string leaves the text identical to old_string once typography is normalized (curly quotes, dashes and ellipses are stored as plain ASCII), so there is nothing for me to review. Nothing is pending. Do not report this as an edit; propose a different replacement if you meant to change something.`
+			: `No change proposed for ${filePath}: the content is identical to the current document once typography is normalized, so there is nothing for me to review. Nothing is pending.`;
+	}
+	if (result.committed) {
+		return opts.kind === 'edit'
+			? `Edit applied and accepted on ${filePath}${opts.replaceAll ? ` (replaced ${occurrences})` : ''}. Accept was already clicked on this edit — do not leave another proposal.`
+			: `${opts.created ? 'Created' : 'Wrote'} and accepted ${opts.chars ?? 0} chars on ${filePath}. Accept was already clicked on this edit — do not leave another proposal.`;
+	}
+	const thread = result.threadId ? ` on thread ${result.threadId}` : '';
+	const tail = ` It changes the document only when I accept it in the gutter, so do not tell me it has been applied.`;
+	if (opts.kind === 'edit') {
+		return `Proposed the edit as a pending diff${thread} in ${filePath}${opts.replaceAll ? ` (${occurrences} replaced)` : ''}.${tail}`;
+	}
+	return opts.created
+		? `Created ${filePath} and proposed its content (${opts.chars ?? 0} chars) as a pending diff${thread}.${tail}`
+		: `Proposed a rewrite of ${filePath} (${opts.chars ?? 0} chars) as a pending diff${thread}.${tail}`;
 }
 
 /** The enforcement promise interpolated into the system prompt's "Announce
@@ -180,26 +322,24 @@ export function setActiveFeedbackThreadId(id: string | null) {
  * that enforces it, so the prompt and the enforcement can't drift apart —
  * change the gate's behavior and this sentence in the same place. */
 export const REPLY_BEFORE_EDIT_PROMPT_NOTE =
-	"This is enforced: while a thread's latest message is the user's, edit_doc and write_doc targeting it fail until you have replied.";
+	"This is enforced: while a thread's latest message is mine, edit_doc and write_doc targeting it fail until you have replied.";
 
 /** Reviewer running the current critique pass, if any. Set by /api/render
  * for the duration of a critique render (same lifecycle as
  * `activeFeedbackThreadId`) and stamped onto every review round and
  * agent-authored comment the pass creates, so the gutter can attribute
  * them to the reviewer instead of the plain agent. */
-let activeReviewerId: string | null = null;
 export function setActiveReviewerId(id: string | null) {
-	activeReviewerId = id;
+	renderScope().reviewerId = id;
 }
 
 /** Set for the duration of a stale-Accept / rebase render. The agent
  * still lands a pending review round (a visible diff), not a live commit. */
-let staleAcceptApply: StaleAcceptApply | null = null;
 export function setStaleAcceptApply(value: StaleAcceptApply | null) {
-	staleAcceptApply = value;
+	renderScope().staleAcceptApply = value;
 }
 export function getStaleAcceptApply(): StaleAcceptApply | null {
-	return staleAcceptApply;
+	return renderScope().staleAcceptApply;
 }
 
 function applyWriteToLiveFragment(doc: Y.Doc, operation: PendingReviewOperation): boolean {
@@ -234,25 +374,6 @@ function dropMatchingReviewRounds(
 	return droppedThreadIds;
 }
 
-function resolveEmptyEditThreads(ydoc: Y.Doc, threadIds: Iterable<string>): void {
-	const ids = new Set([...threadIds].filter((id): id is string => !!id));
-	if (ids.size === 0) return;
-	const commentsMap = getCommentsMap(ydoc);
-	const stillReferenced = new Set(
-		getReviewArray(ydoc)
-			.toArray()
-			.map((r) => r.feedbackThreadId)
-			.filter((id): id is string => typeof id === 'string')
-	);
-	for (const tid of ids) {
-		const thread = commentsMap.get(tid);
-		if (!thread || thread.resolved) continue;
-		if (stillReferenced.has(tid)) continue;
-		if (thread.messages.some((m) => m.author === 'user')) continue;
-		commentsMap.set(tid, { ...thread, resolved: true });
-	}
-}
-
 /** Apply an agent write to the live fragment and drop the stale/superseded
  * pending rounds. Used when the user already Accepted an orphaned proposal.
  * Caller is responsible for origin: this wraps a USER_ORIGIN transact so
@@ -279,6 +400,9 @@ export async function runTabWrite(
 	trigger: PendingReviewRound['trigger'],
 	mutator: (currentText: string) => RoundMutation | null
 ): Promise<TabWriteResult | { error: string }> {
+	if (isBinaryTabPath(tabId)) {
+		return { error: `${tabId} is a binary file — it has no editable document.` };
+	}
 	const ws = getHocuspocus();
 	if (!ws) {
 		return { error: 'WebSocket server not initialized — Y.Doc sync is offline.' };
@@ -296,8 +420,9 @@ export async function runTabWrite(
 			}
 			const { operation, afterMd } = mutation;
 			if (afterMd === beforeMd) {
-				// No-op write. Still succeeds, but don't emit a review round.
-				result = { beforeMd, afterMd };
+				// No-op write: nothing to review, so no round. Flag it so the
+				// tool result can say "no change" instead of "applied".
+				result = { beforeMd, afterMd, noop: true };
 				return;
 			}
 			// Edits targeting a feedback thread pass two gates. (1) The user
@@ -312,9 +437,9 @@ export async function runTabWrite(
 			// because every provider path (MCP tools and tool-handlers.ts)
 			// surfaces it verbatim — which is also why it names no parameter
 			// syntax: the surfaces' reply_to_comment schemas differ.
-			const targetThreadId = activeFeedbackThreadId ?? undefined;
+			const targetThreadId = renderScope().feedbackThreadId ?? undefined;
 			if (targetThreadId) {
-				const thread = getCommentsMap(doc).get(targetThreadId);
+				const thread = getThread(getCommentsMap(doc), targetThreadId);
 				if (thread?.resolved) {
 					result = { beforeMd, afterMd: beforeMd, discarded: true };
 					return;
@@ -323,17 +448,17 @@ export async function runTabWrite(
 				if (lastMessage?.author === 'user') {
 					result = {
 						error:
-							`the user's latest message on thread "${targetThreadId}" has no reply yet, ` +
-							`so this proposal would land as a bare diff with no explanation. First reply ` +
-							`on that thread with reply_to_comment — one or two first-person sentences on ` +
-							`what you make of the user's feedback and what you are changing — then retry ` +
-							`this exact call.`
+							`the latest message on thread "${targetThreadId}" is the author's and has ` +
+							`no reply from you yet, so this proposal would land as a bare diff with no ` +
+							`explanation. First reply on that thread with reply_to_comment — one or two ` +
+							`first-person sentences, addressed to the author as "you", on what you make ` +
+							`of the feedback and what you are changing — then retry this exact call.`
 					};
 					return;
 				}
 			}
 			const reviewArr = getReviewArray(doc);
-			const threadIdExplicit = activeFeedbackThreadId ?? undefined;
+			const threadIdExplicit = renderScope().feedbackThreadId ?? undefined;
 			// Default op: an explicit edit as given, or a narrowed wholesale
 			// write. `baseForRound` is the text this op is anchored to.
 			let baseForRound = beforeMd;
@@ -370,6 +495,7 @@ export async function runTabWrite(
 				}
 			}
 
+			let landedThreadId = threadIdExplicit;
 			doc.transact(() => {
 				// No explicit thread → open one so EVERY edit lives under a
 				// thread (the thread is the parent; there are no standalone edit
@@ -380,18 +506,26 @@ export async function runTabWrite(
 					// Anchor to a SINGLE line (the first changed/non-empty line),
 					// never the whole multi-line old_string: a multi-line quote
 					// doesn't match the editor's plain text verbatim, so the
-					// thread card can't be positioned and silently disappears.
+					// thread card can't be positioned.
 					const fullOldStr = normalizedOperation.type === 'edit'
 						? normalizedOperation.oldString
 						: baseForRound;
-					const anchorQuote = firstNonEmptyLine(fullOldStr);
+					let anchorQuote = firstNonEmptyLine(fullOldStr);
+					let occIdx = 0;
 					if (anchorQuote) {
-						const occIdx = computeAnchorOccurrenceIndex(
-							baseForRound, anchorQuote, fullOldStr
-						);
-						threadId = createAgentEditThread(doc, anchorQuote, occIdx, baseForRound);
+						occIdx = computeAnchorOccurrenceIndex(baseForRound, anchorQuote, fullOldStr);
+					} else {
+						// Whitespace-only old_string (inserting at a blank line)
+						// or an empty document. The thread is created REGARDLESS
+						// — a round without a thread has no Dismiss and used to
+						// strand an un-actionable diff in the doc. Fall back to
+						// the document's first non-empty line; an empty quote
+						// parks the card at the top of the gutter.
+						anchorQuote = firstNonEmptyLine(baseForRound);
 					}
+					threadId = createAgentEditThread(doc, anchorQuote, occIdx, baseForRound);
 				}
+				landedThreadId = threadId;
 
 				const round: PendingReviewRound = {
 					id: cryptoRandomId(),
@@ -405,7 +539,7 @@ export async function runTabWrite(
 					timestamp: Date.now(),
 					kind: classifyRoundKind(baseForRound, afterMd),
 					stepCount: 1,
-					...(activeReviewerId ? { reviewerId: activeReviewerId } : {})
+					...reviewerStamp()
 				};
 				// Revise-in-place: a new edit made for a feedback thread replaces
 				// any older still-pending edits for that same thread, so the
@@ -421,7 +555,7 @@ export async function runTabWrite(
 				}
 				reviewArr.push([round]);
 			}, AGENT_ORIGIN);
-			result = { beforeMd, afterMd };
+			result = { beforeMd, afterMd, threadId: landedThreadId };
 		});
 	} finally {
 		await direct.disconnect();
@@ -492,7 +626,11 @@ function createAgentEditThread(
 			// Snapshot the surroundings so the client's quote fallback can
 			// tell "this text came back" (undo) apart from "the same string
 			// was typed somewhere else" once the passage is deleted.
-			...(anchorIdx >= 0 ? captureAnchorContext(docText, anchorIdx, oldString.length) : {})
+			...(anchorIdx >= 0 ? captureAnchorContext(docText, anchorIdx, oldString.length) : {}),
+			// docText may be the MATERIALIZED proposal text; rel positions
+			// index the live committed fragment, so they are computed there
+			// (empty when the quote isn't committed yet).
+			...relRangeForQuote(doc, oldString, occurrenceIndex)
 		},
 		messages: [
 			{
@@ -500,13 +638,13 @@ function createAgentEditThread(
 				author: 'agent',
 				text: 'Suggested an edit.',
 				timestamp: now,
-				...(activeReviewerId ? { reviewerId: activeReviewerId } : {})
+				...reviewerStamp()
 			}
 		],
 		resolved: false,
 		createdAt: now
 	};
-	getCommentsMap(doc).set(threadId, thread);
+	putThread(getCommentsMap(doc), thread);
 	return threadId;
 }
 
@@ -541,11 +679,24 @@ type EnsureTabResult =
  *    an error.
  *  - Invalid path / escapes sandbox / unsupported shape → error.
  */
+/** Binary files (PDFs, images, …) have no editable document: materializing
+ * a Y.Doc for one would seed the file's bytes into the CRDT log as UTF-8
+ * mojibake. Every doc tool rejects them with a pointer to the built-in
+ * Read, which handles PDFs and images natively. */
+export function binaryTabError(path: string): CallToolResult {
+	return toolError(
+		`${path} is a binary file — it has no editable document and no doc tools. Use the built-in Read tool to view it.`
+	);
+}
+
 export function ensureWorkspaceTabOpen(
 	path: string,
 	opts: { createIfMissing: boolean }
 ): EnsureTabResult {
 	const existingTabId = resolveTabFromPath(path);
+	if (existingTabId && isBinaryTabPath(existingTabId)) {
+		return { ok: false, error: binaryTabError(path) };
+	}
 	if (existingTabId && isOpenTab(existingTabId)) {
 		return {
 			ok: true,
@@ -562,6 +713,9 @@ export function ensureWorkspaceTabOpen(
 				`${path} is not a valid workspace-relative path. Use a path inside the workspace (e.g. "drafts/chapter-1.md") or under .docwriter/agent/scratch/.`
 			)
 		};
+	}
+	if (isBinaryTabPath(tabId)) {
+		return { ok: false, error: binaryTabError(path) };
 	}
 
 	let absPath: string;
@@ -586,7 +740,16 @@ export function ensureWorkspaceTabOpen(
 	if (!fileExists) {
 		try {
 			mkdirSync(dirname(absPath), { recursive: true });
-			writeTextAtomic(absPath, '');
+			if (tabHasPersistedUpdates(tabId)) {
+				// File vanished externally but its Y.Doc history survives —
+				// restore the file from the log instead of blanking both
+				// (create-empty over history also armed the disk-wins reseed
+				// on next load, since an empty file looks like an external
+				// edit).
+				flushTabMarkdownNow(tabId);
+			} else {
+				writeTextAtomic(absPath, '');
+			}
 		} catch (err) {
 			return {
 				ok: false,
@@ -595,16 +758,12 @@ export function ensureWorkspaceTabOpen(
 		}
 	}
 
-	const state = getTabsState();
-	if (!state.order.includes(tabId)) {
-		state.order.push(tabId);
-		// Deliberately do NOT set `state.active = tabId`. The user may be
-		// mid-sentence on another tab; silently yanking focus to a tab the
-		// agent just created is disorienting. The new tab shows up in the
-		// bar with a pulsing dot (driven by `freshAgentTabs` on the client)
-		// and the user opens it when they're ready.
-		setTabsState(state);
-	}
+	// Deliberately do NOT activate. The user may be mid-sentence on another
+	// tab; silently yanking focus to a tab the agent just created is
+	// disorienting. The new tab shows up in the bar with a pulsing dot
+	// (driven by `freshAgentTabs` on the client) and the user opens it when
+	// they're ready.
+	openDocument(tabId, { activate: false });
 
 	return { ok: true, tabId, existedOnDisk: fileExists };
 }
@@ -673,7 +832,7 @@ export function editScratch(
 
 const editDocTool = tool(
 	'edit_doc',
-	'Replace old_string with new_string in the given file. For a workspace file this creates or updates a pending review proposal. The document changes only when the user accepts it. For a path under .docwriter/agent/scratch/ it writes plain text. old_string must match exactly once. Pass replace_all: true to replace every occurrence in one proposal, which suits renames and consistent term changes.',
+	'Replace old_string with new_string in the given file. For a workspace file this creates or updates a pending review proposal. The document changes only when I accept it. For a path under .docwriter/agent/scratch/ it writes plain text. old_string must match exactly once. Pass replace_all: true to replace every occurrence in one proposal, which suits renames and consistent term changes.',
 	{
 		file_path: z
 			.string()
@@ -726,7 +885,7 @@ const editDocTool = tool(
 		// An explicit thread_id on the call wins over the render-level default
 		// (parsed from the triggering message). Restore the prior value after
 		// so a single edit's targeting can't leak into later edits this turn.
-		const priorThreadId = activeFeedbackThreadId;
+		const priorThreadId = renderScope().feedbackThreadId;
 		if (typeof thread_id === 'string' && thread_id) {
 			setActiveFeedbackThreadId(thread_id);
 		}
@@ -735,7 +894,7 @@ const editDocTool = tool(
 		const result = await runTabWrite(tabId, 'agent_edit_doc', (currentMd) => {
 			const hits = countOccurrences(currentMd, old_string);
 			if (hits === 0) {
-				failure = `old_string not found in ${file_path}. The user may have edited this area — read_doc to see the current state and retry.`;
+				failure = `old_string not found in ${file_path}. The text may have changed since your last read — read_doc to see the current state and retry.`;
 				return null;
 			}
 			if (hits > 1 && !replaceAll) {
@@ -778,7 +937,7 @@ const editDocTool = tool(
 		}
 		if (result.discarded) {
 			return toolText(
-				`Edit discarded for ${file_path}: the user resolved this feedback thread before the edit landed, so it was not applied. Do not retry.`
+				`Edit discarded for ${file_path}: this feedback thread was resolved before the edit landed, so it was not applied. Do not retry.`
 			);
 		}
 
@@ -794,15 +953,7 @@ const editDocTool = tool(
 			}
 		}
 
-		return toolText(
-			result.committed
-				? replaceAll
-					? `Edit applied and accepted on ${file_path} (replaced ${appliedHits} occurrence${appliedHits === 1 ? '' : 's'}). The user already clicked Accept — do not leave another proposal.`
-					: `Edit applied and accepted on ${file_path}. The user already clicked Accept — do not leave another proposal.`
-				: replaceAll
-					? `Edit applied to ${file_path} (replaced ${appliedHits} occurrence${appliedHits === 1 ? '' : 's'}).`
-					: `Edit applied to ${file_path}.`
-		);
+		return toolText(describeTabWrite(file_path, result, { kind: 'edit', replaceAll, hits: appliedHits }));
 	}
 );
 
@@ -823,6 +974,9 @@ const readDocTool = tool(
 		// if any, else the committed Y.Doc text). This is the path that lets
 		// the agent see its own queued edits before they land.
 		const tabId = resolveTabFromPath(file_path);
+		if (tabId && isBinaryTabPath(tabId)) {
+			return binaryTabError(file_path);
+		}
 		if (tabId && isOpenTab(tabId)) {
 			const ws = getHocuspocus();
 			if (!ws) {
@@ -905,11 +1059,12 @@ const writeDocTool = tool(
 		if ('error' in result) {
 			return toolError(`write_doc failed for ${file_path}: ${result.error}`);
 		}
-		const verb = opened.existedOnDisk ? 'Wrote' : 'Created';
 		return toolText(
-			result.committed
-				? `${verb} and accepted ${content.length} chars on ${file_path}. The user already clicked Accept — do not leave another proposal.`
-				: `${verb} ${content.length} chars to ${file_path}.`
+			describeTabWrite(file_path, result, {
+				kind: 'write',
+				created: !opened.existedOnDisk,
+				chars: content.length
+			})
 		);
 	}
 );
@@ -951,7 +1106,6 @@ function createAgentCommentThread(
 	anchorText: string,
 	occurrenceIndex: number,
 	message: string,
-	proposedEdit?: { old_string: string; new_string: string },
 	externalAuthor?: string
 ): string {
 	const threadId = 'thread_' + cryptoRandomId();
@@ -964,7 +1118,8 @@ function createAgentCommentThread(
 		anchor: {
 			quote: anchorText,
 			occurrenceIndex,
-			...(anchorIdx >= 0 ? captureAnchorContext(liveText, anchorIdx, anchorText.length) : {})
+			...(anchorIdx >= 0 ? captureAnchorContext(liveText, anchorIdx, anchorText.length) : {}),
+			...relRangeForQuote(doc, anchorText, occurrenceIndex)
 		},
 		messages: [
 			{
@@ -973,21 +1128,13 @@ function createAgentCommentThread(
 				text: message,
 				timestamp: now,
 				...(isExternal ? { externalAuthor } : {}),
-				...(activeReviewerId ? { reviewerId: activeReviewerId } : {}),
-				...(proposedEdit
-					? {
-							proposedEdit: {
-								oldString: proposedEdit.old_string,
-								newString: proposedEdit.new_string
-							}
-						}
-					: {})
+				...reviewerStamp()
 			}
 		],
 		resolved: false,
 		createdAt: now
 	};
-	doc.transact(() => getCommentsMap(doc).set(threadId, thread), AGENT_ORIGIN);
+	doc.transact(() => putThread(getCommentsMap(doc), thread), AGENT_ORIGIN);
 
 	if (isExternal) {
 		const commentId = matchImportedComment(externalAuthor, message);
@@ -1008,13 +1155,12 @@ export function applyReplyToComment(
 	filePath: string,
 	message: string,
 	options?: {
-		proposedEdit?: { old_string: string; new_string: string };
 		anchorText?: string;
 		occurrenceIndex?: number;
 	}
 ): { ok: true; reanchored: boolean } | { ok: false; error: string } {
 	const commentsMap = getCommentsMap(doc);
-	const existing = commentsMap.get(threadId);
+	const existing = getThread(commentsMap, threadId);
 	if (!existing) {
 		return { ok: false, error: `Thread "${threadId}" does not exist on ${filePath}.` };
 	}
@@ -1048,7 +1194,7 @@ export function applyReplyToComment(
 		if (!built) {
 			return { ok: false, error: `anchor_text was not found in ${filePath}.` };
 		}
-		nextAnchor = built;
+		nextAnchor = { ...built, ...relRangeForQuote(doc, anchorText, occurrence) };
 		reanchored = true;
 	}
 
@@ -1058,31 +1204,22 @@ export function applyReplyToComment(
 		author: 'agent',
 		text: message,
 		timestamp: now,
-		...(activeReviewerId ? { reviewerId: activeReviewerId } : {}),
-		...(options?.proposedEdit
-			? {
-					proposedEdit: {
-						oldString: options.proposedEdit.old_string,
-						newString: options.proposedEdit.new_string
-					}
-				}
-			: {})
+		...reviewerStamp()
 	};
-	const updated: CommentThread = {
-		...existing,
-		anchor: nextAnchor,
-		// Re-opening via a new reply un-resolves the thread so the user
-		// sees the new message (and a re-attached orphan).
-		resolved: false,
-		messages: [...existing.messages, newMessage]
-	};
-	doc.transact(() => commentsMap.set(threadId, updated), AGENT_ORIGIN);
+	// Field-level writes: the reply appends, the re-anchor touches only the
+	// anchor, and re-opening flips only the resolved flag — none of them can
+	// clobber a concurrent write to the rest of the thread.
+	doc.transact(() => {
+		appendThreadMessage(commentsMap, threadId, newMessage, { reopen: true });
+		setThreadResolved(commentsMap, threadId, false);
+		if (reanchored) setThreadAnchor(commentsMap, threadId, nextAnchor);
+	}, AGENT_ORIGIN);
 	return { ok: true, reanchored };
 }
 
 const commentDocTool = tool(
 	'comment_doc',
-	'Create a new comment thread anchored to existing text in a workspace document. Use it, at any autonomy level, as the announce thread before an edit proposal (see "Announce edits on a thread" in your instructions). Unprompted observation comments are allowed only at Medium or High autonomy, or when the user asks for a comment; at Low autonomy you may otherwise only reply on threads the user opened. The comment appears in the document gutter and does not change document text.',
+	'Create a new comment thread anchored to existing text in a workspace document. Use it, at any autonomy level, as the announce thread before an edit proposal (see "Announce edits on a thread" in your instructions). Unprompted observation comments are allowed only at Medium or High autonomy, or when I ask for a comment; at Low autonomy you may otherwise only reply on threads I opened. The comment appears in the document gutter and does not change document text.',
 	{
 		file_path: z
 			.string()
@@ -1103,15 +1240,6 @@ const commentDocTool = tool(
 			.describe(
 				'Zero-based occurrence to anchor when anchor_text appears more than once. Omit only when anchor_text is unique.'
 			),
-		proposed_edit: z
-			.object({
-				old_string: z.string(),
-				new_string: z.string()
-			})
-			.optional()
-			.describe(
-				'Optional concrete edit the user can approve from the comment. Do not use this at Medium autonomy unless the user directly asked for an edit.'
-			),
 		external_author: z
 			.string()
 			.optional()
@@ -1119,7 +1247,7 @@ const commentDocTool = tool(
 				'Name of an external commenter when importing feedback from outside the system. When set, the comment is attributed to that person rather than the agent.'
 			)
 	},
-	async ({ file_path, anchor_text, message, occurrence_index, proposed_edit, external_author }) => {
+	async ({ file_path, anchor_text, message, occurrence_index, external_author }) => {
 		if (isScratchPath(file_path)) {
 			return toolError('comment_doc cannot be used on scratch paths — only on workspace files.');
 		}
@@ -1154,7 +1282,7 @@ const commentDocTool = tool(
 					error: `occurrence_index ${occurrence} is out of range; anchor_text appears ${hits} time${hits === 1 ? '' : 's'}.`
 				};
 			}
-			threadId = createAgentCommentThread(doc, anchorText, occurrence, trimmedMessage, proposed_edit, external_author);
+			threadId = createAgentCommentThread(doc, anchorText, occurrence, trimmedMessage, external_author);
 			return { ok: true };
 		});
 
@@ -1165,12 +1293,12 @@ const commentDocTool = tool(
 
 const replyToCommentTool = tool(
 	'reply_to_comment',
-	'Reply on an existing comment thread. Route per the "Where a response goes" rules in your instructions. Write in the first person and keep it to a few sentences. Pass optional anchor_text to move the thread onto a new passage (re-attach after the original text was replaced by another accepted edit). You may attach proposed_edit for the user to approve later. To start a new thread, use comment_doc.',
+	'Reply on an existing comment thread. Route per the "Where a response goes" rules in your instructions. Write in the first person and keep it to a few sentences. When the reply says what you would change, propose that change with edit_doc on the same thread in this turn; a reply is never a substitute for the diff, and there is no separate approval step. Pass optional anchor_text to move the thread onto a new passage (re-attach after the original text was replaced by another accepted edit). To start a new thread, use comment_doc.',
 	{
 		file_path: z
 			.string()
 			.describe(
-				'Workspace-relative path (e.g. "drafts/chapter-1.md") or absolute path inside the workspace. Must be an existing file — comments can only be attached to a tab the user can open.'
+				'Workspace-relative path (e.g. "drafts/chapter-1.md") or absolute path inside the workspace. Must be an existing file — comments can only be attached to a tab I can open.'
 			),
 		thread_id: z
 			.string()
@@ -1186,7 +1314,7 @@ const replyToCommentTool = tool(
 			.string()
 			.optional()
 			.describe(
-				'Exact current document text to move this thread onto. Use when the original anchor was deleted (e.g. the user accepted a neighboring proposal) and you need to re-attach the conversation to the corresponding current passage. Prefer a short unique sentence or clause.'
+				'Exact current document text to move this thread onto. Use when the original anchor was deleted (e.g. I accepted a neighboring proposal) and you need to re-attach the conversation to the corresponding current passage. Prefer a short unique sentence or clause.'
 			),
 		occurrence_index: z
 			.number()
@@ -1195,18 +1323,9 @@ const replyToCommentTool = tool(
 			.optional()
 			.describe(
 				'Zero-based occurrence to anchor when anchor_text appears more than once. Required only when anchor_text is not unique.'
-			),
-		proposed_edit: z
-			.object({
-				old_string: z.string(),
-				new_string: z.string()
-			})
-			.optional()
-			.describe(
-				'Optional concrete edit you would propose if the user approves. `old_string` must match once in the current live markdown at the time of writing. The edit is NOT applied until the user clicks "Approve & propose edit" on your comment.'
 			)
 	},
-	async ({ file_path, thread_id, message, proposed_edit, anchor_text, occurrence_index }) => {
+	async ({ file_path, thread_id, message, anchor_text, occurrence_index }) => {
 		if (isScratchPath(file_path)) {
 			return toolError(
 				'reply_to_comment cannot be used on scratch paths — only on workspace tab files.'
@@ -1221,7 +1340,6 @@ const replyToCommentTool = tool(
 		let reanchored = false;
 		const outcome = await runCommentWrite(opened.tabId, (doc) => {
 			const result = applyReplyToComment(doc, thread_id, file_path, trimmedMessage, {
-				proposedEdit: proposed_edit,
 				anchorText: anchor_text,
 				occurrenceIndex: occurrence_index
 			});
@@ -1245,7 +1363,7 @@ const replyToCommentTool = tool(
  * put one back in the gutter. */
 const listThreadsTool = tool(
 	'list_threads',
-	'Return comment threads for a workspace tab, with every message in each. Defaults to open (visible) threads. The prompt shows only stubs. Set include_dismissed=true to read threads the user dismissed — they stay on the document, hidden from the gutter. Then review_action({ action: "reopen_thread", thread_id }) brings one back.',
+	'Return comment threads for a workspace tab, with every message in each. Defaults to open (visible) threads. The prompt shows only stubs. Set include_dismissed=true to read threads I dismissed — they stay on the document, hidden from the gutter. Then review_action({ action: "reopen_thread", thread_id }) brings one back.',
 	{
 		file_path: z
 			.string()
@@ -1254,7 +1372,7 @@ const listThreadsTool = tool(
 			.boolean()
 			.optional()
 			.describe(
-				'If true, also return dismissed (hidden) threads so you can reopen one. Use when the user asks about a thread that disappeared or wants one brought back.'
+				'If true, also return dismissed (hidden) threads so you can reopen one. Use when I ask about a thread that disappeared or want one brought back.'
 			)
 	},
 	async ({ file_path, include_dismissed }) => {
@@ -1262,6 +1380,9 @@ const listThreadsTool = tool(
 			return toolError('list_threads cannot be used on scratch paths — only on workspace tab files.');
 		}
 		const tabId = resolveTabFromPath(file_path);
+		if (tabId && isBinaryTabPath(tabId)) {
+			return binaryTabError(file_path);
+		}
 		if (!tabId || !isOpenTab(tabId)) {
 			return toolError(`${file_path} is not an open tab. Open it first via the file tree.`);
 		}
@@ -1273,9 +1394,7 @@ const listThreadsTool = tool(
 		let result = '';
 		try {
 			await direct.transact((document) => {
-				const commentsMap = getCommentsMap(document as unknown as Y.Doc);
-				const threads: CommentThread[] = [];
-				commentsMap.forEach((t) => threads.push(t));
+				const threads = readCommentThreads(document as unknown as Y.Doc);
 				result = formatListedThreads(file_path, threads, include_dismissed === true);
 			});
 		} finally {
@@ -1285,11 +1404,24 @@ const listThreadsTool = tool(
 	}
 );
 
-export const docToolsMcp = createSdkMcpServer({
-	name: 'docwriter-doc',
-	version: '0.0.1',
-	tools: [editDocTool, readDocTool, writeDocTool, commentDocTool, replyToCommentTool, listThreadsTool]
-});
+/** Build a FRESH `docwriter-doc` MCP server for one `query()` call.
+ *
+ * This must NOT be a module-level singleton. An in-process SDK MCP server
+ * binds to the query that connects it, so sharing one instance across
+ * overlapping renders leaves the second render without any document tools:
+ * `edit_doc` / `read_doc` / `comment_doc` and friends silently vanish from
+ * its tool list. The agent then falls back to the built-in `Edit`, which
+ * writes straight to the workspace file with no review round, no thread and
+ * no diff card — the user's document changes with nothing to accept or
+ * reject. (Its sibling `buildDocwriterMcp()` was already per-call, which is
+ * why only these six tools disappeared.) */
+export function buildDocToolsMcp() {
+	return createSdkMcpServer({
+		name: 'docwriter-doc',
+		version: '0.0.1',
+		tools: [editDocTool, readDocTool, writeDocTool, commentDocTool, replyToCommentTool, listThreadsTool]
+	});
+}
 
 /** SDK-namespaced tool names (what appears in stream events). */
 export const EDIT_DOC_TOOL_NAME = 'mcp__docwriter-doc__edit_doc';

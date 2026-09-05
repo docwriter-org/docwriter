@@ -409,7 +409,7 @@
 							<Cat size={13} strokeWidth={1.8} />
 						{/if}
 					</span>
-					<span class="header-label">{$activeReviewer && !paused ? $activeReviewer.name : 'Agent'}</span>
+					<span class="header-label">Agent</span>
 					<span class="header-status" aria-hidden="true">
 						{#if paused}
 							<span class="paused-label">Paused</span>
@@ -453,12 +453,12 @@
 				</button>
 				{@render dock()}
 				<button
-					class="header-pill-btn"
+					class="header-pill-btn icon-only"
 					onclick={() => (onNewSession ? onNewSession() : agentHistory.set([]))}
+					aria-label="New session"
 					use:tooltip={"New agent session. Starts a fresh conversation with the agent. Workspace files, comment threads, rules, hooks, and settings all stay the same. Only the agent's conversation history resets."}
 				>
 					<RotateCcw size={12} />
-					<span>New session</span>
 				</button>
 				{#if onCollapse}
 					<button

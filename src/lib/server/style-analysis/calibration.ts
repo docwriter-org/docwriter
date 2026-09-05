@@ -225,7 +225,7 @@ export async function answerCalibrationTrial(input: {
 				model: input.model,
 				proposition,
 				chosenText,
-				reason: input.choice === 'neither' ? 'The user rejected both generated passages and wrote an acceptable version.' : 'The user preferred the close variant that did not support the previous proposition.'
+				reason: input.choice === 'neither' ? 'I rejected both generated passages and wrote an acceptable version.' : 'I preferred the close variant that did not support the previous proposition.'
 			});
 			replaceStyleAgentPropositions(
 				profile.lastRun?.id ?? 'profile',

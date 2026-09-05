@@ -5,6 +5,10 @@ import * as Y from 'yjs';
 import type { Document } from '@hocuspocus/server';
 import {
 	getCommentsMap,
+	getThread,
+	putThread,
+	appendThreadMessage,
+	setThreadResolved,
 	serializeYDoc,
 	captureAnchorContext,
 	USER_ORIGIN
@@ -121,7 +125,7 @@ export const POST: RequestHandler = async ({ request }) => {
 				createdAt: now
 			};
 			const commentsMap = getCommentsMap(doc);
-			doc.transact(() => commentsMap.set(threadId, thread), USER_ORIGIN);
+			doc.transact(() => putThread(commentsMap, thread), USER_ORIGIN);
 			outcomeBox.threadId = threadId;
 			return { ok: true };
 		});
@@ -142,21 +146,22 @@ export const POST: RequestHandler = async ({ request }) => {
 			dev && body.author === 'agent' ? 'agent' : 'user';
 		const outcome = await mutateTabYDoc(tabId, (doc) => {
 			const commentsMap = getCommentsMap(doc);
-			const existing = commentsMap.get(threadId);
-			if (!existing) return { ok: false, error: 'Thread not found', status: 404 };
+			if (!getThread(commentsMap, threadId)) {
+				return { ok: false, error: 'Thread not found', status: 404 };
+			}
 			const reply: CommentMessage = {
 				id: 'msg_' + cryptoRandomId(),
 				author,
 				text: messageText,
 				timestamp: Date.now()
 			};
-			const updated: CommentThread = {
-				...existing,
-				// User replying to a resolved thread re-opens it.
-				resolved: false,
-				messages: [...existing.messages, reply]
-			};
-			doc.transact(() => commentsMap.set(threadId, updated), USER_ORIGIN);
+			// Append + reopen as field-level writes: a reply racing an agent
+			// write keeps both (the whole-object rewrite used to be
+			// last-writer-wins — one side's write silently vanished).
+			doc.transact(() => {
+				appendThreadMessage(commentsMap, threadId, reply);
+				setThreadResolved(commentsMap, threadId, false);
+			}, USER_ORIGIN);
 			return { ok: true };
 		});
 		if (!outcome.ok) throw error(outcome.status, outcome.error);
@@ -176,10 +181,10 @@ export const PATCH: RequestHandler = async ({ request }) => {
 
 	const outcome = await mutateTabYDoc(tabId, (doc) => {
 		const commentsMap = getCommentsMap(doc);
-		const existing = commentsMap.get(threadId);
-		if (!existing) return { ok: false, error: 'Thread not found', status: 404 };
-		const updated: CommentThread = { ...existing, resolved };
-		doc.transact(() => commentsMap.set(threadId, updated), USER_ORIGIN);
+		if (!getThread(commentsMap, threadId)) {
+			return { ok: false, error: 'Thread not found', status: 404 };
+		}
+		doc.transact(() => setThreadResolved(commentsMap, threadId, resolved), USER_ORIGIN);
 		return { ok: true };
 	});
 	if (!outcome.ok) throw error(outcome.status, outcome.error);

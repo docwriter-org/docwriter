@@ -40,6 +40,17 @@ import { existsSync, mkdirSync, readFileSync, watch as fsWatch } from 'node:fs';
 // Argument parsing (no external deps, pure stdlib)
 // ---------------------------------------------------------------------------
 const argv = process.argv.slice(2);
+
+// Subcommand: `docwriter doctor [workspace] [flags]` — inspect and repair a
+// workspace's .docwriter state (orphans, pending review rounds, threads,
+// seq gaps). See bin/docwriter-doctor.js.
+if (argv[0] === 'doctor') {
+	const { spawnSync } = await import('node:child_process');
+	const doctorPath = join(dirname(fileURLToPath(import.meta.url)), 'docwriter-doctor.js');
+	const res = spawnSync(process.execPath, [doctorPath, ...argv.slice(1)], { stdio: 'inherit' });
+	process.exit(res.status ?? 0);
+}
+
 let portArg = null;
 let hostArg = '127.0.0.1';
 let openBrowser = true;
@@ -140,6 +151,7 @@ Examples:
   docwriter --host --watch          # LAN + live reload
   docwriter --model opus            # force Opus for this session
   docwriter --new-session           # fresh conversation on start
+  docwriter doctor [dir]            # inspect/repair .docwriter state
 `.trim());
 	process.exit(0);
 }
@@ -198,7 +210,16 @@ const authLabel = hasApiKey ? 'api key' : 'claude.ai subscription';
 
 console.log(`\n  docwriter  ${origin}`);
 console.log(`  workspace  ${docwriterRoot}`);
+console.log(`  state      ${join(docwriterRoot, '.docwriter')}`);
 console.log(`  auth       ${authLabel}`);
+// State follows the workspace directory, not the shell's cwd. When both
+// have a .docwriter, someone inspecting "the database" will likely open
+// the wrong (stale) one — say so up front.
+if (resolve(process.cwd()) !== docwriterRoot && existsSync(join(process.cwd(), '.docwriter'))) {
+	console.log(
+		`  note       a different .docwriter exists in ${process.cwd()} — this session's state lives in ${join(docwriterRoot, '.docwriter')}`
+	);
+}
 if (modelArg) console.log(`  model      ${modelArg}`);
 if (watchFlag) console.log('  watch      on (file changes → browser reload)');
 if (restartFlag) console.log('  restart    on crash');

@@ -5,7 +5,7 @@
  * persistence error can't take down the request path that triggered it.
  */
 import { getDb } from './db';
-import type { Rule, AgentSettings, TabsState } from './runtime-state';
+import type { Rule, AgentSettings } from './runtime-state';
 import type { Hook } from './hooks-config';
 
 export interface ConversationSessionSummary {
@@ -71,24 +71,6 @@ export function dbUpsertConversationSession(
 			.run(id, provider, model, timestamp, timestamp, status);
 	} catch (err) {
 		logDbError('upsertConversationSession', err);
-	}
-}
-
-export function dbUpsertTabs(tabs: TabsState) {
-	try {
-		const db = getDb();
-		db.transaction(() => {
-			db.prepare('DELETE FROM tabs').run();
-			const insert = db.prepare(
-				'INSERT INTO tabs (tab_id, order_index, is_active) VALUES (?, ?, ?)'
-			);
-			for (let i = 0; i < tabs.order.length; i++) {
-				const tabId = tabs.order[i];
-				insert.run(tabId, i, tabId === tabs.active ? 1 : 0);
-			}
-		})();
-	} catch (err) {
-		logDbError('upsertTabs', err);
 	}
 }
 
@@ -216,13 +198,25 @@ export function dbReplaceRecentActions(
 	try {
 		const db = getDb();
 		db.transaction(() => {
+			// Preserve each label's existing used_at across the rewrite — the
+			// client round-trips the full list on every settings save, and
+			// stamping everything with `now` flattened all history into one
+			// timestamp per save.
+			const existing = new Map(
+				(
+					db.prepare('SELECT label, used_at FROM recent_actions').all() as Array<{
+						label: string;
+						used_at: number;
+					}>
+				).map((r) => [r.label, r.used_at])
+			);
 			db.prepare('DELETE FROM recent_actions').run();
 			if (!actions || actions.length === 0) return;
 			const now = Date.now();
 			const insert = db.prepare(
 				'INSERT INTO recent_actions (label, used_at) VALUES (?, ?)'
 			);
-			for (const a of actions) insert.run(a.label, now);
+			for (const a of actions) insert.run(a.label, existing.get(a.label) ?? now);
 		})();
 	} catch (err) {
 		logDbError('replaceRecentActions', err);
