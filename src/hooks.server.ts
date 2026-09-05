@@ -7,6 +7,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { getRules, getSessionId, setSessionId } from '$lib/server/runtime-state';
+import { stampWorkspaceDir } from '$lib/server/document-files';
 import { syncRulesToClaudeMemory } from '$lib/server/claude-memory';
 import { installBundledSkills } from '$lib/server/skills-install';
 import { createWsServer } from '$lib/server/ws-server';
@@ -39,6 +40,9 @@ if (!IS_HOSTED_LANDING && !globalAny[SERVER_INSTANCE_ID_KEY]) {
 	// Inside this guard so Vite HMR re-executions never re-run it: mid-session
 	// there may be a genuinely live pass this must not touch.
 	failInterruptedStyleRun();
+	// Name the workspace this .docwriter belongs to (and warn if the folder
+	// was moved/copied), so a stale state dir elsewhere is identifiable.
+	stampWorkspaceDir();
 }
 
 if (!IS_HOSTED_LANDING) {

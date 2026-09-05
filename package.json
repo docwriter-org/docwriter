@@ -24,6 +24,7 @@
 		"build:landing": "LANDING_DEPLOY=1 vite build",
 		"dev:landing": "LANDING_DEPLOY=1 vite dev",
 		"start": "node bin/docwriter.js",
+		"doctor": "node bin/docwriter-doctor.js",
 		"preview": "vite preview",
 		"prepare": "node scripts/setup-pdfjs.mjs && svelte-kit sync",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",

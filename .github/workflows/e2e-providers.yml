@@ -27,11 +27,17 @@ jobs:
   # One GitHub-hosted runner (container) per provider — fully isolated.
   provider-smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     strategy:
       fail-fast: false
       matrix:
         provider: [claude, openai, codex, cursor, pi]
+        include:
+          # GLM-5.2 on Together thinks for a minute or more before its first
+          # tool call some of the time; the smoke checks that the provider
+          # path works, not that Together answers within 90 s.
+          - provider: pi
+            agent_timeout_ms: 180000
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -47,7 +53,7 @@ jobs:
         env:
           E2E_PROVIDER: ${{ matrix.provider }}
           E2E_REQUIRE_CREDENTIALS: '1'
-          AGENT_TIMEOUT_MS: 90000
+          AGENT_TIMEOUT_MS: ${{ matrix.agent_timeout_ms || 90000 }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}

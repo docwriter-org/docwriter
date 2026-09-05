@@ -7,32 +7,54 @@ import {
 	tabFile,
 	ensureDocWriterDir
 } from '$lib/server/document-files';
-import { getTabsState, setTabsState } from '$lib/server/runtime-state';
 import { writeTextAtomic } from '$lib/server/file-utils';
-import { destroyTabState } from '$lib/server/ws-server';
+import {
+	destroyTabState,
+	unloadTabDoc,
+	flushTabMarkdownNow
+} from '$lib/server/ws-server';
+import {
+	tabHasPersistedUpdates,
+	migrateTabCaches
+} from '$lib/server/ydoc-persistence';
+import {
+	listOpenTabs,
+	openDocument,
+	closeDocument,
+	renameDocument,
+	setActiveDocument
+} from '$lib/server/documents-store';
+import { reconcileOpenTabs } from '$lib/server/tabs-reconcile';
 
-/** GET /api/tabs  →  { order, active, tabs: string[] }
+/** GET /api/tabs  →  { order, active, tabs, missing }
  *
- * The tabs list is the source of truth now (was: scan notes/). If a
- * tab's file no longer exists on disk (user deleted it externally), we
- * drop it from the list. */
+ * The documents table (status='open') is the source of truth. Tabs whose
+ * file is absent stay listed — badged via `missing` — and either self-heal
+ * from the CRDT log or, when there is no history to restore, drop after a
+ * grace window. See `tabs-reconcile.ts`; a transient absence during a
+ * `git pull` or an atomic save must never delete a tab. */
 export const GET: RequestHandler = async () => {
-	const state = reconcileTabsState();
+	const state = reconcileOpenTabs();
 	return json({
 		order: state.order,
 		active: state.active,
-		tabs: state.order
+		tabs: state.order,
+		missing: state.missing
 	});
 };
 
 /** POST /api/tabs  body: { id: string }  →  open or create a tab.
  *
  * `id` is a workspace-relative path (e.g. "drafts/chapter-1.md" or
- * "script.py"). If the file already exists, just registers the tab. If
- * it doesn't, creates the file (seeded with a heading for markdown,
- * empty for everything else) plus any missing parent directories.
+ * "script.py"). If the file exists, the document opens (a previously closed
+ * document reopens with its full history — text, threads, pending rounds,
+ * provenance). If the file is missing but the CRDT log has history, the
+ * file is RESTORED from the log — never truncated (opening a file that was
+ * mid-`git pull` used to create an empty file over it AND purge its entire
+ * history). Only a path with no file and no history creates a fresh empty
+ * file.
  *
- * Idempotent: opening an already-registered tab just marks it active. */
+ * Idempotent: opening an already-open tab just focuses it. */
 export const POST: RequestHandler = async ({ request }) => {
 	const body = await request.json();
 	const id = String(body?.id || '').trim();
@@ -43,24 +65,32 @@ export const POST: RequestHandler = async ({ request }) => {
 	const path = tabFile(id);
 	if (!existsSync(path)) {
 		mkdirSync(dirname(path), { recursive: true });
-		writeTextAtomic(path, '');
-		await destroyTabState(id);
+		if (tabHasPersistedUpdates(id)) {
+			// The file vanished externally but its Y.Doc history survives —
+			// write the log's content back to disk instead of blanking both.
+			flushTabMarkdownNow(id);
+		} else {
+			writeTextAtomic(path, '');
+		}
 	}
+	openDocument(id);
 
-	const state = reconcileTabsState();
-	if (!state.order.includes(id)) state.order.push(id);
-	state.active = id;
-	setTabsState(state);
-
-	return json({ ok: true, id, active: id, order: state.order });
+	const { order } = listOpenTabs();
+	return json({ ok: true, id, active: id, order });
 };
 
 /** DELETE /api/tabs?id=<path>[&deleteFile=true]
  *
- * Default: just close the tab (remove from `order`, leave the file on
- * disk). Opt in with `?deleteFile=true` to also unlink the file — that's
- * the destructive "delete file" action the user gets from the tab's
- * right-click menu or the FileTree context menu. */
+ * Default: close the tab — a status flip on the documents row. Everything
+ * (file, CRDT history, threads, pending rounds) is retained; reopening the
+ * file restores it all.
+ *
+ * `?deleteFile=true` is the destructive path (tab context menu / FileTree
+ * "delete file"): a JSON backup is written to `.docwriter/backups/`, then
+ * the file is unlinked and the documents row deleted — the yjs_updates
+ * foreign key cascades the whole log in the same statement, and the
+ * feedback-import ledger drops references to the deleted threads. Nothing
+ * can remain, by construction. */
 export const DELETE: RequestHandler = async ({ url }) => {
 	const id = url.searchParams.get('id') || '';
 	if (!isValidTabId(id)) throw error(400, 'Invalid tab id');
@@ -71,31 +101,31 @@ export const DELETE: RequestHandler = async ({ url }) => {
 	if (deleteFile) {
 		const path = tabFile(id);
 		if (existsSync(path)) unlinkSync(path);
-		// Drop the Hocuspocus Document + SQLite CRDT log for this tab.
-		// Otherwise reopening the same path would replay stale updates and
-		// resurrect the deleted content.
 		await destroyTabState(id);
+	} else {
+		closeDocument(id);
 	}
 
-	// Drop from order even if the file still exists (close semantics).
-	const stored = getTabsState();
-	const order = stored.order.filter((t) => t !== id);
-	let active = stored.active === id ? null : stored.active;
-	if (!active && order.length > 0) active = order[0];
-	setTabsState({ order, active });
+	const { order, active } = listOpenTabs();
 	return json({ ok: true, order, active });
 };
 
-/** PATCH /api/tabs  body: { id, newId? , active? }  →  rename or focus.
+/** PATCH /api/tabs  body: { id, newId?, active? }  →  rename or focus.
  *
- * `active: true` just switches focus. `newId` renames the file, the
- * agent shadow (if present), and updates order + active pointer. */
+ * `active: true` just switches focus. `newId` renames the file AND re-keys
+ * its persisted state in one transaction — the documents-row PK update
+ * cascades through the yjs_updates foreign key, so history, threads and
+ * provenance follow the file and the old id leaves nothing behind. The
+ * browser's carried-over Y.Doc then replays the SAME history under the new
+ * id, so the sync merge is a no-op (before the migration existed, the new
+ * id cold-started from a file seed while the client synced up its old copy:
+ * two independent histories of the same text, merging as duplicates). */
 export const PATCH: RequestHandler = async ({ request }) => {
 	const body = await request.json();
 	const id = String(body?.id || '').trim();
 	if (!isValidTabId(id)) throw error(400, 'Invalid tab id');
 
-	let state = reconcileTabsState();
+	const state = reconcileOpenTabs();
 
 	if (body?.newId) {
 		const newId = String(body.newId).trim();
@@ -105,36 +135,24 @@ export const PATCH: RequestHandler = async ({ request }) => {
 		const to = tabFile(newId);
 		if (!existsSync(from)) throw error(404, `Tab "${id}" not found`);
 		if (existsSync(to)) throw error(409, `"${newId}" already exists.`);
+		// Flush the latest committed text so the renamed file carries it,
+		// drop the live in-memory doc (clients reconnect under the new id),
+		// then move the file and re-key the persisted state.
+		flushTabMarkdownNow(id);
+		await unloadTabDoc(id);
 		mkdirSync(dirname(to), { recursive: true });
 		renameSync(from, to);
-		state.order = state.order.map((t) => (t === id ? newId : t));
-		if (state.active === id) state.active = newId;
-		setTabsState(state);
-		return json({ ok: true, id: newId, order: state.order, active: state.active });
+		renameDocument(id, newId);
+		migrateTabCaches(id, newId);
+		const { order, active } = listOpenTabs();
+		return json({ ok: true, id: newId, order, active });
 	}
 
 	if (body?.active === true) {
 		if (!state.order.includes(id)) throw error(404, `Tab "${id}" not found`);
-		state.active = id;
-		setTabsState(state);
+		setActiveDocument(id);
+		return json({ ok: true, id, order: state.order, active: id });
 	}
 
 	return json({ ok: true, id, order: state.order, active: state.active });
 };
-
-/** Reconcile the persisted tabs list against what's on disk. Drops any
- * entry whose file no longer exists (e.g. the user deleted it in their
- * terminal); resolves a dangling `active` pointer. */
-function reconcileTabsState() {
-	const stored = getTabsState();
-	const order = stored.order.filter((id) => existsSync(tabFile(id)));
-	let active = stored.active && order.includes(stored.active) ? stored.active : null;
-	if (!active && order.length > 0) active = order[0];
-
-	const cleaned = { order, active };
-	const changed =
-		cleaned.order.join('|') !== stored.order.join('|') ||
-		cleaned.active !== stored.active;
-	if (changed) setTabsState(cleaned);
-	return cleaned;
-}

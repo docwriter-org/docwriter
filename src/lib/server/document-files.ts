@@ -1,5 +1,5 @@
 import { join } from 'path';
-import { existsSync, mkdirSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 
 // DocWriter persistence layout:
 //
@@ -107,6 +107,73 @@ export function isKnownTextExtension(tabId: string): boolean {
 	return ext !== null && TEXT_EXTENSIONS.has(ext);
 }
 
+/** Extensions that are definitely NOT editable text documents. Everything
+ * else is treated as text: any file can be an open tab (LaTeX, Typst,
+ * bib files, extensionless notes…), so the binary gate is a DENYLIST —
+ * misclassifying a text file as binary would break editing it entirely,
+ * while the reverse merely risks the old seed-bytes-into-the-CRDT bug for
+ * genuinely binary formats. */
+const BINARY_EXTENSIONS = new Set([
+	'pdf',
+	'png',
+	'jpg',
+	'jpeg',
+	'gif',
+	'webp',
+	'ico',
+	'bmp',
+	'tif',
+	'tiff',
+	'heic',
+	'mp3',
+	'wav',
+	'ogg',
+	'mp4',
+	'mov',
+	'avi',
+	'mkv',
+	'zip',
+	'gz',
+	'tgz',
+	'bz2',
+	'xz',
+	'tar',
+	'7z',
+	'rar',
+	'docx',
+	'xlsx',
+	'pptx',
+	'odt',
+	'ods',
+	'odp',
+	'woff',
+	'woff2',
+	'ttf',
+	'otf',
+	'eot',
+	'bin',
+	'exe',
+	'dll',
+	'dylib',
+	'so',
+	'wasm',
+	'sqlite',
+	'db',
+	'pyc',
+	'class',
+	'jar',
+	'dmg',
+	'iso'
+]);
+
+/** True for tabs that have no editable text document (PDFs, images, media,
+ * archives). These are preview-only: never seeded into the CRDT log, never
+ * diffed into the prompt, rejected by the doc tools. */
+export function isBinaryTabPath(tabId: string): boolean {
+	const ext = extensionOf(tabId);
+	return ext !== null && BINARY_EXTENSIONS.has(ext);
+}
+
 function extensionOf(path: string): string | null {
 	const base = path.split('/').pop() || '';
 	const idx = base.lastIndexOf('.');
@@ -134,6 +201,37 @@ export function ensureAgentScratchDir() {
 	ensureDocWriterDir();
 	if (!existsSync(AGENT_SCRATCH_DIR)) {
 		mkdirSync(AGENT_SCRATCH_DIR, { recursive: true });
+	}
+}
+
+/** Write `.docwriter/workspace.json` naming the workspace this state dir
+ * belongs to. A `.docwriter` found on disk is otherwise anonymous — when a
+ * stale one lingers in some other directory (state follows the workspace
+ * argument, not the shell's cwd), whoever inspects it can now see which
+ * workspace it served and when it was last opened. Warns when the stamped
+ * root differs from the current one (the folder was moved or copied).
+ * Best-effort; called once per server boot. */
+export function stampWorkspaceDir() {
+	try {
+		ensureDocWriterDir();
+		const stampPath = join(DOCWRITER_DIR, 'workspace.json');
+		let prior: { workspaceRoot?: string } | null = null;
+		try {
+			prior = JSON.parse(readFileSync(stampPath, 'utf-8')) as { workspaceRoot?: string };
+		} catch {
+			// No stamp yet, or unreadable — either way we rewrite it below.
+		}
+		if (prior?.workspaceRoot && prior.workspaceRoot !== ROOT) {
+			console.warn(
+				`[docwriter] this .docwriter was last opened as workspace ${prior.workspaceRoot}; now opening as ${ROOT} (folder moved or copied?)`
+			);
+		}
+		writeFileSync(
+			stampPath,
+			JSON.stringify({ workspaceRoot: ROOT, lastOpenedAt: new Date().toISOString() }, null, 2)
+		);
+	} catch (err) {
+		console.error('[docwriter] workspace stamp failed:', err);
 	}
 }
 

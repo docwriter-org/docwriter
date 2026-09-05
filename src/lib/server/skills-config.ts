@@ -462,7 +462,7 @@ export function buildSkillsPromptBlock(): string | null {
 		'## Available skills',
 		'',
 		'Use these reusable skill instructions when they match the task. For OpenAI or Cursor provider runs, call `read_skill` with the skill name before following the full instructions.',
-		'If the user message is exactly or primarily `/<skill-name>` (for example `/plain-writing`), call `read_skill` for that skill and apply it to the current document/task.',
+		'If my message is exactly or primarily `/<skill-name>` (for example `/plain-writing`), call `read_skill` for that skill and apply it to the current document/task.',
 		'',
 		...enabled.map((skill) => `- ${skill.name}: ${skill.description}`)
 	].join('\n');

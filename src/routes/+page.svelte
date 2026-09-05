@@ -35,7 +35,9 @@
 	import { isStaleAcceptFollowup } from '$lib/shared/stale-accept';
 	import {
 		serializeFragment as plainTextFromFragment,
-		matchCommentAnchor
+		matchCommentAnchor,
+		readThreadValue,
+		type CommentsMap
 	} from '$lib/shared/ydoc-codec';
 
 	/** Turn a submit trigger into a compact description for the history
@@ -45,13 +47,14 @@
 	 * prompt the agent actually receives, not a vague "Submitted". */
 	function shortDescription(trigger: string | undefined): string {
 		if (!trigger) return 'Review documents & see if there’s anything to do';
-		// `The user flagged this passage as|with feedback "…"` — show the
-		// feedback text itself, quoted (U+201C/U+201D), and ellipsized when
-		// long. The HistoryPane italicizes descriptions that start with the
-		// curly-open-quote so user-voiced turns read as the user's words,
-		// not a framework label.
+		// `I flagged this passage as|with feedback "…"` — show the feedback
+		// text itself, quoted (U+201C/U+201D), and ellipsized when long. The
+		// HistoryPane italicizes descriptions that start with the
+		// curly-open-quote so user-voiced turns read as the author's words,
+		// not a framework label. Matchers accept BOTH voices: persisted
+		// rounds/history may carry the old third-person triggers.
 		const feedbackMatch = trigger.match(
-			/^The user flagged this passage (?:as|with feedback) "([^"]+)"/
+			/^(?:The user|I) flagged this passage (?:as|with feedback) "([^"]+)"/
 		);
 		if (feedbackMatch) {
 			const text = feedbackMatch[1];
@@ -62,13 +65,12 @@
 		if (/^Review the open files? against the following rules/.test(trigger)) {
 			return 'Apply rules';
 		}
-		// Reject-and-reconsider trigger starts with "The user just rejected"
-		if (/^The user clicked Accept on your previous edit/.test(trigger)) {
+		if (/^(?:The user|I) clicked Accept on your previous edit/.test(trigger)) {
 			return 'Rebase stale proposal';
 		}
-		if (/^The user just rejected/.test(trigger)) {
+		if (/^(?:The user|I) just rejected/.test(trigger)) {
 			const retryFeedbackMatch = trigger.match(
-				/The user explained why they rejected it:\n\n```text\n([\s\S]*?)\n```/
+				/(?:The user|I) explained why (?:they|I) rejected it:\n\n```text\n([\s\S]*?)\n```/
 			);
 			if (retryFeedbackMatch) {
 				const feedback = retryFeedbackMatch[1].trim().replace(/\s+/g, ' ');
@@ -91,7 +93,8 @@
 		renameTab,
 		reconcileServerInstance,
 		applyUpdateToTab,
-		pauseTabSync
+		pauseTabSync,
+		onSyncConnectionChange
 	} from '$lib/yjs-doc';
 	import type { Editor } from '@tiptap/core';
 	import {
@@ -206,6 +209,10 @@
 	 * still want the pulsing "new content" dot so the user notices the
 	 * new file appeared. Cleared when the user switches to that tab. */
 	let freshAgentTabs: Set<string> = $state(new Set());
+	/** Open tabs whose file is currently absent on disk (mid-git-pull,
+	 * external delete). Reported by GET /api/tabs; the TabBar badges them.
+	 * Content is safe in the CRDT log and restores on next load/flush. */
+	let missingFileTabs: Set<string> = $state(new Set());
 	// Local mirror of the cross-tab comment aggregate. The merged gutter only
 	// renders the active tab's cards, so awareness of comments on background
 	// tabs rides on the TabBar dots derived from this.
@@ -381,6 +388,7 @@
 			let active: string | null = data.active ?? null;
 			tabs.set(tabIds);
 			activeTab.set(active);
+			missingFileTabs = new Set(Array.isArray(data.missing) ? data.missing : []);
 			if (active && !isPdfPath(active)) getYDocForTab(active);
 			refreshPendingReviewTabs(tabIds);
 			// Attach background observers for every non-active tab so their
@@ -433,14 +441,17 @@
 	} | null = null;
 	let activeCommentsObserver: {
 		tabId: string;
-		map: Y.Map<CommentThread>;
+		map: CommentsMap;
 		handler: () => void;
 	} | null = null;
 
 	function syncActiveCommentThreads(tabId: string) {
 		if (tabId !== getCurrentActiveTab()) return;
 		const list: CommentThread[] = [];
-		getCommentsMapForTab(tabId).forEach((thread) => list.push(thread));
+		getCommentsMapForTab(tabId).forEach((value) => {
+			const thread = readThreadValue(value);
+			if (thread) list.push(thread);
+		});
 		list.sort((a, b) => a.createdAt - b.createdAt);
 		commentThreads.set(list);
 		syncAllTabsState();
@@ -461,8 +472,9 @@
 			// and counts/renders again.
 			const tabText = currentTabText(id);
 			const threads: CommentThread[] = [];
-			getCommentsMapForTab(id).forEach((t) => {
-				if (t.resolved) return;
+			getCommentsMapForTab(id).forEach((value) => {
+				const t = readThreadValue(value);
+				if (!t || t.resolved) return;
 				if (!t.messages.some((m) => m.author === 'agent')) return;
 				if (!anchorPresentInText(t.anchor, tabText)) return;
 				threads.push(t);
@@ -496,7 +508,7 @@
 			activeReviewObserver = null;
 		}
 		if (activeCommentsObserver?.tabId === tabId) {
-			activeCommentsObserver.map.unobserve(activeCommentsObserver.handler);
+			activeCommentsObserver.map.unobserveDeep(activeCommentsObserver.handler);
 			activeCommentsObserver = null;
 			commentThreads.set([]);
 			openCommentThreadId.set(null);
@@ -531,7 +543,10 @@
 
 		const commentsMap = getCommentsMapForTab(tabId);
 		const commentsHandler = () => syncActiveCommentThreads(tabId);
-		commentsMap.observe(commentsHandler);
+		// Deep: threads are nested Y.Maps now, so a message append or a
+		// resolved-flag flip mutates a CHILD type — a shallow observer only
+		// fires on top-level key changes and would miss them.
+		commentsMap.observeDeep(commentsHandler);
 		activeCommentsObserver = { tabId, map: commentsMap, handler: commentsHandler };
 		syncActiveCommentThreads(tabId);
 	}
@@ -547,7 +562,7 @@
 		const commentsMap = getCommentsMapForTab(tabId);
 		const handler = () => syncAllTabsState();
 		arr.observe(handler);
-		commentsMap.observe(handler);
+		commentsMap.observeDeep(handler);
 		bgTabObservers.set(tabId, { arr, commentsMap, arrHandler: handler, commentsHandler: handler });
 	}
 
@@ -555,7 +570,7 @@
 		const obs = bgTabObservers.get(tabId);
 		if (!obs) return;
 		obs.arr.unobserve(obs.arrHandler);
-		obs.commentsMap.unobserve(obs.commentsHandler);
+		obs.commentsMap.unobserveDeep(obs.commentsHandler);
 		bgTabObservers.delete(tabId);
 	}
 
@@ -680,7 +695,7 @@
 		await removeTab(id, /* deleteFile */ true);
 		// Wake the agent so it can react — e.g. drop references to the
 		// deleted file from whatever's still open.
-		void submit(`The user deleted the file "${id}". Update any open files that referenced it.`);
+		void submit(`I deleted the file "${id}". Update any open files that referenced it.`);
 	}
 
 	/** No open tabs: tear down review/editor state and show the empty pane. */
@@ -949,12 +964,12 @@
 		conservative: {
 			label: 'Low',
 			instruction:
-				'Low autonomy means you should act only when the user asks, or when something is clearly broken. Do not create proactive comments or edits.'
+				'Low autonomy means you should act only when I ask, or when something is clearly broken. Do not create proactive comments or edits.'
 		},
 		balanced: {
 			label: 'Medium',
 			instruction:
-				'Medium autonomy means you may proactively create new comment threads. Do not edit unless the user asks.'
+				'Medium autonomy means you may proactively create new comment threads. Do not edit unless I ask.'
 		},
 		aggressive: {
 			label: 'High',
@@ -982,10 +997,10 @@
 
 	function buildAudienceChangeMessage(audience: string): string {
 		if (!audience) {
-			return 'The user cleared the intended audience. Stop targeting a specific reader from now on.';
+			return 'I cleared the intended audience. Stop targeting a specific reader from now on.';
 		}
 		return (
-			`The user set the intended audience to: "${audience}". ` +
+			`I set the intended audience to: "${audience}". ` +
 			`Write for that reader from now on. Review the open documents with that audience in mind. ` +
 			`If a useful edit or comment follows, make it; otherwise keep the response brief.`
 		);
@@ -1137,7 +1152,7 @@
 		// If this is a feedback trigger, pull out the passage so the history
 		// entry shows both the label and what it was applied to.
 		const feedbackQuoteMatch = trigger?.match(
-			/^The user flagged this passage (?:as|with feedback) "[^"]+"\. Rewrite it to address that: "([\s\S]+)"$/
+			/^(?:The user|I) flagged this passage (?:as|with feedback) "[^"]+"\. (?:\[mode: \w+\] )?(?:Rewrite it to address that: |Rewrite it: |Current text of the passage, quoted verbatim from the document: )"([\s\S]+?)"(?:\. That quote is what is there now|$)/
 		);
 		pushHistory({
 			type: 'user_action',
@@ -1672,7 +1687,7 @@
 		const oldString = stale.operation?.type === 'edit' ? stale.operation.oldString : undefined;
 		const newString = intendedReplacement(stale);
 		const lines: string[] = [
-			`The user clicked Accept on your previous edit to \`${tabId}\`. Rebase it onto the current text and leave a pending reviewable diff — do not apply it to the live document. It could not be accepted as-is because it became stale:`,
+			`I clicked Accept on your previous edit to \`${tabId}\`. Rebase it onto the current text and leave a pending reviewable diff — do not apply it to the live document. It could not be accepted as-is because it became stale:`,
 			'',
 			`> ${reason}`,
 			'',
@@ -1693,7 +1708,7 @@
 		}
 		lines.push(
 			'',
-			'Find the current passage that now corresponds to that old_string — match on intent and nearby wording, not a string-equal match. Then call edit_doc with that current passage as old_string and the intended new_string (adapt it only if the surrounding sentence requires it). Leave that edit as a pending proposal so the user can see the rebased diff and Accept it.'
+			'Find the current passage that now corresponds to that old_string — match on intent and nearby wording, not a string-equal match. Then call edit_doc with that current passage as old_string and the intended new_string (adapt it only if the surrounding sentence requires it). Leave that edit as a pending proposal so I can see the rebased diff and Accept it.'
 		);
 		if (thread) {
 			const transcript = thread.messages
@@ -1775,6 +1790,10 @@
 		stale?: boolean;
 		staleRoundId?: string | null;
 		staleRoundKind?: string | null;
+		/** Batch accepts skip stale rounds instead of failing wholesale;
+		 * these stay pending for individual accept (→ agent rebase) or
+		 * dismissal. */
+		skippedStale?: Array<{ id: string; reason: string }>;
 	};
 
 	/** Shared accept/reject transport. The ordering here is the undo contract:
@@ -1790,7 +1809,13 @@
 	): Promise<{ res: Response; data: ReviewActionResponse }> {
 		const synced = await editorRef?.flushAutosave();
 		if (synced === false) {
-			throw new Error('Latest local edits are still syncing to the server. Try again in a moment.');
+			if (action === 'accept_rounds') {
+				throw new Error('Latest local edits are still syncing to the server. Try again in a moment.');
+			}
+			// Reject doesn't apply text ops, so it stays available even when
+			// the sync gate can't settle — a wedged WebSocket used to freeze
+			// the entire review surface behind this throw.
+			console.warn(`[docwriter] proceeding with ${action} while local edits are unsynced`);
 		}
 
 		const resumeTabSync = pauseTabSync(tabId);
@@ -1811,6 +1836,18 @@
 				// edit and the default scroll yanked the user away from the
 				// card they just clicked.
 				editorRef?.focusEditor({ scrollIntoView: false });
+			}
+			if (res.ok && data?.ok && (data.skippedStale?.length ?? 0) > 0) {
+				const n = data.skippedStale!.length;
+				pushHistory({
+					type: 'notification',
+					timestamp: Date.now(),
+					text:
+						n === 1
+							? '1 proposal was stale and stays pending — accept it individually to rebase it, or dismiss it.'
+							: `${n} proposals were stale and stay pending — accept them individually to rebase, or dismiss them.`,
+					priority: 'medium'
+				});
 			}
 			return { res, data };
 		} finally {
@@ -2039,18 +2076,18 @@
 	): string {
 		const rejectedDiff = unifiedLineDiff(rejected.beforeMd, rejected.afterMd, 1);
 		const lines: string[] = [
-			`The user just rejected your previous edit on \`${tabId}\`:`,
+			`I just rejected your previous edit on \`${tabId}\`:`,
 			'',
 			'```diff',
 			rejectedDiff,
 			'```',
 			'',
-			"Do not make that same change again. Take this rejection as feedback on what the user wants different in that area of the file."
+			'Do not make that same change again. Take this rejection as feedback on what I want different in that area of the file.'
 		];
 		if (feedback) {
 			lines.push(
 				'',
-				'User provided this feedback:',
+				'I explained why I rejected it:',
 				'',
 				'```text',
 				feedback,
@@ -2317,7 +2354,7 @@
 			'',
 			proposal.plan,
 			'',
-			'The user rejected it with this feedback:',
+			'I rejected it with this feedback:',
 			'',
 			feedback,
 			'',
@@ -2667,6 +2704,7 @@
 	let fileTreeHeight = $state(280);
 	let leftPaneInnerEl: HTMLDivElement | null = $state(null);
 	let removeSidebarResizeListener = () => {};
+	let stopSyncConnectionWatch: () => void = () => {};
 	let didInitFileTreeHeight = false;
 
 	function maxFileTreeHeight() {
@@ -2794,6 +2832,21 @@
 			window.removeEventListener('resize', clampSidebarPanels);
 		};
 
+		// A tab whose WebSocket stays down is otherwise invisible: every
+		// button still works, but keystrokes stop reaching the server and the
+		// agent's proposals never arrive — the agent reports an edit that the
+		// document never shows. Say so where the author is looking.
+		stopSyncConnectionWatch = onSyncConnectionChange(({ tabId, connected }) => {
+			pushHistory({
+				type: 'notification',
+				timestamp: Date.now(),
+				text: connected
+					? `Reconnected to the server for ${tabId}.`
+					: `Lost the live connection to the server for ${tabId}. Typing and the agent's proposals will not sync until it reconnects — check the terminal running DocWriter, then reload if this persists.`,
+				priority: connected ? 'low' : 'high'
+			});
+		});
+
 		// HMR safety: if the module was hot-reloaded during a render, the
 		// store could still say we're rendering. Clamp it to false so the
 		// submit button unlocks.
@@ -2896,6 +2949,7 @@
 	});
 
 	onDestroy(() => {
+		stopSyncConnectionWatch();
 		if (activeReviewObserver) {
 			activeReviewObserver.arr.unobserve(activeReviewObserver.handler);
 			activeReviewObserver = null;
@@ -3490,6 +3544,7 @@
 								onRename={renameTabAction}
 								pendingTabs={mergedPendingTabs}
 								onDropFile={handleDropFiles}
+								missingTabs={missingFileTabs}
 							/>
 						</div>
 						{#if docLoaded && activeTabFilePath && !activeTabIsPdf}

@@ -19,5 +19,7 @@ export function matchesStaleAcceptApply(
 }
 
 export function isStaleAcceptFollowup(trigger: string | undefined): boolean {
-	return /^The user clicked Accept on your previous edit/.test(trigger ?? '');
+	// Both voices: persisted rounds/history may carry the old third-person
+	// trigger ("The user clicked Accept…"); new triggers speak as the author.
+	return /^(?:The user|I) clicked Accept on your previous edit/.test(trigger ?? '');
 }

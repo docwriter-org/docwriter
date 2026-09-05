@@ -47,7 +47,6 @@
 		openThreadId: string | null;
 		onOpen: (threadId: string) => void;
 		onClose: () => void;
-		onApprove: (thread: CommentThread, messageId: string) => void;
 		/** Fires after a user reply is successfully posted to a thread. Used
 		 * by TiptapEditor to wake the agent so it can respond on the same
 		 * thread. The thread argument is the *post-reply* state. */
@@ -88,7 +87,6 @@
 		openThreadId,
 		onOpen,
 		onClose,
-		onApprove,
 		onReply,
 		onAcceptRound,
 		onRejectRound,
@@ -103,8 +101,16 @@
 		newAwaitingThreadId
 	}: Props = $props();
 
-	const BATCH_BAR_HEIGHT = 36;
-	let showBatchBar = $derived(!muted && rounds.length > 0 && !!(onAcceptAll || onRejectAll));
+	/** Offset of the batch bar from the top of the gutter (mirrors its
+	 * `top`). Its height is measured rather than assumed: the bar wraps to a
+	 * second row in a narrow gutter with a large count, and a hard-coded
+	 * height would let the first card slide under it. */
+	const BATCH_BAR_TOP = 6;
+	let batchBarHeight = $state(0);
+	/** The batch bar earns its place only from two suggestions up: a single
+	 * card already carries its own Accept and Reject, so "Accept all (1)"
+	 * above it is a second button for the same action. */
+	let showBatchBar = $derived(!muted && rounds.length > 1 && !!(onAcceptAll || onRejectAll));
 	let reapply = $derived($staleAcceptUi?.tabId === tabId ? $staleAcceptUi : null);
 	function isReapplyingThread(threadId: string): boolean {
 		return !!reapply?.threadId && reapply.threadId === threadId;
@@ -123,6 +129,10 @@
 	// ── Group an agent's edits under the feedback thread that triggered them ──
 	// Rounds tagged with `feedbackThreadId` matching an open thread are shown
 	// INSIDE that thread's card (numbered), not as separate edit cards.
+	/** Cards whose passage is no longer in the document, pinned at the top
+	 * of the gutter by the layout effect. The card says so, because a card
+	 * far from any text otherwise reads as a bug. */
+	let parkedIds = $state<Set<string>>(new Set());
 	let openThreadIds = $derived(new Set(threads.filter((t) => !t.resolved).map((t) => t.id)));
 	let roundsByThread = $derived.by(() => {
 		const m = new Map<string, MaterializedPendingReviewRound[]>();
@@ -228,6 +238,53 @@
 			awaitTimers.delete(threadId);
 		}
 	}
+	/** Scroll the editor so a card is not hidden under the fixed agent dock.
+	 * The dock floats over the lower part of the gutter column, so a card
+	 * anchored to a passage in the lower half of the view — or the edits
+	 * section and reply box of an open card — can sit fully behind it while
+	 * every other signal (the agent's log entry, the tab badge) says a
+	 * proposal is there. Runs after layout settles. */
+	function revealCard(cardId: string) {
+		if (typeof window === 'undefined') return;
+		requestAnimationFrame(() =>
+			requestAnimationFrame(() => {
+				if (!gutterEl) return;
+				const el = gutterEl.querySelector<HTMLElement>(`[data-card-id="${CSS.escape(cardId)}"]`);
+				const wrapper = gutterEl.closest<HTMLElement>('.tiptap-wrapper');
+				if (!el || !wrapper) return;
+				const reserved =
+					parseFloat(
+						getComputedStyle(document.documentElement).getPropertyValue('--dock-reserved-bottom')
+					) || 0;
+				const wrapperRect = wrapper.getBoundingClientRect();
+				const dockTop = window.innerHeight - reserved;
+				const visibleBottom = Math.min(wrapperRect.bottom, dockTop);
+				const rect = el.getBoundingClientRect();
+				if (rect.bottom > visibleBottom && rect.height < visibleBottom - wrapperRect.top) {
+					wrapper.scrollTop += rect.bottom - visibleBottom + 12;
+				} else if (rect.top < wrapperRect.top) {
+					wrapper.scrollTop -= wrapperRect.top - rect.top + 12;
+				}
+			})
+		);
+	}
+	// An open card must be readable end to end: its edits section and reply
+	// box sit below the messages, which is exactly the part the dock covers.
+	// The open id can precede its thread: a comment the author just made is
+	// opened before the server's thread syncs back, so the reveal waits for
+	// the thread and runs once per opening.
+	let revealedOpenId: string | null = null;
+	$effect(() => {
+		if (!openThreadId) {
+			revealedOpenId = null;
+			return;
+		}
+		if (revealedOpenId === openThreadId) return;
+		if (!threads.some((t) => t.id === openThreadId)) return;
+		revealedOpenId = openThreadId;
+		revealCard(openThreadId);
+	});
+
 	let renderWasActive = false;
 	const unsubscribeRendering = isRendering.subscribe((value) => {
 		if (value) {
@@ -240,12 +297,15 @@
 			if (awaitingAgent[tid]) clearAwaiting(tid);
 		}
 	});
-	// Clear the waiting indicator as soon as the agent's response lands — a new
-	// agent-authored message in the thread, or a new edit grouped under it.
+	// Clear the waiting indicator when the agent's edit lands on the thread.
+	// While a render is active, an agent *message* alone doesn't clear: the
+	// agent replies first (explanation), then calls edit_doc (the proposal).
+	// Clearing on the reply hides the spinner while the edit is still in
+	// flight. The render-end handler (above) sweeps any remaining awaiting.
 	$effect(() => {
-		// Touch reactive inputs so this re-runs when the thread or its edits change.
 		threads;
 		roundsByThread;
+		const rendering = get(isRendering);
 		for (const tid of Object.keys(awaitingAgent)) {
 			if (!awaitingAgent[tid]) continue;
 			const base = awaitBaseline.get(tid);
@@ -255,7 +315,35 @@
 				(m) => m.author === 'agent' && !base.msgIds.has(m.id)
 			);
 			const newRound = (roundsByThread.get(tid) ?? []).some((r) => !base.roundIds.has(r.id));
-			if (newAgentMsg || newRound) clearAwaiting(tid);
+			if (newRound) {
+				clearAwaiting(tid);
+				revealCard(tid);
+			} else if (newAgentMsg && !rendering) {
+				clearAwaiting(tid);
+			}
+		}
+	});
+	// A proposal that lands on a thread the author is not looking at (the
+	// agent opened its own announce thread instead of using the feedback
+	// thread) stacks below the open card, where the dock hides it. Bring it
+	// into view when it arrives during a turn the author is waiting on.
+	const seenRoundIds = new Set<string>();
+	let seenRoundsPrimed = false;
+	$effect(() => {
+		const current = rounds;
+		if (!seenRoundsPrimed) {
+			for (const r of current) seenRoundIds.add(r.id);
+			seenRoundsPrimed = true;
+			return;
+		}
+		const waiting = Object.values(awaitingAgent).some(Boolean);
+		for (const r of current) {
+			if (seenRoundIds.has(r.id)) continue;
+			seenRoundIds.add(r.id);
+			const tid = r.feedbackThreadId;
+			if (!waiting || !tid || awaitingAgent[tid]) continue;
+			if (document.activeElement instanceof HTMLTextAreaElement) continue;
+			revealCard(openThreadIds.has(tid) ? tid : editCardId(r.id));
 		}
 	});
 	$effect(() => {
@@ -387,19 +475,17 @@
 			const range = editPos == null ? resolveThreadRange(editor, thread) : null;
 			const anchorPos = editPos ?? range?.from ?? null;
 			if (anchorPos == null) {
-				// Passage gone (neighboring accept wiped it) but the thread
-				// still has a stale proposal — park the card at the top so
-				// the user can click Accept and ask the agent to re-attach.
-				// Keep it parked while a stale Accept is in flight even if
-				// the pending row already dropped, so the thinking state stays.
-				if (threadEdits.length > 0 || isReapplyingThread(thread.id)) {
-					parked.push({
-						id: thread.id,
-						kind: 'comment',
-						expanded: thread.id === openThreadId || isReapplyingThread(thread.id),
-						editCount: threadEdits.length
-					});
-				}
+				// Passage gone (neighboring accept wiped it, external edit,
+				// whitespace-anchored insert) — park the card at the top so
+				// the thread stays visible and dismissable. A skipped card
+				// used to leave actionable state with no UI at all: a pending
+				// diff in the doc and nothing anywhere to click.
+				parked.push({
+					id: thread.id,
+					kind: 'comment',
+					expanded: thread.id === openThreadId || isReapplyingThread(thread.id),
+					editCount: threadEdits.length
+				});
 				continue;
 			}
 			try {
@@ -419,14 +505,14 @@
 			for (const round of looseEditRounds) {
 				const pos = resolveRoundAnchorPos(editor, round, baseline);
 				if (pos == null) {
-					if (round.stale || isReapplyingRound(round.id)) {
-						parked.push({
-							id: editCardId(round.id),
-							kind: 'edit',
-							expanded: isReapplyingRound(round.id),
-							editCount: 0
-						});
-					}
+					// Unpositionable — park, never skip: every pending round
+					// must render somewhere actionable (Reject at minimum).
+					parked.push({
+						id: editCardId(round.id),
+						kind: 'edit',
+						expanded: isReapplyingRound(round.id),
+						editCount: 0
+					});
 					continue;
 				}
 				try {
@@ -443,23 +529,24 @@
 				}
 			}
 		} else if (!muted) {
+			// No baseline to resolve positions against — park every loose
+			// round rather than hiding actionable state.
 			for (const round of looseEditRounds) {
-				if (round.stale || isReapplyingRound(round.id)) {
-					parked.push({
-						id: editCardId(round.id),
-						kind: 'edit',
-						expanded: isReapplyingRound(round.id),
-						editCount: 0
-					});
-				}
+				parked.push({
+					id: editCardId(round.id),
+					kind: 'edit',
+					expanded: isReapplyingRound(round.id),
+					editCount: 0
+				});
 			}
 		}
 		entries.sort((a, b) => a.top - b.top);
+		parkedIds = new Set(parked.map((c) => c.id));
 		// Collision stack: each card claims [top, top + height + gap]; if
 		// the next card's natural top falls inside that, push it down to
 		// sit right below the previous one. Reserve room for the batch bar.
 		// Parked (detached/stale) cards sit at the top so they stay clickable.
-		let runningBottom = showBatchBar ? BATCH_BAR_HEIGHT + CARD_GAP : -Infinity;
+		let runningBottom = showBatchBar ? BATCH_BAR_TOP + batchBarHeight + CARD_GAP : -Infinity;
 		const next = new Map<string, number>();
 		for (const card of parked) {
 			const h = cardHeightFor(card.id, card.kind, card.expanded, card.editCount);
@@ -504,6 +591,7 @@
 		baseline;
 		muted;
 		showBatchBar;
+		batchBarHeight;
 		reapply;
 		requestAnimationFrame(() => recomputePositions());
 	});
@@ -541,23 +629,31 @@
 	);
 
 	// Keep the newest message visible: attached to the open card's message
-	// list (use:followNewMessages), scroll to the bottom when a message
-	// lands — the user's own reply syncing back, or the agent's response.
-	// Counts are remembered per thread across open/close so the first open
-	// of a card doesn't jump; only growth after that (including messages
-	// that arrived while the card was closed) scrolls.
+	// list (use:followNewMessages). The list is capped in height and
+	// scrolls, so a card opens showing its END — the latest reply and the
+	// edits section below it — not the oldest message; a long first comment
+	// (a reviewer's paragraph) used to fill the whole box and hide the
+	// agent's answer and the proposal. The open-time scroll is instant;
+	// growth after that (a reply syncing back, the agent's response,
+	// messages that arrived while the card was closed) scrolls smoothly.
 	const seenMsgCounts = new Map<string, number>();
 	function followNewMessages(node: HTMLElement, params: { id: string; count: number }) {
 		const track = ({ id, count }: { id: string; count: number }) => {
 			const prev = seenMsgCounts.get(id);
 			seenMsgCounts.set(id, count);
-			if (prev !== undefined && count > prev) {
+			if (prev === undefined) {
+				// First open: jump to the bottom so the latest message is visible.
+				requestAnimationFrame(() => { node.scrollTop = node.scrollHeight; });
+			} else if (count > prev) {
 				requestAnimationFrame(() =>
 					node.scrollTo({ top: node.scrollHeight, behavior: 'smooth' })
 				);
 			}
 		};
 		track(params);
+		requestAnimationFrame(() => {
+			node.scrollTop = node.scrollHeight;
+		});
 		return { update: track };
 	}
 
@@ -631,28 +727,25 @@
 
 <div class="comment-gutter" bind:this={gutterEl}>
 	{#if showBatchBar}
-		<div class="gutter-batch-bar">
-			<span class="batch-count">{rounds.length} suggestion{rounds.length === 1 ? '' : 's'}</span>
-			<div class="batch-actions">
-				<button
-					class="batch-btn reject"
-					type="button"
-					onclick={() => onRejectAll?.()}
-					disabled={!onRejectAll}
-					use:tooltip={`Reject all ${rounds.length} pending suggestion${rounds.length === 1 ? '' : 's'}`}
-				>
-					<X size={11} /> Reject all
-				</button>
-				<button
-					class="batch-btn accept"
-					type="button"
-					onclick={() => onAcceptAll?.()}
-					disabled={!onAcceptAll}
-					use:tooltip={`Accept all ${rounds.length} pending suggestion${rounds.length === 1 ? '' : 's'}`}
-				>
-					<Check size={11} /> Accept all
-				</button>
-			</div>
+		<div class="gutter-batch-bar" bind:clientHeight={batchBarHeight}>
+			<button
+				class="batch-btn reject"
+				type="button"
+				onclick={() => onRejectAll?.()}
+				disabled={!onRejectAll}
+				use:tooltip={`Reject all ${rounds.length} pending suggestion${rounds.length === 1 ? '' : 's'}`}
+			>
+				<X size={11} /> Reject all ({rounds.length})
+			</button>
+			<button
+				class="batch-btn accept"
+				type="button"
+				onclick={() => onAcceptAll?.()}
+				disabled={!onAcceptAll}
+				use:tooltip={`Accept all ${rounds.length} pending suggestion${rounds.length === 1 ? '' : 's'}`}
+			>
+				<Check size={11} /> Accept all ({rounds.length})
+			</button>
 		</div>
 	{/if}
 	{#each visibleThreads as thread (thread.id)}
@@ -674,6 +767,9 @@
 				onOpen(thread.id);
 			}}
 		>
+			{#if parkedIds.has(thread.id)}
+				<div class="parked-note">This passage is no longer in the document.</div>
+			{/if}
 			{#if isOpen}
 				{@const tEdits = editsForThread(thread.id)}
 				{#if tEdits.length > 0}
@@ -730,15 +826,6 @@
 								<span class="timestamp">{formatTimestamp(message.timestamp)}</span>
 							</span>
 							<div class="message-body">{@html renderMarkdown(message.text)}</div>
-							{#if message.author === 'agent' && message.proposedEdit}
-								<button
-									class="approve-btn"
-									onclick={() => onApprove(thread, message.id)}
-								>
-									<Sparkles size={11} />
-									Approve & propose edit
-								</button>
-							{/if}
 						</div>
 					{/each}
 				</div>
@@ -1000,61 +1087,69 @@
 		overflow: visible;
 		font-family: 'Inter', -apple-system, sans-serif;
 	}
+	/* Two real buttons, right-aligned to the cards' edge. No container: a
+	 * solid primary anchors the pair, so neither button floats on the
+	 * column's grey the way loose text did. Every container tried here
+	 * either stranded the actions across a gap of its own background or
+	 * stacked a second competing pill under the editor chrome.
+	 *
+	 * The count lives inside each button rather than in a separate label
+	 * (GitHub's batched "Commit suggestions"), which is what removed the
+	 * third fragment that kept needing somewhere to live. Both buttons name
+	 * the whole action - "Accept all (2)", not "Accept 2" - so neither can
+	 * be misread as applying to some subset. */
 	.gutter-batch-bar {
 		position: absolute;
-		top: 0;
-		left: 10px;
+		top: 6px;
 		right: 10px;
 		z-index: 4;
 		display: flex;
+		flex-wrap: wrap;
 		align-items: center;
-		justify-content: space-between;
-		gap: 8px;
-		height: 32px;
-		padding: 0 8px;
-		background: var(--bg-elevated);
-		border: 1px solid var(--border-light);
-		border-radius: 8px;
-		box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
-	}
-	.batch-count {
-		font-size: 11px;
-		font-weight: 600;
-		color: var(--text-faint);
-		white-space: nowrap;
-	}
-	.batch-actions {
-		display: flex;
-		align-items: center;
-		gap: 4px;
+		justify-content: flex-end;
+		gap: 6px;
 	}
 	.batch-btn {
 		display: inline-flex;
 		align-items: center;
-		gap: 3px;
-		padding: 3px 8px;
+		gap: 5px;
+		height: 26px;
+		padding: 0 10px 0 8px;
+		border-radius: 7px;
 		font: inherit;
-		font-size: 11px;
+		font-size: 12px;
 		font-weight: 500;
-		border-radius: 5px;
-		cursor: pointer;
-		border: 1px solid var(--border-light);
-		background: transparent;
-		color: var(--text-secondary);
 		white-space: nowrap;
+		cursor: pointer;
+		transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
 	}
-	.batch-btn:hover:not(:disabled) {
-		background: var(--bg-hover);
+	/* Secondary: the same treatment as the AI-provenance pill, so it reads as
+	 * a sibling control rather than a stray bit of text. */
+	.batch-btn.reject {
+		color: var(--text-faint);
+		background: var(--bg-elevated);
+		border: 1px solid var(--border-light);
+		box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+	}
+	.batch-btn.reject:hover:not(:disabled) {
 		color: var(--text);
+		background: var(--bg-hover);
+		border-color: var(--border);
 	}
+	/* Primary: solid accent, matching `.accept-all-btn` inside a thread card.
+	 * Accepting a batch is a real action people want to reach for, so it gets
+	 * a real button — the app already spells "accept all" this way one level
+	 * down, and a faint version of it just disappeared into the column. */
 	.batch-btn.accept {
-		background: var(--accent);
-		border-color: var(--accent);
 		color: #fff;
+		font-weight: 600;
+		background: var(--accent);
+		border: 1px solid var(--accent);
+		box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
 	}
 	.batch-btn.accept:hover:not(:disabled) {
 		background: color-mix(in srgb, var(--accent) 88%, black);
-		color: #fff;
+		border-color: color-mix(in srgb, var(--accent) 88%, black);
 	}
 	.batch-btn:disabled {
 		opacity: 0.5;
@@ -1165,6 +1260,14 @@
 		padding: 0 6px;
 		border-radius: 9px;
 	}
+	.parked-note {
+		margin-bottom: 8px;
+		padding: 3px 8px;
+		font-size: 11px;
+		color: var(--text-muted);
+		background: var(--bg-surface);
+		border-radius: 6px;
+	}
 	.card-messages {
 		max-height: 300px;
 		overflow-y: auto;
@@ -1267,26 +1370,6 @@
 	}
 	.message-body :global(.md-bullet) {
 		display: block;
-	}
-	.approve-btn {
-		grid-column: 1 / 3;
-		justify-self: start;
-		display: inline-flex;
-		align-items: center;
-		gap: 4px;
-		margin-top: 5px;
-		padding: 3px 7px;
-		font: inherit;
-		font-size: 10.5px;
-		font-weight: 500;
-		background: var(--accent);
-		color: white;
-		border: 1px solid var(--accent);
-		border-radius: 4px;
-		cursor: pointer;
-	}
-	.approve-btn:hover {
-		background: color-mix(in srgb, var(--accent) 88%, black);
 	}
 	.reply-input {
 		resize: none;

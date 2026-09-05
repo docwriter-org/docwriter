@@ -9,6 +9,8 @@ import {
 	runTabWrite,
 	runCommentWrite,
 	setActiveFeedbackThreadId,
+	getActiveFeedbackThreadId,
+	describeTabWrite,
 	countOccurrences,
 	getHocuspocus,
 	ensureWorkspaceTabOpen,
@@ -29,6 +31,8 @@ import * as Y from 'yjs';
 import {
 	serializeYDoc,
 	getCommentsMap,
+	putThread,
+	readCommentThreads,
 	AGENT_ORIGIN,
 	normalizeTypography,
 	captureAnchorContext,
@@ -162,6 +166,10 @@ export function buildToolDefinitions(): ToolDefinition[] {
 				if (!opened.ok) return toToolResult(opened.error);
 				const tabId = opened.tabId;
 
+				// An explicit thread_id wins over the render-level default for
+				// this one call; restore the prior value after so the targeting
+				// cannot leak into (or blank out for) later edits this turn.
+				const priorThreadId = getActiveFeedbackThreadId();
 				if (typeof thread_id === 'string' && thread_id) {
 					setActiveFeedbackThreadId(thread_id);
 				}
@@ -170,7 +178,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
 				const result = await runTabWrite(tabId, 'agent_edit_doc', (currentMd) => {
 					const hits = countOccurrences(currentMd, normOld);
 					if (hits === 0) {
-						failure = `old_string not found in ${path}. The user may have edited this area — read_doc to see the current state and retry.`;
+						failure = `old_string not found in ${path}. The text may have changed since your last read — read_doc to see the current state and retry.`;
 						return null;
 					}
 					if (hits > 1 && !replaceAll) {
@@ -187,25 +195,19 @@ export function buildToolDefinitions(): ToolDefinition[] {
 					};
 				});
 				if (typeof thread_id === 'string' && thread_id) {
-					setActiveFeedbackThreadId(null);
+					setActiveFeedbackThreadId(priorThreadId);
 				}
 				if (failure) return { isError: true, content: [{ type: 'text' as const, text: failure }] };
 				if ('error' in result) {
 					return { isError: true, content: [{ type: 'text' as const, text: `edit_doc failed: ${result.error}` }] };
 				}
 				if (result.discarded) {
-					return { content: [{ type: 'text' as const, text: `Edit discarded for ${path}: the user resolved this feedback thread.` }] };
+					return { content: [{ type: 'text' as const, text: `Edit discarded for ${path}: this feedback thread was resolved.` }] };
 				}
 				return {
 					content: [{
 						type: 'text' as const,
-						text: result.committed
-							? replaceAll
-								? `Edit applied and accepted on ${path} (replaced ${appliedHits} occurrence${appliedHits === 1 ? '' : 's'}). The user already clicked Accept — do not leave another proposal.`
-								: `Edit applied and accepted on ${path}. The user already clicked Accept — do not leave another proposal.`
-							: replaceAll
-								? `Edit applied to ${path} (replaced ${appliedHits} occurrence${appliedHits === 1 ? '' : 's'}).`
-								: `Edit applied to ${path}.`
+						text: describeTabWrite(path, result, { kind: 'edit', replaceAll, hits: appliedHits })
 					}]
 				};
 			}
@@ -291,9 +293,11 @@ export function buildToolDefinitions(): ToolDefinition[] {
 				return {
 					content: [{
 						type: 'text' as const,
-						text: result.committed
-							? `${opened.existedOnDisk ? 'Wrote' : 'Created'} and accepted ${content.length} chars on ${path}. The user already clicked Accept — do not leave another proposal.`
-							: `${opened.existedOnDisk ? 'Wrote' : 'Created'} ${content.length} chars to ${path}.`
+						text: describeTabWrite(path, result, {
+							kind: 'write',
+							created: !opened.existedOnDisk,
+							chars: content.length
+						})
 					}]
 				};
 			}
@@ -362,7 +366,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
 		{
 			name: 'review_action',
 			description:
-				'Accept/reject pending review edits, or dismiss/reopen comment threads, ONLY when the user explicitly asks. reopen_thread brings a dismissed thread back into the gutter — find its id with list_threads(include_dismissed=true).',
+				'Accept/reject pending review edits, or dismiss/reopen comment threads, ONLY when I explicitly ask. reopen_thread brings a dismissed thread back into the gutter — find its id with list_threads(include_dismissed=true).',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -370,7 +374,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
 					action: {
 						type: 'string',
 						enum: ['accept_round', 'accept_all', 'reject_round', 'reject_all', 'resolve_thread', 'reopen_thread'],
-						description: 'The explicit review action requested by the user.'
+						description: 'The explicit review action I requested.'
 					},
 					round_id: { type: 'string', description: 'Required for accept_round or reject_round.' },
 					thread_id: { type: 'string', description: 'Required for resolve_thread or reopen_thread.' }
@@ -381,7 +385,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
 		},
 		{
 			name: 'propose_rule',
-			description: 'Propose a writing rule for the user to review.',
+			description: 'Propose a writing rule for me to review.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -390,16 +394,16 @@ export function buildToolDefinitions(): ToolDefinition[] {
 					example_violation: {
 						type: 'string',
 						description:
-							'A verbatim passage that breaks the rule, ideally from this session (a rejected edit, a sentence the user flagged). Stored with the rule as a few-shot example.'
+							'A verbatim passage that breaks the rule, ideally from this session (a rejected edit, a sentence I flagged). Stored with the rule as a few-shot example.'
 					}
 				},
 				required: ['text']
 			},
-			execute: async () => ({ content: [{ type: 'text' as const, text: 'Rule proposal sent to the user for review.' }] })
+			execute: async () => ({ content: [{ type: 'text' as const, text: 'Rule proposal sent for review.' }] })
 		},
 		{
 			name: 'propose_hook',
-			description: 'Propose a shell hook for the user to review.',
+			description: 'Propose a shell hook for me to review.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -410,12 +414,12 @@ export function buildToolDefinitions(): ToolDefinition[] {
 				},
 				required: ['event', 'command']
 			},
-			execute: async () => ({ content: [{ type: 'text' as const, text: 'Hook proposal sent to the user for review.' }] })
+			execute: async () => ({ content: [{ type: 'text' as const, text: 'Hook proposal sent for review.' }] })
 		},
 		{
 			name: 'comment_doc',
 			description:
-				'Create a new agent comment thread anchored to existing text in a workspace document. It does not change document text. In Medium autonomy, use this to create comment threads on your own, but do not propose edits unless asked.',
+				'Create a new agent comment thread anchored to existing text in a workspace document. It does not change document text. Use it as the announce thread before an edit proposal; unprompted observations are allowed at Medium or High autonomy.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -423,13 +427,6 @@ export function buildToolDefinitions(): ToolDefinition[] {
 					anchor_text: { type: 'string', description: 'Exact current document text to anchor the comment to.' },
 					message: { type: 'string', description: 'The comment text.' },
 					occurrence_index: { type: 'number', description: 'Zero-based occurrence when anchor_text appears more than once.' },
-					proposed_edit: {
-						type: 'object',
-						description:
-							'Optional concrete edit the user can approve. Use only when the user directly asked for an edit or autonomy is High.',
-						properties: { old_string: { type: 'string' }, new_string: { type: 'string' } },
-						required: ['old_string', 'new_string']
-					},
 					external_author: {
 						type: 'string',
 						description: 'Name of an external commenter when importing feedback. When set, the comment is attributed to that person.'
@@ -438,12 +435,11 @@ export function buildToolDefinitions(): ToolDefinition[] {
 				required: ['file_path', 'anchor_text', 'message']
 			},
 			execute: async (input) => {
-				const { file_path: path, anchor_text, message: msg, occurrence_index, proposed_edit, external_author } = input as {
+				const { file_path: path, anchor_text, message: msg, occurrence_index, external_author } = input as {
 					file_path: string;
 					anchor_text: string;
 					message: string;
 					occurrence_index?: number;
-					proposed_edit?: { old_string: string; new_string: string };
 					external_author?: string;
 				};
 				if (!path) {
@@ -493,20 +489,12 @@ export function buildToolDefinitions(): ToolDefinition[] {
 							author: isExternal ? 'external' : 'agent',
 							text: trimmedMessage,
 							timestamp: now,
-							...(isExternal ? { externalAuthor: external_author } : {}),
-							...(proposed_edit
-								? {
-										proposedEdit: {
-											oldString: proposed_edit.old_string,
-											newString: proposed_edit.new_string
-										}
-									}
-								: {})
+							...(isExternal ? { externalAuthor: external_author } : {})
 						}],
 						resolved: false,
 						createdAt: now
 					};
-					doc.transact(() => commentsMap.set(threadId, thread), AGENT_ORIGIN);
+					doc.transact(() => putThread(commentsMap, thread), AGENT_ORIGIN);
 
 					if (isExternal && external_author) {
 						const commentId = matchImportedComment(external_author, trimmedMessage);
@@ -524,7 +512,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
 		{
 			name: 'reply_to_comment',
 			description:
-				'Reply on an existing comment thread. Include proposed_edit only when the user directly asked for an edit or autonomy is High. Pass optional anchor_text to re-attach the thread to a new passage after the original text was replaced.',
+				'Reply on an existing comment thread. When the reply says what you would change, propose that change with edit_doc on the same thread in this turn; a reply is never a substitute for the diff, and there is no separate approval step. Pass optional anchor_text to re-attach the thread to a new passage after the original text was replaced.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -539,19 +527,13 @@ export function buildToolDefinitions(): ToolDefinition[] {
 					occurrence_index: {
 						type: 'number',
 						description: 'Zero-based occurrence when anchor_text appears more than once.'
-					},
-					proposed_edit: {
-						type: 'object',
-						properties: { old_string: { type: 'string' }, new_string: { type: 'string' } },
-						required: ['old_string', 'new_string']
 					}
 				},
 				required: ['file_path', 'thread_id', 'message']
 			},
 			execute: async (input) => {
-				const { file_path: path, thread_id, message: msg, proposed_edit, anchor_text, occurrence_index } = input as {
+				const { file_path: path, thread_id, message: msg, anchor_text, occurrence_index } = input as {
 					file_path: string; thread_id: string; message: string;
-					proposed_edit?: { old_string: string; new_string: string };
 					anchor_text?: string;
 					occurrence_index?: number;
 				};
@@ -566,7 +548,6 @@ export function buildToolDefinitions(): ToolDefinition[] {
 				let reanchored = false;
 				const outcome = await runCommentWrite(opened.tabId, (doc) => {
 					const result = applyReplyToComment(doc, thread_id, path, trimmedMessage, {
-						proposedEdit: proposed_edit,
 						anchorText: anchor_text,
 						occurrenceIndex: occurrence_index
 					});
@@ -587,7 +568,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
 		{
 			name: 'list_threads',
 			description:
-				'Return comment threads for a workspace tab, with every message in each. Defaults to open threads. Set include_dismissed=true to read threads the user dismissed (they stay on the document, hidden from the gutter). Then review_action({ action: "reopen_thread", thread_id }) brings one back.',
+				'Return comment threads for a workspace tab, with every message in each. Defaults to open threads. Set include_dismissed=true to read threads I dismissed (they stay on the document, hidden from the gutter). Then review_action({ action: "reopen_thread", thread_id }) brings one back.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -595,7 +576,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
 					include_dismissed: {
 						type: 'boolean',
 						description:
-							'If true, also return dismissed (hidden) threads so you can reopen one. Use when the user asks about a thread that disappeared or wants one brought back.'
+							'If true, also return dismissed (hidden) threads so you can reopen one. Use when I ask about a thread that disappeared or want one brought back.'
 					}
 				},
 				required: ['file_path']
@@ -619,9 +600,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
 				let result = '';
 				try {
 					await direct.transact((document) => {
-						const commentsMap = getCommentsMap(document as unknown as Y.Doc);
-						const threads: CommentThread[] = [];
-						commentsMap.forEach((t) => threads.push(t));
+						const threads = readCommentThreads(document as unknown as Y.Doc);
 						result = formatListedThreads(path, threads, include_dismissed === true);
 					});
 				} finally {

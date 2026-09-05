@@ -20,8 +20,9 @@ import {
 } from 'fs';
 import { join, dirname } from 'path';
 import { resolveWorkspacePath } from '$lib/server/workspace-path';
-import { getTabsState, setTabsState } from '$lib/server/runtime-state';
-import { destroyTabState } from '$lib/server/ws-server';
+import { listDocuments, renameDocument } from '$lib/server/documents-store';
+import { destroyTabState, unloadTabDoc, flushTabMarkdownNow } from '$lib/server/ws-server';
+import { migrateTabCaches } from '$lib/server/ydoc-persistence';
 
 /** Names we always hide from the tree — noise that obscures the writing
  * workspace. `.docwriter/` is intentionally NOT here; the user wants to
@@ -107,7 +108,10 @@ export const POST: RequestHandler = async ({ request }) => {
 };
 
 /** PATCH /api/files { from, to } — rename/move a file or folder within
- * the workspace. Both paths are safe-resolved. */
+ * the workspace. Both paths are safe-resolved. Every document row under the
+ * moved path is re-keyed with it (flush → unload → rename row; the
+ * yjs_updates FK cascade moves the log), so history, threads and
+ * provenance follow the file and nothing orphans under the old id. */
 export const PATCH: RequestHandler = async ({ request }) => {
 	const body = await request.json();
 	const from = typeof body.from === 'string' ? body.from.trim() : '';
@@ -117,8 +121,22 @@ export const PATCH: RequestHandler = async ({ request }) => {
 	const absTo = resolveWorkspacePath(to);
 	if (!existsSync(absFrom)) throw error(404, `Not found: ${from}`);
 	if (existsSync(absTo)) throw error(409, `Target exists: ${to}`);
+	const wasDir = statSync(absFrom).isDirectory();
+	const prefix = wasDir ? `${from}/` : null;
+	const moved = listDocuments()
+		.map((d) => d.tabId)
+		.filter((id) => id === from || (prefix && id.startsWith(prefix)));
+	for (const id of moved) {
+		flushTabMarkdownNow(id);
+		await unloadTabDoc(id);
+	}
 	mkdirSync(dirname(absTo), { recursive: true });
 	renameSync(absFrom, absTo);
+	for (const id of moved) {
+		const newId = id === from ? to : `${to}/${id.slice(prefix!.length)}`;
+		renameDocument(id, newId);
+		migrateTabCaches(id, newId);
+	}
 	return json({ ok: true, from, to });
 };
 
@@ -132,21 +150,17 @@ export const DELETE: RequestHandler = async ({ url }) => {
 	const wasDir = statSync(abs).isDirectory();
 	rmSync(abs, { recursive: true, force: true });
 
-	// Any open tab whose id is (or is under) the deleted path must also
-	// have its Hocuspocus Document + CRDT log torn down — otherwise
+	// Every document whose id is (or is under) the deleted path — open OR
+	// closed — must be torn down with it: backup, live-doc unload, and the
+	// identity-row delete whose FK cascades the CRDT log. Otherwise
 	// recreating the same path later resurrects the deleted content from
-	// the stale yjs_updates log.
+	// the stale yjs_updates log (and closed documents would dangle forever).
 	const prefix = wasDir ? `${relPath}/` : null;
-	const state = getTabsState();
-	const doomed = state.order.filter((id) => id === relPath || (prefix && id.startsWith(prefix)));
-	if (doomed.length > 0) {
-		for (const id of doomed) {
-			await destroyTabState(id);
-		}
-		const remaining = state.order.filter((id) => !doomed.includes(id));
-		let active = state.active && doomed.includes(state.active) ? null : state.active;
-		if (!active && remaining.length > 0) active = remaining[0];
-		setTabsState({ order: remaining, active });
+	const doomed = listDocuments()
+		.map((d) => d.tabId)
+		.filter((id) => id === relPath || (prefix && id.startsWith(prefix)));
+	for (const id of doomed) {
+		await destroyTabState(id);
 	}
 
 	return json({ ok: true, path: relPath });

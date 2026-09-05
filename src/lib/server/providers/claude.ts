@@ -20,7 +20,7 @@ import type {
 } from './types';
 import { emitProposalEvents, wrapToolsForProvider } from './shared';
 import {
-	docToolsMcp,
+	buildDocToolsMcp,
 	EDIT_DOC_TOOL_NAME,
 	WRITE_DOC_TOOL_NAME
 } from '$lib/server/mcp-doc-tools';
@@ -59,24 +59,24 @@ function buildDocwriterMcp() {
 	const tools: any[] = [
 		tool(
 			'propose_rule',
-			'Propose a writing rule for the user to review. Follow the Proposing rules section: at most one per turn, and only with evidence.',
+			'Propose a writing rule for me to review. Follow the Proposing rules section: at most one per turn, and only with evidence.',
 			{
 				text: z.string().describe('The rule, a short imperative.'),
 				reason: z.string().optional().describe('The evidence in one sentence, e.g. "you removed em dashes in three edits today".'),
-				example_violation: z.string().optional().describe('A verbatim passage that breaks the rule, ideally from this session (a rejected edit, a sentence the user flagged). Stored with the rule as a few-shot example.')
+				example_violation: z.string().optional().describe('A verbatim passage that breaks the rule, ideally from this session (a rejected edit, a sentence I flagged). Stored with the rule as a few-shot example.')
 			},
-			async () => ({ content: [{ type: 'text', text: 'Rule proposal sent to the user for review.' }] })
+			async () => ({ content: [{ type: 'text', text: 'Rule proposal sent for review.' }] })
 		),
 		tool(
 			'propose_hook',
-			'Propose a shell hook for the user to review.',
+			'Propose a shell hook for me to review.',
 			{
 				event: z.enum(['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'UserPromptSubmit', 'Stop', 'SubagentStop', 'SessionStart', 'SessionEnd', 'Notification']).describe('When the hook fires.'),
 				matcher: z.string().optional().describe('Regex over the tool name.'),
 				command: z.string().describe('The shell command.'),
 				reason: z.string().optional().describe('Explanation.')
 			},
-			async () => ({ content: [{ type: 'text', text: 'Hook proposal sent to the user for review.' }] })
+			async () => ({ content: [{ type: 'text', text: 'Hook proposal sent for review.' }] })
 		),
 		tool(
 			'add_skill',
@@ -106,10 +106,10 @@ function buildDocwriterMcp() {
 		),
 		tool(
 			'review_action',
-			'Accept or reject pending edits, or dismiss or reopen comment threads, only when the user\'s current message explicitly asks. reopen_thread brings a dismissed thread back into the gutter — find its id with list_threads(include_dismissed=true).',
+			'Accept or reject pending edits, or dismiss or reopen comment threads, only when my current message explicitly asks. reopen_thread brings a dismissed thread back into the gutter — find its id with list_threads(include_dismissed=true).',
 			{
 				file_path: z.string().describe('Workspace-relative path or absolute path inside the workspace.'),
-				action: z.enum(['accept_round', 'accept_all', 'reject_round', 'reject_all', 'resolve_thread', 'reopen_thread']).describe('The explicit review action requested by the user.'),
+				action: z.enum(['accept_round', 'accept_all', 'reject_round', 'reject_all', 'resolve_thread', 'reopen_thread']).describe('The explicit review action I requested.'),
 				round_id: z.string().optional().describe('Required for accept_round or reject_round.'),
 				thread_id: z.string().optional().describe('Required for resolve_thread or reopen_thread.')
 			},
@@ -243,7 +243,7 @@ export class ClaudeProvider implements AgentProvider {
 				: options.allowedTools,
 			mcpServers: isolated
 				? { 'docwriter-style': customMcp }
-				: { docwriter: docwriterMcp, 'docwriter-doc': docToolsMcp },
+				: { docwriter: docwriterMcp, 'docwriter-doc': buildDocToolsMcp() },
 			settingSources: isolated ? [] : ['user', 'project'],
 			// The server process runs from the docwriter package, not the
 			// workspace, so without this the SDK discovers project skills and
@@ -251,7 +251,16 @@ export class ClaudeProvider implements AgentProvider {
 			// compiled author-style skill came back as "Unknown skill": it is
 			// installed into the workspace, which the SDK was never looking at.
 			cwd: getEffectiveRoot(),
-			permissionMode: options.planMode ? 'plan' : 'acceptEdits',
+			// NOT 'acceptEdits': that auto-approves the built-in file-mutation
+			// tools, which skips `canUseTool` entirely — so docwriter's own gate
+			// ("built-in Edit / Write are restricted to your scratch directory,
+			// use edit_doc") never ran. An agent that lost its document tools
+			// would quietly fall back to `Edit` and rewrite the workspace file
+			// with no review round, no thread and no diff card. Under 'default'
+			// every tool outside `allowedTools` routes through `canUseTool`,
+			// which allows anything it does not explicitly deny, so the only
+			// behavior change is that the existing rules are enforced.
+			permissionMode: options.planMode ? 'plan' : 'default',
 			includePartialMessages: true,
 			agentProgressSummaries: true,
 			effort,

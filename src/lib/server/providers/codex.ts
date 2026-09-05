@@ -50,7 +50,7 @@ const TOOL_LOOP_SCHEMA = {
 	properties: {
 		assistant_text: {
 			type: 'string',
-			description: 'Final text to show the user when no more tool calls are needed.'
+			description: 'Final text to show me when no more tool calls are needed.'
 		},
 		tool_calls: {
 			type: 'array',
@@ -133,7 +133,7 @@ function buildToolProtocolPrompt(
 		'You are running inside DocWriter through the Codex SDK provider.',
 		'Do not edit files directly. Use the DocWriter tools below by returning JSON `tool_calls`.',
 		'If you need tool results before answering, return one or more tool calls and leave `assistant_text` empty.',
-		'When you are done, return an empty `tool_calls` array and put the user-facing response in `assistant_text`.',
+		'When you are done, return an empty `tool_calls` array and put the response meant for me in `assistant_text`.',
 		'For document edits, prefer `edit_doc` for focused replacements and `write_doc` for whole-file proposals. These create reviewable pending edits in DocWriter.',
 		options.planMode
 			? 'Plan-first mode is active: do not call mutation tools such as edit_doc or write_doc. Return the plan in assistant_text.'

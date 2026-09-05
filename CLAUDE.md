@@ -10,9 +10,13 @@ npm run dev          # Start Vite dev server (hot reload)
 npm run build        # Production build
 npm run check        # TypeScript + Svelte type checking
 npm run check:watch  # Watch mode type checking
+npm run test:unit    # vitest (src/**/*.test.ts)
+npm run doctor       # docwriter doctor — inspect/repair .docwriter state
 ```
 
-No test framework is configured. Use `npm run check` for validation.
+Validate changes with `npm run check` AND `npm run test:unit`. The
+lifecycle/consistency invariants live in
+`src/lib/server/state-consistency.test.ts`.
 
 ## What DocWriter is
 
@@ -46,15 +50,37 @@ project-root/
                          server Y.Doc; git-friendly)
   drafts/chapter-1.md  ← any workspace file can be an open tab
   .docwriter/
-    docwriter.db       ← SQLite: yjs_updates, tabs, rules, reviewers,
+    docwriter.db       ← SQLite: documents, yjs_updates, rules, reviewers,
                          recent_actions, action_usage_counts,
                          provider_session_entries, conversation_events,
-                         kv (sessionId, agentSettings, last_seen:<tabId>,
-                             feedbackImport…)
+                         kv (sessionId, agentSettings, feedbackImport…)
+    workspace.json     ← stamp naming the workspace this state dir belongs
+                         to (written on boot; warns if the folder moved)
+    backups/           ← JSON snapshots written before any destructive
+                         transition (file delete, external-edit reseed,
+                         doctor repairs); pruned to the newest 40
     hooks.json         ← user-defined shell hooks (read by hooks-config.ts)
     agent/scratch/     ← agent scratch workspace (lazy-created on first
                          scratch write; cleared on "New session")
 ```
+
+**`documents` is the identity table** (schema v13): one row per document
+the app holds CRDT state for — lifecycle `status` (`open` in the tab bar /
+`closed` but restorable), tab-bar order, the agent's `last_seen` diff
+baseline (was kv `last_seen:<tabId>`), and the missing-file grace stamp.
+`yjs_updates.tab_id` has a FOREIGN KEY to it with ON DELETE/UPDATE CASCADE:
+deleting a document deletes its log in the same statement, renaming re-keys
+it, and an orphaned log row is structurally impossible. The old `tabs`
+table is gone; all access goes through `documents-store.ts` (never
+DELETE-all + INSERT for identity tables). Closing a tab is a status flip —
+reopening replays text, threads, pending rounds, and provenance. A missing
+file badges the tab (grace window; history-backed docs self-heal from the
+log) instead of deleting it. External file edits fold in as one appended
+SYSTEM update (normalized comparison — typography-only diffs don't count);
+log rows are deleted only by explicit delete, `docwriter doctor`, or
+compaction (>500 rows on unload), always after a backup. Binary tabs
+(`isBinaryTabPath` — a DENYLIST; LaTeX/Typst/BibTeX are text) are
+preview-only and never touch the CRDT.
 
 SQLite is the single source of truth for runtime state — there is no
 `state.json` JSON mirror (it was removed; only stale comments referenced it).
@@ -94,10 +120,24 @@ first `synced` event — on localhost this is sub-20ms.
 `/api/render` streams a single `query()` call over SSE:
 
 1. Build a multi-tab prompt:
-   - Every tab: header (path + active marker) + diff vs `kv['last_seen:<tabId>']` if it changed, else "unchanged" note. No tab content is ever inlined; the agent calls `read_doc(file_path)` on demand.
+   - Every text tab: header (path + active marker) + diff vs the document's `last_seen` baseline (a `documents` column) if it changed, else "unchanged" note. Diffs above ~8KB are summarized (`+X/−Y lines — call read_doc`) instead of inlined. Binary tabs are listed as preview-only, never materialized. No tab content is ever inlined; the agent calls `read_doc(file_path)` on demand.
    - First-render tab (no `last_seen`): path only — agent must `read_doc` to see content.
    Agency guidance (`conservative` / `balanced` / `aggressive`) rewires
    the "how to decide whether to edit" section.
+   The `<author_style>` block (`src/lib/server/style-block.ts`) carries the
+   learned style's full instruction list only when the transcript has not
+   seen the current list: the first turn of a session, or a turn where the
+   published propositions changed. Every other turn gets a one-line
+   reminder naming the skill, so no turn runs with nothing saying a style
+   exists (an earlier delta-only version had that hole) and the author's
+   words no longer sit under the same bullets every turn. "First turn of a
+   session" is tracked by `last_render:session`, the session id the
+   `last_render:*` snapshots were sent in: a turn that resumes a different
+   session, or none (New session, a provider switch, the first real turn
+   after a warmup, which mints the session without building this prompt),
+   treats every snapshot as absent and sends the full rules, refs, agency,
+   audience and style. Clearing the snapshots on New session was not enough
+   for the warmup case.
 2. `query()` runs with two MCP servers:
    - `docwriter` — `propose_rule` / `propose_hook` (user-review tools).
    - `docwriter-doc` — `edit_doc` / `read_doc` / `write_doc` /
@@ -109,6 +149,41 @@ first `synced` event — on localhost this is sub-20ms.
    Built-in `Edit` / `Write` / `Read` remain available for files outside
    the open-tab set; the prompt explicitly routes open-tab work through
    the custom tools.
+   There is no approve-a-suggestion step: a reply that names a change is
+   followed by `edit_doc` on the same thread in the same turn, and the
+   diff lands under the explanation. Only genuine uncertainty about the
+   change itself (rare) earns a reply with no proposal. The old
+   `proposed_edit` parameter and the gutter's "Approve & propose edit"
+   button are gone; `CommentMessage.proposedEdit` survives as legacy data
+   on older threads and renders as plain text.
+   `comment-then-edit.test.ts` guards the contract.
+   The feedback trigger quotes the passage as "Current text of the
+   passage, quoted verbatim from the document" — the earlier
+   `Rewrite it: "<passage>"` read as "rewrite it TO this", and the agent
+   compared the quote with the document and declared nothing to change.
+   An edit-mode feedback turn, or a reply on a thread, that ends with no new round on the tab gets
+   one harness retry (`feedbackRetryPrompt` in the render route) naming
+   the fact; it stands down only if the agent already said no change is
+   needed or asked a question on the thread.
+   The fixed agent dock floats over the lower gutter column, so
+   `CommentGutter` scrolls a card into view (`revealCard`) when it opens
+   and when the proposal an author is waiting on lands — its edits
+   section and reply box are exactly the part the dock covers.
+   A comment the author makes opens its card (`openFeedbackThread` in
+   `TiptapEditor.svelte` sets `openCommentThreadId` before the thread
+   has synced back; the gutter reveals it on arrival). Cards render
+   collapsed by default, and the author used to have to click the card
+   they had just written to see the reply and the proposal.
+   A card's message list is capped at 300px and scrolls; it opens at its
+   END (newest reply, then the edits section below), because a long first
+   comment used to fill the box and hide the agent's answer and the
+   proposal. Growth after that scrolls smoothly (`followNewMessages`).
+   A round that moves text (one diff block only strikes, another block
+   of the same round only adds) gets a "Proposed text moves below ↓"
+   button under the struck passage (`createMovedNote` in
+   `diff-overlay.ts`); red alone read as a deletion while the green sat
+   off-screen past a code block. Clicking it scrolls the insertion into
+   view.
 3. Agent calls `edit_doc`: server finds the single `old_string` match in
    the live markdown, then in one `document.transact(..., AGENT_ORIGIN)`
    both rebuilds the XmlFragment via a headless Collaboration editor and
@@ -119,9 +194,18 @@ first `synced` event — on localhost this is sub-20ms.
 5. SSE stream emits `tool_call_start`, `tool_call`, `assistant_text`,
    `result` — drives the HistoryPane. The `result` event does NOT carry
    markdown anymore; there's nothing to apply on the client.
-6. After render completes, update `kv['last_seen:<tabId>']` to the current
+6. After render completes, update each text tab's `last_seen` column to the current
    markdown for every tab the agent saw, so the next render's diff block
    reflects what changed since.
+
+Tool results for `edit_doc` / `write_doc` come from one helper,
+`describeTabWrite` in `mcp-doc-tools.ts`, shared by the MCP tools and the
+provider handlers. They say the edit was *proposed* as a pending diff on
+its thread, never *applied*: the document changes only when the author
+Accepts, and the old "Edit applied to X." had the agent telling the author
+an edit was in when it was still pending. A replacement that leaves the
+text identical after typography normalization creates no round and says
+"No change proposed" instead of succeeding silently.
 
 ## Agent reconciliation
 
@@ -137,9 +221,21 @@ server-side UndoManager). Reject removes the round from the review
 `Y.Array`; the doc fragment isn't touched. Accept walks each accepted
 round and applies its `edit` op via `applyEditToFragment` (in
 `ydoc-codec.ts`), which deletes + reinserts only the paragraphs the edit
-covers. `write` ops fall back to wholesale `replaceYDocText`. Both paths
+covers. `write` ops fall back to wholesale `replaceYDocText`. Batch
+accepts SKIP stale rounds and report them (`skippedStale`) instead of
+409ing everything; only single-round accepts throw the
+StalePendingReviewError that drives the client's rebase flow. Both paths
 run in a single `ydoc.transact(..., USER_ORIGIN)` along with the
 `reviewArr.delete`.
+
+Accept also moves the threads behind the accepted rounds
+(`followAcceptedEdits` in `ydoc-codec.ts`, same transaction): a thread
+whose quote the edit replaced is re-anchored to the first line the edit
+added, and one whose edit only removed text resolves. Threads whose
+passage survived, or that still have another pending round, are left
+alone. Without this every round of accepts left the feedback threads
+parked at the top of the gutter as orphans. A parked card says "This
+passage is no longer in the document."
 
 Because Accept's blast radius is bounded to the affected paragraphs,
 the client doesn't need to disconnect + remount the editor to avoid
@@ -172,18 +268,27 @@ the mascot card).
 ## Critique passes (reviewer agents)
 
 Settings → **Critique pass** lists reviewer agents — built-ins (PhD
-Advisor, Copy Editor, Skeptic, Fresh Eyes) from
+Advisor, Skeptic, Fresh Eyes, Gricean Maxims) from
 `src/lib/shared/reviewers.ts`, custom ones from the SQLite `reviewers`
 table (`/api/reviewers` CRUD; created via `ReviewerEditorDialog`, which
 collects name, mascot, color, and the reviewer's system prompt). Picking
 one POSTs `/api/render` with `reviewerId`:
 
 - The server resolves the reviewer, builds a `<mode>` message
-  (`buildCritiqueMessage` in `src/lib/server/reviewers.ts`) instructing
-  the main agent to spawn ONE subagent via the Agent tool with the
-  reviewer's brief (its prompt + the shared pass procedure: read the
-  whole draft, rationale comment before each edit, ≤6 findings, honest
-  "no findings" allowed). Critique renders run at `effort: 'medium'`.
+  (`buildCritiqueMessage` in `src/lib/server/reviewers.ts`) telling the
+  agent to adopt the reviewer's brief (its prompt + the shared pass
+  procedure: read the whole draft, rationale comment before each edit,
+  ≤6 findings, honest "no findings" allowed) and run it IN THIS TURN.
+  Critique renders run at `effort: 'medium'`.
+- **Never delegate document work to a subagent.** `docwriter-doc` is an
+  in-process SDK MCP server bound to the query that connects it, so a
+  subagent's `read_doc` / `comment_doc` / `edit_doc` calls fail with
+  "Stream closed" — and the failure takes the parent's connection with
+  it, costing the rest of the turn its tools too. The pass used to spawn
+  a subagent and silently produced nothing: the reviewer did the whole
+  analysis, then could not land one finding. The same rule is stated in
+  the system prompt's `## Subagents` section and in the feedback-import
+  prompts, which had the same defect.
 - `setActiveReviewerId` in `mcp-doc-tools.ts` (same lifecycle as
   `setActiveFeedbackThreadId`) stamps `reviewerId` onto every review
   round and agent comment the pass creates. Findings are ordinary
@@ -212,9 +317,9 @@ input paths:
 The import is a single agent pass — threads appear progressively in the
 gutter as the agent works. For structured imports (.docx), the prompt
 uses `buildFeedbackImportMessage` (in `src/lib/shared/feedback-import.ts`)
-with numbered comments and original anchor hints. The main agent
-receives the prompt directly and can spawn subagents to parallelize
-large batches.
+with numbered comments and original anchor hints. The agent receives the
+prompt directly and works the batch itself — like a critique pass, it
+must not delegate to a subagent, which cannot reach the document tools.
 
 **External author attribution**: `CommentAuthor` includes `'external'`
 alongside `'user'` and `'agent'`. The `comment_doc` MCP tool accepts an
@@ -252,6 +357,22 @@ the disposition from `discussed` to `applied`.
 
 ## Gotchas
 
+- **Accept/Reject pause the WebSocket, and the resume must re-arm it.**
+  `pauseTabSync` disconnects the provider so the HTTP response's delta is
+  applied locally with `USER_ORIGIN` (undo contract). `disconnect()` only
+  starts the close handshake; if the HTTP reply lands before the close
+  completes, the provider's `connect()` returns early without setting
+  `shouldConnect`, and the later close never reconnects — a silently dead
+  tab (keystrokes stop syncing, the agent's next proposals never arrive).
+  The resume sets `websocketProvider.shouldConnect = true` before
+  `connect()`. `onSyncConnectionChange` reports a tab that stays
+  disconnected outside a pause for 5 s; the page turns it into a history
+  notification.
+- **Unloading a live doc flushes it.** `afterUnloadDocument` runs
+  `onTabUnloaded`: a tab still dirty from the 500 ms flush window is
+  replayed from the log and written to its file before the dirty flag is
+  dropped, so `document.md` never lags the CRDT because the last browser
+  disconnected mid-window.
 - **`globalThis.__docwriterWsServer` singleton.** Vite HMR re-executes
   `hooks.server.ts` on save; the module-scope guard keeps us from
   double-binding the Hocuspocus port (`ECONNREFUSED`-via-reconnect). The
@@ -276,6 +397,45 @@ the disposition from `discussed` to `applied`.
   to MUTATE a tab MUST go through
   `hocuspocus.openDirectConnection(...)` (see `getHocuspocus` in
   `mcp-doc-tools.ts`) — never mutate a replayed throwaway doc.
+- **Comment threads are nested Y types.** Each thread is a `Y.Map`
+  (id/anchor/resolved/createdAt) holding a `Y.Array` of messages, so
+  concurrent writes merge (a Dismiss racing an agent reply keeps both).
+  NEVER `commentsMap.set(id, {...})` a whole plain object — that reverts to
+  last-writer-wins and one side's write silently vanishes (the original
+  dismissed-thread-resurrects / reply-disappears bug). Read via
+  `readThreadValue`/`getThread`/`readCommentThreads` (they also accept the
+  legacy plain shape); write via `putThread` / `appendThreadMessage` /
+  `setThreadResolved` / `setThreadAnchor`. Legacy threads migrate on doc
+  load. Client observers must `observeDeep` — nested mutations don't fire
+  shallow map observers.
+- **Per-render state is per-render, not module-level.** The reviewer id,
+  the active feedback thread and the stale-accept payload live in an
+  `AsyncLocalStorage` scope opened by `runWithRenderScope`
+  (`mcp-doc-tools.ts`), because `runTabWrite` / `createAgentEditThread` /
+  `createAgentCommentThread` / `applyReplyToComment` are shared by every
+  provider and read them ambiently. As module globals they were clobbered
+  by overlapping renders: a critique pass's findings got another
+  reviewer's id or none, a feedback reply attached to the wrong thread,
+  and whichever render finished first blanked all three for the one still
+  streaming. Never move them back to module scope.
+- **Agent tool availability is per-render.** `buildDocToolsMcp()` builds a
+  FRESH `docwriter-doc` MCP server for every `query()`. It must never become
+  a module singleton again: an in-process SDK MCP server binds to the query
+  that connects it, so a shared instance leaves a second, overlapping render
+  with no `edit_doc` / `read_doc` / `comment_doc` at all. Paired with that,
+  `permissionMode` is `'default'`, NOT `'acceptEdits'` — `acceptEdits`
+  auto-approves built-in file mutation and skips `canUseTool`, so the
+  "built-in Edit / Write are restricted to your scratch directory" gate
+  never ran and a tool-less agent would rewrite the workspace file with no
+  review round, no thread and no diff card. `agent-voice.test.ts` and the
+  live gate message are the guards.
+- **Injected transcript voice.** The transcript is the author and the agent
+  talking: injected user turns speak as "I", the system prompt is the
+  author's briefing, and the agent addresses the author as "you" — never
+  "the user" in anything a person reads. Trigger-string MATCHERS
+  (`stale-accept.ts`, `+page.svelte` shortDescription) accept both the old
+  third-person and new first-person forms because persisted rounds carry
+  old triggers; keep them in lockstep when templates change.
 - **`Y.XmlText.toString()` is not plain text.** Once a text node carries a
   format attribute (the `ai` provenance attribute), `toString()` serializes
   formatted ranges as XML tags (`a <ai>b</ai>`). All text extraction in

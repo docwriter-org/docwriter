@@ -3,8 +3,8 @@
  *
  * Custom reviewers persist in the SQLite `reviewers` table; built-ins come
  * from src/lib/shared/reviewers.ts. `buildCritiqueMessage` composes the
- * per-render instruction that tells the main agent to spawn the reviewer
- * subagent with its brief.
+ * per-render instruction that hands the reviewer's brief to the agent
+ * running the render.
  */
 import { getDb } from './db';
 import { BUILTIN_REVIEWERS, findReviewer, type Reviewer } from '$lib/shared/reviewers';
@@ -70,15 +70,21 @@ export function deleteReviewer(id: string): boolean {
 	return result.changes > 0;
 }
 
-/** The message a critique render sends to the main agent: spawn one
- * subagent carrying the reviewer's brief. The brief is the reviewer's own
- * prompt plus the shared pass procedure; the subagent inherits the system
- * prompt, so the house voice rules and the user's rules apply to it too. */
+/** The message a critique render sends to the agent: adopt the reviewer's
+ * brief for this turn. The brief is the reviewer's own prompt plus the
+ * shared pass procedure.
+ *
+ * The pass runs in THIS turn, never in a subagent. `docwriter-doc` is an
+ * in-process SDK MCP server bound to the query that connects it, so a
+ * subagent's read_doc / comment_doc / edit_doc calls fail with "Stream
+ * closed" — and the failure takes the parent's connection with it. That is
+ * what made critique passes silently produce nothing: the reviewer did the
+ * analysis, then had no way to land a single finding. */
 export function buildCritiqueMessage(reviewer: Reviewer, tabId: string): string {
 	return [
 		'<mode>',
-		`Critique pass. The user asked the reviewer "${reviewer.name}" to review ${tabId}.`,
-		'Spawn exactly one subagent with the Agent tool and pass it the reviewer_brief below verbatim as its task, nothing else. Do not read, comment, or edit the document yourself this turn, and do not summarize the findings when the pass ends — they land on the document. If the Agent tool is unavailable, execute the brief yourself exactly as written.',
+		`Critique pass. I asked the reviewer "${reviewer.name}" to review ${tabId}.`,
+		'Take on the reviewer_brief below as your own instructions and carry it out yourself, start to finish, in this turn. Do not delegate any of it to a subagent: read_doc, comment_doc and edit_doc are connected to this turn only, a subagent cannot reach them, and every finding it produced would be lost. Do not summarize the findings when the pass ends — they land on the document.',
 		'</mode>',
 		'',
 		'<reviewer_brief>',

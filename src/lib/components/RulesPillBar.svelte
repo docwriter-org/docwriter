@@ -71,7 +71,7 @@
 		pushHistory({ type: 'user_action', timestamp: Date.now(), description: `Added rule: "${text}"` });
 		newRule = '';
 		requestAnimationFrame(() => inputEl?.focus());
-		onSubmit?.(`The user added a new writing rule: "${text}". Revise the open files to comply.`);
+		onSubmit?.(`I added a new writing rule: "${text}". Revise the open files to comply.`);
 	}
 
 	function removeRule(id: string) {
