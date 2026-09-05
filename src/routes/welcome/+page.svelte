@@ -256,7 +256,12 @@
 		</div>
 	</section>
 
-
+	<footer class="sponsors" aria-label="Project sponsors">
+		<p>Supported by</p>
+		<a href="https://www.laude.org/slingshots" target="_blank" rel="noopener noreferrer" aria-label="Laude Institute Slingshots">
+			<img src="/sponsors/laude-institute.svg" alt="Laude Institute" width="180" height="77" loading="lazy" />
+		</a>
+	</footer>
 </div>
 
 <style>
@@ -386,6 +391,12 @@
 	.features h2 { margin: 0 0 6px; font-family: 'Lora', Georgia, serif; font-size: 16px; line-height: 1.65; font-weight: 600; }
 	.features p { margin: 0; font-size: 14px; line-height: 1.65; color: #666; }
 	.features code { font-size: 12px; color: #6d28d9; }
+
+	.sponsors { max-width: 680px; margin: 56px auto 0; padding: 0 24px; text-align: center; }
+	.sponsors p { margin: 0 0 12px; font-size: 13px; color: #76716a; }
+	.sponsors a { display: inline-flex; border-radius: 4px; }
+	.sponsors img { display: block; width: 180px; height: auto; filter: brightness(0); opacity: 0.7; transition: opacity 150ms ease; }
+	.sponsors a:hover img { opacity: 1; }
 
 	@media (max-width: 780px) {
 		.demo-body { grid-template-columns: 1fr; }
