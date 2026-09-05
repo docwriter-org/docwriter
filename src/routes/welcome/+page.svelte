@@ -100,7 +100,7 @@
 		<h1><LogoMark size={44} />DocWriter</h1>
 		<p class="subtitle">A real-time, async document editor for humans and agents.</p>
 		<p class="attribution">A project from <span>Full Stack Data Lab</span></p>
-		<div class="project-links" aria-label="Open source projects">
+		<div class="project-links" aria-label="Project resources">
 			{#each projects as project}
 				<a href={`https://github.com/${project.repo}`} class="project-link" target="_blank" rel="noopener noreferrer">
 					<span class="project-label">
@@ -114,8 +114,8 @@
 					</span>
 				</a>
 			{/each}
+			<a class="project-link" href="https://docs.docwriter.org">Documentation</a>
 		</div>
-		<a class="docs-link" href="https://docs.docwriter.org">Documentation</a>
 	</header>
 
 	<!-- Animated demo -->
@@ -276,7 +276,6 @@
 	.attribution { margin: 16px 0 0; font-size: 14px; color: #76716a; }
 	.attribution span { color: #344859; }
 	h1 :global(.dw-logo) { flex-shrink: 0; }
-	.docs-link { display: inline-block; margin-top: 14px; color: #344859; font-size: 13px; text-underline-offset: 3px; }
 	.project-links { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin-top: 22px; }
 	.project-link { display: inline-flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 16px; border: 1px solid #c7c3b9; border-radius: 4px; background: #f5f3ed; text-decoration: none; color: #344859; font-family: 'Lora', Georgia, serif; font-size: 14px; font-weight: 500; transition: background 150ms ease, border-color 150ms ease; }
 	.project-label { display: inline-flex; align-items: center; gap: 8px; }
