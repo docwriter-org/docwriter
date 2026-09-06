@@ -55,15 +55,32 @@ Fly.io fits because it treats a machine per user as a first-class pattern and PR
 
 Keep the landing site on Vercel as it is now. The `landing` branch and its sync workflow are unrelated to the hosted editor and stay as they are.
 
-## Smallest version for a user study
+## Scaling to 1000 users
 
-If the immediate need is a study with a known set of participants, skip the gateway:
+A thousand accounts does not change the design. It changes what has to be automated on day one.
 
-- Create one Fly app per participant (or one app with one machine per participant), each with its own volume and API key.
-- Give each participant a URL with a long random token; the container rejects requests without it.
-- Stop and delete the machines when the study ends.
+Per-user machines scale better than a shared server here for two reasons. First, a shared server would still need to pin each document to one instance, because Hocuspocus keeps the live Y.Doc in memory; scaling a shared server past one instance means sticky routing or a Redis-backed sync layer, which per-user machines give you by construction. Second, every render spawns a `claude` subprocess that holds a few hundred megabytes; a shared server running 50 of those at once is one big box under memory pressure, while 50 user machines are 50 small boxes that each stop when idle.
 
-This needs only steps 1 to 3 above and ships in a day. The gateway and Clerk come later, and nothing built for the study is thrown away when they do.
+What matters is concurrency, not the account count. Most of a thousand accounts are idle at any moment, and stopped machines cost nothing beyond their disk.
+
+| Item | Rough monthly cost, 1000 accounts, ~50 active at once |
+|---|---|
+| 1000 volumes at 1 GB each | ~$150 |
+| ~50 running 1 GB machines, stopped when idle | ~$300 |
+| 950 stopped machines | ~$0 |
+| Agent API spend | dominant, and set entirely by usage |
+
+Hosting is not the expensive line. The model spend is, so decide early whether users bring their own key (the API keys panel already stores one per workspace, which in this design is per container) or the deployment funds a shared key with a rate limit tier to match.
+
+Things that must be true from the first sign-up at this scale:
+
+- **Provisioning is code.** The gateway creates the machine and volume through the Machines API on first sign-in. Nobody creates machines by hand.
+- **Quotas are raised ahead of time.** Fly caps machines and volumes per organization by default; ask for the limit before launch, not during it.
+- **Volumes are backed up.** A volume lives on one host. Keep the platform's daily snapshots on, and add a periodic copy of each workspace's markdown and SQLite file to object storage so a lost host is an inconvenience, not lost writing.
+- **Idle machines stop.** Configure auto-stop on WebSocket disconnect with a short grace period, and measure resume time on the real image. A stopped machine resumes in about a second; a suspended one faster.
+- **The image is small.** Cold start scales with image size, and a thousand machines pull it.
+
+If the first launch is a study with a known list of participants, the same gateway still applies; skipping it only works for a handful of people.
 
 ## What to carry over from PR #51
 
