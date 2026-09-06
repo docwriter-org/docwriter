@@ -339,6 +339,25 @@ When `comment_doc` fires with `external_author`, the handler matches
 against the active import and records the thread ID; `edit_doc` upgrades
 the disposition from `discussed` to `applied`.
 
+## Hosting
+
+The hosted deployment runs one sandboxed DocWriter process per user behind
+a supervisor (`deploy/supervisor/`, runbook in `deploy/README.md`, design
+in `docs/contribute/hosting.mdx`). The app knows about hosting through
+three environment variables only, all unset for the CLI:
+
+- `DOCWRITER_GATEWAY_SECRET` (`src/lib/server/gateway.ts`): when set, the
+  SvelteKit handle and the Hocuspocus `onUpgrade` hook refuse any request
+  or WebSocket handshake without the `x-docwriter-gateway` header. This is
+  what isolates users' localhost ports on a shared machine; never weaken it.
+- `PUBLIC_DOCWRITER_WS_URL`: same-origin WebSocket URL for the browser
+  (`wsUrl()` in `yjs-doc.ts`), used behind the supervisor's proxy.
+- `HOST` / `DOCWRITER_WS_HOST`: bind address for the Hocuspocus server.
+
+`GET /api/health` is the supervisor's readiness probe and must stay free of
+database and workspace access. Supervisor tests run with `npm run test:unit`
+(`deploy/supervisor/**/*.test.js`).
+
 ## Conventions
 
 - **Svelte 5 runes** (`$state`, `$derived`, `$effect`) in components.

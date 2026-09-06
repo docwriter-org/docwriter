@@ -4,6 +4,8 @@ title: "Hosting plan"
 
 Implementation plan for the design chosen in [Hosting](/contribute/hosting): one big machine, one sandboxed DocWriter process per user, a supervisor that spawns and reaps them. Work through the phases in order; each ends with something you can run.
 
+**Status.** Phases 1 through 5 are implemented under `deploy/` and `src/`, with unit and integration tests, and verified by hand under bubblewrap in a container. What remains is done on a real machine: run the provisioning script, measure memory during a render, and do the restore drill. The runbook is `deploy/README.md`.
+
 ## Shape
 
 ```mermaid
@@ -34,86 +36,64 @@ Half a day. Numbers here decide the machine size and the per-process memory cap.
 1. Build the app and run one process against a realistic workspace.
 2. Record resident memory idle, during a render, and during a critique pass. The `claude` subprocess is the bulk and only exists during a render.
 3. Confirm bubblewrap works on the target host: `bwrap --unshare-all --share-net --ro-bind / / --dev /dev --proc /proc -- node -e 1`. It needs unprivileged user namespaces. A plain VM has them; a Docker container blocks them under the default seccomp and AppArmor profiles, so if the host is a container it needs those relaxed or the sysbox runtime. A Fly machine is a VM and works as is.
-4. Size the machine from the numbers. As a placeholder until measured:
+4. Size the machine from the numbers. Measured so far, on the production build inside bubblewrap in a container:
 
-| Per process | Estimate |
-|---|---|
-| Idle DocWriter | ~150 MB |
-| During a render | +300 to 400 MB |
-| 50 active, half rendering | ~17 GB |
+| Per process | Measured | Still to measure |
+|---|---|---|
+| Idle DocWriter (Node, Hocuspocus, one open tab) | 164 MB resident | |
+| Spawn to `/api/health` answering | 0.8 s | |
+| Reap (SIGTERM to exit) | under 50 ms | |
+| During a render | | needs an API key on the machine; expect +300 to 400 MB for the `claude` subprocess |
 
-A 32 GB VM or a 64 GB dedicated box covers a thousand accounts at fifty active with room to spare.
+At those numbers, 50 active users with half of them rendering is roughly 17 GB. A 32 GB VM or a 64 GB dedicated box covers a thousand accounts at fifty active with room to spare.
 
 ## Phase 1: app changes
 
-One small PR against `main`. Everything else in this plan lives under `deploy/` and never touches app code.
+One small change set on `main`, done. Everything else in this plan lives under `deploy/` and never touches app code.
 
-1. **Same-origin WebSocket URL.** `wsUrl()` in `src/lib/yjs-doc.ts` builds `ws://<hostname>:<port>`. Add a runtime public variable, `PUBLIC_DOCWRITER_WS_URL`; when set, return it verbatim. The supervisor sets it to `wss://app.docwriter.org/ws`. Hocuspocus carries the document name in messages, not the URL path, so a fixed path works. The CLI is unaffected: the variable is unset, and the existing port logic runs.
-2. **Health route.** `GET /api/health` returning `{ ok: true }`. The supervisor polls it after spawn to know when to start proxying, instead of guessing at boot time.
-3. **Proxy headers.** Confirm adapter-node's `ORIGIN`, `PROTOCOL_HEADER`, and `HOST_HEADER` are honored when set in the process environment; the supervisor passes `ORIGIN=https://app.docwriter.org`, `PROTOCOL_HEADER=x-forwarded-proto`, `HOST_HEADER=x-forwarded-host`. No code change expected, but check it against a POST from the editor.
+1. **Gateway trust.** `DOCWRITER_GATEWAY_SECRET` (`src/lib/server/gateway.ts`). When set, the SvelteKit handle in `hooks.server.ts` returns 403 to any request without the `x-docwriter-gateway` header, and the Hocuspocus `onUpgrade` hook refuses a WebSocket handshake without it. This is what makes process-per-user sound on a shared network namespace: every user process could otherwise connect to every other user's localhost ports. Unset, the CLI behaves as before.
+2. **Same-origin WebSocket URL.** `PUBLIC_DOCWRITER_WS_URL` in `wsUrl()` (`src/lib/yjs-doc.ts`). The supervisor sets it to `wss://<domain>/ws` so the browser never needs a port. Hocuspocus carries the document name in messages, not the URL path.
+3. **Health route.** `GET /api/health` returns `{ ok: true }` without touching the database or workspace; the supervisor polls it after spawning.
+4. **Bind address.** The Hocuspocus server now follows `HOST` (or `DOCWRITER_WS_HOST`) instead of always listening on every interface. `vite dev` is unchanged.
 
-Validate with `npm run check` and `npm run test:unit`, then run the CLI once to confirm nothing changed for local use.
+No single-port mode was needed: the supervisor is a reverse proxy anyway, so it forwards `/ws` to the process's WebSocket port and everything else to its HTTP port.
 
 ## Phase 2: the supervisor
 
-`deploy/supervisor/`, a small Node service. Around three hundred lines, in TypeScript so it can be checked with the rest of the repo. Responsibilities, each a module:
+`deploy/supervisor/`, plain ESM JavaScript on the Node standard library plus `better-sqlite3`, started with `npm run supervisor`. About six hundred lines across small modules, each with tests under `deploy/supervisor/test/`:
 
-- **Registry.** SQLite file mapping user id to numeric uid, app port, ws port, process state, last activity. Ports come from a fixed range. Uids come from a fixed range starting at 20000, so every user is a distinct Linux user and filesystem permissions isolate them even if the sandbox does not.
-- **Spawner.** On first request for a user with no live process: create the directories if missing, chown to the user's uid, then spawn:
+- **`registry.js`.** SQLite file mapping user id to a numeric uid and two localhost ports, allocated once and stable for the life of the user. Uids start at 20000, ports at 41000.
+- **`sandbox.js`.** Pure functions that build the environment the CLI launcher would pass, and the `bwrap` argument list: fresh user, pid, ipc and uts namespaces, `/usr` read-only, the release at `/app`, the user's directories at `/workspace` and `/home/user`, a generated `/etc/passwd`, `--clearenv` and `--setenv` for everything the app reads. The network namespace is shared. The supervisor drops to the user's uid before exec, so bubblewrap runs unprivileged.
+- **`cgroup.js`.** A cgroup v2 leaf per process with `memory.max` and `pids.max`, created by the supervisor itself under its own delegated cgroup. No `systemd-run`. Missing delegation degrades to no limits with a warning.
+- **`processes.js`.** Spawn, readiness poll on `/api/health` with the process's own gateway secret, activity and WebSocket counting, the idle reaper, the process cap, a per-user respawn cooldown, and stop (SIGTERM to the Node process found by walking `/proc`, then SIGKILL through the cgroup after the grace period).
+- **`proxy.js`.** HTTP forwarding on `node:http` and WebSocket upgrades on `node:net`, adding the gateway secret and the `x-forwarded-*` headers. No buffering, so SSE renders stream through.
+- **`auth.js`, `session.js`.** GitHub OAuth or a dev mode, HMAC-signed cookies, an allowlist file.
+- **`main.js`.** One HTTP server: `/auth/*`, `/__supervisor/metrics` and `healthz`, and everything else proxied to the signed-in user's process, spawning it first if needed and showing a "starting" page if that takes more than 25 seconds.
 
-  ```
-  systemd-run --scope -p MemoryMax=1500M -p CPUWeight=100 \
-    bwrap --unshare-all --share-net --die-with-parent \
-      --unshare-user --uid <uid> --gid <uid> \
-      --ro-bind /usr /usr --ro-bind /etc/ssl /etc/ssl --ro-bind /etc/resolv.conf /etc/resolv.conf \
-      --ro-bind /app/current /app \
-      --bind /data/users/<uid>/workspace /workspace \
-      --bind /data/users/<uid>/home /home/user \
-      --dev /dev --proc /proc --tmpfs /tmp \
-      --setenv HOME /home/user \
-      --setenv DOCWRITER_ROOT /workspace \
-      --setenv PORT <app port> --setenv HOST 127.0.0.1 \
-      --setenv DOCWRITER_WS_PORT <ws port> --setenv PUBLIC_DOCWRITER_WS_PORT <ws port> \
-      --setenv PUBLIC_DOCWRITER_WS_URL wss://app.docwriter.org/ws \
-      --setenv ORIGIN https://app.docwriter.org \
-      --setenv PROTOCOL_HEADER x-forwarded-proto --setenv HOST_HEADER x-forwarded-host \
-      --setenv ANTHROPIC_API_KEY <shared key, or omit for bring-your-own> \
-      -- node /app/build/index.js
-  ```
-
-  This spawns `build/index.js` directly with the same environment `bin/docwriter.js` would pass, minus the port probing and browser opening. `systemd-run --scope` puts the process in its own cgroup so the memory cap kills only that user's process. The network namespace is shared because the process has to reach the API and the supervisor has to reach its ports.
-- **Readiness.** Poll `/api/health` on the app port until it answers, with a timeout; show a plain "starting your workspace" page meanwhile and refresh.
-- **Proxy.** `http-proxy` handles both HTTP and WebSocket upgrades. Route by the session cookie's user id: `/ws` to the ws port, everything else to the app port. Set `x-forwarded-proto` and `x-forwarded-host`.
-- **Reaper.** Track open WebSocket connections per user through the proxy. When a user has had none for ten minutes, send `SIGTERM`. DocWriter flushes dirty tabs on document unload, so a clean shutdown loses nothing. Escalate to `SIGKILL` after thirty seconds.
-- **Limits.** A cap on concurrent processes; past it, new sign-ins queue with a message rather than overcommitting memory. A per-user spawn rate limit.
-
-Test locally on any Linux box with bubblewrap: two fake users, a Bash call from user A's agent that lists `/workspace` and sees only A's files, an attempt to read B's directory that fails, a WebSocket sync through the proxy, a reap after idle followed by a reconnect that shows the same document, and a render that exceeds `MemoryMax` and kills only that process.
+Verified: the integration test runs the supervisor against a fake app; a manual run put the real build under bubblewrap as root, opened a tab, synced a Yjs document through the proxied WebSocket with the real Hocuspocus provider, typed into it, reaped the process, found the text in the file on disk, and respawned. Direct connections to both of the process's ports were refused with 403.
 
 ## Phase 3: auth
 
-The supervisor owns sign-in. Two acceptable choices, one file either way:
+The supervisor owns sign-in. Done: GitHub OAuth with the `read:user` scope, the user id `gh:<numeric id>` so renames do not create a new workspace, a signed session cookie, an allowlist file for invite-only phases, and a sign-out route. `SUPERVISOR_AUTH=dev` accepts any name for laptops and tests. The app processes never see any of this; they trust the gateway header, which only the supervisor sends.
 
-- **GitHub OAuth.** Free, about eighty lines with no library, and the user id is the GitHub id. Right for a study or a beta where everyone has GitHub.
-- **Clerk.** Email, magic link, and social sign-in with a hosted UI. The sign-in page from the closed PR #51 can be reused almost unchanged. The free tier covers far more than a thousand monthly users.
-
-Either way: a signed session cookie, an allowlist file for invite-only phases, and a sign-out route. The app processes never see any of this; they trust whatever reaches their localhost ports, which only the supervisor can do.
+Clerk would slot into `auth.js` in place of the GitHub flow if email or magic-link sign-in is wanted later.
 
 ## Phase 4: machine and deploys
 
-`deploy/` holds everything the machine needs. Provision once by hand or with a shell script, not a config management tool:
+`deploy/machine/` holds everything the machine needs, written and not yet run on a real host:
 
-1. Ubuntu LTS VM, bubblewrap and Node 22 installed, a data disk mounted at `/data`.
-2. Caddy in front, terminating TLS for `app.docwriter.org` and proxying to the supervisor on `127.0.0.1:8080`. Caddy's automatic certificates remove the DNS and cert steps the closed PR had.
-3. A systemd unit for the supervisor, restart on failure, logs to journald with the user id in each line.
-4. Releases under `/app/releases/<git sha>/` with `/app/current` a symlink. A GitHub Actions job on push to `main` runs `npm ci`, `npm run build`, `npm prune --omit=dev`, rsyncs the tree to a new release directory, and flips the symlink. New spawns use the new build; running processes keep the old one until reaped. Since bubblewrap binds `/app/current` at spawn, a process is never torn out from under a user mid-session.
+1. `provision.sh`: Ubuntu 24.04, installs bubblewrap, Node 22, Caddy, Litestream and rclone, checks that an unprivileged user can run bubblewrap, lays out `/app` and `/data`, writes a `supervisor.env` template, installs the units, and opens the firewall for 22, 80 and 443 only.
+2. `Caddyfile`: TLS for the domain with automatic certificates, proxying to the supervisor on `127.0.0.1:8080` with no upstream timeouts, so SSE renders and WebSockets live as long as they need.
+3. `docwriter-supervisor.service`: restart on failure, `Delegate=yes` for the per-process cgroups, logs to journald.
+4. `release.sh` and `.github/workflows/deploy-hosted.yml`: on push to `main`, run the checks and tests, build, prune to production dependencies, pack, copy to the machine, unpack under `/app/releases/<sha>/`, flip the `/app/current` symlink, restart the supervisor. Running processes keep the old release until reaped. The workflow is off until the repository variable `HOSTED_DEPLOY_ENABLED` is `true`.
 5. A rollback is moving the symlink back.
 
 ## Phase 5: state and backups
 
 The machine's disk is the primary store. A VM disk persists across reboots, so restore-on-spawn is not needed until there is more than one machine.
 
-- **Continuous.** Litestream, one process for the machine, watching every `/data/users/*/workspace/.docwriter/docwriter.db` and replicating to a bucket prefix per user. SQLite is the source of truth and the Yjs log rebuilds the markdown, so this protects the writing with about a second of loss on a hard failure.
-- **Hourly.** `rclone sync /data/users <bucket>/users` from a systemd timer for everything Litestream does not cover: references, PDFs, skills, hooks, scratch, `home/`.
+- **Continuous.** `deploy/backup/litestream.yml`: one Litestream process for the machine, watching every `/data/users/*/workspace/.docwriter/docwriter.db` and replicating to a bucket prefix per user. SQLite is the source of truth and the Yjs log rebuilds the markdown, so this protects the writing with about a second of loss on a hard failure.
+- **Hourly.** `deploy/backup/backup.sh` on a systemd timer: `rclone sync` of `/data/users` for everything Litestream does not cover: references, PDFs, skills, hooks, scratch, `home/`.
 - **Drill.** Before launch, restore one user's prefix onto a scratch VM and open their document. A backup nobody has restored is a hope.
 - **Growth.** `.docwriter/backups/` is pruned by the app; watch total disk with an alert at 80 percent. Add a per-user size cap only if someone hits it.
 
@@ -130,12 +110,12 @@ Multi-machine routing, warm process pools, the Claude subscription login inside 
 
 ## Order of work
 
-| Phase | Effort | Ends with |
+| Phase | State | Ends with |
 |---|---|---|
-| 0 Measure | half a day | a machine size and a memory cap |
-| 1 App changes | half a day | a merged PR on `main` |
-| 2 Supervisor | 2 to 3 days | two sandboxed users on a laptop |
-| 3 Auth | 1 day | sign-in with an allowlist |
-| 4 Machine and deploys | 1 day | `app.docwriter.org` serving `main` |
-| 5 State and backups | 1 day | a restore that worked |
-| 6 Observability and launch | 1 day | alerts and the checklist |
+| 0 Measure | idle and spawn measured; render memory needs a key | a machine size and a memory cap |
+| 1 App changes | done, on this branch | a merged PR on `main` |
+| 2 Supervisor | done, tested | two sandboxed users on a laptop |
+| 3 Auth | done, GitHub flow tested with a fake GitHub | sign-in with an allowlist |
+| 4 Machine and deploys | files written, not yet run on a host | the domain serving `main` |
+| 5 State and backups | files written, restore drill pending | a restore that worked |
+| 6 Observability and launch | metrics endpoint done; alerts and checklist pending | alerts and the checklist |

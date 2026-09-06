@@ -125,6 +125,7 @@ bwrap --unshare-all --share-net \
 
 - **The supervisor** maps user to port, spawns the process on the first request, and kills it after the WebSocket has been idle for a few minutes. That is the same two hundred lines the machine gateway would be, minus the Machines API.
 - **Bubblewrap wraps the whole DocWriter process**, not just the `claude` subprocess, so Bash, hooks, and synctex are all confined to that user's directory. It needs only user namespaces, which a Fly machine or any VM provides. gVisor gives stronger isolation but runs poorly nested inside a VM and is not needed when every process is your own build.
+- **The network namespace stays shared**, so every process can reach every localhost port. Each process therefore gets its own gateway secret (`DOCWRITER_GATEWAY_SECRET`) and refuses any request or WebSocket handshake without it; only the supervisor knows it.
 - **State is the same bucket layer** as above, restored per user when their process starts and synced while it runs.
 - **The app is untouched.** Each process is the CLI build with `--root` and `--port`, so the same three app-side changes apply and `main` stays the only branch.
 
@@ -136,7 +137,7 @@ What it gives up relative to a machine per user:
 - **A crash is shared.** The supervisor can restart one process, but a kernel-level problem or a full disk takes every user on the machine down together.
 - **The ceiling is one machine.** Past what one machine holds, the supervisor has to route across machines, which is the multi-machine gateway you avoided. Plan for it as an upgrade, not a rewrite: the supervisor's spawn call changes from "start a process" to "start a machine" and nothing else moves.
 
-Recommendation: start here. The supervisor is the only new code, the image and entrypoint are shared with the machine-per-user design, and the switch to machines later is contained in the spawner. The step-by-step version is on the [Hosting plan](/contribute/hosting-plan) page.
+Recommendation: start here. The supervisor is the only new code, the image and entrypoint are shared with the machine-per-user design, and the switch to machines later is contained in the spawner. The step-by-step version is on the [Hosting plan](/contribute/hosting-plan) page, and the implementation lives under `deploy/` with its runbook in `deploy/README.md`.
 
 ## Why not the browser or a shared server
 
