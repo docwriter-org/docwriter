@@ -89,3 +89,59 @@ describe('github auth', () => {
 		expect(res.headers['set-cookie']).toContain('Max-Age=0');
 	});
 });
+
+describe('clerk auth', () => {
+	const clerkConfig = { ...config, auth: 'clerk', clerk: { publishableKey: 'pk_test_abc', secretKey: 'sk_test_abc' } };
+	const fakeClerk = ({ users = { tok_alice: 'user_1' }, emails = { user_1: 'alice@example.org' } } = {}) => ({
+		scriptUrls: () => ({ js: 'https://x.clerk.accounts.dev/js.js', ui: 'https://x.clerk.accounts.dev/ui.js' }),
+		verify: async (token) => users[token] ?? null,
+		email: async (id) => emails[id] ?? null
+	});
+	const post = async (auth, token) => {
+		const url = new URL('/auth/clerk/session', clerkConfig.publicOrigin);
+		const req = { method: 'POST', headers: token ? { authorization: `Bearer ${token}` } : {} };
+		const res = fakeRes();
+		await auth.handle(req, res, url);
+		return res;
+	};
+
+	it('serves a sign-in page that loads ClerkJS with the publishable key', async () => {
+		const auth = createAuth({ config: clerkConfig, clerk: fakeClerk() });
+		const { res } = await run(auth, '/auth/login');
+		expect(res.status).toBe(200);
+		expect(res.body).toContain('https://x.clerk.accounts.dev/js.js');
+		expect(res.body).toContain('data-clerk-publishable-key="pk_test_abc"');
+		expect(res.body).toContain('/auth/clerk/session');
+	});
+
+	it('trades a verified Clerk token for a supervisor session keyed by Clerk user id', async () => {
+		const auth = createAuth({ config: clerkConfig, clerk: fakeClerk() });
+		const res = await post(auth, 'tok_alice');
+		expect(res.status).toBe(204);
+		const session = parseCookies(res.headers['set-cookie']).get('dw_session');
+		expect(auth.userFromRequest({ headers: { cookie: `dw_session=${encodeURIComponent(session)}` } })).toEqual({ id: 'clerk:user_1', login: 'alice@example.org' });
+	});
+
+	it('refuses missing, unverifiable, and uninvited tokens', async () => {
+		const allowed = new Set(['someone@else.org']);
+		const auth = createAuth({ config: clerkConfig, clerk: fakeClerk(), allowlist: () => allowed });
+		expect((await post(auth, '')).status).toBe(401);
+		expect((await post(auth, 'tok_bogus')).status).toBe(401);
+		const denied = await post(auth, 'tok_alice');
+		expect(denied.status).toBe(403);
+		expect(denied.body).toContain('alice@example.org');
+		expect(denied.headers['set-cookie']).toBeUndefined();
+	});
+
+	it('signs out by clearing our cookie and ending the Clerk session on the page', async () => {
+		const auth = createAuth({ config: clerkConfig, clerk: fakeClerk() });
+		const { res } = await run(auth, '/auth/logout');
+		expect(res.status).toBe(200);
+		expect(res.headers['set-cookie']).toContain('Max-Age=0');
+		expect(res.body).toContain('signOut()');
+	});
+
+	it('refuses to start in clerk mode without a verifier', () => {
+		expect(() => createAuth({ config: clerkConfig })).toThrow(/clerk verifier/);
+	});
+});

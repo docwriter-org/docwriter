@@ -149,7 +149,7 @@ Recommendation: start here. The supervisor is the only new code, the image and e
 
 **A cleaner multi-tenant refactor.** It is possible to do PR #51 well, with an explicit `Workspace` object passed per request instead of `AsyncLocalStorage`. The section above explains why it still is not a saving: same compute, a sandbox per subprocess anyway, and every server module made tenant-aware for good.
 
-**Hand provisioning.** Creating machines by hand works for ten participants and not for a thousand. The gateway is about two hundred lines: sign-in, look up or create the user's machine, answer with a `fly-replay` header. Auth itself is not the cost: GitHub OAuth is free, and Clerk's free tier covers far more than a thousand monthly users.
+**Hand provisioning.** Creating machines by hand works for ten participants and not for a thousand. The gateway is about two hundred lines: sign-in, look up or create the user's machine, answer with a `fly-replay` header. Auth itself is not the cost: Clerk's free tier covers far more than a thousand monthly users, and GitHub OAuth is free for the subset who have GitHub.
 
 **A different platform is not cheaper, but it can be cleaner.** Cloudflare Containers attach one container to one Durable Object, so per-user routing is a platform primitive keyed by user id and the gateway shrinks to a Worker. The state layer is the same, on R2 instead of a Fly-adjacent bucket. Choose between Fly and Cloudflare on familiarity; the design is identical.
 

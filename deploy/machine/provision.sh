@@ -50,10 +50,13 @@ SUPERVISOR_PORT=8080
 SUPERVISOR_DATA_DIR=/data
 SUPERVISOR_APP_DIR=/app/current
 SUPERVISOR_SANDBOX=bwrap
-SUPERVISOR_AUTH=github
+# clerk (email, magic link, Google, GitHub via the Clerk dashboard) or github (OAuth app only)
+SUPERVISOR_AUTH=clerk
 SUPERVISOR_ALLOWLIST=/etc/docwriter/allowlist
 SUPERVISOR_MAX_PROCESSES=60
 SUPERVISOR_MEMORY_MAX=1500M
+CLERK_PUBLISHABLE_KEY=
+CLERK_SECRET_KEY=
 GITHUB_CLIENT_ID=
 GITHUB_CLIENT_SECRET=
 SUPERVISOR_COOKIE_SECRET=$(head -c 32 /dev/urandom | base64 | tr -d '=+/' | head -c 48)

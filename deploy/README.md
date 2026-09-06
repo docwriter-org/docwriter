@@ -36,9 +36,9 @@ With bubblewrap installed and running as root, `SUPERVISOR_SANDBOX=bwrap` uses t
 
 1. Ubuntu 24.04 machine with a public IP, DNS `A` record for the domain pointing at it, ports 80 and 443 open.
 2. Copy `deploy/` to the machine and run `DOMAIN=app.example.org bash deploy/machine/provision.sh` as root. It installs bubblewrap, Node, Caddy, Litestream, rclone, writes the services, opens the firewall, and prints what to fill in.
-3. Create a GitHub OAuth app: homepage `https://app.example.org`, callback `https://app.example.org/auth/callback`. Put its id and secret in `/etc/docwriter/supervisor.env`.
+3. Sign-in. The default is Clerk, so anyone can sign in with email, a magic link, Google, or GitHub, whichever the Clerk dashboard enables. Create a Clerk application, add `https://app.example.org` under allowed origins, and put the publishable and secret keys in `/etc/docwriter/supervisor.env`. For a production Clerk instance, also add the DNS records Clerk asks for (its frontend API runs on a subdomain of yours, and the sign-in page loads ClerkJS from there). If everyone has GitHub and you would rather have no vendor, set `SUPERVISOR_AUTH=github` and create a GitHub OAuth app with callback `https://app.example.org/auth/callback` instead.
 4. Decide on the model key. `ANTHROPIC_API_KEY` in `supervisor.env` gives every user the same key; leave it empty for bring-your-own, where each user pastes a key in DocWriter's API keys panel and it is stored in their own home directory.
-5. Add GitHub logins to `/etc/docwriter/allowlist`, one per line. An empty file lets everyone in.
+5. Add invited users to `/etc/docwriter/allowlist`, one per line: email addresses with Clerk, GitHub logins with GitHub. An empty file lets everyone in.
 6. Ship a release: set the repository variable `HOSTED_DEPLOY_ENABLED=true` and the secrets `HOSTED_HOST` and `HOSTED_SSH_KEY` (a private key whose public half is in root's `authorized_keys`), then push to `main` or run the "Deploy hosted" workflow. By hand instead: build locally, `tar -czf release.tgz build deploy bin package.json node_modules`, copy it over, and run `deploy/machine/release.sh release.tgz`.
 7. `systemctl start docwriter-supervisor` and open the domain.
 
@@ -62,6 +62,10 @@ Roll back: `ln -sfn /app/releases/<older sha> /app/current && systemctl restart 
 - Capacity: `SUPERVISOR_MAX_PROCESSES` caps concurrent users; past it, new sign-ins get a "busy" page that retries. `SUPERVISOR_MEMORY_MAX` and `SUPERVISOR_PIDS_MAX` are per process, enforced by a cgroup under the supervisor's unit (`Delegate=yes`).
 - Idle: a process with no WebSocket for `SUPERVISOR_IDLE_SECONDS` (default 600) gets SIGTERM; the app flushes and exits; the next request respawns it in about a second.
 - A crash-looping user is held back by `SUPERVISOR_RESPAWN_COOLDOWN_MS` and sees a "restarting" page.
+
+## How sign-in works
+
+Clerk is used only at the moment of sign-in. Its page posts one short-lived Clerk session token to `/auth/clerk/session`; the supervisor verifies it with Clerk, reads the user's primary email, checks the allowlist, and sets its own signed cookie for thirty days. Every later request, the WebSocket included, is authenticated by that cookie alone. This is why the app never needs ClerkJS: Clerk tokens expire after a minute and are refreshed by ClerkJS on the page, which the DocWriter page does not load. The user's workspace is keyed by the Clerk user id, so changing email keeps the same workspace. Sign-out clears our cookie and ends the Clerk session on the sign-out page.
 
 ## Security model
 

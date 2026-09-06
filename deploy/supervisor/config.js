@@ -9,7 +9,7 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const SANDBOXES = new Set(['bwrap', 'none']);
-const AUTHS = new Set(['github', 'dev']);
+const AUTHS = new Set(['clerk', 'github', 'dev']);
 
 function int(value, fallback) {
 	const n = parseInt(value ?? '', 10);
@@ -39,13 +39,14 @@ export function loadConfig(env = process.env) {
 	if (!existsSync(appEntry)) throw new Error(`App entry not found: ${appEntry} (set SUPERVISOR_APP_DIR)`);
 
 	const cookieSecret = env.SUPERVISOR_COOKIE_SECRET || '';
-	if (auth === 'github') {
-		if (!env.GITHUB_CLIENT_ID || !env.GITHUB_CLIENT_SECRET) {
-			throw new Error('GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET are required for SUPERVISOR_AUTH=github');
-		}
-		if (cookieSecret.length < 32) {
-			throw new Error('SUPERVISOR_COOKIE_SECRET must be at least 32 characters for SUPERVISOR_AUTH=github');
-		}
+	if (auth === 'github' && !(env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET)) {
+		throw new Error('GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET are required for SUPERVISOR_AUTH=github');
+	}
+	if (auth === 'clerk' && !(env.CLERK_PUBLISHABLE_KEY && env.CLERK_SECRET_KEY)) {
+		throw new Error('CLERK_PUBLISHABLE_KEY and CLERK_SECRET_KEY are required for SUPERVISOR_AUTH=clerk');
+	}
+	if (auth !== 'dev' && cookieSecret.length < 32) {
+		throw new Error('SUPERVISOR_COOKIE_SECRET must be at least 32 characters');
 	}
 
 	return {
@@ -81,7 +82,8 @@ export function loadConfig(env = process.env) {
 		cookieName: 'dw_session',
 		sessionDays: int(env.SUPERVISOR_SESSION_DAYS, 30),
 		github: { clientId: env.GITHUB_CLIENT_ID || '', clientSecret: env.GITHUB_CLIENT_SECRET || '' },
-		/** File with one GitHub login per line. Missing or empty = everyone. */
+		clerk: { publishableKey: env.CLERK_PUBLISHABLE_KEY || '', secretKey: env.CLERK_SECRET_KEY || '' },
+		/** File with one login (GitHub) or email (Clerk) per line. Missing or empty = everyone. */
 		allowlistPath: env.SUPERVISOR_ALLOWLIST || '',
 		/** Bearer token for /__supervisor/metrics; empty = localhost only. */
 		metricsToken: env.SUPERVISOR_METRICS_TOKEN || ''

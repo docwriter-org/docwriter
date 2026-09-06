@@ -5,6 +5,11 @@
  *   `gh:<numeric id>` (stable across renames) and the login is display only.
  *   An optional allowlist file (one login per line, `#` comments) gates
  *   who may in.
+ * - `clerk`: Clerk's hosted sign-in UI (email, magic link, Google, GitHub,
+ *   as enabled in the Clerk dashboard). The page posts one Clerk session
+ *   token to `/auth/clerk/session`; the supervisor verifies it, reads the
+ *   user's primary email, checks the allowlist by email, and issues its
+ *   own cookie. The user id is `clerk:<user id>`. See clerk.js.
  * - `dev`: `/auth/login?user=<name>` signs in as that name. For laptops
  *   and tests only; the config refuses it unless SUPERVISOR_AUTH=dev.
  *
@@ -13,7 +18,7 @@
 import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { cookieHeader, issueSession, parseCookies, verifySession } from './session.js';
-import { notAllowedPage, signInPage } from './pages.js';
+import { clerkSignInPage, clerkSignOutPage, notAllowedPage, signInPage } from './pages.js';
 
 export function readAllowlist(path) {
 	if (!path) return null;
@@ -28,8 +33,15 @@ export function readAllowlist(path) {
 	}
 }
 
-export function createAuth({ config, metrics, fetchImpl = fetch, allowlist = () => readAllowlist(config.allowlistPath) }) {
+export function createAuth({
+	config,
+	metrics,
+	fetchImpl = fetch,
+	allowlist = () => readAllowlist(config.allowlistPath),
+	clerk = null
+}) {
 	const secret = config.cookieSecret || randomBytes(32).toString('hex');
+	if (config.auth === 'clerk' && !clerk) throw new Error('clerk verifier required for SUPERVISOR_AUTH=clerk');
 	const cookieOpts = { secure: config.secure, maxAgeSeconds: config.sessionDays * 86_400 };
 
 	function userFromRequest(req) {
@@ -107,6 +119,29 @@ export function createAuth({ config, metrics, fetchImpl = fetch, allowlist = () 
 		redirect(res, '/');
 	}
 
+	async function clerkSession(req, res) {
+		const token = (req.headers.authorization ?? '').replace(/^Bearer\s+/i, '').trim();
+		const fail = (status, text) => {
+			metrics?.inc('auth_denied');
+			res.writeHead(status, { 'content-type': 'text/plain; charset=utf-8' });
+			res.end(text);
+		};
+		if (!token) return fail(401, 'No session token.');
+		let userId = null;
+		try {
+			userId = await clerk.verify(token);
+		} catch {
+			userId = null;
+		}
+		if (!userId) return fail(401, 'Sign-in could not be verified. Reload and try again.');
+		const email = await clerk.email(userId).catch(() => null);
+		if (!email) return fail(401, 'Your account has no email address.');
+		if (!isAllowed(email)) return fail(403, `${email} is not invited to this DocWriter yet.`);
+		setSession(res, { id: `clerk:${userId}`, login: email });
+		res.writeHead(204);
+		res.end();
+	}
+
 	function devLogin(res, url) {
 		const name = (url.searchParams.get('user') ?? '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
 		if (!name) return html(res, 200, signInPage({ mode: 'dev' }));
@@ -120,7 +155,12 @@ export function createAuth({ config, metrics, fetchImpl = fetch, allowlist = () 
 		switch (url.pathname) {
 			case '/auth/login':
 				if (config.auth === 'github') await githubLogin(res);
+				else if (config.auth === 'clerk') html(res, 200, clerkSignInPage({ ...clerk.scriptUrls(), publishableKey: config.clerk.publishableKey }));
 				else devLogin(res, url);
+				return true;
+			case '/auth/clerk/session':
+				if (config.auth !== 'clerk' || req.method !== 'POST') return false;
+				await clerkSession(req, res);
 				return true;
 			case '/auth/callback':
 				if (config.auth === 'github') await githubCallback(req, res, url);
@@ -128,7 +168,8 @@ export function createAuth({ config, metrics, fetchImpl = fetch, allowlist = () 
 				return true;
 			case '/auth/logout':
 				res.setHeader('set-cookie', cookieHeader(config.cookieName, '', { secure: config.secure, maxAgeSeconds: 0 }));
-				redirect(res, '/auth/login');
+				if (config.auth === 'clerk') html(res, 200, clerkSignOutPage({ ...clerk.scriptUrls(), publishableKey: config.clerk.publishableKey }));
+				else redirect(res, '/auth/login');
 				return true;
 			default:
 				return false;
@@ -136,6 +177,7 @@ export function createAuth({ config, metrics, fetchImpl = fetch, allowlist = () 
 	}
 
 	function signInResponse(res) {
+		if (config.auth === 'clerk') return html(res, 401, clerkSignInPage({ ...clerk.scriptUrls(), publishableKey: config.clerk.publishableKey }));
 		html(res, 401, signInPage({ mode: config.auth }));
 	}
 

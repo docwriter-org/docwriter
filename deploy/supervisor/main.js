@@ -16,6 +16,7 @@ import { createCgroups } from './cgroup.js';
 import { probeHost } from './sandbox.js';
 import { createProcessManager, CapacityError, CooldownError, SpawnError } from './processes.js';
 import { createAuth } from './auth.js';
+import { createClerkVerifier } from './clerk.js';
 import { createMetrics } from './metrics.js';
 import { proxyRequest, proxyUpgrade } from './proxy.js';
 import { capacityPage, failedPage, restartingPage, startingPage } from './pages.js';
@@ -41,7 +42,8 @@ export async function startSupervisor(config) {
 	}
 
 	const manager = createProcessManager({ config, cgroups, host, metrics });
-	const auth = createAuth({ config, metrics });
+	const clerk = config.auth === 'clerk' ? createClerkVerifier({ ...config.clerk, publicOrigin: config.publicOrigin }) : null;
+	const auth = createAuth({ config, metrics, clerk });
 
 	function wantsHtml(req) {
 		return (req.headers.accept ?? '').includes('text/html');

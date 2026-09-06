@@ -74,9 +74,13 @@ Verified: the integration test runs the supervisor against a fake app; a manual 
 
 ## Phase 3: auth
 
-The supervisor owns sign-in. Done: GitHub OAuth with the `read:user` scope, the user id `gh:<numeric id>` so renames do not create a new workspace, a signed session cookie, an allowlist file for invite-only phases, and a sign-out route. `SUPERVISOR_AUTH=dev` accepts any name for laptops and tests. The app processes never see any of this; they trust the gateway header, which only the supervisor sends.
+The supervisor owns sign-in. Done, three modes behind `SUPERVISOR_AUTH`:
 
-Clerk would slot into `auth.js` in place of the GitHub flow if email or magic-link sign-in is wanted later.
+- **`clerk`** (default): Clerk's hosted sign-in UI, so participants without a GitHub account can use email, a magic link, or Google. Clerk is used only at sign-in: the page posts one Clerk session token to the supervisor, which verifies it with `@clerk/backend`, reads the primary email, checks the allowlist by email, and issues its own thirty-day cookie. That keeps ClerkJS out of the app page, where Clerk's sixty-second tokens could not be refreshed. The user id is `clerk:<user id>`, so an email change keeps the workspace.
+- **`github`**: a plain OAuth app with the `read:user` scope, no vendor. The user id is `gh:<numeric id>`.
+- **`dev`**: any name, for laptops and tests.
+
+All three end in the same signed session cookie, allowlist file, and sign-out route. The app processes never see any of this; they trust the gateway header, which only the supervisor sends.
 
 ## Phase 4: machine and deploys
 
@@ -115,7 +119,7 @@ Multi-machine routing, warm process pools, the Claude subscription login inside 
 | 0 Measure | idle and spawn measured; render memory needs a key | a machine size and a memory cap |
 | 1 App changes | done, on this branch | a merged PR on `main` |
 | 2 Supervisor | done, tested | two sandboxed users on a laptop |
-| 3 Auth | done, GitHub flow tested with a fake GitHub | sign-in with an allowlist |
+| 3 Auth | done: Clerk, GitHub, and dev modes, tested with fakes | sign-in with an allowlist |
 | 4 Machine and deploys | files written, not yet run on a host | the domain serving `main` |
 | 5 State and backups | files written, restore drill pending | a restore that worked |
 | 6 Observability and launch | metrics endpoint done; alerts and checklist pending | alerts and the checklist |
