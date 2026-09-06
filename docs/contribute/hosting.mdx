@@ -128,7 +128,7 @@ What it gives up relative to a machine per user:
 - **A crash is shared.** The supervisor can restart one process, but a kernel-level problem or a full disk takes every user on the machine down together.
 - **The ceiling is one machine.** Past what one machine holds, the supervisor has to route across machines, which is the multi-machine gateway you avoided. Plan for it as an upgrade, not a rewrite: the supervisor's spawn call changes from "start a process" to "start a machine" and nothing else moves.
 
-Recommendation: start here. The supervisor is the only new code, the image and entrypoint are shared with the machine-per-user design, and the switch to machines later is contained in the spawner.
+Recommendation: start here. The supervisor is the only new code, the image and entrypoint are shared with the machine-per-user design, and the switch to machines later is contained in the spawner. The step-by-step version is on the [Hosting plan](/contribute/hosting-plan) page.
 
 ## Why not the browser or a shared server
 
