@@ -104,9 +104,41 @@ The app code stays the same three changes as before. The state layer is entirely
 
 Machine size is the other lever, and it should be measured, not guessed: boot the real image, open a document, run a render, and read peak memory. Node plus Hocuspocus is small; the `claude` subprocess is the bulk, and it only exists during a render.
 
+## Cheapest sound option: one process per user on a shared machine
+
+The isolation boundary does not have to be a machine. It can be a process. Each user still gets their own single-tenant DocWriter, but a supervisor on one large machine spawns it on demand instead of the platform booting a VM:
+
+```
+bwrap --unshare-all --share-net \
+      --ro-bind /usr /usr --ro-bind /app /app \
+      --bind /data/<user> /workspace --tmpfs /tmp \
+      -- node /app/build --root /workspace --port <p>
+```
+
+- **The supervisor** maps user to port, spawns the process on the first request, and kills it after the WebSocket has been idle for a few minutes. That is the same two hundred lines the machine gateway would be, minus the Machines API.
+- **Bubblewrap wraps the whole DocWriter process**, not just the `claude` subprocess, so Bash, hooks, and synctex are all confined to that user's directory. It needs only user namespaces, which a Fly machine or any VM provides. gVisor gives stronger isolation but runs poorly nested inside a VM and is not needed when every process is your own build.
+- **State is the same bucket layer** as above, restored per user when their process starts and synced while it runs.
+- **The app is untouched.** Each process is the CLI build with `--root` and `--port`, so the same three app-side changes apply and `main` stays the only branch.
+
+This is how JupyterHub's local process spawner works, and it is the cheapest version that is still sound. One 8 GB machine holds roughly thirty to sixty active users, depending on measured memory per process, at about forty dollars a month always on. A second machine covers a thousand accounts at fifty active.
+
+What it gives up relative to a machine per user:
+
+- **Neighbors share CPU.** One user's heavy render slows the others on that machine. Memory is bounded per process by a cgroup or `ulimit`, but CPU fairness is only what the kernel scheduler gives you.
+- **A crash is shared.** The supervisor can restart one process, but a kernel-level problem or a full disk takes every user on the machine down together.
+- **The ceiling is one machine.** Past what one machine holds, the supervisor has to route across machines, which is the multi-machine gateway you avoided. Plan for it as an upgrade, not a rewrite: the supervisor's spawn call changes from "start a process" to "start a machine" and nothing else moves.
+
+Recommendation: start here. The supervisor is the only new code, the image and entrypoint are shared with the machine-per-user design, and the switch to machines later is contained in the spawner.
+
+## Why not the browser or a shared server
+
+**Running the harness client side** is not a hosting strategy for DocWriter; it is a different application. The Agent SDK's `query()` is a wrapper around a `claude` subprocess, so nothing in it runs in a browser. The agent loop, prompt building, the document tools, the review rounds, the critique and feedback passes, style analysis, and the live Y.Doc all live in the server code, most of it against SQLite and Hocuspocus. Moving the agent into the browser means rewriting that layer against the browser's Y.Doc replica, dropping Bash, hooks, skills, and the four non-Claude providers, and either shipping the API key to the browser or adding a key-injecting proxy. The hosted product would then be a permanent fork of the CLI product, which is the failure mode this page exists to avoid.
+
+**A single shared server process with each `claude` subprocess sandboxed** is technically workable, and bubblewrap is the right tool for the subprocess too. What it does not do is remove the need for multiple machines at a thousand accounts, because peak memory is the same sum of subprocesses and the live Y.Doc for a tab can only exist in one process, so a second server means sticky routing or Hocuspocus's Redis extension. It also brings back the tenancy refactor from PR #51: per-user database, root, session store, skills install, hook runner, API keys, and scratch, resolved on every request and maintained on every future change to `main`. The saving over process per user is a few hundred megabytes of Node overhead per active user, which is one small machine's worth of cost against weeks of work and a permanent tax on the codebase. It also loses the property that one user's runaway render or oversized document cannot stall the event loop for everyone else.
+
 ## What is not a saving
 
-**A cleaner multi-tenant refactor.** It is possible to do PR #51 well: make a `Workspace` object that carries root, database, and scratch directory, resolve one per request, and pass it explicitly instead of through `AsyncLocalStorage`. It is still a change to every server module, and it does not save compute, because each active user still runs their own `claude` subprocess. Worse, a shared process gives every one of those subprocesses Bash on the same filesystem, so isolating users means sandboxing each subprocess with something like bubblewrap or gVisor, which is a container per user built by hand. The only way around that is to remove Bash and hooks in hosted mode, which weakens the agent. Per-user containers cost the same and touch no app code.
+**A cleaner multi-tenant refactor.** It is possible to do PR #51 well, with an explicit `Workspace` object passed per request instead of `AsyncLocalStorage`. The section above explains why it still is not a saving: same compute, a sandbox per subprocess anyway, and every server module made tenant-aware for good.
 
 **Hand provisioning.** Creating machines by hand works for ten participants and not for a thousand. The gateway is about two hundred lines: sign-in, look up or create the user's machine, answer with a `fly-replay` header. Auth itself is not the cost: GitHub OAuth is free, and Clerk's free tier covers far more than a thousand monthly users.
 
