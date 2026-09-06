@@ -93,7 +93,7 @@ describe('process manager', () => {
 		s.tick(61_000);
 		expect(s.manager.idleProcs().map((x) => x.user.id)).toEqual(['u1']);
 		const reaped = s.manager.reapIdle();
-		expect(s.killed).toEqual([[-p.pid, 'SIGTERM']]);
+		expect(s.killed).toEqual([[p.pid, 'SIGTERM']]); // the app process itself, not its group
 		p.child.emit('exit', 0, null);
 		await reaped;
 		expect(s.manager.get('u1')).toBeNull();

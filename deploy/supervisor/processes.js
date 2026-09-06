@@ -12,6 +12,7 @@ import { randomBytes } from 'node:crypto';
 import { chownSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildCommand, passwdFiles, userDirs } from './sandbox.js';
+import { findAppPid } from './procfs.js';
 import { info, warn, error } from './log.js';
 
 export class CapacityError extends Error {}
@@ -27,6 +28,7 @@ export function createProcessManager({
 	metrics,
 	spawnImpl = spawn,
 	fetchImpl = fetch,
+	findAppPidImpl = findAppPid,
 	now = Date.now
 }) {
 	/** @type {Map<string, any>} userId → proc */
@@ -192,7 +194,15 @@ export function createProcessManager({
 				warn('force killing', { user: proc.user.login, pid: proc.pid });
 				if (!cgroups?.kill(proc.user.uid)) signalGroup(proc.pid, 'SIGKILL');
 			}, config.killGraceSeconds * 1000);
-			signalGroup(proc.pid, 'SIGTERM');
+			// SIGTERM the Node process itself, not the whole group: under bwrap
+			// the group also contains bwrap, which would die first and take
+			// the app down with SIGKILL (--die-with-parent) before it flushes.
+			const appPid = config.sandbox === 'none' ? proc.pid : (findAppPidImpl(proc.pid) ?? proc.pid);
+			try {
+				process.kill(appPid, 'SIGTERM');
+			} catch {
+				signalGroup(proc.pid, 'SIGTERM');
+			}
 		});
 		return proc.stopped;
 	}
