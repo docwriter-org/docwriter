@@ -50,6 +50,7 @@ import { ensureDocument, deleteDocument } from './documents-store';
 import { backupDocumentState } from './state-backup';
 import { scrubFeedbackThreads } from './feedback-import';
 import { getDb } from './db';
+import { isTrustedGatewayRequest } from './gateway';
 
 function globalHolder() {
 	return globalThis as unknown as { __docwriterWsServer?: Server };
@@ -65,7 +66,20 @@ function currentServerInstanceId(): string {
 export function createWsServer(port: number): Server {
 	const server = new Server({
 		port,
+		// Follow the HTTP server's bind address (the CLI sets HOST; `--host`
+		// widens both together). Unset in `vite dev` keeps Hocuspocus's
+		// default so LAN access during development is unchanged.
+		...(process.env.DOCWRITER_WS_HOST || process.env.HOST
+			? { address: process.env.DOCWRITER_WS_HOST || process.env.HOST }
+			: {}),
 		quiet: true,
+		async onConnect({ requestHeaders }) {
+			// Hosted: the upgrade must come through the supervisor. Same check
+			// as the HTTP handle in hooks.server.ts; see gateway.ts.
+			if (!isTrustedGatewayRequest(requestHeaders)) {
+				throw new Error('gateway-required');
+			}
+		},
 		async onAuthenticate({ token }) {
 			// Require a matching instance id on every connect. The client
 			// fetches /api/session at mount time to populate sessionStorage

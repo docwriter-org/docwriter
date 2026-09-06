@@ -30,6 +30,11 @@ interface TabDoc {
 }
 
 function wsUrl(): string {
+	// Hosted: the supervisor proxies the WebSocket on the page's own origin
+	// (e.g. wss://app.example.org/ws), so the browser never needs a port.
+	// Hocuspocus carries the document name in messages, not the URL path,
+	// so a fixed path is fine.
+	if (env.PUBLIC_DOCWRITER_WS_URL) return env.PUBLIC_DOCWRITER_WS_URL;
 	// Runtime (not build-time) env: the CLI picks a free WS port per instance
 	// and passes it via PUBLIC_DOCWRITER_WS_PORT, so the value can't be baked
 	// into the bundle at build time.

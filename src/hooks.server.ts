@@ -14,6 +14,7 @@ import { installBundledSkills } from '$lib/server/skills-install';
 import { createWsServer } from '$lib/server/ws-server';
 import { loadGlobalKeys, loadRepoEnv } from '$lib/server/api-keys';
 import { failInterruptedStyleRun } from '$lib/server/style-analysis/interrupted-run';
+import { isTrustedGatewayRequest } from '$lib/server/gateway';
 
 // Load repo .env, then ~/.docwriter/keys.env into process.env so provider API
 // keys are available before any render path reads process.env.<KEY>. The
@@ -88,5 +89,15 @@ if (process.env.DOCWRITER_NEW_SESSION === '1') {
 	}
 }
 
-// Pass-through handle (no per-request modifications needed here).
-export const handle: Handle = async ({ event, resolve }) => resolve(event);
+// Hosted deployments set DOCWRITER_GATEWAY_SECRET; then only requests the
+// supervisor forwarded (carrying the secret header) are served. See
+// src/lib/server/gateway.ts. Unset, this is a pass-through.
+export const handle: Handle = async ({ event, resolve }) => {
+	if (!isTrustedGatewayRequest(event.request.headers)) {
+		return new Response('Forbidden: this DocWriter is only reachable through its gateway.', {
+			status: 403,
+			headers: { 'content-type': 'text/plain' }
+		});
+	}
+	return resolve(event);
+};
