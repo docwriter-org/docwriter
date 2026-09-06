@@ -9,7 +9,7 @@ export default defineConfig({
 		alias: { $lib: resolve(root, 'src/lib') }
 	},
 	test: {
-		include: ['src/**/*.test.ts'],
+		include: ['src/**/*.test.ts', 'deploy/supervisor/**/*.test.js'],
 		exclude: ['.claude/**', 'tests/**', 'node_modules/**']
 	}
 });

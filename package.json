@@ -23,6 +23,7 @@
 		"build": "vite build",
 		"start": "node bin/docwriter.js",
 		"doctor": "node bin/docwriter-doctor.js",
+		"supervisor": "node deploy/supervisor/main.js",
 		"preview": "vite preview",
 		"prepare": "node scripts/setup-pdfjs.mjs && svelte-kit sync",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
