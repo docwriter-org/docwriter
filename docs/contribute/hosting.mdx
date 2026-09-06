@@ -76,11 +76,41 @@ Things that must be true from the first sign-up at this scale:
 
 - **Provisioning is code.** The gateway creates the machine and volume through the Machines API on first sign-in. Nobody creates machines by hand.
 - **Quotas are raised ahead of time.** Fly caps machines and volumes per organization by default; ask for the limit before launch, not during it.
-- **Volumes are backed up.** A volume lives on one host. Keep the platform's daily snapshots on, and add a periodic copy of each workspace's markdown and SQLite file to object storage so a lost host is an inconvenience, not lost writing.
+- **State outlives the machine.** Either back volumes up, or skip volumes entirely as described in the next section.
 - **Idle machines stop.** Configure auto-stop on WebSocket disconnect with a short grace period, and measure resume time on the real image. A stopped machine resumes in about a second; a suspended one faster.
 - **The image is small.** Cold start scales with image size, and a thousand machines pull it.
 
 If the first launch is a study with a known list of participants, the same gateway still applies; skipping it only works for a handful of people.
+
+## Cheaper variant: stateless machines, state in object storage
+
+The per-user volume is the one recurring cost that idle users still pay, and it is also the operational burden: a volume is pinned to a host, needs snapshots, and counts against a quota. Drop it.
+
+A workspace is small: a few markdown files, a SQLite file of a few megabytes, and whatever references the user uploaded. Keep it in a bucket instead, one prefix per user, and make the machine a cache of it:
+
+- **The SQLite file streams continuously.** Run Litestream as a sidecar process inside the container, replicating `.docwriter/docwriter.db` to the user's prefix. SQLite is the source of truth and the Yjs log rebuilds `document.md`, so this alone protects the writing. The loss window on a hard kill is about a second of WAL.
+- **Everything else syncs on a timer and on shutdown.** An entrypoint script restores the prefix into `/data` before starting DocWriter, runs `rclone sync` every minute, and runs it once more on `SIGTERM`. References, uploaded PDFs, skills, hooks, and scratch files travel this way.
+- **Agent session state lives under the workspace.** Set `CLAUDE_CONFIG_DIR` to a directory under `/data` so the CLI's transcripts, which `resume` needs, persist with the rest instead of in the container's home directory.
+
+Machines then become fungible. Destroy an idle one instead of stopping it, recreate it on the next sign-in from the same image, and let it restore in the entrypoint. Nothing on the machine is unique, so a lost host is a cold start, not lost work.
+
+| Item | Rough monthly cost, 1000 accounts, ~50 active at once |
+|---|---|
+| Object storage, 1000 workspaces at ~1 GB | ~$20 |
+| ~50 running machines, destroyed when idle | ~$150 to $300, depending on machine size |
+| Idle accounts | $0 |
+
+The app code stays the same three changes as before. The state layer is entirely deploy-side: the entrypoint script, a Litestream config, and the bucket. Nothing on `main` learns about hosting.
+
+Machine size is the other lever, and it should be measured, not guessed: boot the real image, open a document, run a render, and read peak memory. Node plus Hocuspocus is small; the `claude` subprocess is the bulk, and it only exists during a render.
+
+## What is not a saving
+
+**A cleaner multi-tenant refactor.** It is possible to do PR #51 well: make a `Workspace` object that carries root, database, and scratch directory, resolve one per request, and pass it explicitly instead of through `AsyncLocalStorage`. It is still a change to every server module, and it does not save compute, because each active user still runs their own `claude` subprocess. Worse, a shared process gives every one of those subprocesses Bash on the same filesystem, so isolating users means sandboxing each subprocess with something like bubblewrap or gVisor, which is a container per user built by hand. The only way around that is to remove Bash and hooks in hosted mode, which weakens the agent. Per-user containers cost the same and touch no app code.
+
+**Hand provisioning.** Creating machines by hand works for ten participants and not for a thousand. The gateway is about two hundred lines: sign-in, look up or create the user's machine, answer with a `fly-replay` header. Auth itself is not the cost: GitHub OAuth is free, and Clerk's free tier covers far more than a thousand monthly users.
+
+**A different platform is not cheaper, but it can be cleaner.** Cloudflare Containers attach one container to one Durable Object, so per-user routing is a platform primitive keyed by user id and the gateway shrinks to a Worker. The state layer is the same, on R2 instead of a Fly-adjacent bucket. Choose between Fly and Cloudflare on familiarity; the design is identical.
 
 ## What to carry over from PR #51
 
