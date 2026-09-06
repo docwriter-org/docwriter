@@ -99,7 +99,8 @@
 					"contribute/setup",
 					"contribute/architecture",
 					"contribute/providers-and-tools",
-					"contribute/testing-and-docs"
+					"contribute/testing-and-docs",
+					"contribute/hosting"
 				]
 			},
 			{
