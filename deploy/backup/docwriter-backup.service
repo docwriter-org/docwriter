@@ -1,0 +1,8 @@
+[Unit]
+Description=DocWriter hourly workspace backup to object storage
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/docwriter-backup
+Nice=10
+IOSchedulingClass=idle

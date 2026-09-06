@@ -1,0 +1,25 @@
+[Unit]
+Description=DocWriter hosting supervisor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/docwriter/supervisor.env
+WorkingDirectory=/app/current
+ExecStart=/usr/bin/node /app/current/deploy/supervisor/main.js
+Restart=always
+RestartSec=3
+KillMode=mixed
+TimeoutStopSec=60
+# The supervisor creates a cgroup per user process for memory and pid caps.
+Delegate=yes
+# Runs as root: it drops to a distinct uid for every user process it spawns.
+User=root
+LimitNOFILE=65536
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=docwriter-supervisor
+
+[Install]
+WantedBy=multi-user.target

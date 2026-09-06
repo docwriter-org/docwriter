@@ -1,0 +1,42 @@
+# Build a release of the hosted editor and install it on the machine.
+# Needs secrets: HOSTED_SSH_KEY (private key for root@host), HOSTED_HOST.
+# Only runs when those are configured; otherwise it does nothing.
+name: Deploy hosted
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-hosted
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    if: ${{ vars.HOSTED_DEPLOY_ENABLED == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Prefer glibc Claude Agent SDK binary
+        run: rm -rf node_modules/@anthropic-ai/claude-agent-sdk-linux-x64-musl
+      - run: npm run check
+      - run: npm run test:unit
+      - run: npm run build
+      - run: npm prune --omit=dev
+      - name: Pack release
+        run: tar -czf release.tgz build deploy bin package.json node_modules
+      - name: Ship and install
+        env:
+          SSH_KEY: ${{ secrets.HOSTED_SSH_KEY }}
+          HOST: ${{ secrets.HOSTED_HOST }}
+        run: |
+          mkdir -p ~/.ssh && echo "$SSH_KEY" > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts
+          scp release.tgz "root@$HOST:/tmp/release-${GITHUB_SHA}.tgz"
+          ssh "root@$HOST" "bash -s" < deploy/machine/release.sh "/tmp/release-${GITHUB_SHA}.tgz" "${GITHUB_SHA::12}"

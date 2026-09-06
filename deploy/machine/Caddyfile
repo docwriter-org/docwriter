@@ -1,0 +1,22 @@
+# TLS termination for the DocWriter supervisor. Caddy fetches and renews the
+# certificate itself. Everything, WebSocket included, goes to the supervisor.
+__DOMAIN__ {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8080 {
+		# Long-lived SSE renders and WebSockets: never time out the upstream.
+		transport http {
+			read_timeout 0
+			write_timeout 0
+		}
+		flush_interval -1
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		-Server
+	}
+	log {
+		output file /var/log/caddy/access.log
+		format json
+	}
+}

@@ -73,11 +73,18 @@ export function createWsServer(port: number): Server {
 			? { address: process.env.DOCWRITER_WS_HOST || process.env.HOST }
 			: {}),
 		quiet: true,
-		async onConnect({ requestHeaders }) {
+		async onUpgrade({ request, socket }) {
 			// Hosted: the upgrade must come through the supervisor. Same check
-			// as the HTTP handle in hooks.server.ts; see gateway.ts.
-			if (!isTrustedGatewayRequest(requestHeaders)) {
-				throw new Error('gateway-required');
+			// as the HTTP handle in hooks.server.ts; see gateway.ts. This runs
+			// on the raw HTTP upgrade, before the WebSocket exists, so a direct
+			// connection is refused at the handshake. (`onConnect` would only
+			// close it after the handshake.)
+			if (!isTrustedGatewayRequest(request.headers)) {
+				socket.write('HTTP/1.1 403 Forbidden\r\nconnection: close\r\n\r\n');
+				socket.destroy();
+				// Hocuspocus's contract: a hook that rejects with an empty value
+				// skips the default upgrade handler without rethrowing.
+				return Promise.reject();
 			}
 		},
 		async onAuthenticate({ token }) {
