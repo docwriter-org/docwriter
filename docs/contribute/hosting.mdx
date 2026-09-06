@@ -15,6 +15,14 @@ DocWriter is a single-tenant process by design. One process owns one workspace r
 
 This is why a "mock filesystem" does not fit. The editor's own file access could be virtualized, but the agent's cannot: the SDK spawns a separate process that expects real files. The only way to give it a virtual filesystem is to copy files out to a sandbox, run, and copy them back, which is the sandboxed runner PR #51 had to build.
 
+## Why the agent is a subprocess
+
+The Claude provider uses `@anthropic-ai/claude-agent-sdk`, which is Claude Code packaged as a library: `query()` starts the Claude Code CLI as a child process and talks to it over stdio. DocWriter depends on that harness, not just the model. The built-in Read, Glob, Grep, Bash, and web tools, the project skills and `.claude/CLAUDE.md` rules that reach the model through `settingSources`, session resume, plan mode, hooks, and subscription login with no API key all come from the CLI. The other providers are the same shape: Codex, Cursor, and Pi are each a coding-agent harness with its own tools and login.
+
+That is the product decision underneath every hosting choice on this page. DocWriter is a document layer over coding-agent harnesses, so hosting it means hosting a small development environment per user, the way code-server and JupyterHub do.
+
+The one design that escapes this is a hosted-only agent that does not use a harness at all: an in-process loop over the Messages API with only the document tools, no filesystem, no subprocess. A shared multi-tenant server then becomes viable, and the tenancy work shrinks to the data layer. The price is a second agent runtime maintained next to the CLI one, no Bash, hooks, skills, or non-Claude providers for hosted users, and a second implementation of everything that consumes the SDK's event stream. Take it only if the hosted product is meant to be a lighter thing than the CLI.
+
 ## What PR #51 tried
 
 PR #51 retrofitted tenancy into the single process. Every request ran inside an `AsyncLocalStorage` user scope, every server module resolved the user's root and database through that scope, `~/.claude` state was relocated per user, and agent Bash calls shipped a bundle of workspace files (up to 16 MB) to a remote runner app and merged the results back.
