@@ -63,7 +63,18 @@ SUPERVISOR_COOKIE_SECRET=$(head -c 32 /dev/urandom | base64 | tr -d '=+/' | head
 SUPERVISOR_METRICS_TOKEN=$(head -c 24 /dev/urandom | base64 | tr -d '=+/' | head -c 32)
 # Shared model key for every user, or leave empty for bring-your-own-key.
 ANTHROPIC_API_KEY=
+# Backups (see deploy/backup/). Litestream reads these from /etc/default/litestream too.
+LITESTREAM_BUCKET=
+LITESTREAM_ENDPOINT=
+LITESTREAM_ACCESS_KEY_ID=
+LITESTREAM_SECRET_ACCESS_KEY=
+RCLONE_CONFIG_BACKUP_TYPE=s3
+RCLONE_CONFIG_BACKUP_PROVIDER=
+RCLONE_CONFIG_BACKUP_ENDPOINT=
+RCLONE_CONFIG_BACKUP_ACCESS_KEY_ID=
+RCLONE_CONFIG_BACKUP_SECRET_ACCESS_KEY=
 ENV
+ln -sfn /etc/docwriter/supervisor.env /etc/default/litestream
 chmod 600 /etc/docwriter/supervisor.env
 
 echo "== services"
@@ -72,6 +83,8 @@ install -m 644 "$HERE/docwriter-supervisor.service" /etc/systemd/system/
 sed "s/__DOMAIN__/${DOMAIN}/g" "$HERE/Caddyfile" > /etc/caddy/Caddyfile
 install -m 644 "$HERE/../backup/litestream.yml" /etc/litestream.yml
 install -m 644 "$HERE/../backup/docwriter-backup.service" "$HERE/../backup/docwriter-backup.timer" /etc/systemd/system/
+mkdir -p /etc/systemd/system/docwriter-backup.service.d
+printf '[Service]\nEnvironmentFile=/etc/docwriter/supervisor.env\n' > /etc/systemd/system/docwriter-backup.service.d/env.conf
 install -m 755 "$HERE/../backup/backup.sh" /usr/local/bin/docwriter-backup
 systemctl daemon-reload
 systemctl enable caddy docwriter-supervisor docwriter-backup.timer

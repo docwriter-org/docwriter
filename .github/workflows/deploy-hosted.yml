@@ -1,6 +1,6 @@
-# Build a release of the hosted editor and install it on the machine.
-# Needs secrets: HOSTED_SSH_KEY (private key for root@host), HOSTED_HOST.
-# Only runs when those are configured; otherwise it does nothing.
+# Deploy the hosted editor on push to main. Two targets, chosen by the
+# repository variable HOSTED_DEPLOY_TARGET: "fly" (deploy/fly) or "ssh"
+# (a plain VM provisioned with deploy/machine). Unset means do nothing.
 name: Deploy hosted
 
 on:
@@ -13,9 +13,20 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
+  fly:
+    if: ${{ vars.HOSTED_DEPLOY_TARGET == 'fly' }}
     runs-on: ubuntu-latest
-    if: ${{ vars.HOSTED_DEPLOY_ENABLED == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@1.6
+      - name: Deploy
+        run: flyctl deploy . --config deploy/fly/fly.toml --dockerfile deploy/fly/Dockerfile --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_APP_DEPLOY_TOKEN }}
+
+  ssh:
+    if: ${{ vars.HOSTED_DEPLOY_TARGET == 'ssh' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

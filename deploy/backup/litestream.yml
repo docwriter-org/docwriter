@@ -1,15 +1,19 @@
 # Continuous replication of every user's SQLite file to one bucket prefix
 # per user. SQLite is DocWriter's source of truth, so this alone protects
 # the writing with about a second of loss on a hard failure.
-# Fill in the bucket and credentials, then: systemctl enable --now litestream
+# Configure through the environment (Litestream expands ${VAR}):
+#   LITESTREAM_BUCKET, LITESTREAM_ENDPOINT (S3-compatible, e.g. R2),
+#   LITESTREAM_ACCESS_KEY_ID, LITESTREAM_SECRET_ACCESS_KEY
+# Fly: `fly secrets set ...`; VM: /etc/docwriter/supervisor.env plus
+# `systemctl enable --now litestream` (its unit reads /etc/litestream.yml).
 dbs:
   - path: /data/users/*/workspace/.docwriter/docwriter.db
     replicas:
       - type: s3
-        bucket: CHANGE-ME-bucket
+        bucket: ${LITESTREAM_BUCKET}
         path: litestream/${LITESTREAM_DB_PATH}
-        endpoint: https://CHANGE-ME.r2.cloudflarestorage.com   # or any S3 endpoint
-        access-key-id: CHANGE-ME
-        secret-access-key: CHANGE-ME
+        endpoint: ${LITESTREAM_ENDPOINT}
+        access-key-id: ${LITESTREAM_ACCESS_KEY_ID}
+        secret-access-key: ${LITESTREAM_SECRET_ACCESS_KEY}
         retention: 168h
         sync-interval: 1s

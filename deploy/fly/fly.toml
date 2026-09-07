@@ -1,0 +1,49 @@
+# One Fly Machine runs the supervisor and every user's sandboxed process.
+# Deploy from the repository root:
+#   fly deploy . --config deploy/fly/fly.toml --dockerfile deploy/fly/Dockerfile --remote-only
+# Secrets (fly secrets set --config deploy/fly/fly.toml KEY=value):
+#   CLERK_PUBLISHABLE_KEY, CLERK_SECRET_KEY, SUPERVISOR_COOKIE_SECRET,
+#   SUPERVISOR_METRICS_TOKEN, ANTHROPIC_API_KEY (or leave unset for bring-your-own),
+#   LITESTREAM_BUCKET, LITESTREAM_ENDPOINT, LITESTREAM_ACCESS_KEY_ID, LITESTREAM_SECRET_ACCESS_KEY,
+#   RCLONE_CONFIG_BACKUP_TYPE=s3, RCLONE_CONFIG_BACKUP_PROVIDER, RCLONE_CONFIG_BACKUP_ENDPOINT,
+#   RCLONE_CONFIG_BACKUP_ACCESS_KEY_ID, RCLONE_CONFIG_BACKUP_SECRET_ACCESS_KEY
+app = 'docwriter-app'
+primary_region = 'sjc'
+# Give the supervisor time to SIGTERM every user process and let each flush.
+kill_timeout = '90s'
+
+[env]
+  SUPERVISOR_PUBLIC_ORIGIN = 'https://app.docwriter.org'
+  SUPERVISOR_MAX_PROCESSES = '60'
+  SUPERVISOR_MEMORY_MAX = '1500M'
+  SUPERVISOR_IDLE_SECONDS = '600'
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # The machine holds live documents; never let Fly stop it for idleness.
+  auto_stop_machines = 'off'
+  auto_start_machines = true
+  min_machines_running = 1
+
+  # Every browser tab holds a WebSocket. Fly's defaults (soft 20, hard 25)
+  # would start refusing connections after a couple of dozen users.
+  [http_service.concurrency]
+    type = 'connections'
+    soft_limit = 4000
+    hard_limit = 5000
+
+  [[http_service.checks]]
+    path = '/__supervisor/healthz'
+    interval = '30s'
+    timeout = '5s'
+    grace_period = '30s'
+
+[[vm]]
+  size = 'performance-4x'
+  memory = '32gb'
+
+[[mounts]]
+  source = 'docwriter_data'
+  destination = '/data'
+  initial_size = '50gb'

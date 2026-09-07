@@ -133,7 +133,10 @@ describe('supervisor end to end (fake app)', () => {
 		expect(sup.metrics.snapshot()).toMatchObject({ spawns: 3, reaps: 2, spawn_failures: 0 });
 	});
 
-	it('serves metrics to localhost', async () => {
+	it('answers liveness without auth and serves metrics to localhost', async () => {
+		const health = await (await fetch(`${base}/__supervisor/healthz`)).json();
+		expect(health.ok).toBe(true);
+		expect(typeof health.running).toBe('number');
 		const text = await (await fetch(`${base}/__supervisor/metrics`)).text();
 		expect(text).toContain('docwriter_supervisor_spawns_total 3');
 		expect(text).toContain('docwriter_supervisor_users_total 2');

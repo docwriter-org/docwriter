@@ -58,6 +58,12 @@ export async function startSupervisor(config) {
 	}
 
 	function supervisorRoutes(req, res, url) {
+		// Liveness is public: platform health checkers (Fly, a load balancer)
+		// are not on loopback, and it reveals only process counts.
+		if (url.pathname === '/__supervisor/healthz') {
+			res.writeHead(200, { 'content-type': 'application/json' });
+			return res.end(JSON.stringify({ ok: true, ...manager.stats() }));
+		}
 		const local = req.socket.remoteAddress === '127.0.0.1' || req.socket.remoteAddress === '::1';
 		const token = (req.headers.authorization ?? '').replace(/^Bearer\s+/i, '');
 		if (!(local || (config.metricsToken && token === config.metricsToken))) {
@@ -70,10 +76,6 @@ export async function startSupervisor(config) {
 			return res.end(
 				metrics.render({ processes_running: s.running, processes_starting: s.starting, ws_connections: s.wsConnections, users_total: registry.all().length })
 			);
-		}
-		if (url.pathname === '/__supervisor/healthz') {
-			res.writeHead(200, { 'content-type': 'application/json' });
-			return res.end(JSON.stringify({ ok: true, ...manager.stats() }));
 		}
 		res.writeHead(404);
 		res.end();

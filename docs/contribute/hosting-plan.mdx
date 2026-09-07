@@ -84,13 +84,19 @@ All three end in the same signed session cookie, allowlist file, and sign-out ro
 
 ## Phase 4: machine and deploys
 
-`deploy/machine/` holds everything the machine needs, written and not yet run on a real host:
+Two targets share the supervisor and the backup layer. Both are written; neither has run on a real host yet.
 
-1. `provision.sh`: Ubuntu 24.04, installs bubblewrap, Node 22, Caddy, Litestream and rclone, checks that an unprivileged user can run bubblewrap, lays out `/app` and `/data`, writes a `supervisor.env` template, installs the units, and opens the firewall for 22, 80 and 443 only.
-2. `Caddyfile`: TLS for the domain with automatic certificates, proxying to the supervisor on `127.0.0.1:8080` with no upstream timeouts, so SSE renders and WebSockets live as long as they need.
-3. `docwriter-supervisor.service`: restart on failure, `Delegate=yes` for the per-process cgroups, logs to journald.
-4. `release.sh` and `.github/workflows/deploy-hosted.yml`: on push to `main`, run the checks and tests, build, prune to production dependencies, pack, copy to the machine, unpack under `/app/releases/<sha>/`, flip the `/app/current` symlink, restart the supervisor. Running processes keep the old release until reaped. The workflow is off until the repository variable `HOSTED_DEPLOY_ENABLED` is `true`.
-5. A rollback is moving the symlink back.
+**Fly.io, the primary target** (`deploy/fly/`). One Fly Machine is a Firecracker VM, so the process-per-user design and bubblewrap work unchanged, and the pieces already set up for PR #51 carry over: the `docwriter-app` name, the `app.docwriter.org` certificate, the deploy token, and the production Clerk instance.
+
+1. `Dockerfile`: the production build plus bubblewrap, Litestream, and rclone, on the glibc Node image. The whole app tree is world-readable because every user uid binds it read-only.
+2. `entrypoint.sh`: prepares `/data`, self-tests bubblewrap as an unprivileged uid and refuses to start if that fails, starts Litestream and the hourly backup loop when their secrets are set, then runs the supervisor.
+3. `fly.toml`: one machine that Fly never stops for idleness, a 32 GB `performance-4x` VM, the volume at `/data`, a public liveness check, a connection concurrency limit high enough for one WebSocket per open tab (Fly's default of 25 would refuse the twenty-sixth user), and a 90 second stop timeout so every user process can flush.
+4. Fly's proxy terminates TLS, so there is no Caddy. The supervisor listens on the machine's private address.
+5. A deploy replaces the machine, so running user processes stop and browsers reconnect. Acceptable for a study. Rollback is `fly deploy --image` with the previous image.
+
+**A plain VM, the alternative** (`deploy/machine/`), for when a bigger box for less money matters more than reusing Fly: `provision.sh` for Ubuntu 24.04, Caddy for TLS, a systemd unit with cgroup delegation, release directories with a symlink so deploys keep sessions, and the same backup layer through systemd units.
+
+`.github/workflows/deploy-hosted.yml` deploys on push to `main` to whichever target the repository variable `HOSTED_DEPLOY_TARGET` names.
 
 ## Phase 5: state and backups
 
@@ -120,6 +126,6 @@ Multi-machine routing, warm process pools, the Claude subscription login inside 
 | 1 App changes | done, on this branch | a merged PR on `main` |
 | 2 Supervisor | done, tested | two sandboxed users on a laptop |
 | 3 Auth | done: Clerk, GitHub, and dev modes, tested with fakes | sign-in with an allowlist |
-| 4 Machine and deploys | files written, not yet run on a host | the domain serving `main` |
+| 4 Machine and deploys | Fly image and VM files written; entrypoint exercised locally; not yet run on a host | the domain serving `main` |
 | 5 State and backups | files written, restore drill pending | a restore that worked |
 | 6 Observability and launch | metrics endpoint done; alerts and checklist pending | alerts and the checklist |

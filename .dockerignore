@@ -1,0 +1,20 @@
+# Build context for deploy/fly/Dockerfile (repository root).
+.git
+node_modules
+build
+.svelte-kit
+.output
+.vercel
+.docwriter
+.env
+.env.*
+!.env.example
+!.env.test
+docs
+e2e
+tests
+.github
+*.md
+.DS_Store
+test-results
+playwright-report
