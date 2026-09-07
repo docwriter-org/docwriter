@@ -30,6 +30,17 @@ SUPERVISOR_SANDBOX=none SUPERVISOR_AUTH=dev SUPERVISOR_DATA_DIR=/tmp/dw-data npm
 # open http://localhost:8080 and type any name
 ```
 
+To try the real sign-in on a laptop, use a Clerk development instance (its keys work on any origin):
+
+```bash
+SUPERVISOR_SANDBOX=none SUPERVISOR_AUTH=clerk SUPERVISOR_PUBLIC_ORIGIN=http://localhost:8080 \
+CLERK_PUBLISHABLE_KEY=pk_test_… CLERK_SECRET_KEY=sk_test_… \
+SUPERVISOR_COOKIE_SECRET=$(head -c 32 /dev/urandom | base64) \
+SUPERVISOR_DATA_DIR=/tmp/dw-data npm run supervisor
+```
+
+Open http://localhost:8080, sign in with any method the Clerk instance allows, and the editor should appear with a `dw_session` cookie set. `/auth/logout` ends both sessions.
+
 With bubblewrap installed and running as root, `SUPERVISOR_SANDBOX=bwrap` uses the real sandbox on the laptop too. The data directory and every parent must be traversable by other users (`chmod 755`), because each process runs as its own uid.
 
 ## First deploy
