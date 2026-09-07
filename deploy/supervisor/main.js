@@ -43,6 +43,9 @@ export async function startSupervisor(config) {
 
 	const manager = createProcessManager({ config, cgroups, host, metrics });
 	const clerk = config.auth === 'clerk' ? createClerkVerifier({ ...config.clerk, publicOrigin: config.publicOrigin }) : null;
+	if (clerk && config.clerk.authorizedParties.length === 0) {
+		warn('SUPERVISOR_CLERK_AUTHORIZED_PARTIES is empty: Clerk tokens from any origin are accepted. Only for tests.');
+	}
 	const auth = createAuth({ config, metrics, clerk });
 
 	function wantsHtml(req) {

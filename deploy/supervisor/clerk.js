@@ -13,8 +13,13 @@
 import { createClerkClient } from '@clerk/backend';
 import { clerkJSScriptUrl, clerkUIScriptUrl } from '@clerk/shared/loadClerkJsScript';
 
-export function createClerkVerifier({ publishableKey, secretKey, publicOrigin }) {
+export function createClerkVerifier({ publishableKey, secretKey, publicOrigin, authorizedParties = [publicOrigin] }) {
 	const clerk = createClerkClient({ publishableKey, secretKey });
+	// A browser-issued token carries `azp` = the page origin; verifying it
+	// stops a token from another site on the same Clerk instance being
+	// replayed here. Tokens minted server-side have no `azp` and only pass
+	// when the list is empty.
+	const authOptions = authorizedParties.length ? { authorizedParties } : {};
 	return {
 		scriptUrls() {
 			return { js: clerkJSScriptUrl({ publishableKey }), ui: clerkUIScriptUrl({ publishableKey }) };
@@ -25,7 +30,7 @@ export function createClerkVerifier({ publishableKey, secretKey, publicOrigin })
 				method: 'POST',
 				headers: { authorization: `Bearer ${token}` }
 			});
-			const state = await clerk.authenticateRequest(request, { authorizedParties: [publicOrigin] });
+			const state = await clerk.authenticateRequest(request, authOptions);
 			if (!state.isSignedIn) return null;
 			return state.toAuth().userId ?? null;
 		},

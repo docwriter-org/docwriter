@@ -82,7 +82,16 @@ export function loadConfig(env = process.env) {
 		cookieName: 'dw_session',
 		sessionDays: int(env.SUPERVISOR_SESSION_DAYS, 30),
 		github: { clientId: env.GITHUB_CLIENT_ID || '', clientSecret: env.GITHUB_CLIENT_SECRET || '' },
-		clerk: { publishableKey: env.CLERK_PUBLISHABLE_KEY || '', secretKey: env.CLERK_SECRET_KEY || '' },
+		clerk: {
+			publishableKey: env.CLERK_PUBLISHABLE_KEY || '',
+			secretKey: env.CLERK_SECRET_KEY || '',
+			/** Origins a Clerk token may have been issued to (its `azp` claim).
+			 * Default: this deployment's public origin. Add more when the app
+			 * answers on several hostnames. Set to the empty string to skip the
+			 * check, which is only safe for server-minted test tokens. */
+			authorizedParties:
+				env.SUPERVISOR_CLERK_AUTHORIZED_PARTIES === undefined ? [publicOrigin] : list(env.SUPERVISOR_CLERK_AUTHORIZED_PARTIES)
+		},
 		/** File with one login (GitHub) or email (Clerk) per line. Missing or empty = everyone. */
 		allowlistPath: env.SUPERVISOR_ALLOWLIST || '',
 		/** Bearer token for /__supervisor/metrics; empty = localhost only. */
