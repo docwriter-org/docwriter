@@ -11,7 +11,9 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { getEffectiveDocwriterDir, getEffectiveRoot } from '$lib/server/document-files';
+import { getEffectiveRoot } from '$lib/server/document-files';
+import { linkCodexAuth } from '$lib/server/codex-auth';
+import { workspaceCodexHome } from '$lib/server/api-keys';
 import type {
 	AgentProvider,
 	ProviderEvent,
@@ -200,12 +202,17 @@ export class CodexProvider implements AgentProvider {
 	private async createClient(): Promise<any> {
 		await loadSdk();
 		if (!Codex) throw new Error('Codex SDK failed to load.');
-		const codexHome = join(getEffectiveDocwriterDir(), 'codex');
+		const codexHome = workspaceCodexHome();
 		await mkdir(codexHome, { recursive: true });
 		// Prefer CODEX_API_KEY, but allow OPENAI_API_KEY for CI and local setups
 		// where Codex uses the same OpenAI credential.
+		const apiKey = process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY || undefined;
+		// CODEX_HOME below keeps sessions/config per-workspace, but the CLI
+		// also resolves auth.json under it, which hid the user's `codex login`.
+		// Expose that login inside the workspace home (see codex-auth.ts).
+		if (!apiKey) linkCodexAuth(codexHome);
 		return new Codex({
-			apiKey: process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY || undefined,
+			apiKey,
 			env: { ...process.env, CODEX_HOME: codexHome }
 		});
 	}

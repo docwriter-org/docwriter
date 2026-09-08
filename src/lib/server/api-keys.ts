@@ -18,6 +18,8 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
+import { hasCodexLogin } from './codex-auth';
+import { getEffectiveDocwriterDir } from './document-files';
 
 export const GLOBAL_KEYS_PATH = join(homedir(), '.docwriter', 'keys.env');
 
@@ -58,7 +60,7 @@ export const PROVIDER_KEYS: ProviderKeySpec[] = [
 		envVar: 'CODEX_API_KEY',
 		required: false,
 		altAuthNote:
-			'Falls back to OPENAI_API_KEY or your Codex CLI login (`~/.codex/auth.json`) if no key is set.'
+			'Or skip the key: in a terminal run `codex login` (ChatGPT sign-in). Falls back to OPENAI_API_KEY if set.'
 	},
 	{ id: 'cursor', label: 'Cursor', envVar: 'CURSOR_API_KEY', required: true },
 	{
@@ -150,14 +152,9 @@ export function loadGlobalKeys(): void {
 	}
 }
 
-/** True if the Codex CLI has a usable ChatGPT login on disk. */
-function hasCodexLogin(): boolean {
-	try {
-		const auth = JSON.parse(readFileSync(join(homedir(), '.codex', 'auth.json'), 'utf8'));
-		return auth?.auth_mode === 'chatgpt' && !!auth?.tokens?.access_token;
-	} catch {
-		return false;
-	}
+/** The per-workspace `CODEX_HOME` the Codex provider launches the CLI with. */
+export function workspaceCodexHome(): string {
+	return join(getEffectiveDocwriterDir(), 'codex');
 }
 
 /** True if `claude login` credentials are present. */
@@ -199,7 +196,10 @@ export function getKeyStatus(): ProviderKeyStatus[] {
 			source = 'env';
 		}
 		if (!usable) {
-			if (spec.id === 'codex' && (process.env.OPENAI_API_KEY || hasCodexLogin())) {
+			if (
+				spec.id === 'codex' &&
+				(process.env.OPENAI_API_KEY || hasCodexLogin(workspaceCodexHome()))
+			) {
 				usable = true;
 				source = process.env.OPENAI_API_KEY ? 'env' : 'login';
 			} else if (spec.id === 'claude' && hasClaudeLogin()) {

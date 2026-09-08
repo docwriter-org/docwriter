@@ -49,7 +49,15 @@ If auth fails later, repeat steps 1–3, then retry in DocWriter. See [Provider 
 
 ### OpenAI and Codex
 
-OpenAI uses `OPENAI_API_KEY`. Codex can use an existing Codex login. Choose a model that is available to the account.
+OpenAI uses `OPENAI_API_KEY`.
+
+Codex can use your Codex CLI login on this computer, the same way Claude uses the Claude Code login.
+
+1. Open a terminal on the same computer that runs DocWriter.
+2. Enter `codex login` and press Enter. Finish the ChatGPT sign-in when the browser opens.
+3. In DocWriter, open **Settings → API keys**. Codex should show **Using login**.
+
+DocWriter runs Codex with its own per-workspace home under `.docwriter/codex` and links your `~/.codex/auth.json` into it, so the login stays shared with the terminal and token refreshes reach both. Set `CODEX_API_KEY` (or `OPENAI_API_KEY`) instead when you want API billing. Choose a model that is available to the account.
 
 ### Cursor
 

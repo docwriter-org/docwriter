@@ -378,6 +378,15 @@ the disposition from `discussed` to `applied`.
   double-binding the Hocuspocus port (`ECONNREFUSED`-via-reconnect). The
   live server instance is also how route handlers (`mcp-doc-tools.ts`,
   `/api/document`'s flush path) reach `openDirectConnection`.
+- **Codex runs with a per-workspace `CODEX_HOME`, so its login must be
+  linked in.** `CodexProvider.createClient` points `CODEX_HOME` at
+  `.docwriter/codex` to keep sessions and config out of `~/.codex`, but the
+  CLI resolves `auth.json` under `CODEX_HOME` too. `linkCodexAuth`
+  (`codex-auth.ts`) symlinks `~/.codex/auth.json` into that home before
+  every render unless an API key is set; `getKeyStatus` uses the same
+  module so "Using login" means the render will actually see it. Keep it
+  a symlink, never a copy: the CLI rewrites `auth.json` in place on token
+  refresh and refresh tokens rotate, so a stale copy invalidates one side.
 - **`yjs_updates.payload` column.** The blob column holding raw Yjs
   updates is named `payload`. (Historical: it was originally named
   `update`, a SQLite reserved word; migration v2 renamed it. Don't
