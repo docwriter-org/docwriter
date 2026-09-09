@@ -5,7 +5,7 @@
  * `.docwriter/codex` so its sessions, logs and config stay per-workspace and
  * out of the user's `~/.codex`. The CLI resolves `auth.json` relative to
  * `CODEX_HOME` too, so that override also hid the user's `codex login`: the
- * API keys panel said "Using login" (it probed `~/.codex/auth.json`) while
+ * Providers panel said "Using login" (it probed `~/.codex/auth.json`) while
  * every render started from an empty home and failed as "Not logged in".
  *
  * `linkCodexAuth` bridges the two: it symlinks `<CODEX_HOME>/auth.json` to

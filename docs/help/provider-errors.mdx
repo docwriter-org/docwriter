@@ -6,10 +6,10 @@ Start with the message shown in the **Agent auth failed** or **Agent run failed*
 
 ## The provider says a credential is missing
 
-Open **Settings**, then **API keys**. Check whether the selected provider shows **Key set**, **Using login**, **Missing**, or **Optional**.
+Open **Settings**, then **Providers**. Check whether the selected provider shows **Connected · CLI login**, **Connected · API key**, or **Not connected**. Press **Refresh** after signing in from a terminal.
 
 <Frame>
-  ![The API keys panel with a status beside each provider](/images/api-keys-panel.png)
+  ![The Providers panel with a status beside each provider](/images/api-keys-panel.png)
 </Frame>
 
 Adding a key allows future requests to use that provider. When you enter a key in the panel, DocWriter stores it in `~/.docwriter/keys.env` with permissions limited to your operating system user. Removing a key stops DocWriter from using that saved value, but the provider may still work through an environment variable or command line login.
@@ -23,7 +23,7 @@ Process environment variables and project `.env` files take precedence over `~/.
 1. Open a terminal on the same computer that runs DocWriter.
 2. Enter `claude` and press Enter. Wait until the session is running.
 3. Type `/login` and press Enter. Finish the browser sign-in.
-4. In DocWriter, open **Settings → API keys**. Claude should show **Using login**.
+4. In DocWriter, open **Settings → Providers** and press **Refresh**. Claude should show **Connected · CLI login** with your email.
 5. Retry the agent request.
 
 Keep the Anthropic key field empty for subscription login. If a key is set in the panel or as `ANTHROPIC_API_KEY`, DocWriter bills API usage instead — remove the stored key and unset the env var to use login again.

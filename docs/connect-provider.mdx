@@ -24,12 +24,12 @@ When you switch to an earlier session through **Settings**, then **Sessions**, y
 
 ## Add credentials
 
-Open **Settings**, then **API keys**. You can see whether each provider uses a saved key, an existing login, or no credential.
+Open **Settings**, then **Providers**. Each provider shows **Connected · CLI login**, **Connected · API key**, or **Not connected**. Claude and Codex have a **CLI login** / **API key** switch; the login side shows the signed-in account and, when you are signed out, the exact command to run.
 
 Paste a key in the matching field and choose **Save**. Choose **Remove stored key** when you no longer want DocWriter to use the saved key.
 
-<Frame caption="Open Settings, then API keys, to see and change provider credentials.">
-  ![The API keys panel open from Settings](/images/api-keys-panel.png)
+<Frame caption="Open Settings, then Providers, to see and change provider credentials.">
+  ![The Providers panel open from Settings](/images/api-keys-panel.png)
 </Frame>
 
 Saved keys live in `~/.docwriter/keys.env`. A process environment variable or project `.env` value takes precedence over that file.
@@ -39,9 +39,9 @@ Saved keys live in `~/.docwriter/keys.env`. A process environment variable or pr
 DocWriter can use your Claude Code login on this computer. You do not need to paste a key in DocWriter for that.
 
 1. Open a terminal on the same computer that runs DocWriter.
-2. Enter `claude` and press Enter. Wait until the Claude Code session is running.
-3. Type `/login` and press Enter. Finish the browser sign-in when it opens.
-4. In DocWriter, open **Settings → API keys**. Claude should show **Using login**.
+2. Enter `claude auth login` and press Enter. (Typing `/login` inside a running `claude` session does the same.)
+3. Finish the browser sign-in when it opens.
+4. In DocWriter, open **Settings → Providers** and press **Refresh**. Claude should show **Connected · CLI login** with your email.
 
 Leave the Anthropic key field empty. If you paste an `ANTHROPIC_API_KEY` (or set it in the environment), agent calls bill Anthropic API usage instead of your Claude Code subscription. Remove the stored key and unset the env var to go back to login.
 
@@ -55,7 +55,7 @@ Codex can use your Codex CLI login on this computer, the same way Claude uses th
 
 1. Open a terminal on the same computer that runs DocWriter.
 2. Enter `codex login` and press Enter. Finish the ChatGPT sign-in when the browser opens.
-3. In DocWriter, open **Settings → API keys**. Codex should show **Using login**.
+3. In DocWriter, open **Settings → Providers** and press **Refresh**. Codex should show **Connected · CLI login** with your ChatGPT account.
 
 DocWriter runs Codex with its own per-workspace home under `.docwriter/codex` and links your `~/.codex/auth.json` into it, so the login stays shared with the terminal and token refreshes reach both. Set `CODEX_API_KEY` (or `OPENAI_API_KEY`) instead when you want API billing. Choose a model that is available to the account.
 

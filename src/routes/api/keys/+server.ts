@@ -1,10 +1,14 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { getKeyStatus, setGlobalKey, PROVIDER_KEYS } from '$lib/server/api-keys';
+import { setGlobalKey, PROVIDER_KEYS } from '$lib/server/api-keys';
+import { getProviderAuthStatus } from '$lib/server/provider-auth';
 
-/** Report per-provider key status (never returns the secret values). */
+/**
+ * Report per-provider auth status: API-key presence plus CLI-login details
+ * (Claude Code, Codex). Never returns a secret value.
+ */
 export const GET: RequestHandler = async () => {
-	return json({ providers: getKeyStatus() });
+	return json({ providers: await getProviderAuthStatus() });
 };
 
 /**
@@ -34,5 +38,5 @@ export const POST: RequestHandler = async ({ request }) => {
 		return json({ error: (err as Error).message }, { status: 400 });
 	}
 
-	return json({ providers: getKeyStatus() });
+	return json({ providers: await getProviderAuthStatus() });
 };

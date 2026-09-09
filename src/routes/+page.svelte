@@ -26,7 +26,7 @@
 	import AudiencePanel from '$lib/components/AudiencePanel.svelte';
 	import HooksPanel from '$lib/components/HooksPanel.svelte';
 	import SkillsPanel from '$lib/components/SkillsPanel.svelte';
-	import ApiKeysPanel from '$lib/components/ApiKeysPanel.svelte';
+	import ProvidersPanel from '$lib/components/ProvidersPanel.svelte';
 	import CustomModelDialog from '$lib/components/CustomModelDialog.svelte';
 	import SessionBrowser from '$lib/components/SessionBrowser.svelte';
 	import { themes, applyTheme } from '$lib/themes';
@@ -1052,15 +1052,15 @@
 		if (providerId === 'claude') {
 			return [
 				'In a terminal on this computer:',
-				'1. Enter claude and wait for the session to start',
-				'2. Type /login and finish the browser sign-in',
-				'3. Retry here (Settings → API keys should show Using login; leave the Anthropic key empty)'
+				'1. Run claude auth login (or type /login inside a running claude session)',
+				'2. Finish the browser sign-in',
+				'3. Retry here (Settings → Providers should show Connected · CLI login; leave the Anthropic key empty)'
 			].join('\n');
 		}
 		if (providerId === 'codex') {
-			return 'Re-run your Codex CLI login in a terminal, or paste a key under Settings → API keys.';
+			return 'Run codex login in a terminal on this computer, or paste a key under Settings → Providers.';
 		}
-		return 'Re-authenticate this provider, then try again. See Settings → API keys.';
+		return 'Re-authenticate this provider, then try again. See Settings → Providers.';
 	}
 
 	function isSkippableWhenQueued(trigger?: string): boolean {
@@ -2682,7 +2682,7 @@
 		{
 			label: 'Settings',
 			items: [
-				{ kind: 'panel', label: 'API keys', panelKey: 'apiKeys' },
+				{ kind: 'panel', label: 'Providers', panelKey: 'apiKeys' },
 				{ kind: 'panel', label: 'Agent behavior', panelKey: 'agentSettings' },
 				{ kind: 'panel', label: 'Intended audience', panelKey: 'audience' },
 				{ kind: 'panel', label: 'Skills', panelKey: 'skills' },
@@ -3497,7 +3497,7 @@
 	{/snippet}
 
 	{#snippet apiKeysPanelSnippet()}
-		<ApiKeysPanel />
+		<ProvidersPanel />
 	{/snippet}
 
 	<div class="toolbar">

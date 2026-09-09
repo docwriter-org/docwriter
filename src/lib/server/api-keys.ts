@@ -5,7 +5,7 @@
  *   1. The real process environment (incl. the repo `.env`, which Vite loads
  *      in dev). An explicit env var always wins.
  *   2. `~/.docwriter/keys.env` — a global, cross-workspace KEY=VALUE file that
- *      we load at server startup. This is what the in-app "API keys" panel
+ *      we load at server startup. This is what the in-app "Providers" panel
  *      writes to, so keys persist across every workspace and survive the
  *      built (non-Vite) server too.
  *   3. A provider-specific login token on disk (e.g. the Codex CLI's ChatGPT
@@ -45,7 +45,7 @@ export const PROVIDER_KEYS: ProviderKeySpec[] = [
 		label: 'Claude',
 		envVar: 'ANTHROPIC_API_KEY',
 		required: false,
-		altAuthNote: 'Or skip the key: in a terminal run `claude`, then type `/login`.'
+		altAuthNote: 'Or skip the key: in a terminal run `claude auth login` (or `/login` inside claude).'
 	},
 	{
 		id: 'openai',
@@ -229,7 +229,7 @@ export function setGlobalKey(name: string, value: string): void {
 	if (value) existing[name] = value;
 	else delete existing[name];
 
-	const header = '# DocWriter global API keys — KEY=VALUE per line. Managed by the API keys panel.';
+	const header = '# DocWriter global API keys — KEY=VALUE per line. Managed by the Providers panel.';
 	const body = Object.entries(existing)
 		.map(([k, v]) => `${k}=${v}`)
 		.join('\n');

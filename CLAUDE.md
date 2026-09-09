@@ -378,6 +378,15 @@ the disposition from `discussed` to `applied`.
   double-binding the Hocuspocus port (`ECONNREFUSED`-via-reconnect). The
   live server instance is also how route handlers (`mcp-doc-tools.ts`,
   `/api/document`'s flush path) reach `openDirectConnection`.
+- **Settings → Providers is the auth panel** (`ProvidersPanel.svelte`,
+  fed by `GET /api/keys` → `getProviderAuthStatus` in `provider-auth.ts`).
+  Claude and Codex get a CLI login / API key switch; the login side runs
+  `claude auth status` (with ANTHROPIC_API_KEY stripped so it reports the
+  saved login) and reads identity from `~/.claude.json` / the Codex
+  `auth.json` id_token — never a token value. The CLI's answer outranks
+  the file probe for the Connected badge. Login itself stays in the
+  user's terminal (`claude auth login`, `codex login` both need a TTY);
+  the panel shows the command with Copy and a Refresh button.
 - **Codex runs with a per-workspace `CODEX_HOME`, so its login must be
   linked in.** `CodexProvider.createClient` points `CODEX_HOME` at
   `.docwriter/codex` to keep sessions and config out of `~/.codex`, but the
