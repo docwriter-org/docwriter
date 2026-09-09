@@ -6,7 +6,7 @@ Start with the message shown in the **Agent auth failed** or **Agent run failed*
 
 ## The provider says a credential is missing
 
-Open **Settings**, then **Providers**. Check whether the selected provider shows **Connected · CLI login**, **Connected · API key**, or **Not connected**. Press **Refresh** after signing in from a terminal.
+Open **Settings**, then **Providers…**, and pick the provider. It shows **Connected** or **Not connected**, and for Claude and Codex which of **CLI login** or **API key** is in effect. Press **Refresh** after signing in from your own terminal.
 
 <Frame>
   ![The Providers panel with a status beside each provider](/images/api-keys-panel.png)
@@ -18,13 +18,10 @@ Process environment variables and project `.env` files take precedence over `~/.
 
 ## Claude Code login expired
 
-`/login` is typed inside Claude Code in a terminal — not in the DocWriter UI.
-
-1. Open a terminal on the same computer that runs DocWriter.
-2. Enter `claude` and press Enter. Wait until the session is running.
-3. Type `/login` and press Enter. Finish the browser sign-in.
-4. In DocWriter, open **Settings → Providers** and press **Refresh**. Claude should show **Connected · CLI login** with your email.
-5. Retry the agent request.
+1. Open **Settings → Providers…** and choose **Claude**.
+2. Click **Sign in again**. A terminal opens inside the dialog running `claude auth login`; finish the browser sign-in it starts. If the browser shows a code instead of returning, paste it into that terminal.
+3. When it finishes, Claude shows **Connected** with your email. (Running `claude auth login` in your own terminal works too; press **Refresh** afterwards.)
+4. Retry the agent request.
 
 Keep the Anthropic key field empty for subscription login. If a key is set in the panel or as `ANTHROPIC_API_KEY`, DocWriter bills API usage instead — remove the stored key and unset the env var to use login again.
 
@@ -32,7 +29,7 @@ Choose **New session** if the provider still tries to resume an expired conversa
 
 ## Other command line logins expired
 
-Codex can also use an existing command line login. Run `codex login` again in a terminal on this computer, then retry. DocWriter links `~/.codex/auth.json` into its per-workspace Codex home on the next request, so no restart is needed.
+Codex can also use your ChatGPT login. Open **Settings → Providers**, choose **Codex**, and click **Sign in again** (it runs `codex login` in an embedded terminal), then retry. DocWriter links `~/.codex/auth.json` into its per-workspace Codex home on the next request, so no restart is needed.
 
 Choose **New session** if the provider still tries to resume the expired conversation.
 

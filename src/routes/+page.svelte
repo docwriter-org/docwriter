@@ -26,7 +26,7 @@
 	import AudiencePanel from '$lib/components/AudiencePanel.svelte';
 	import HooksPanel from '$lib/components/HooksPanel.svelte';
 	import SkillsPanel from '$lib/components/SkillsPanel.svelte';
-	import ProvidersPanel from '$lib/components/ProvidersPanel.svelte';
+	import ProvidersDialog from '$lib/components/ProvidersDialog.svelte';
 	import CustomModelDialog from '$lib/components/CustomModelDialog.svelte';
 	import SessionBrowser from '$lib/components/SessionBrowser.svelte';
 	import { themes, applyTheme } from '$lib/themes';
@@ -1050,15 +1050,10 @@
 	 * a Claude Code terminal session — not in the DocWriter UI. */
 	function authRecoveryHint(providerId: string): string {
 		if (providerId === 'claude') {
-			return [
-				'In a terminal on this computer:',
-				'1. Run claude auth login (or type /login inside a running claude session)',
-				'2. Finish the browser sign-in',
-				'3. Retry here (Settings → Providers should show Connected · CLI login; leave the Anthropic key empty)'
-			].join('\n');
+			return 'Open Settings → Providers and click Sign in under Claude (it runs claude auth login here), then retry. Leave the Anthropic key empty to use your subscription.';
 		}
 		if (providerId === 'codex') {
-			return 'Run codex login in a terminal on this computer, or paste a key under Settings → Providers.';
+			return 'Open Settings → Providers and click Sign in under Codex (it runs codex login here), or paste a key there.';
 		}
 		return 'Re-authenticate this provider, then try again. See Settings → Providers.';
 	}
@@ -2517,6 +2512,7 @@
 
 	// ── Feedback import ──────────────────────────────────────────────────
 	let feedbackImportDialogOpen = $state(false);
+	let providersDialogOpen = $state(false);
 
 	async function runFeedbackImportStructured(comments: ImportedComment[]) {
 		const tab = $activeTab;
@@ -2682,7 +2678,13 @@
 		{
 			label: 'Settings',
 			items: [
-				{ kind: 'panel', label: 'Providers', panelKey: 'apiKeys' },
+				{
+					kind: 'action' as const,
+					label: 'Providers…',
+					onClick: () => {
+						providersDialogOpen = true;
+					}
+				},
 				{ kind: 'panel', label: 'Agent behavior', panelKey: 'agentSettings' },
 				{ kind: 'panel', label: 'Intended audience', panelKey: 'audience' },
 				{ kind: 'panel', label: 'Skills', panelKey: 'skills' },
@@ -3437,7 +3439,6 @@
 					audience: audiencePanelSnippet,
 					hooks: hooksPanelSnippet,
 					skills: skillsPanelSnippet,
-					apiKeys: apiKeysPanelSnippet
 				}}
 			/>
 			<ModelPicker
@@ -3496,9 +3497,6 @@
 		<SkillsPanel onSubmit={(trigger) => void submit(trigger)} />
 	{/snippet}
 
-	{#snippet apiKeysPanelSnippet()}
-		<ProvidersPanel />
-	{/snippet}
 
 	<div class="toolbar">
 		<RulesPillBar onSubmit={(trigger) => void submit(trigger)} />
@@ -3670,6 +3668,8 @@
 	onClose={() => (reviewerDialogOpen = false)}
 	onCreated={(r) => customReviewers.update((list) => [...list, r])}
 />
+
+<ProvidersDialog open={providersDialogOpen} onClose={() => (providersDialogOpen = false)} />
 
 <FeedbackImportDialog
 	open={feedbackImportDialogOpen}

@@ -24,38 +24,31 @@ When you switch to an earlier session through **Settings**, then **Sessions**, y
 
 ## Add credentials
 
-Open **Settings**, then **Providers**. Each provider shows **Connected · CLI login**, **Connected · API key**, or **Not connected**. Claude and Codex have a **CLI login** / **API key** switch; the login side shows the signed-in account and, when you are signed out, the exact command to run.
-
-Paste a key in the matching field and choose **Save**. Choose **Remove stored key** when you no longer want DocWriter to use the saved key.
+Open **Settings**, then **Providers…**. Pick a provider in the left column. Each one shows whether it is connected; Claude and Codex offer two ways in, **CLI login** and **API key**, as two cards.
 
 <Frame caption="Open Settings, then Providers, to see and change provider credentials.">
-  ![The Providers panel open from Settings](/images/api-keys-panel.png)
+  ![The Providers dialog open from Settings](/images/api-keys-panel.png)
 </Frame>
 
-Saved keys live in `~/.docwriter/keys.env`. A process environment variable or project `.env` value takes precedence over that file.
+For an API key, choose the **API key** card, paste the key, and choose **Save**. Choose **Remove stored key** when you no longer want DocWriter to use it. Saved keys live in `~/.docwriter/keys.env`. A process environment variable or project `.env` value takes precedence over that file.
 
 ### Claude
 
-DocWriter can use your Claude Code login on this computer. You do not need to paste a key in DocWriter for that.
+DocWriter can use your Claude Code login on this computer. You do not need to paste a key for that.
 
-1. Open a terminal on the same computer that runs DocWriter.
-2. Enter `claude auth login` and press Enter. (Typing `/login` inside a running `claude` session does the same.)
-3. Finish the browser sign-in when it opens.
-4. In DocWriter, open **Settings → Providers** and press **Refresh**. Claude should show **Connected · CLI login** with your email.
+1. Choose **Claude**, then the **CLI login** card.
+2. Click **Sign in**. A terminal opens inside the dialog running `claude auth login`; follow it and finish the browser sign-in. (Running `claude auth login` in your own terminal works the same way; press **Refresh** afterwards.)
+3. When the login finishes, the card shows **Connected** with the version, login method, and account.
 
-Leave the Anthropic key field empty. If you paste an `ANTHROPIC_API_KEY` (or set it in the environment), agent calls bill Anthropic API usage instead of your Claude Code subscription. Remove the stored key and unset the env var to go back to login.
+Leave the Anthropic key empty. If you paste an `ANTHROPIC_API_KEY` (or set it in the environment), agent calls bill Anthropic API usage instead of your Claude Code subscription; the dialog says so and offers to remove the key.
 
-If auth fails later, repeat steps 1–3, then retry in DocWriter. See [Provider errors](/help/provider-errors#claude-code-login-expired).
+If auth fails later, click **Sign in again**, then retry in DocWriter. See [Provider errors](/help/provider-errors#claude-code-login-expired).
 
 ### OpenAI and Codex
 
 OpenAI uses `OPENAI_API_KEY`.
 
-Codex can use your Codex CLI login on this computer, the same way Claude uses the Claude Code login.
-
-1. Open a terminal on the same computer that runs DocWriter.
-2. Enter `codex login` and press Enter. Finish the ChatGPT sign-in when the browser opens.
-3. In DocWriter, open **Settings → Providers** and press **Refresh**. Codex should show **Connected · CLI login** with your ChatGPT account.
+Codex can use your ChatGPT account through the Codex CLI, the same way Claude uses the Claude Code login: choose **Codex**, the **CLI login** card, then **Sign in**. The embedded terminal runs `codex login` and DocWriter picks up the result when it finishes.
 
 DocWriter runs Codex with its own per-workspace home under `.docwriter/codex` and links your `~/.codex/auth.json` into it, so the login stays shared with the terminal and token refreshes reach both. Set `CODEX_API_KEY` (or `OPENAI_API_KEY`) instead when you want API billing. Choose a model that is available to the account.
 

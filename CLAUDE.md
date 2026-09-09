@@ -378,15 +378,23 @@ the disposition from `discussed` to `applied`.
   double-binding the Hocuspocus port (`ECONNREFUSED`-via-reconnect). The
   live server instance is also how route handlers (`mcp-doc-tools.ts`,
   `/api/document`'s flush path) reach `openDirectConnection`.
-- **Settings → Providers is the auth panel** (`ProvidersPanel.svelte`,
+- **Settings → Providers is the auth dialog** (`ProvidersDialog.svelte`,
   fed by `GET /api/keys` → `getProviderAuthStatus` in `provider-auth.ts`).
-  Claude and Codex get a CLI login / API key switch; the login side runs
+  Claude and Codex get CLI login / API key cards; the login side runs
   `claude auth status` (with ANTHROPIC_API_KEY stripped so it reports the
   saved login) and reads identity from `~/.claude.json` / the Codex
   `auth.json` id_token — never a token value. The CLI's answer outranks
-  the file probe for the Connected badge. Login itself stays in the
-  user's terminal (`claude auth login`, `codex login` both need a TTY);
-  the panel shows the command with Copy and a Refresh button.
+  the file probe for the Connected badge. **Sign in** opens an embedded
+  terminal (`LoginTerminal.svelte` ↔ `login-terminal.ts`): a node-pty
+  running `claude auth login` / `codex login` (both are TUIs that hang on
+  a pipe), streamed to xterm.js over SSE with keystrokes POSTed back. The
+  route takes a provider id only — the command set is a fixed allowlist,
+  never an argv from the request — so the localhost server is not a
+  shell. The Claude binary is `claude` on PATH, else the Agent SDK's
+  bundled one (the same binary renders use). node-pty ships prebuilds for
+  macOS and Windows; Linux compiles it on install (needs python3 + a C++
+  toolchain), and a failed build degrades to an error in the terminal
+  box, not at server boot.
 - **Codex runs with a per-workspace `CODEX_HOME`, so its login must be
   linked in.** `CodexProvider.createClient` points `CODEX_HOME` at
   `.docwriter/codex` to keep sessions and config out of `~/.codex`, but the
