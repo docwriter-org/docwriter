@@ -1,6 +1,6 @@
 # Plan: proposals as marks in the document
 
-Status: agreed, not started. Replaces the pending-round model.
+Status: implemented (see `src/lib/shared/proposals.ts`). Replaced the pending-round model.
 
 ## The problem
 

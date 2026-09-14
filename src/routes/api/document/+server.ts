@@ -5,24 +5,13 @@ import { readUserDoc, readMeta, writeMeta } from '$lib/server/document-io';
 import { isValidTabId } from '$lib/server/document-files';
 import { getTabsState } from '$lib/server/runtime-state';
 import {
-	acceptTabRounds,
-	rejectTabRounds,
+	resolveTabThread,
+	resolveAllTabThreads,
 	setThreadResolution,
 	flushTabMarkdownNow
 } from '$lib/server/ws-server';
-import { runWithRenderScope } from '$lib/server/mcp-doc-tools';
-import { runTabWrite } from '$lib/server/mcp-doc-tools';
-
-function countOccurrences(haystack: string, needle: string): number {
-	if (!needle) return 0;
-	let count = 0;
-	let idx = 0;
-	while ((idx = haystack.indexOf(needle, idx)) !== -1) {
-		count += 1;
-		idx += needle.length;
-	}
-	return count;
-}
+import { runWithRenderScope, runTabWrite } from '$lib/server/mcp-doc-tools';
+import type { ThreadOutcome } from '$lib/types';
 
 /**
  * Per-tab document endpoint.
@@ -31,10 +20,11 @@ function countOccurrences(haystack: string, needle: string): number {
  *     agentSettings). Used by the client's initial `loadTab`.
  *   - `PUT` — persist `meta` (rules / agentSettings). Editor content
  *     writes are ignored here; Y.Doc sync over WebSocket owns content.
- *   - `POST` — review-state mutations (accept_rounds / reject_rounds)
- *     that need a server ack before the UI clears, so a hard refresh
- *     can't race ahead of the WebSocket send and resurrect already-
- *     accepted rounds.
+ *   - `POST` — review-state mutations (resolve a thread with an outcome,
+ *     resolve every proposal, dismiss / reopen) that need a server ack
+ *     before the UI clears, so a hard refresh can't race ahead of the
+ *     WebSocket send. Each returns the Yjs delta so the client applies it
+ *     locally with USER_ORIGIN (the undo contract).
  */
 
 function resolveTabId(url: URL): string {
@@ -46,6 +36,10 @@ function resolveTabId(url: URL): string {
 	const active = getTabsState().active;
 	if (!active) throw error(400, 'No active tab — create one first');
 	return active;
+}
+
+function readOutcome(value: unknown): ThreadOutcome | null {
+	return value === 'accepted' || value === 'rejected' || value === 'dismissed' ? value : null;
 }
 
 export const GET: RequestHandler = async ({ url }) => {
@@ -83,55 +77,35 @@ export const PUT: RequestHandler = async ({ request }) => {
 	}
 };
 
+function flushed(tabId: string): { diskFlushed: boolean; diskFlushError?: string } {
+	try {
+		flushTabMarkdownNow(tabId);
+		return { diskFlushed: true };
+	} catch (e) {
+		console.error(`[docwriter] accept flush failed for tab "${tabId}":`, e);
+		return { diskFlushed: false, diskFlushError: String(e) };
+	}
+}
+
 export const POST: RequestHandler = async ({ request, url }) => {
 	try {
 		const tabId = resolveTabId(url);
 		const body = await request.json().catch(() => ({}));
-		const roundId = typeof body.roundId === 'string' ? body.roundId : undefined;
-		// Accept a SET of rounds (e.g. all edits for one feedback thread).
-		const roundIds = Array.isArray(body.roundIds)
-			? (body.roundIds.filter((x: unknown) => typeof x === 'string') as string[])
-			: undefined;
-		if (body?.action === 'accept_rounds') {
-			let result;
-			try {
-				result = await acceptTabRounds(tabId, roundIds ?? roundId);
-			} catch (e) {
-				if ((e as Error).name === 'StalePendingReviewError') {
-					const stale = e as Error & {
-						staleRoundId?: string;
-						staleRound?: { operation?: { type?: string } };
-					};
-					return json(
-						{
-							error: stale.message,
-							stale: true,
-							staleRoundId: stale.staleRoundId ?? null,
-							staleRoundKind: stale.staleRound?.operation?.type ?? null
-						},
-						{ status: 409 }
-					);
-				}
-				throw e;
-			}
-			try {
-				flushTabMarkdownNow(tabId);
-				return json({ ok: true, diskFlushed: true, ...result });
-			} catch (e) {
-				console.error(`[docwriter] accept flush failed for tab "${tabId}":`, e);
-				return json({
-					ok: true,
-					diskFlushed: false,
-					diskFlushError: String(e),
-					...result
-				});
-			}
+		if (body?.action === 'resolve_thread') {
+			const threadId = typeof body.threadId === 'string' ? body.threadId : '';
+			const outcome = readOutcome(body.outcome);
+			if (!threadId || !outcome) return json({ error: 'threadId and outcome required' }, { status: 400 });
+			const result = await resolveTabThread(tabId, threadId, outcome);
+			if (!result.ok) return json({ error: 'Thread not found' }, { status: 404 });
+			return json({ ...result, ...(outcome === 'accepted' ? flushed(tabId) : {}) });
 		}
-		if (body?.action === 'reject_rounds') {
-			const result = await rejectTabRounds(tabId, roundId, {
-				keepThreads: body.keepThreads === true
-			});
-			return json({ ok: true, ...result });
+		if (body?.action === 'resolve_all') {
+			const outcome = readOutcome(body.outcome);
+			if (outcome !== 'accepted' && outcome !== 'rejected') {
+				return json({ error: 'outcome must be accepted or rejected' }, { status: 400 });
+			}
+			const result = await resolveAllTabThreads(tabId, outcome);
+			return json({ ...result, ...(outcome === 'accepted' ? flushed(tabId) : {}) });
 		}
 		if (body?.action === 'set_thread_resolution') {
 			const threadId = typeof body.threadId === 'string' ? body.threadId : '';
@@ -148,10 +122,7 @@ export const POST: RequestHandler = async ({ request, url }) => {
 			if (content === null) {
 				return json({ error: 'Missing content' }, { status: 400 });
 			}
-			const result = await runTabWrite(tabId, 'dev_fake_agent_write', () => ({
-				operation: { type: 'write', content },
-				afterMd: content
-			}));
+			const result = await runTabWrite(tabId, { kind: 'write', content });
 			if ('error' in result) {
 				return json({ error: result.error }, { status: 500 });
 			}
@@ -166,33 +137,16 @@ export const POST: RequestHandler = async ({ request, url }) => {
 			if (oldString === null || newString === null) {
 				return json({ error: 'Missing oldString/newString' }, { status: 400 });
 			}
-			let failure: string | null = null;
 			// Dev-only: allow tagging the fake edit with a feedback thread so
 			// the gutter's grouped-card rendering can be exercised locally.
 			const fakeThreadId =
 				typeof body.feedbackThreadId === 'string' ? body.feedbackThreadId : null;
-			const result = await runWithRenderScope({ feedbackThreadId: fakeThreadId }, async () => {
-				return runTabWrite(tabId, 'dev_fake_agent_edit', (currentMd) => {
-					const hits = countOccurrences(currentMd, oldString);
-					if (hits === 0) {
-						failure = 'oldString not found in current document';
-						return null;
-					}
-					if (hits > 1) {
-						failure = `oldString matched ${hits} locations in current document`;
-						return null;
-					}
-					return {
-						operation: { type: 'edit', oldString, newString },
-						afterMd: currentMd.replace(oldString, newString)
-					};
-				});
-			});
+			const result = await runWithRenderScope({ feedbackThreadId: fakeThreadId }, () =>
+				runTabWrite(tabId, { kind: 'edit', oldString, newString })
+			);
 			if ('error' in result) {
-				if (failure) {
-					return json({ error: failure }, { status: 409 });
-				}
-				return json({ error: result.error }, { status: 500 });
+				const status = result.code === 'not-found' || result.code === 'ambiguous' || result.code === 'overlap' ? 409 : 500;
+				return json({ error: result.error }, { status });
 			}
 			return json({ ok: true, ...result });
 		}

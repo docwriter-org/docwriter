@@ -24,9 +24,11 @@ A plain-markdown writing editor with an AI side-channel. The user writes
 markdown in a Tiptap editor. The editor state for every open tab is a CRDT
 (Yjs `Y.Doc`) whose authoritative copy lives on the **server**; the browser
 is a synced client. An agent proposes edits by mutating the server Y.Doc
-directly through custom MCP tools. Every mutation reaches the browser over
-a WebSocket as an atomic Yjs update and appears in the UI as a reviewable
-round. The data model is flat markdown — no atoms, no blocks, no pins.
+directly through custom MCP tools. A proposal is tracked changes on the
+document itself (`insertion` / `deletion` marks owned by a comment thread,
+see `src/lib/shared/proposals.ts`); every mutation reaches the browser over
+a WebSocket as an atomic Yjs update and renders through CSS on those marks.
+The data model is flat markdown — no atoms, no blocks, no pins.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system.
 
@@ -40,7 +42,22 @@ origin. SQLite is the persistence layer; `document.md` is a debounced
 markdown backup for portability and git, not the source of truth. There
 are no shadow files: the agent's `edit_doc` / `write_doc` MCP tools open a
 `DirectConnection` to the live Hocuspocus document and transact with
-`AGENT_ORIGIN` directly.
+`AGENT_ORIGIN` directly, writing the proposal as marks.
+
+**Proposals are marks, not records.** There is no review array and no
+string-pair round. `proposals.ts` holds the whole model: three views of a
+document (`committed` = no insertions, `proposed` = what `read_doc`
+returns and `old_string` is matched against, `proposed except thread T` =
+the base a revision of T is diffed against), `proposeReplacement` /
+`proposeText` (word-level marks for a modified line, whole-line `suggest`
+paragraph attrs when a line is added, removed, or rewritten past 80%
+churn), `resolveThreadMarks` (accept converts insertions to `ai` and
+removes struck text; reject and dismiss revert), and
+`summarizeThreadMarks` (what the gutter and the prompt stubs read). One
+passage has one thread: a proposal or comment on a line another thread
+already holds fails with `overlap`, naming that thread, and the agent is
+told to use it. A new proposal on a thread replaces the thread's old one.
+Nothing diffs strings in the browser.
 
 ## Persistence layout
 
@@ -73,10 +90,11 @@ deleting a document deletes its log in the same statement, renaming re-keys
 it, and an orphaned log row is structurally impossible. The old `tabs`
 table is gone; all access goes through `documents-store.ts` (never
 DELETE-all + INSERT for identity tables). Closing a tab is a status flip —
-reopening replays text, threads, pending rounds, and provenance. A missing
+reopening replays text, threads, pending proposals, and provenance. A missing
 file badges the tab (grace window; history-backed docs self-heal from the
 log) instead of deleting it. External file edits fold in as one appended
-SYSTEM update (normalized comparison — typography-only diffs don't count);
+SYSTEM update that replaces only the changed lines (`applyExternalText`;
+normalized comparison — typography-only diffs don't count);
 log rows are deleted only by explicit delete, `docwriter doctor`, or
 compaction (>500 rows on unload), always after a backup. Binary tabs
 (`isBinaryTabPath` — a DENYLIST; LaTeX/Typst/BibTeX are text) are
@@ -100,17 +118,20 @@ first `synced` event — on localhost this is sub-20ms.
   up button, sleeping-cat mascot, gear-icon settings popover). The agent
   tool-call log (`HistoryPane`) lives inside the expandable
   `AgentDockShell`, not a fixed pane.
-- **Pending agent edits + comment threads** render inline in the editor's
-  comment gutter (`CommentGutter`, mounted in `TiptapEditor`) with Accept /
-  Reject / Retry, plus per-tab badges on the `TabBar` — there is no separate
-  review column.
+- **Proposals + comment threads:** a proposal renders in the text as
+  tracked changes (green insertions, red struck deletions, whole added /
+  removed lines) and its thread's card in the comment gutter
+  (`CommentGutter`, mounted in `TiptapEditor`) lists the changed paragraphs
+  with Accept / Reject; a comment-only thread is an amber highlight. The
+  `ThreadOverlay` plugin adds only per-viewer state (open-thread highlight,
+  hover flash, the per-thread pill). Per-tab badges on the `TabBar` count
+  proposals — there is no separate review column.
 - **Proposed rules / hooks** surface as dismissable toasts (`ToastStack`).
 - **AI provenance toggle** (`AiProvenanceToggle`, in the editor's sticky
   top-right chrome next to `PreviewButton`): colors agent-written text,
-  iA-Writer-authorship style. Accepting a round stamps the `ai` Yjs
-  text-format attribute onto the text the agent actually introduced — a
-  word-level diff (`diffWordLevel` in `ydoc-codec.ts`), so surviving user
-  prose stays unmarked. The client renders the attribute as the
+  iA-Writer-authorship style. Accepting a thread's proposal converts its
+  `insertion` marks to the `ai` Yjs text-format attribute, so surviving
+  user prose stays unmarked. The client renders the attribute as the
   `AiProvenanceMark` Tiptap mark (`span[data-ai-text]`); the toggle is pure
   CSS view state (`showAiProvenance` store, localStorage). Typing into an
   AI span strips the mark from the typed text ("make it your own").
@@ -184,73 +205,56 @@ first `synced` event — on localhost this is sub-20ms.
    `diff-overlay.ts`); red alone read as a deletion while the green sat
    off-screen past a code block. Clicking it scrolls the insertion into
    view.
-3. Agent calls `edit_doc`: server finds the single `old_string` match in
-   the live markdown, then in one `document.transact(..., AGENT_ORIGIN)`
-   both rebuilds the XmlFragment via a headless Collaboration editor and
-   appends a new `PendingReviewRound` to the tab's `Y.Map('review')`. The
-   content change + review card land atomically.
-4. Hocuspocus syncs the combined update to every connected browser over
-   WebSocket. The review card appears next to the Tiptap cursor.
+3. Agent calls `edit_doc`: the server matches `old_string` in the
+   proposed view, computes the full `after` text, reverts the thread's
+   existing marks, diffs the base against `after` line by line (word-level
+   within a one-to-one modified line) and writes the marks in one
+   `document.transact(..., AGENT_ORIGIN)`. Without a `thread_id` the
+   proposal opens its own thread; the marks are the thread's position.
+4. Hocuspocus syncs the update to every connected browser over WebSocket.
+   The tracked changes appear in the text and the thread's card in the
+   gutter.
 5. SSE stream emits `tool_call_start`, `tool_call`, `assistant_text`,
    `result` — drives the HistoryPane. The `result` event does NOT carry
-   markdown anymore; there's nothing to apply on the client.
-6. After render completes, update each text tab's `last_seen` column to the current
-   markdown for every tab the agent saw, so the next render's diff block
-   reflects what changed since.
+   markdown; there's nothing to apply on the client.
+6. After render completes, update each text tab's `last_seen` column to the
+   proposed view for every tab the agent saw, so the next render's diff
+   block reflects what changed since.
 
 Tool results for `edit_doc` / `write_doc` come from one helper,
 `describeTabWrite` in `mcp-doc-tools.ts`, shared by the MCP tools and the
 provider handlers. They say the edit was *proposed* as a pending diff on
 its thread, never *applied*: the document changes only when the author
-Accepts, and the old "Edit applied to X." had the agent telling the author
-an edit was in when it was still pending. A replacement that leaves the
-text identical after typography normalization creates no round and says
-"No change proposed" instead of succeeding silently.
+Accepts. A replacement that leaves the proposed text identical creates no
+marks and says "No change proposed" instead of succeeding silently.
 
-## Agent reconciliation
+## Accept, reject, dismiss
 
-There is none — in the old sense. Agent edits flow as CRDT ops directly
-through the live Hocuspocus document; the browser receives them like any
-other remote update. No client-side 3-way merge, no clone-and-diff, no
-rolling baselines. User keystrokes typed during a render converge with
-agent ops via Yjs's item-level CRDT merge.
+One operation: `resolveTabThread(tabId, threadId, outcome)` in
+`ws-server.ts` runs `resolveThreadMarks` + `setThreadResolved` in a single
+`ydoc.transact(..., USER_ORIGIN)` on the live Hocuspocus Document and
+returns the delta; `resolveAllTabThreads` does every thread with a proposal.
+Accept keeps inserted text (stamped `ai`) and removes struck text and
+`del` paragraphs; reject and dismiss revert. A thread whose proposal was
+accepted or rejected is resolved with that `outcome` (Reopen brings the
+thread back; its marks come back only through undo). There is no stale
+state: a proposal is content, so nothing can fail to match later. An
+external file edit through a passage under proposal takes the proposal's
+text with it and the thread parks ("This passage is no longer in the
+document").
 
-On the server, Accept/Reject run against the live Hocuspocus Document
-(`acceptTabRounds` / `rejectTabRounds` in `ws-server.ts`; there is no
-server-side UndoManager). Reject removes the round from the review
-`Y.Array`; the doc fragment isn't touched. Accept walks each accepted
-round and applies its `edit` op via `applyEditToFragment` (in
-`ydoc-codec.ts`), which deletes + reinserts only the paragraphs the edit
-covers. `write` ops fall back to wholesale `replaceYDocText`. Batch
-accepts SKIP stale rounds and report them (`skippedStale`) instead of
-409ing everything; only single-round accepts throw the
-StalePendingReviewError that drives the client's rebase flow. Both paths
-run in a single `ydoc.transact(..., USER_ORIGIN)` along with the
-`reviewArr.delete`.
-
-Accept also moves the threads behind the accepted rounds
-(`followAcceptedEdits` in `ydoc-codec.ts`, same transaction): a thread
-whose quote the edit replaced is re-anchored to the first line the edit
-added, and one whose edit only removed text resolves. Threads whose
-passage survived, or that still have another pending round, are left
-alone. Without this every round of accepts left the feedback threads
-parked at the top of the gutter as orphans. A parked card says "This
-passage is no longer in the document."
-
-Because Accept's blast radius is bounded to the affected paragraphs,
-the client doesn't need to disconnect + remount the editor to avoid
-clobbering concurrent typing — the Yjs sync delivers the surgical
-update over the existing WebSocket and ProseMirror re-renders only the
-touched range. `acceptAgentEdit` / `rejectAgentEdit` in `+page.svelte`
-just POST to `/api/document` and let the sync handle the UI update.
-
-On the client, undo lives in `src/lib/editor-extensions.ts`: a custom
-`Y.UndoManager` scoped to the text fragment + review array + comments map,
-with `trackedOrigins = {ySyncPluginKey, USER_ORIGIN}` — local typing and
-Accept/Reject are undoable; agent-origin changes are not on the local undo
-stack. The editor update handler distinguishes user typing from remote/
-agent transactions via `transaction.getMeta(ySyncPluginKey)` (undefined ⇒
-local typing ⇒ restart the idle timer).
+On the client, `postThreadAction` in `+page.svelte` pauses the WebSocket,
+POSTs `/api/document` (`resolve_thread` / `resolve_all` /
+`set_thread_resolution`), applies the returned delta with `USER_ORIGIN`
+and reconnects, so ctrl+z reopens the thread AND brings its marks back in
+one step. Undo lives in `src/lib/editor-extensions.ts`: a custom
+`Y.UndoManager` scoped to the text fragment + comments map, with
+`trackedOrigins = {ySyncPluginKey, USER_ORIGIN}` — local typing and
+resolve actions are undoable; agent-origin proposals are not on the local
+undo stack. `LocalInputMarkStrip` strips `ai`, `insertion` and `deletion`
+from anything the author types, so author text is never inside a
+proposal; text the author deletes is simply gone (deleting struck text
+accepts that piece by hand, deleting inserted text rejects it).
 
 ## Agent settings
 
@@ -258,9 +262,9 @@ local typing ⇒ restart the idle timer).
 (`agentSettings` key; see `runtime-state.ts`):
 - **autonomy** (`agency: 'conservative' | 'balanced' | 'aggressive'`) —
   prompt rewiring.
-- **trackChanges** — review mode on/off. (Track-changes off bypasses the
-  pending-round UI; edits still flow through `AGENT_ORIGIN` so Undo
-  continues to isolate them.)
+- **muted** — the agent's threads leave the gutter and its tracked
+  changes render subdued (`agent-muted` on the editor). Content is never
+  hidden.
 
 Edited via the `AgentDock` settings popover (click the gear icon pinned to
 the mascot card).
@@ -290,9 +294,9 @@ one POSTs `/api/render` with `reviewerId`:
   the system prompt's `## Subagents` section and in the feedback-import
   prompts, which had the same defect.
 - `setActiveReviewerId` in `mcp-doc-tools.ts` (same lifecycle as
-  `setActiveFeedbackThreadId`) stamps `reviewerId` onto every review
-  round and agent comment the pass creates. Findings are ordinary
-  threads + pending rounds — Accept/Reject/reply machinery unchanged.
+  `setActiveFeedbackThreadId`) stamps `reviewerId` onto every agent
+  comment the pass creates. Findings are ordinary threads + proposals —
+  Accept/Reject/reply machinery unchanged.
 - Client: the `activeReviewer` store makes the agent pill hand itself to
   the reviewer while the pass runs (mascot + name, reviewer-tinted, in
   `AgentDockShell` and `HistoryPane`); `CommentGutter` renders the
@@ -397,8 +401,18 @@ the disposition from `discussed` to `applied`.
   to MUTATE a tab MUST go through
   `hocuspocus.openDirectConnection(...)` (see `getHocuspocus` in
   `mcp-doc-tools.ts`) — never mutate a replayed throwaway doc.
+- **A thread's position is its marks.** Threads store no anchor: the
+  `comment` / `insertion` / `deletion` marks carrying the thread id are
+  where it sits, and `firstThreadPos` (client) / `summarizeThreadMarks`
+  (shared) read them. The user's feedback popup checks
+  `threadUnderRange` first and replies on an existing thread instead of
+  opening a second one on the same passage; the server refuses a comment
+  mark on a line another thread holds (`overlap`) and the client replies
+  there instead. Legacy `anchor` fields are read once by the load-time
+  migration (`migrateLegacyProposals` in `ws-server.ts`, which also
+  converts old review rounds to marks after a backup) and never written.
 - **Comment threads are nested Y types.** Each thread is a `Y.Map`
-  (id/anchor/resolved/createdAt) holding a `Y.Array` of messages, so
+  (id/resolved/outcome/createdAt) holding a `Y.Array` of messages, so
   concurrent writes merge (a Dismiss racing an agent reply keeps both).
   NEVER `commentsMap.set(id, {...})` a whole plain object — that reverts to
   last-writer-wins and one side's write silently vanishes (the original
@@ -408,16 +422,15 @@ the disposition from `discussed` to `applied`.
   `setThreadResolved` / `setThreadAnchor`. Legacy threads migrate on doc
   load. Client observers must `observeDeep` — nested mutations don't fire
   shallow map observers.
-- **Per-render state is per-render, not module-level.** The reviewer id,
-  the active feedback thread and the stale-accept payload live in an
-  `AsyncLocalStorage` scope opened by `runWithRenderScope`
-  (`mcp-doc-tools.ts`), because `runTabWrite` / `createAgentEditThread` /
-  `createAgentCommentThread` / `applyReplyToComment` are shared by every
-  provider and read them ambiently. As module globals they were clobbered
-  by overlapping renders: a critique pass's findings got another
-  reviewer's id or none, a feedback reply attached to the wrong thread,
-  and whichever render finished first blanked all three for the one still
-  streaming. Never move them back to module scope.
+- **Per-render state is per-render, not module-level.** The reviewer id
+  and the active feedback thread live in an `AsyncLocalStorage` scope
+  opened by `runWithRenderScope` (`mcp-doc-tools.ts`), because
+  `runTabWrite` / `createAgentCommentThread` / `applyReplyToComment` are
+  shared by every provider and read them ambiently. As module globals
+  they were clobbered by overlapping renders: a critique pass's findings
+  got another reviewer's id or none, a feedback reply attached to the
+  wrong thread, and whichever render finished first blanked them for the
+  one still streaming. Never move them back to module scope.
 - **Agent tool availability is per-render.** `buildDocToolsMcp()` builds a
   FRESH `docwriter-doc` MCP server for every `query()`. It must never become
   a module singleton again: an in-process SDK MCP server binds to the query
@@ -444,11 +457,12 @@ the disposition from `discussed` to `applied`.
   formatting of the preceding character; build formatted paragraphs with
   `applyDelta` (attribute-less ops insert genuinely unformatted).
 - **Serialization is plain text, not markdown.** `serializeFragment` /
-  `serializeYDoc` in `ydoc-codec.ts` emit the document text verbatim
-  (plus typography normalization) — nothing escapes markdown specials, and
-  the `ai` provenance attribute is stripped, so `document.md`, `read_doc`,
-  prompt diffs and stale checks all see plain text (provenance lives only
-  in the CRDT log).
+  `serializeYDoc` in `ydoc-codec.ts` emit the COMMITTED view (`buildView`
+  in `proposals.ts`): proposed insertions omitted, struck text kept, the
+  `ai` provenance attribute stripped, typography normalized — nothing
+  escapes markdown specials. `read_doc`, `last_seen` and prompt diffs use
+  the PROPOSED view (`proposedText`). All text-offset-to-position mapping
+  goes through `buildView`; nothing else may convert between the two.
   The editor schema is intentionally minimal (Document / Paragraph /
   Text / HardBreak); don't add StarterKit, Link, or Tiptap's history
   extension — undo is the custom `Y.UndoManager` wired through

@@ -1,12 +1,11 @@
 import * as Y from 'yjs';
-import { materializePendingReviewText } from '$lib/review-rounds';
-import { serializeYDoc, readReviewRounds } from '$lib/shared/ydoc-codec';
+import { proposedText } from '$lib/shared/proposals';
 import { getLastSeen, setLastSeen } from './documents-store';
 
-/** Agent-facing markdown for a tab: committed Y.Doc text plus any pending
- * review rounds, with typography normalized to match `serializeYDoc`. */
+/** Agent-facing text for a tab: the proposed view (every pending proposal
+ * shown as if accepted), typography normalized like `serializeYDoc`. */
 export function readTabMarkdownForAgent(ydoc: Y.Doc): string {
-	return materializePendingReviewText(serializeYDoc(ydoc), readReviewRounds(ydoc));
+	return proposedText(ydoc);
 }
 
 /** The agent's diff baseline for a tab — what its prompt last saw. Lives on

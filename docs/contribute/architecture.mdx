@@ -28,9 +28,9 @@ Never change an open tab by loading its saved updates into a temporary Yjs docum
 
 When the user types, the browser sends Yjs updates over the WebSocket. The server applies each update to the live document and saves it in SQLite.
 
-When the agent proposes an edit, `edit_doc` adds a pending review to the live document. The committed text does not change yet. The browser uses the saved edit to show the proposed text beside the original text.
+When the agent proposes an edit, `edit_doc` writes tracked changes into the live document: `insertion` and `deletion` text marks, and a paragraph attribute for whole lines added or removed, each carrying the id of the comment thread the proposal belongs to (`src/lib/shared/proposals.ts`). The committed text does not change yet; the browser renders the marks with CSS. A passage has one thread, and a new proposal on a thread replaces its old one.
 
-When the user accepts an edit, the server changes the affected paragraphs and removes the review in one transaction. When the user rejects an edit, the server removes the review without changing the text.
+When the user accepts, the server keeps the inserted text (marked as AI-written), removes the struck text, and resolves the thread in one transaction. When the user rejects or dismisses, the server reverts the marks and resolves the thread.
 
 The browser undo manager tracks user typing and review actions. It does not add agent changes to the user's undo history.
 
@@ -50,7 +50,7 @@ SQLite is the source of truth while DocWriter is running. The `yjs_updates` tabl
 
 The server also writes plain text to the workspace file and records its modification time. The file makes the document easy to use with Git and other tools, but it is not a second live document. Saved files do not include the Yjs attribute that marks text written by AI.
 
-Comments and pending reviews live inside the Yjs document. The committed text, comments, and reviews therefore reach every connected browser through the same update stream.
+Comments and proposals live inside the Yjs document: the thread messages in a map, the thread's position as marks on the text. The committed text, comments, and proposals therefore reach every connected browser through the same update stream. Saved files hold the committed text only.
 
 When DocWriter opens a tab, the server first rebuilds its Yjs document from SQLite. A newer workspace file can replace the saved document when its text changed outside DocWriter. Read an open tab from the live Hocuspocus document when it is available. Mutations must use `openDirectConnection`.
 
@@ -70,7 +70,7 @@ Agent activity and document changes travel on separate connections. Activity app
 
 ## Where to make a change
 
-- Document encoding, saved edit operations, and transaction origins are in `src/lib/shared/ydoc-codec.ts`.
+- Document encoding, thread storage, and transaction origins are in `src/lib/shared/ydoc-codec.ts`; proposals as marks, the three text views, and accept / reject are in `src/lib/shared/proposals.ts`.
 - The Hocuspocus server and review actions are in `src/lib/server/ws-server.ts`.
 - Agent document tools are in `src/lib/server/mcp-doc-tools.ts`.
 - The provider request starts in `src/routes/api/render/+server.ts`.

@@ -5,9 +5,9 @@
  * the migration that heals orphaned tab data, the grace-window reconcile
  * that stops transient file absence from deleting tabs, restore-from-log
  * on open, the append-mode external-edit reseed that keeps threads and
- * rounds alive, rename migration via the FK cascade, cascade-delete with
+ * proposals alive, rename migration via the FK cascade, cascade-delete with
  * backups and ledger scrubbing, nested-Y threads surviving concurrent
- * writes, and the narrowed write ops that stop document-sized rounds.
+ * writes, and accept / reject / dismiss as one resolve operation.
  *
  * One workspace + one DB for the whole file: the migration test seeds a
  * LEGACY (v12) database BEFORE the server modules load, so the first
@@ -36,6 +36,7 @@ let rt: typeof import('$lib/server/runtime-state');
 let store: typeof import('$lib/server/documents-store');
 let yp: typeof import('$lib/server/ydoc-persistence');
 let codec: typeof import('$lib/shared/ydoc-codec');
+let proposals: typeof import('$lib/shared/proposals');
 let reconcile: typeof import('$lib/server/tabs-reconcile');
 let mcp: typeof import('$lib/server/mcp-doc-tools');
 let ws: typeof import('$lib/server/ws-server');
@@ -127,6 +128,7 @@ beforeAll(async () => {
 	store = await import('$lib/server/documents-store');
 	yp = await import('$lib/server/ydoc-persistence');
 	codec = await import('$lib/shared/ydoc-codec');
+	proposals = await import('$lib/shared/proposals');
 	reconcile = await import('$lib/server/tabs-reconcile');
 	mcp = await import('$lib/server/mcp-doc-tools');
 	ws = await import('$lib/server/ws-server');
@@ -242,7 +244,7 @@ describe('missing files no longer destroy tabs', () => {
 });
 
 describe('external edits fold in instead of purging', () => {
-	it('text follows disk while threads, rounds and the log survive', () => {
+	it('text follows disk while threads, proposals elsewhere and the log survive', () => {
 		const tabId = 'paper.tex';
 		writeFileSync(join(root, tabId), 'Methods section.\nResults section.\n');
 		store.ensureDocument(tabId);
@@ -255,14 +257,7 @@ describe('external edits fold in instead of purging', () => {
 				resolved: false,
 				createdAt: 1
 			});
-			codec.getReviewArray(doc).push([
-				{
-					id: 'round_keep',
-					operation: { type: 'edit', oldString: 'Results section.', newString: 'Findings.' },
-					feedbackThreadId: 'thread_keep',
-					timestamp: 1
-				}
-			]);
+			proposals.proposeReplacement(doc, 'thread_keep', 'Results section.', 'Findings.');
 		}, codec.AGENT_ORIGIN);
 		insertRow(tabId, Y.encodeStateAsUpdate(doc), 'user', Date.now() - 60_000);
 		const seqBefore = updateRows(tabId)[0].seq;
@@ -273,7 +268,8 @@ describe('external edits fold in instead of purging', () => {
 
 		expect(codec.serializeYDoc(fresh)).toContain('revised externally');
 		expect(codec.readCommentThreads(fresh)).toHaveLength(1); // thread survived
-		expect(codec.readReviewRounds(fresh)).toHaveLength(1); // round survived
+		expect(proposals.proposalThreadIds(fresh).has('thread_keep')).toBe(true); // proposal survived
+		expect(proposals.proposedText(fresh)).toBe('Methods section, revised externally.\nFindings.\n');
 		const rows = updateRows(tabId);
 		expect(rows.map((r) => r.seq)).toContain(seqBefore); // nothing deleted
 		expect(rows.length).toBe(2); // the external edit appended as one update
@@ -401,79 +397,6 @@ describe('nested-Y threads merge concurrent writes', () => {
 		client.destroy();
 	});
 
-	it('the anchor backfill cannot clobber a concurrent reply', () => {
-		const a = new Y.Doc();
-		const b = new Y.Doc();
-		codec.putThread(codec.getCommentsMap(a), {
-			id: 't2',
-			anchor: { quote: 'q', occurrenceIndex: 0 },
-			messages: [{ id: 'm1', author: 'agent', text: 'first', timestamp: 1 }],
-			resolved: false,
-			createdAt: 1
-		});
-		Y.applyUpdate(b, Y.encodeStateAsUpdate(a));
-		codec.appendThreadMessage(codec.getCommentsMap(a), 't2', {
-			id: 'm2',
-			author: 'agent',
-			text: 'second',
-			timestamp: 2
-		});
-		codec.setThreadAnchor(codec.getCommentsMap(b), 't2', {
-			quote: 'q',
-			occurrenceIndex: 0,
-			relStart: 'AAAA',
-			relEnd: 'BBBB'
-		});
-		Y.applyUpdate(a, Y.encodeStateAsUpdate(b));
-		Y.applyUpdate(b, Y.encodeStateAsUpdate(a));
-		const t = codec.getThread(codec.getCommentsMap(a), 't2');
-		expect(t?.messages).toHaveLength(2);
-		expect(t?.anchor.relStart).toBe('AAAA');
-		a.destroy();
-		b.destroy();
-	});
-});
-
-describe('rounds stay small', () => {
-	it('a pure insertion narrows to a contextual edit op instead of a whole-document write', () => {
-		// Realistic prose: each paragraph distinct, so a small context window
-		// around the insertion point is unique.
-		const paragraphs: string[] = [];
-		for (let i = 0; i < 200; i++) {
-			paragraphs.push(`Paragraph ${i} discusses evaluation topic number ${i} in detail.\n`);
-		}
-		const before = paragraphs.join(''); // ~11KB
-		const insertion = 'A brand-new paragraph inserted in the middle.\n';
-		const midpoint = paragraphs.slice(0, 100).join('').length;
-		const after = before.slice(0, midpoint) + insertion + before.slice(midpoint);
-
-		const op = mcp.narrowWriteOperation(before, after);
-		expect(op).not.toBeNull();
-		expect(op?.type).toBe('edit');
-		if (op?.type === 'edit') {
-			expect(op.oldString.length).toBeLessThan(2_000); // context, not the doc
-			expect(op.newString).toContain(insertion.trim());
-			// And it applies: exactly one match, replacement yields `after`.
-			expect(before.split(op.oldString).length - 1).toBe(1);
-			expect(before.replace(op.oldString, op.newString)).toBe(after);
-		}
-	});
-
-	it('a genuine whole-document rewrite still stores as a write', () => {
-		// Large and fully different: no unique narrow span exists that isn't
-		// most of the document, so the round stores as a wholesale write.
-		const before = Array.from({ length: 80 }, (_, i) => `Original line ${i} of the source text.`).join('\n');
-		const after = Array.from({ length: 80 }, (_, i) => `Replacement sentence ${i} sharing nothing.`).join('\n');
-		expect(mcp.narrowWriteOperation(before, after)).toBeNull();
-	});
-
-	it('a perfectly periodic document (no unique context anywhere) falls back to a write', () => {
-		const paragraph = 'The same sentence repeats through the whole file.\n';
-		const before = paragraph.repeat(200);
-		const midpoint = paragraph.length * 100;
-		const after = before.slice(0, midpoint) + 'Inserted.\n' + before.slice(midpoint);
-		expect(mcp.narrowWriteOperation(before, after)).toBeNull();
-	});
 });
 
 describe('binary tabs never materialize', () => {
@@ -519,22 +442,6 @@ describe('recent actions keep their history', () => {
 	});
 });
 
-describe('server-side rel positions', () => {
-	it('threads are stamped with decodable CRDT anchors at creation', () => {
-		const doc = seededDoc('First line.\nAnchor me exactly here.\nLast line.\n');
-		const raw = codec.serializeFragmentRaw(codec.getFragment(doc));
-		const idx = raw.indexOf('Anchor me exactly here.');
-		const range = codec.computeFragmentRelRange(codec.getFragment(doc), idx, 'Anchor me exactly here.'.length);
-		expect(range).not.toBeNull();
-		const start = codec.decodeRelPosition(range!.relStart);
-		expect(start).not.toBeNull();
-		const abs = Y.createAbsolutePositionFromRelativePosition(start!, doc);
-		expect(abs).not.toBeNull();
-		expect(abs!.index).toBe(0); // start of the anchored line's text node
-		doc.destroy();
-	});
-});
-
 describe('binary tabs never reach the CRDT log', () => {
 	it('appendUpdate refuses a binary tab even when something tries to write one', () => {
 		// onLoadDocument already refuses to HYDRATE a binary tab, but nothing
@@ -572,37 +479,36 @@ describe('per-render state is isolated between concurrent renders', () => {
 			async () => {
 				gate.b();
 				await waitA; // B runs to completion while A is suspended here.
-				seen.aStale = mcp.getStaleAcceptApply();
+				seen.aThread = mcp.getActiveFeedbackThreadId();
 				mcp.setActiveFeedbackThreadId('thread_A_revised');
 				return { thread: 'thread_A_revised' };
 			}
 		);
 
 		const renderB = mcp.runWithRenderScope(
-			{ feedbackThreadId: 'thread_B', reviewerId: 'gricean-maxims', staleAcceptApply: null },
+			{ feedbackThreadId: 'thread_B', reviewerId: 'gricean-maxims' },
 			async () => {
 				await waitB;
 				// B mutating and then leaving must not touch A's values.
 				mcp.setActiveReviewerId('fresh-eyes');
 				mcp.setActiveFeedbackThreadId(null);
-				mcp.setStaleAcceptApply({ tabId: 'other.md' } as never);
 				gate.a();
 				return { done: true };
 			}
 		);
 
 		await Promise.all([renderA, renderB]);
-		// A never saw B's stale-accept payload, despite B setting one while A
+		// A still saw its own thread, despite B blanking its scope while A
 		// was suspended.
-		expect(seen.aStale).toBeNull();
+		expect(seen.aThread).toBe('thread_A');
 		// And nothing leaked to callers outside any scope.
-		expect(mcp.getStaleAcceptApply()).toBeNull();
+		expect(mcp.getActiveFeedbackThreadId()).toBeNull();
 	});
 
 	it('a call outside any render scope falls back instead of throwing', () => {
-		expect(mcp.getStaleAcceptApply()).toBeNull();
+		expect(mcp.getActiveFeedbackThreadId()).toBeNull();
 		mcp.setActiveReviewerId('orphan');
-		expect(mcp.getStaleAcceptApply()).toBeNull();
+		expect(mcp.getActiveFeedbackThreadId()).toBeNull();
 		mcp.setActiveReviewerId(null);
 	});
 });
@@ -638,12 +544,6 @@ describe('tool results never claim an edit was applied', () => {
 		).toMatch(/^Proposed a rewrite of notes\.md \(12 chars\) as a pending diff on thread thread_1\./);
 	});
 
-	it('the stale-Accept commit path keeps its "already accepted" wording', () => {
-		const committed = { beforeMd: 'a', afterMd: 'b', committed: true };
-		expect(mcp.describeTabWrite('essay.md', committed, { kind: 'edit', hits: 1 })).toMatch(
-			/^Edit applied and accepted on essay\.md\. Accept was already clicked/
-		);
-	});
 });
 
 describe('unloading a live doc flushes what the tick had not written yet', () => {
@@ -677,87 +577,96 @@ describe('unloading a live doc flushes what the tick had not written yet', () =>
 	});
 });
 
-describe('accepting a thread\'s edit moves the thread with the text', () => {
-	// After a round of accepts, threads whose passages the edits replaced
-	// parked at the top of the gutter as orphans ("so many dangling
-	// threads"). The conversation belongs with the text the edit produced.
+describe('accept, reject and dismiss are one resolve operation', () => {
 	const P1 = 'Consider a shopper who asks for a refund.';
 	const P2 = 'The application must not rely on the model.';
-	const CODE = 'tools = [get_order, issue_refund]';
 	const P1NEW = 'The agent handles a request like returning a yellow shirt.';
 
-	function seed(threadQuote: string, round: Omit<import('$lib/types').PendingReviewRound, 'id' | 'timestamp'>) {
-		const doc = seededDoc(`${P1}\n\n${P2}\n\n${CODE}\n`);
+	function seed(threadId: string, oldString: string, newString: string) {
+		const doc = seededDoc(`${P1}\n\n${P2}\n`);
 		const suffix = Math.random().toString(36).slice(2, 8);
-		const tab = `follow-accept-${suffix}.md`;
-		const threadId = 'thread_follow_' + suffix;
+		const tab = `resolve-${suffix}.md`;
 		doc.transact(() => {
 			codec.putThread(codec.getCommentsMap(doc), {
 				id: threadId,
-				anchor: { quote: threadQuote, occurrenceIndex: 0 },
 				messages: [
 					{ id: 'm1', author: 'user', text: 'Too abstract.', timestamp: 1 },
-					{ id: 'm2', author: 'agent', text: 'I will rewrite and move it.', timestamp: 2 }
+					{ id: 'm2', author: 'agent', text: 'I will rewrite it.', timestamp: 2 }
 				],
 				resolved: false,
 				createdAt: 1
 			});
-			codec.getReviewArray(doc).push([{ ...round, id: 'round_' + threadId, timestamp: 3, feedbackThreadId: threadId }]);
-		}, codec.USER_ORIGIN);
-		yp.appendUpdate(tab, Y.encodeStateAsUpdate(doc), codec.USER_ORIGIN);
-		return { tab, threadId, roundId: 'round_' + threadId };
+			expect(proposals.proposeReplacement(doc, threadId, oldString, newString)).toEqual({ ok: true, noop: false });
+		}, codec.AGENT_ORIGIN);
+		yp.appendUpdate(tab, Y.encodeStateAsUpdate(doc), codec.AGENT_ORIGIN);
+		return tab;
 	}
 
-	function readThread(tab: string, threadId: string) {
+	function read(tab: string, threadId: string) {
 		const doc = new Y.Doc();
 		yp.replayUpdatesInto(doc, tab);
 		return {
 			thread: codec.getThread(codec.getCommentsMap(doc), threadId),
-			text: codec.serializeYDoc(doc)
+			text: codec.serializeYDoc(doc),
+			marks: proposals.summarizeThreadMarks(doc)
 		};
 	}
 
-	it('a move past a code block re-anchors the thread to the moved text', async () => {
-		const { tab, threadId, roundId } = seed(P1, {
-			operation: {
-				type: 'edit',
-				oldString: `${P1}\n\n${P2}\n\n${CODE}`,
-				newString: `${P2}\n\n${CODE}\n\n${P1NEW}`
-			},
-			trigger: 'agent_edit_doc',
-			feedbackThreadId: 'placeholder'
-		});
-		const result = await ws.acceptTabRounds(tab, roundId);
-		expect(result.acceptedCount).toBe(1);
-		const { thread, text } = readThread(tab, threadId);
+	it('accept lands the text, resolves the thread, and leaves no marks', async () => {
+		const tab = seed('thread_accept', P1, P1NEW);
+		const result = await ws.resolveTabThread(tab, 'thread_accept', 'accepted');
+		expect(result.ok).toBe(true);
+		expect(result.hadProposal).toBe(true);
+		const { thread, text, marks } = read(tab, 'thread_accept');
 		expect(text).toContain(P1NEW);
 		expect(text).not.toContain(P1);
-		expect(thread?.resolved).toBe(false);
-		expect(thread?.anchor.quote).toBe(P1NEW);
-		expect(thread?.anchor.relStart).toBeTruthy();
-	});
-
-	it('an edit that only removes the passage resolves the thread', async () => {
-		const { tab, threadId, roundId } = seed(P1, {
-			operation: { type: 'edit', oldString: `${P1}\n\n`, newString: '' },
-			trigger: 'agent_edit_doc',
-			feedbackThreadId: 'placeholder'
-		});
-		await ws.acceptTabRounds(tab, roundId);
-		const { thread, text } = readThread(tab, threadId);
-		expect(text).not.toContain(P1);
 		expect(thread?.resolved).toBe(true);
+		expect(thread?.outcome).toBe('accepted');
+		expect(marks).toEqual([]);
 	});
 
-	it('a thread whose passage survived is left alone', async () => {
-		const { tab, threadId, roundId } = seed(P2, {
-			operation: { type: 'edit', oldString: CODE, newString: 'tools = [get_order]' },
-			trigger: 'agent_edit_doc',
-			feedbackThreadId: 'placeholder'
-		});
-		await ws.acceptTabRounds(tab, roundId);
-		const { thread } = readThread(tab, threadId);
-		expect(thread?.resolved).toBe(false);
-		expect(thread?.anchor.quote).toBe(P2);
+	it('reject restores the text and resolves the thread', async () => {
+		const tab = seed('thread_reject', P1, P1NEW);
+		await ws.resolveTabThread(tab, 'thread_reject', 'rejected');
+		const { thread, text, marks } = read(tab, 'thread_reject');
+		expect(text).toContain(P1);
+		expect(text).not.toContain(P1NEW);
+		expect(thread?.outcome).toBe('rejected');
+		expect(marks).toEqual([]);
+	});
+
+	it('dismissing a thread drops its proposal; reopening keeps the flag only', async () => {
+		const tab = seed('thread_dismiss', P2, 'Rely on nothing.');
+		await ws.setThreadResolution(tab, 'thread_dismiss', true);
+		let state = read(tab, 'thread_dismiss');
+		expect(state.text).toContain(P2);
+		expect(state.thread?.outcome).toBe('dismissed');
+		expect(state.marks).toEqual([]);
+		await ws.setThreadResolution(tab, 'thread_dismiss', false);
+		state = read(tab, 'thread_dismiss');
+		expect(state.thread?.resolved).toBe(false);
+		expect(state.thread?.outcome).toBeUndefined();
+	});
+
+	it('accept-all resolves every open thread with a proposal', async () => {
+		const tab = seed('thread_all_1', P1, P1NEW);
+		const doc = new Y.Doc();
+		yp.replayUpdatesInto(doc, tab);
+		const before = Y.encodeStateVector(doc);
+		doc.transact(() => {
+			codec.putThread(codec.getCommentsMap(doc), {
+				id: 'thread_all_2',
+				messages: [{ id: 'm', author: 'agent', text: 'Suggested an edit.', timestamp: 1 }],
+				resolved: false,
+				createdAt: 2
+			});
+			expect(proposals.proposeReplacement(doc, 'thread_all_2', P2, 'Trust the model.')).toEqual({ ok: true, noop: false });
+		}, codec.AGENT_ORIGIN);
+		yp.appendUpdate(tab, Y.encodeStateAsUpdate(doc, before), codec.AGENT_ORIGIN);
+		const result = await ws.resolveAllTabThreads(tab, 'accepted');
+		expect(result.count).toBe(2);
+		const { text, marks } = read(tab, 'thread_all_1');
+		expect(text).toBe(`${P1NEW}\n\nTrust the model.\n`);
+		expect(marks).toEqual([]);
 	});
 });

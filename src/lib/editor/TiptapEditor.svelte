@@ -2,12 +2,7 @@
 	import { onMount, onDestroy, tick } from 'svelte';
 	import { Editor } from '@tiptap/core';
 	import { TextSelection, type Transaction } from '@tiptap/pm/state';
-	import { DiffOverlay, setDiffState } from './diff-overlay';
-	import {
-		CommentOverlay,
-		setCommentOverlayState,
-		computeRelPositionsForRange
-	} from './comment-overlay';
+	import { ThreadOverlay, setThreadOverlayState, threadUnderRange } from './thread-overlay';
 	import { CelebrationOverlay, flashCelebration } from './celebration-overlay';
 	import {
 		FindOverlay,
@@ -37,10 +32,9 @@
 	// editor-extensions. Importing it from `y-prosemirror` yields a different
 	// PluginKey, so `transaction.getMeta(ySyncPluginKey)` never matches and
 	// remote/agent Yjs transactions get misclassified as user edits.
-	import { collaborativeExtensions, ySyncPluginKey } from '$lib/editor-extensions';
+	import { collaborativeExtensions, ySyncPluginKey, computeRelPositionsForRange } from '$lib/editor-extensions';
 	import { getYDocForTab, whenYDocReadyForTab, waitForTabSync } from '$lib/yjs-doc';
 	import {
-		reviewBaseline,
 		isRendering,
 		submitCountdown,
 		editorFontScale,
@@ -51,17 +45,15 @@
 		trackActionUsage,
 		rules,
 		pushHistory,
-		pendingReviewRounds,
+		threadMarks,
 		commentThreads,
 		openCommentThreadId,
 		agentSettings,
-		expandedReviewRoundId,
-		pinnedDiffRounds,
 		showAiProvenance
 	} from '$lib/stores';
 	import type { Action, CommentThread, FeedbackMode } from '$lib/types';
 	import { isModEnter } from '$lib/keyboard';
-	import type { MaterializedPendingReviewRound } from '$lib/review-rounds';
+	import type { ThreadMarkSummary } from '$lib/shared/proposals';
 
 	const IDLE_MS = 3_000;
 
@@ -74,16 +66,14 @@
 		 * `getScrollTop()` before tearing the editor down (Accept / Reject /
 		 * file reload) so the user keeps their place across the remount. */
 		initialScrollTop?: number;
-		/** Accept / reject the pending review round whose gutter card the user
-		 * clicked. Wired to acceptAgentEdit / rejectAgentEdit in +page. */
-		onAcceptInlineEdit?: (roundId: string | null) => void;
-		onRejectInlineEdit?: (roundId: string | null) => void;
-		/** Accept every pending edit for one feedback thread at once. */
-		onAcceptFeedbackEdits?: (roundIds: string[]) => void;
-		/** Accept / reject every pending round on this tab. */
-		onAcceptAllEdits?: () => void;
-		onRejectAllEdits?: () => void;
-		/** Dismiss / reopen a thread (undoable; also drops its pending edits). */
+		/** Accept / reject the proposal a thread holds. Wired to
+		 * acceptThread / rejectThread in +page. */
+		onAcceptThread?: (threadId: string) => void;
+		onRejectThread?: (threadId: string) => void;
+		/** Accept / reject every proposal on this tab. */
+		onAcceptAll?: () => void;
+		onRejectAll?: () => void;
+		/** Dismiss / reopen a thread (undoable; also drops its proposal). */
 		onResolveThread?: (threadId: string, resolved: boolean) => void;
 		/** Open the resolved preview output beside the source editor
 		 * (used by "Locate in PDF" on the feedback popup). */
@@ -94,11 +84,10 @@
 		tabId,
 		onSubmit,
 		initialScrollTop = 0,
-		onAcceptInlineEdit,
-		onRejectInlineEdit,
-		onAcceptFeedbackEdits,
-		onAcceptAllEdits,
-		onRejectAllEdits,
+		onAcceptThread,
+		onRejectThread,
+		onAcceptAll,
+		onRejectAll,
 		onResolveThread,
 		onOpenSplitPreview,
 		splitPreviewOpen = false
@@ -173,22 +162,24 @@
 	 * starts fresh. */
 	let feedbackMode = $state<FeedbackMode>('edit');
 
-	// Comment thread + review state, each mirrored from its store via `$store`
+	// Comment thread + mark state, each mirrored from its store via `$store`
 	// auto-subscription so there's exactly ONE reactive value per concept and
-	// no manually-managed (leak-prone) subscriptions. These feed BOTH the diff
-	// overlay (imperatively, inside updateDiff / syncCommentOverlay) and the
-	// CommentGutter props. The overlay refresh is driven reactively by the
-	// $effect near updateDiff below — no imperative updateDiff/syncCommentOverlay
-	// calls are scattered through store handlers anymore.
+	// no manually-managed (leak-prone) subscriptions. These feed BOTH the
+	// thread overlay (imperatively, inside syncThreadOverlay) and the
+	// CommentGutter props. Proposals themselves are marks on the document
+	// and render through CSS; no client code diffs anything.
 	let threadsForTab: CommentThread[] = $derived($commentThreads);
 	let openThreadId = $derived($openCommentThreadId);
 	let newAwaitingThreadId = $state<string | null>(null);
-	let rounds: MaterializedPendingReviewRound[] = $derived($pendingReviewRounds);
-	let baseline = $derived($reviewBaseline);
+	let marks: ThreadMarkSummary[] = $derived($threadMarks);
+	let markById = $derived(new Map(marks.map((m) => [m.threadId, m])));
+	let proposalThreadIds = $derived(
+		new Set(marks.filter((m) => m.hasProposal).map((m) => m.threadId))
+	);
 	/** The gutter (and its --gutter-width column) shows when there's anything
-	 * to review — unresolved comment threads OR pending edit rounds. */
+	 * to review — unresolved comment threads OR pending proposals. */
 	let hasGutterContent = $derived(
-		threadsForTab.some((t) => !t.resolved) || rounds.length > 0
+		threadsForTab.some((t) => !t.resolved) || proposalThreadIds.size > 0
 	);
 	let recent: Action[] = $derived($recentActions);
 
@@ -360,7 +351,7 @@
 			feedbackInput = '';
 			feedbackSelectionRange = null;
 			shouldFocusFeedbackInput = false;
-			updateDiff();
+			syncThreadOverlay();
 			return;
 		}
 		const selection = editor.state.selection;
@@ -375,7 +366,7 @@
 			feedbackInput = '';
 			feedbackSelectionRange = null;
 			shouldFocusFeedbackInput = false;
-			updateDiff();
+			syncThreadOverlay();
 			return;
 		}
 		const selectedText = editor.state.doc.textBetween(from, to, '\n', '\n');
@@ -385,7 +376,7 @@
 			feedbackInput = '';
 			feedbackSelectionRange = null;
 			shouldFocusFeedbackInput = false;
-			updateDiff();
+			syncThreadOverlay();
 			return;
 		}
 		const selectionRange = { from, to };
@@ -394,7 +385,7 @@
 			feedbackInput = '';
 			feedbackSelectionRange = null;
 			shouldFocusFeedbackInput = false;
-			updateDiff();
+			syncThreadOverlay();
 			return;
 		}
 		dismissedFeedbackSelectionRange = null;
@@ -418,7 +409,7 @@
 		shouldFocusFeedbackInput = autoFocus;
 		feedbackPopup = { text: selectedText, x, y, flipBelow, anchorTop, anchorBottom };
 		feedbackSelectionRange = selectionRange;
-		updateDiff();
+		syncThreadOverlay();
 	}
 
 	function handleSelectionChange() {
@@ -525,7 +516,7 @@
 		feedbackSelectionRange = null;
 		shouldFocusFeedbackInput = false;
 		feedbackMode = 'edit';
-		updateDiff();
+		syncThreadOverlay();
 		if (preserveSelection && refocusEditor) {
 			requestAnimationFrame(() => editor?.commands.focus());
 		}
@@ -598,17 +589,30 @@
 	 * RelativePositions — when present, the server stores them on the
 	 * anchor and the comment overlay anchors to the EXACT location the
 	 * user selected (not just the first occurrence of `passage` in the
-	 * doc). The comment-overlay backfill pass remains as a safety net
+	 * doc). The quote match on the server remains as a safety net
 	 * for legacy threads created before this field existed. */
 	async function maybeOpenThreadForFeedback(
 		feedback: string,
 		passage: string,
-		relPositions: { relStart: string; relEnd: string } | null
+		relPositions: { relStart: string; relEnd: string } | null,
+		existingThreadId: string | null
 	): Promise<string | null> {
-		// Every feedback opens a thread so it persists on the passage — as a
-		// record in direct-edit mode, and as the conversation the agent's
-		// plan reflection replies on in plan-first mode.
+		// Every feedback lives on a thread so it persists on the passage — as
+		// a record in direct-edit mode, and as the conversation the agent's
+		// plan reflection replies on in plan-first mode. A passage has ONE
+		// thread: feedback on a passage that already has one (a proposal, a
+		// comment) becomes a reply there, so the agent revises that thread
+		// instead of opening a second one on the same text.
+		const replyOn = async (threadId: string): Promise<string | null> => {
+			const res = await fetch('/api/comments', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ mode: 'reply', tabId, threadId, message: feedback })
+			});
+			return res.ok ? threadId : null;
+		};
 		try {
+			if (existingThreadId) return await replyOn(existingThreadId);
 			const res = await fetch('/api/comments', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -620,13 +624,23 @@
 					...(relPositions ?? {})
 				})
 			});
+			const data = await res.json().catch(() => ({}));
+			if (res.status === 409 && typeof data?.overlapThreadId === 'string') {
+				return await replyOn(data.overlapThreadId);
+			}
 			if (!res.ok) return null;
-			const data = await res.json();
 			return typeof data?.threadId === 'string' ? data.threadId : null;
 		} catch (e) {
 			console.error('Failed to pre-open thread for feedback:', e);
 			return null;
 		}
+	}
+
+	/** The thread already on the current feedback selection, if any. Read
+	 * BEFORE closeFeedbackPopup wipes feedbackSelectionRange. */
+	function existingThreadForSelection(): string | null {
+		if (!editor || !feedbackSelectionRange) return null;
+		return threadUnderRange(editor.state.doc, feedbackSelectionRange.from, feedbackSelectionRange.to);
 	}
 
 	/** Snapshot rel positions for the current feedback selection BEFORE
@@ -651,6 +665,7 @@
 		// change before proposing the edit.
 		const modeSnapshot: FeedbackMode = action.id === 'a_ai' ? 'plan' : feedbackMode;
 		const relSnapshot = snapshotFeedbackRelPositions();
+		const existingThread = existingThreadForSelection();
 		trackActionUsage(action.label);
 		if (!action.pinned) {
 			recentActions.update((prev) => [action, ...prev.filter((x) => x.id !== action.id)].slice(0, 6));
@@ -659,7 +674,7 @@
 		// Restore the mode for the trigger build — closeFeedbackPopup reset
 		// it to `edit`, but we want to honor what the user picked.
 		feedbackMode = modeSnapshot;
-		const threadId = await maybeOpenThreadForFeedback(action.label, text, relSnapshot);
+		const threadId = await maybeOpenThreadForFeedback(action.label, text, relSnapshot, existingThread);
 		if (threadId) openFeedbackThread(threadId);
 		const trigger = buildFeedbackTrigger(action.label, text, false, threadId);
 		feedbackMode = 'edit';
@@ -672,6 +687,7 @@
 		const fb = feedbackInput.trim();
 		const modeSnapshot = feedbackMode;
 		const relSnapshot = snapshotFeedbackRelPositions();
+		const existingThread = existingThreadForSelection();
 		// Preserve the full label — CSS truncates long text with an ellipsis
 		// inside the button, and `title={label}` lets the user see the whole
 		// thing on hover. Slicing here used to destroy the original text.
@@ -686,7 +702,7 @@
 		recentActions.update((prev) => [customAction, ...prev.filter((x) => x.label !== customAction.label)].slice(0, 6));
 		closeFeedbackPopup();
 		feedbackMode = modeSnapshot;
-		const threadId = await maybeOpenThreadForFeedback(fb, text, relSnapshot);
+		const threadId = await maybeOpenThreadForFeedback(fb, text, relSnapshot, existingThread);
 		if (threadId) openFeedbackThread(threadId);
 		const trigger = buildFeedbackTrigger(fb, text, true, threadId);
 		feedbackMode = 'edit';
@@ -792,100 +808,48 @@
 		return waitForTabSync(tabId);
 	}
 
-	// Diff overlay derived state. `baseline` + `rounds` are declared above via
-	// `$store` auto-subscription; the rest derive from them, so there's ONE
-	// reactive value per concept and no manual subscriptions to leak.
-	/** True when every pending round is a tiny (<THRESHOLD char) edit. Drives a
-	 * softer ghost style on the diff overlay so a one-word tweak doesn't look
-	 * like a paragraph rewrite. */
-	let allRoundsTiny = $derived(rounds.length > 0 && rounds.every((r) => r.kind === 'tiny'));
-	// Compose the full pending stack in the overlay: baseline is rounds[0].beforeMd
-	// (via reviewBaseline) and the proposal is the last round's afterMd (all ops
-	// applied in order). Each round's hunks are rendered separately with that
-	// round's id on the pill.
-	let currentProposalText = $derived(
-		rounds.length > 0 ? (rounds[rounds.length - 1].afterMd ?? null) : null
-	);
-	// Muted mode + which round is "expanded" in the OutlinePane drive a
-	// peek-one-round-at-a-time variant of the overlay. See updateDiff().
 	let muted = $derived($agentSettings.muted);
-	let expandedRoundId = $derived($expandedReviewRoundId);
-	// Rounds the user pinned "keep diff visible" on — their green proposal stays
-	// revealed regardless of which card is focused.
-	let pinnedRoundIds = $derived($pinnedDiffRounds);
 
-	// Sole reactive trigger for the in-doc diff overlay. Touching each store-
-	// derived input makes this effect re-run whenever any of them changes; the
-	// actual overlay write happens inside updateDiff, which defers to a
-	// queueMicrotask so it lands AFTER y-prosemirror reconciles the doc (see the
-	// long comment on updateDiff). Store handlers no longer call updateDiff
-	// imperatively, so this is the only reactive path — no duplicate triggers,
-	// nothing to leak. A revised edit arriving over WebSocket while a thread is
-	// open still reveals in the document without the user reopening the thread,
-	// because `rounds` / `openThreadId` are tracked here.
-	$effect(() => {
-		rounds;
-		openThreadId;
-		baseline;
-		expandedRoundId;
-		muted;
-		pinnedRoundIds;
-		updateDiff();
-	});
-	// A round appearing/disappearing flips whether its thread should be
-	// highlighted (diff present → suppress the redundant comment highlight), and
-	// opening/closing a thread changes the same. Deferred inside
-	// syncCommentOverlay, so it's safe during a Yjs apply.
+	// Sole reactive trigger for the in-doc thread overlay. Touching each
+	// store-derived input makes this effect re-run whenever any of them
+	// changes; the actual overlay write happens inside syncThreadOverlay,
+	// which defers to a queueMicrotask so it lands AFTER y-prosemirror
+	// reconciles the doc (see the comment there).
 	$effect(() => {
 		threadsForTab;
 		openThreadId;
-		rounds;
-		syncCommentOverlay();
+		marks;
+		muted;
+		syncThreadOverlay();
 	});
-	// Pending-round changes alter paragraph heights (diff decorations), so the
-	// line-number gutter needs a relayout when the round set changes.
+	// Proposal changes alter paragraph heights (inserted lines), so the
+	// line-number gutter needs a relayout when the marks change.
 	$effect(() => {
-		rounds;
+		marks;
 		schedulePlainLineSync();
 	});
-	// Round whose in-doc diff should pulse — driven by hovering its row in a
-	// feedback thread card. Null = nothing flashing.
-	let flashRoundId: string | null = null;
+	// Thread whose marks should pulse — driven by hovering its card. Null =
+	// nothing flashing.
+	let flashThreadId: string | null = null;
 	let flashClearTimer: ReturnType<typeof setTimeout> | null = null;
 	/** Set (or clear) the hover-flash target. Always self-expiring: a non-null
-	 * flash auto-clears after a beat so it can NEVER get stuck on. Without this,
-	 * accepting an edit while hovering its row removes the card before
-	 * `onmouseleave` fires, leaving `flashRoundId` pinned — and a later Ctrl+Z
-	 * that resurrects the round makes its diff pulse forever. */
-	function setHoverFlash(roundId: string | null) {
+	 * flash auto-clears after a beat so it can NEVER get stuck on. Without
+	 * this, accepting a proposal while hovering its card removes the card
+	 * before `onmouseleave` fires, leaving the flash pinned. */
+	function setHoverFlash(threadId: string | null) {
 		if (flashClearTimer) {
 			clearTimeout(flashClearTimer);
 			flashClearTimer = null;
 		}
-		flashRoundId = roundId;
-		updateDiff();
-		if (roundId) {
+		flashThreadId = threadId;
+		syncThreadOverlay();
+		if (threadId) {
 			flashClearTimer = setTimeout(() => {
 				flashClearTimer = null;
-				flashRoundId = null;
-				updateDiff();
+				flashThreadId = null;
+				syncThreadOverlay();
 			}, 1100);
 		}
-	}
-
-	/** The open feedback thread's edits, in the same order the gutter cards
-	 * number them, so in-doc numbers line up with the card rows. */
-	function openThreadEdits(): MaterializedPendingReviewRound[] {
-		if (!openThreadId) return [];
-		return rounds.filter((r) => r.feedbackThreadId === openThreadId);
-	}
-	function openThreadEditIds(): string[] {
-		return openThreadEdits().map((r) => r.id);
-	}
-	function openThreadRoundNumbers(): Map<string, number> {
-		const m = new Map<string, number>();
-		openThreadEdits().forEach((r, i) => m.set(r.id, i + 1));
-		return m;
 	}
 
 	/** PM range currently highlighted as "what the user is giving feedback
@@ -1059,36 +1023,29 @@
 		}
 	}
 
-	let commentOverlayQueued = false;
-	/** Refresh the comment-highlight overlay. ALWAYS deferred to a microtask:
-	 * callers fire from Yjs observers (comment-map / review-array changes), and
-	 * dispatching a PM transaction synchronously inside an observer makes
-	 * y-prosemirror write the OLD doc back into the fragment — clobbering a
-	 * just-applied edit (same hazard documented on `updateDiff`). Accept now
-	 * touches the comments map (auto-resolve), so a synchronous dispatch here
-	 * would clobber the accepted text. Deferring runs it after y-prosemirror
-	 * has reconciled, when the dispatch is a safe no-op for the fragment. */
-	function syncCommentOverlay() {
+	let threadOverlayQueued = false;
+	/** Refresh the thread overlay (open-thread highlight, hover flash, the
+	 * feedback selection, and the per-thread pills). ALWAYS deferred to a
+	 * microtask: callers fire from Yjs observers (comment-map / fragment
+	 * changes), and dispatching a PM transaction synchronously inside an
+	 * observer makes y-prosemirror write the OLD doc back into the fragment
+	 * — clobbering a just-applied change. Deferring runs it after
+	 * y-prosemirror has reconciled, when the dispatch is a safe no-op for
+	 * the fragment. */
+	function syncThreadOverlay() {
 		if (!editor) return;
-		if (commentOverlayQueued) return;
-		commentOverlayQueued = true;
+		if (threadOverlayQueued) return;
+		threadOverlayQueued = true;
 		queueMicrotask(() => {
-			commentOverlayQueued = false;
+			threadOverlayQueued = false;
 			if (!editor) return;
-			// A thread with a pending edit is already marked in the doc by the
-			// diff overlay (strikethrough + green insert). Highlighting it too is
-			// redundant double-marking, so we suppress the amber comment highlight
-			// (and its pill) for those — only threads WITHOUT a pending edit get
-			// highlighted, i.e. the user's own text-selection feedback that hasn't
-			// turned into a diff yet. Agent-suggested edits show only the diff.
-			const pendingEditThreadIds = new Set(
-				rounds
-					.map((r) => r.feedbackThreadId)
-					.filter((id): id is string => typeof id === 'string')
-			);
-			setCommentOverlayState(editor, {
-				threads: threadsForTab.filter((t) => !pendingEditThreadIds.has(t.id)),
-				openThreadId
+			setThreadOverlayState(editor, {
+				openThreadId,
+				flashThreadId,
+				feedbackRange: feedbackSelectionRange,
+				pills: threadsForTab
+					.filter((t) => !t.resolved && !(muted && t.messages[0]?.author === 'agent'))
+					.map((t) => ({ threadId: t.id, count: t.messages.length }))
 			});
 			setFreezeOverlayState(editor, { rules: $rules });
 		});
@@ -1179,84 +1136,6 @@
 			return;
 		}
 		freezeMenu = { ruleId, quote, x, y };
-	}
-
-	// Whether a diff-state update is already queued for this microtask checkpoint.
-	let diffUpdateQueued = false;
-
-	/** Schedule a deferred setDiffState call.
-	 *
-	 * Yjs observer callbacks (fragment.observe, reviewArr.observe) fire in this
-	 * order within a single transaction cleanup:
-	 *   1. Direct type observers  ← textHandler / reviewArr handler call updateDiff
-	 *   2. Deep observers         ← y-prosemirror's _typeChanged updates ProseMirror
-	 *
-	 * If we dispatch a PM transaction synchronously in step 1, y-prosemirror sees
-	 * a non-isChangeOrigin transaction and calls _prosemirrorChanged with the OLD
-	 * PM doc, writing the old text BACK into the Yjs fragment (clobbering the
-	 * accepted edit). Deferring to a queueMicrotask ensures setDiffState fires
-	 * AFTER step 2, by which time PM already has the new content. At that point
-	 * _prosemirrorChanged is a no-op (PM == Yjs). */
-	function updateDiff() {
-		if (!editor) return;
-		if (diffUpdateQueued) return;
-		diffUpdateQueued = true;
-		queueMicrotask(() => {
-			diffUpdateQueued = false;
-			if (!editor) return;
-			// Guard against timing issues where one store updates before the
-			// other (e.g. fragment observer clears rounds before array observer
-			// sets baseline to null). Use hasRounds as source of truth.
-			const hasRounds = rounds.length > 0;
-			// Muted mode: hide the overlay entirely until the user clicks a
-			// pending card, then show only that round's decorations.
-			let baselineForOverlay = hasRounds ? baseline : null;
-			let proposalForOverlay = hasRounds ? currentProposalText : null;
-			let pendingRoundsForOverlay: MaterializedPendingReviewRound[] = [];
-			if (muted && hasRounds) {
-				const expanded = expandedRoundId
-					? rounds.find((r) => r.id === expandedRoundId)
-					: null;
-				if (expanded && expanded.beforeMd != null && expanded.afterMd != null) {
-					baselineForOverlay = expanded.beforeMd;
-					proposalForOverlay = expanded.afterMd;
-					pendingRoundsForOverlay = [expanded];
-				} else {
-					baselineForOverlay = null;
-					proposalForOverlay = null;
-				}
-			} else if (hasRounds) {
-				pendingRoundsForOverlay = rounds;
-			}
-			const validThreadIds = new Set(
-				threadsForTab.filter((t) => !t.resolved).map((t) => t.id)
-			);
-			const overlayRounds = pendingRoundsForOverlay.map((round) =>
-				round.feedbackThreadId && !validThreadIds.has(round.feedbackThreadId)
-					? { ...round, feedbackThreadId: undefined }
-					: round
-			);
-			setDiffState(editor, {
-				baseline: baselineForOverlay,
-				proposedText: proposalForOverlay,
-				activeFeedbackRange: feedbackSelectionRange,
-				allRoundsTiny,
-				// Proposed (green) lines show inline for the focused round, any
-				// the user pinned "keep diff visible", and — when a feedback
-				// thread card is open — all the edits grouped under it. No pill.
-				revealedRoundIds: new Set([
-					...pinnedRoundIds,
-					...(expandedRoundId ? [expandedRoundId] : []),
-					...openThreadEditIds()
-				]),
-				// When a feedback thread card is open, number its edits 1..N in
-				// the document so each in-doc diff maps to a numbered card row.
-				roundNumbers: openThreadRoundNumbers(),
-				// Pulse the hovered edit's diff so the user can locate it fast.
-				flashRoundId,
-				pendingRounds: overlayRounds
-			});
-		});
 	}
 
 	function startCountdown() {
@@ -1352,8 +1231,7 @@
 			element,
 			extensions: [
 				...collaborativeExtensions(ydoc, { placeholder: 'Start writing...' }),
-				DiffOverlay,
-				CommentOverlay,
+				ThreadOverlay,
 				FreezeOverlay,
 				CelebrationOverlay,
 				FindOverlay,
@@ -1504,7 +1382,6 @@
 			// open id + reply draft on the way back.
 			if (target.closest?.('.tab-bar, .tab-slot, .file-tree, .file-tree-panel, .tree-row')) return;
 			openCommentThreadId.set(null);
-			expandedReviewRoundId.set(null);
 			freezeMenu = null;
 		};
 		window.addEventListener('mousedown', handleOutsideMousedown);
@@ -1535,10 +1412,8 @@
 			window.removeEventListener('mousedown', handleFeedbackOutsideMousedown);
 		};
 
-		syncCommentOverlay();
-
+		syncThreadOverlay();
 		schedulePlainLineSync();
-		updateDiff();
 		editor.on('update', ({ transaction }) => onEditorUpdate({ transaction }));
 		// Keep our reactive `findState` in sync with the FindOverlay plugin
 		// state so the FindBar re-renders match counts, current index, etc.
@@ -1678,33 +1553,24 @@
 				{/each}
 			</div>
 		{/if}
-		<div class="tiptap-editor plain-mode" class:soft-wrap-enabled={softWrap} bind:this={element}></div>
+		<div class="tiptap-editor plain-mode" class:soft-wrap-enabled={softWrap} class:agent-muted={muted} bind:this={element}></div>
 		{#if hasGutterContent}
 			<CommentGutter
 				threads={threadsForTab}
-				rounds={rounds}
-				baseline={baseline}
+				marks={marks}
 				editor={editor}
 				tabId={tabId}
 				openThreadId={openThreadId}
 				{newAwaitingThreadId}
 				onOpen={(id) => openCommentThreadId.set(id)}
 				onClose={() => openCommentThreadId.set(null)}
-				onAcceptRound={(roundId) => onAcceptInlineEdit?.(roundId)}
-				onRejectRound={(roundId) => onRejectInlineEdit?.(roundId)}
-				pinnedRoundIds={pinnedRoundIds}
-				onAcceptFeedback={(roundIds) => onAcceptFeedbackEdits?.(roundIds)}
-				onAcceptAll={() => onAcceptAllEdits?.()}
-				onRejectAll={() => onRejectAllEdits?.()}
+				onAccept={(threadId) => onAcceptThread?.(threadId)}
+				onReject={(threadId) => onRejectThread?.(threadId)}
+				onAcceptAll={() => onAcceptAll?.()}
+				onRejectAll={() => onRejectAll?.()}
 				onResolveThread={(threadId, resolved) => onResolveThread?.(threadId, resolved)}
 				muted={muted}
-				onPinThreadEdits={(roundIds, pinned) =>
-					pinnedDiffRounds.update((s) => {
-						const n = new Set(s);
-						for (const id of roundIds) pinned ? n.add(id) : n.delete(id);
-						return n;
-					})}
-				onHoverEdit={(roundId) => setHoverFlash(roundId)}
+				onHoverThread={(threadId) => setHoverFlash(threadId)}
 				onReply={(t, replyText) => {
 					// User replied on a thread — wake the agent to respond.
 					// The post-reply thread `t` doesn't yet include the just-
@@ -1727,11 +1593,12 @@
 					// Routing (revise the pending edit vs. reply in words) lives in
 					// the system prompt's "Where a response goes" rules; the trigger
 					// carries the facts only.
-					const hasPendingEdit = rounds.some((r) => r.feedbackThreadId === t.id);
+					const hasPendingEdit = proposalThreadIds.has(t.id);
+					const passage = markById.get(t.id)?.quote ?? '';
 					const trigger =
 						`I replied on comment thread thread_id="${t.id}" on this tab` +
 						`${hasPendingEdit ? ' (it has a pending edit)' : ''}.\n` +
-						`Anchor passage: "${t.anchor.quote}"\n` +
+						(passage ? `Passage the thread is on: "${passage}"\n` : '') +
 						`My latest reply: "${replyText}"\n` +
 						`Full thread (latest reply included):\n${transcript}`;
 					onSubmit?.(trigger);
@@ -2161,405 +2028,72 @@
 		height: 0;
 		pointer-events: none;
 	}
-	/* Diff decoration classes, applied by the DiffOverlay extension */
-	/* Fade-in for diff decorations. ProseMirror creates fresh DOM for these
-	 * spans/widgets every time the decoration set rebuilds, so the keyframe
-	 * fires whenever the overlay turns on (unmute, peek a round, new edit
-	 * arrives). Going the other direction (mute / collapse peek) the nodes
-	 * are removed so out-fade isn't possible without buffering — skipped
-	 * intentionally; the pop-out reads as "dismissed" anyway. */
-	@keyframes diffFadeIn {
+	/* ── Proposals as marks ────────────────────────────────────────────
+	 * Agent proposals are tracked changes on the document itself (see
+	 * $lib/shared/proposals): `insertion` / `deletion` / `comment` marks
+	 * carrying a thread id, plus a paragraph attribute for whole lines
+	 * added or removed. Everything below is plain CSS on those spans and
+	 * paragraphs; nothing is computed at render time. Strikes use
+	 * text-decoration and highlights use background-color, so no rule can
+	 * erase another when a passage carries several. */
+	@keyframes markFadeIn {
 		from { opacity: 0; }
-		to { opacity: var(--diff-final-opacity, 1); }
+		to { opacity: 1; }
 	}
-
-	.tiptap-editor :global(.diff-added) {
+	.tiptap-editor :global(span[data-mark='insertion']) {
 		color: var(--diff-added-color);
-		background: var(--diff-added-bg);
-		animation: diffFadeIn 480ms ease-out both;
+		background-color: var(--diff-added-bg);
+		border-radius: 2px;
+		animation: markFadeIn 320ms ease-out both;
 	}
-	.tiptap-editor :global(.tiptap-plain p.diff-added-line) {
-		color: var(--diff-added-color);
-		background: var(--diff-added-bg);
-		animation: diffFadeIn 480ms ease-out both;
-	}
-	.tiptap-editor :global(.diff-added-line) {
-		display: block;
-		position: relative;
-		color: var(--diff-added-color);
-		background: var(--diff-added-bg);
-		white-space: pre-wrap;
-		cursor: text;
-		/* Selectable on purpose: the proposal is decoration DOM, and being
-		 * able to drag-copy a phrase out of it (then reject the round) is a
-		 * real workflow. Copying routes through the diff overlay's `copy`
-		 * handler. */
-		user-select: text;
-		transform-origin: top;
-		animation: diffSlideIn 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
-	}
-	/* "Proposed text moves below ↓": sits under a struck passage whose
-	 * replacement the same round inserts elsewhere, so red-only never reads
-	 * as a plain deletion. A button, so it is keyboard-reachable. */
-	.tiptap-editor :global(.diff-moved-note) {
-		display: inline-flex;
-		align-items: center;
-		gap: 4px;
-		margin: 2px 0 6px;
-		padding: 2px 8px;
-		font: inherit;
-		font-size: 11.5px;
-		line-height: 1.4;
-		color: var(--diff-added-color);
-		background: var(--diff-added-bg);
-		border: 1px solid color-mix(in srgb, var(--diff-added-color) 30%, transparent);
-		border-radius: 999px;
-		cursor: pointer;
-		user-select: none;
-	}
-	.tiptap-editor :global(.diff-moved-note:hover) {
-		background: color-mix(in srgb, var(--diff-added-color) 16%, var(--bg-elevated, #fff));
-	}
-	/* Hover copy affordance on proposed lines. */
-	.tiptap-editor :global(.proposal-copy-btn) {
-		position: absolute;
-		top: 3px;
-		right: 3px;
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		width: 20px;
-		height: 20px;
-		padding: 0;
-		border: 1px solid color-mix(in srgb, var(--diff-added-color) 35%, transparent);
-		border-radius: 5px;
-		background: color-mix(in srgb, var(--bg-elevated, #fff) 92%, transparent);
-		color: var(--diff-added-color);
-		cursor: pointer;
-		opacity: 0;
-		transition: opacity 0.12s, background 0.12s;
-		user-select: none;
-	}
-	.tiptap-editor :global(.diff-added-line:hover .proposal-copy-btn) {
-		opacity: 1;
-	}
-	.tiptap-editor :global(.proposal-copy-btn:hover) {
-		background: color-mix(in srgb, var(--diff-added-color) 14%, var(--bg-elevated, #fff));
-	}
-	.tiptap-editor :global(.proposal-copy-btn.copied) {
-		opacity: 1;
-		background: color-mix(in srgb, var(--diff-added-color) 22%, var(--bg-elevated, #fff));
-	}
-	.tiptap-editor :global(.diff-added[data-thread-id]),
-	.tiptap-editor :global(.diff-added-line[data-thread-id]),
-	.tiptap-editor :global(.diff-removed[data-thread-id]),
-	.tiptap-editor :global(.diff-removed-line[data-thread-id]),
-	.tiptap-editor :global(.diff-insert-caret[data-thread-id]) {
-		cursor: pointer;
-	}
-	/* Insertion caret: a small pulsing green bar marking where a collapsed,
-	 * purely-additive agent edit will add text — so an edit with nothing
-	 * struck out still signals "more coming here" in the document. */
-	.tiptap-editor :global(.diff-insert-caret) {
-		display: inline-block;
-		width: 2px;
-		height: 1.05em;
-		margin: 0 1px;
-		vertical-align: text-bottom;
-		border-radius: 1px;
-		background: var(--diff-added-color);
-		user-select: none;
-		animation: diffInsertCaretPulse 1.6s ease-in-out infinite;
-	}
-	@keyframes diffInsertCaretPulse {
-		0%, 100% { opacity: 0.3; }
-		50% { opacity: 0.8; }
-	}
-	@keyframes diffSlideIn {
-		0% {
-			opacity: 0;
-			transform: translateY(-3px) scaleY(0.7);
-			max-height: 0;
-		}
-		100% {
-			opacity: 1;
-			transform: translateY(0) scaleY(1);
-			max-height: 1000px;
-		}
-	}
-	/* "Show" / "Hide" pill that toggles a diff block's proposed
-	 * replacement. The inline variant lives at the end of the last
-	 * strikethrough paragraph and is pinned to the right margin via
-	 * absolute positioning so it consumes ZERO vertical space — the
-	 * cursor doesn't move when the user types nearby. The block
-	 * variant is the fallback for pure insertions (no strikethrough
-	 * to host the inline pill). */
-	.tiptap-editor :global(.diff-toggle-pill-wrap.inline) {
-		position: absolute;
-		top: 50%;
-		right: 6px;
-		transform: translateY(-50%);
-		display: inline-flex;
-		gap: 4px;
-		align-items: center;
-		user-select: none;
-		z-index: 5;
-		pointer-events: auto;
-		opacity: 1;
-		text-decoration: none;
-	}
-	.tiptap-editor :global(.diff-toggle-pill-wrap.block) {
-		display: flex;
-		gap: 4px;
-		align-items: center;
-		margin: 4px 0;
-		user-select: none;
-	}
-	.tiptap-editor :global(.diff-toggle-pill) {
-		display: inline-flex;
-		align-items: center;
-		gap: 4px;
-		padding: 1px 8px;
-		font-family: 'Inter', -apple-system, sans-serif;
-		font-size: 10.5px;
-		font-weight: 500;
-		color: var(--accent);
-		background: var(--bg-elevated);
-		border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border-light));
-		border-radius: 999px;
-		cursor: pointer;
-		line-height: 1.4;
-		letter-spacing: 0.02em;
-		text-decoration: none;
-		opacity: 0.85;
-		transition: background 120ms ease, border-color 120ms ease, color 120ms ease, opacity 120ms ease;
-	}
-	.tiptap-editor :global(.diff-toggle-pill:hover) {
-		background: var(--accent-bg);
-		border-color: var(--accent);
-		opacity: 1;
-	}
-	.tiptap-editor :global(.diff-toggle-pill.expanded) {
-		color: var(--text-secondary);
-		background: var(--bg-surface);
-		border-color: var(--border-light);
-	}
-	.tiptap-editor :global(.diff-toggle-pill.expanded:hover) {
-		background: var(--bg);
-		color: var(--text);
-		border-color: color-mix(in srgb, var(--text-secondary) 30%, var(--border-light));
-	}
-	/* Inline ✓ accept pill — companion to the toggle pill. Green palette
-	 * so it reads as the affirmative action. */
-	.tiptap-editor :global(.diff-accept-pill) {
-		display: inline-flex;
-		align-items: center;
-		gap: 4px;
-		padding: 1px 8px 1px 6px;
-		font-family: 'Inter', -apple-system, sans-serif;
-		font-size: 10.5px;
-		font-weight: 500;
-		letter-spacing: 0.02em;
-		color: var(--diff-added-color);
-		background: var(--bg-elevated);
-		border: 1px solid color-mix(in srgb, var(--diff-added-color) 35%, var(--border-light));
-		border-radius: 999px;
-		cursor: pointer;
-		line-height: 1.4;
-		text-decoration: none;
-		opacity: 0.85;
-		transition: background 120ms ease, border-color 120ms ease, color 120ms ease, opacity 120ms ease;
-	}
-	.tiptap-editor :global(.diff-accept-pill:hover) {
-		background: color-mix(in srgb, var(--diff-added-color) 14%, var(--bg-elevated));
-		border-color: var(--diff-added-color);
-		opacity: 1;
-	}
-	.tiptap-editor :global(.diff-accept-pill svg) {
-		display: block;
-		flex: none;
-	}
-	/* Inline ✕ reject pill — mirror of accept, red palette. */
-	.tiptap-editor :global(.diff-reject-pill) {
-		display: inline-flex;
-		align-items: center;
-		gap: 4px;
-		padding: 1px 8px 1px 6px;
-		font-family: 'Inter', -apple-system, sans-serif;
-		font-size: 10.5px;
-		font-weight: 500;
-		letter-spacing: 0.02em;
-		color: var(--diff-removed-color);
-		background: var(--bg-elevated);
-		border: 1px solid color-mix(in srgb, var(--diff-removed-color) 35%, var(--border-light));
-		border-radius: 999px;
-		cursor: pointer;
-		line-height: 1.4;
-		text-decoration: none;
-		opacity: 0.85;
-		transition: background 120ms ease, border-color 120ms ease, color 120ms ease, opacity 120ms ease;
-	}
-	.tiptap-editor :global(.diff-reject-pill:hover) {
-		background: color-mix(in srgb, var(--diff-removed-color) 14%, var(--bg-elevated));
-		border-color: var(--diff-removed-color);
-		opacity: 1;
-	}
-	.tiptap-editor :global(.diff-reject-pill svg) {
-		display: block;
-		flex: none;
-	}
-	/* Strikethrough drawn as a pseudo-element line that sweeps left → right
-	 * (scaleX 0 → 1, like a pen). It's painted ABOVE any background, so the
-	 * strike still shows when the word also has a comment highlight behind
-	 * it — a `background`-based strike would get covered. */
-	@keyframes strikeSweepX {
-		from {
-			transform: scaleX(0);
-		}
-		to {
-			transform: scaleX(1);
-		}
-	}
-	.tiptap-editor :global(.diff-removed) {
-		position: relative;
-		color: var(--diff-removed-color);
-		text-decoration: none;
-		--diff-final-opacity: 0.7;
-		opacity: 0.7;
-		/* Strike drawn as a repeating background line (not a single absolutely-
-		 * positioned ::after box) so it renders on EVERY row when a removed span
-		 * wraps across lines — the old ::after only covered the first row.
-		 * box-decoration-break: clone repeats the background per line fragment;
-		 * the background-size width sweeps 0→100% left-to-right. */
-		background-image: linear-gradient(var(--diff-removed-color), var(--diff-removed-color));
-		background-repeat: no-repeat;
-		background-position: 0 0.58em;
-		background-size: 100% 1.5px;
-		-webkit-box-decoration-break: clone;
-		box-decoration-break: clone;
-		animation: diffFadeIn 480ms ease-out both,
-			strikeSweepBg 520ms cubic-bezier(0.33, 0, 0.2, 1) both;
-	}
-	@keyframes strikeSweepBg {
-		from {
-			background-size: 0% 1.5px;
-		}
-		to {
-			background-size: 100% 1.5px;
-		}
-	}
-	.tiptap-editor :global(.tiptap-plain p.diff-removed-line) {
+	.tiptap-editor :global(span[data-mark='deletion']) {
 		color: var(--diff-removed-color);
 		text-decoration: line-through;
-		--diff-final-opacity: 0.72;
-		opacity: 0.72;
-		/* Multi-row paragraphs can't sweep a single line cleanly, so they
-		 * redden + draw the strike in gradually instead (still gentle). */
-		animation: removedLineReddenIn 520ms ease-out both;
-		position: relative;
+		text-decoration-thickness: 1.5px;
+		text-decoration-color: var(--diff-removed-color);
+		opacity: 0.75;
+		animation: markFadeIn 320ms ease-out both;
 	}
-	@keyframes removedLineReddenIn {
-		from {
-			color: var(--prose-text);
-			text-decoration-color: transparent;
-			opacity: 0.85;
-		}
+	.tiptap-editor :global(span[data-mark='comment']) {
+		background-color: color-mix(in srgb, #f59e0b 10%, transparent);
+		border-bottom: 2px solid color-mix(in srgb, #f59e0b 45%, transparent);
+		border-radius: 2px;
 	}
-	/* Word-level modified paragraph: no color or strikethrough — the
-	 * paragraph reads as normal editable text and only the changed tokens
-	 * are decorated. `position: relative` is the sole effect, so the
-	 * absolutely-positioned inline "Show diff" pill anchors to this
-	 * paragraph's right margin instead of the editor edge. */
-	.tiptap-editor :global(.tiptap-plain p.diff-modified-line),
-	.tiptap-editor :global(.diff-modified-line) {
-		position: relative;
+	.tiptap-editor :global(span[data-mark='comment']:hover) {
+		background-color: color-mix(in srgb, #f59e0b 18%, transparent);
 	}
-	/* Number badge floating in the left margin of a changed paragraph, shown
-	 * while its feedback thread card is open — maps each in-doc change to a
-	 * numbered row in the card. */
-	.tiptap-editor :global(.diff-num-badge) {
-		position: absolute;
-		/* Fan out leftward when several badges land on the same line. */
-		left: calc(-1.9em - var(--badge-i, 0) * 1.5em);
-		top: 0.15em;
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		width: 1.35em;
-		height: 1.35em;
-		border-radius: 50%;
-		/* Light circle matching the card's numbered rows (.edit-num) — soft
-		 * accent fill + accent text, not a solid dark badge. */
-		background: color-mix(in srgb, var(--accent) 14%, var(--bg));
-		color: var(--accent);
-		font-family: 'Inter', -apple-system, sans-serif;
-		font-size: 0.66em;
-		font-weight: 700;
-		line-height: 1;
-		user-select: none;
+	.tiptap-editor :global(.tiptap-plain p[data-suggest='ins']) {
+		background-color: var(--diff-added-bg);
+		box-shadow: -3px 0 0 color-mix(in srgb, var(--diff-added-color) 55%, transparent);
 	}
-	.tiptap-editor :global(.diff-thread-btn) {
-		position: absolute;
-		left: calc(-3.45em - var(--thread-i, 0) * 1.55em);
-		top: 0.08em;
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		width: 1.55em;
-		height: 1.55em;
-		padding: 0;
-		border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border-light));
-		border-radius: 50%;
-		background: var(--bg-elevated);
-		color: var(--accent);
-		box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+	.tiptap-editor :global(.tiptap-plain p[data-suggest='del']) {
+		color: var(--diff-removed-color);
+		text-decoration: line-through;
+		text-decoration-thickness: 1.5px;
+		opacity: 0.75;
+		box-shadow: -3px 0 0 color-mix(in srgb, var(--diff-removed-color) 55%, transparent);
+	}
+	.tiptap-editor :global([data-thread-id]) {
 		cursor: pointer;
-		user-select: none;
-		z-index: 6;
 	}
-	.tiptap-editor :global(.diff-thread-btn:hover) {
-		background: var(--accent-bg);
-		border-color: var(--accent);
+	/* The open thread's marks, and a hovered card's marks. */
+	.tiptap-editor :global(.thread-open) {
+		background-color: color-mix(in srgb, var(--accent) 16%, transparent);
+		box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--accent) 55%, transparent);
 	}
-	.tiptap-editor :global(.diff-thread-btn svg) {
-		display: block;
-		width: 0.85em;
-		height: 0.85em;
+	.tiptap-editor :global(.thread-flash) {
+		animation: thread-flash-pulse 0.9s ease-in-out infinite;
 	}
-	/* Hover-flash: pulse a changed paragraph when its row is hovered in the
-	 * thread card, so the user can locate it instantly. */
-	.tiptap-editor :global(.diff-flash) {
-		animation: diff-flash-pulse 0.9s ease-in-out infinite;
-		border-radius: 3px;
+	@keyframes thread-flash-pulse {
+		0%, 100% { background-color: color-mix(in srgb, var(--accent) 8%, transparent); }
+		50% { background-color: color-mix(in srgb, var(--accent) 26%, transparent); }
 	}
-	@keyframes diff-flash-pulse {
-		0%,
-		100% {
-			background: transparent;
-		}
-		50% {
-			background: color-mix(in srgb, var(--accent) 22%, transparent);
-		}
-	}
-	/* Tiny-edit variants: when every pending round is small (< ~25 chars
-	 * delta, e.g. a typo fix), drop the solid green/red treatment and use
-	 * a ghost-like muted style so the diff reads as "a small suggestion"
-	 * rather than "the agent rewrote a paragraph". Background gone; text
-	 * takes just a subtle color + thin underline/strike. */
-	.tiptap-editor :global(.diff-added.diff-added-tiny) {
-		color: var(--diff-added-color);
-		background: transparent;
-		border-bottom: 1px dotted color-mix(in srgb, var(--diff-added-color) 60%, transparent);
-	}
-	.tiptap-editor :global(.tiptap-plain p.diff-added-line.diff-added-line-tiny) {
-		color: var(--diff-added-color);
-		background: transparent;
-		border-bottom: 1px dotted color-mix(in srgb, var(--diff-added-color) 60%, transparent);
-	}
-	.tiptap-editor :global(.diff-added-line.diff-added-line-tiny) {
-		color: var(--diff-added-color);
-		background: transparent;
-		border-bottom: 1px dotted color-mix(in srgb, var(--diff-added-color) 60%, transparent);
+	/* Muted agent: proposals stay visible (they are the document's tracked
+	 * changes) but subdued, so a quiet review does not shout. */
+	.tiptap-editor.agent-muted :global(span[data-mark='insertion']),
+	.tiptap-editor.agent-muted :global(span[data-mark='deletion']),
+	.tiptap-editor.agent-muted :global(.tiptap-plain p[data-suggest]) {
+		opacity: 0.5;
 	}
 	.tiptap-editor :global(.feedback-selection) {
 		background: color-mix(in srgb, var(--accent) 18%, transparent);
@@ -2866,21 +2400,8 @@
 		background: var(--bg-surface);
 		color: var(--text-secondary);
 	}
-	/* Comment thread overlay: unresolved threads get a subtle amber
-	 * highlight, and a small gutter pill shows the message count. */
-	.tiptap-editor :global(.comment-thread-highlight) {
-		background: color-mix(in srgb, #f59e0b 10%, transparent);
-		border-bottom: 2px solid color-mix(in srgb, #f59e0b 45%, transparent);
-		border-radius: 2px;
-		cursor: pointer;
-	}
-	.tiptap-editor :global(.comment-thread-highlight:hover) {
-		background: color-mix(in srgb, #f59e0b 18%, transparent);
-	}
-	.tiptap-editor :global(.comment-thread-open) {
-		background: color-mix(in srgb, #f59e0b 22%, transparent);
-		border-bottom-color: color-mix(in srgb, #f59e0b 65%, transparent);
-	}
+	/* Per-thread pill after a thread's last mark: message count; opens the
+	 * thread on click. */
 	.tiptap-editor :global(.comment-thread-pill) {
 		display: inline-flex;
 		align-items: center;

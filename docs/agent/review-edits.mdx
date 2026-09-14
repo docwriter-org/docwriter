@@ -4,11 +4,9 @@ title: "Review edits"
 
 ## Read a proposal
 
-You will see proposed text in the editor and in a card in the comment gutter. Green text is an addition and red struck text is a removal.
+A proposal is tracked changes in the draft: green text is an addition and red struck text is a removal, word by word. A line the agent adds or removes is marked whole. Every proposal belongs to a comment thread, and the thread's card in the gutter lists each changed paragraph as before and after.
 
-Hover an edit row to flash the matching text. Pin a diff to keep the proposal visible after closing a card. Small edits use a quieter presentation than large edits.
-
-When one comment leads to several edits, the open thread numbers the matching diffs in the document so you can connect each edit to its row.
+Hover a card to flash the matching text. Click a highlighted passage or its pill to open the thread.
 
 <Frame caption="Review one proposal, accept it, then reject another.">
   <video
@@ -31,23 +29,23 @@ When one comment leads to several edits, the open thread numbers the matching di
 
 ## Accept or reject
 
-A loose edit is a proposal that is not attached to a comment thread. Use its check button to **Accept** it or its x button to **Reject** it.
+Open a thread's card and use **Accept** or **Reject**. Accept keeps the added text and removes the struck text. Reject puts the original back. Both close the thread; reopen it from the gutter if you want to continue the discussion.
 
-**Accept all** accepts every proposal in the current tab. **Reject all** removes every proposal in the current tab, including proposals attached to threads. Neither action affects another tab.
+**Accept all** accepts every proposal in the current tab. **Reject all** removes every proposal in the current tab. Neither action affects another tab.
 
 <Frame>
   ![The Accept all and Reject all controls above pending suggestions](/images/agent-accept-reject-all.png)
 </Frame>
 
-Thread edits stay grouped under the comment that led to them. You can accept each grouped edit or accept the group.
+Reply on the thread when the agent should revise the proposal. The agent's new proposal replaces the old one on the same thread. Dismiss the thread when you are done with the discussion; dismissing removes a proposal you did not accept.
 
-Thread edits do not have a separate Reject button. Reply to the thread when the agent should revise the proposal. Resolve the thread when you are done with the discussion. Resolving it removes any linked proposals that you did not accept.
+A passage has one thread. Feedback you give on a passage that already has a thread becomes a reply on that thread, and the agent is told to use it.
 
-An edit becomes stale when you or another edit changes the passage that the proposal was based on. You cannot accept a stale edit because applying the old replacement could overwrite newer text. If the source text changes while you are accepting the edit, you will see the old proposal rejected. The agent will receive a follow up request for a new edit based on the current text. There is no separate Regenerate button.
+Your own typing is never part of a proposal. Text you type inside a proposal stays when the proposal is rejected. If you edit the file outside DocWriter through a passage under proposal, that proposal goes with the text and its thread card says the passage is no longer in the document.
 
 ## Copy proposed text
 
-Use **Copy proposed text** on an edit row. You can also select visible added text in the editor and copy it normally.
+Use **Copy proposed text** on a thread card. You can also select added text in the editor and copy it normally; it pastes as plain text.
 
 ## AI provenance
 
@@ -59,4 +57,4 @@ Accept and reject actions use the same undo history as your typing. Press **Comm
 
 After you accept a paragraph edit, the changed range briefly flashes so you can find it in the draft.
 
-You cannot turn track changes off for agent edits. When you mute proposals, you only hide the proposal layers. Your pending reviews stay in place until you accept or reject them.
+You cannot turn track changes off for agent edits. When you mute the agent, its threads leave the gutter and its tracked changes render faintly. They stay in place until you accept or reject them.

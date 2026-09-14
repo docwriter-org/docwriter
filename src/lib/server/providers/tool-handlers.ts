@@ -6,49 +6,31 @@
  */
 import type { ToolDefinition, ToolResult } from './types';
 import {
-	runTabWrite,
 	runCommentWrite,
-	setActiveFeedbackThreadId,
-	getActiveFeedbackThreadId,
-	describeTabWrite,
-	countOccurrences,
+	editOpenTab,
+	writeOpenTab,
+	createAgentCommentThread,
 	getHocuspocus,
 	ensureWorkspaceTabOpen,
 	readScratch,
 	writeScratch,
 	editScratch,
 	pathToTabId,
-	cryptoRandomId,
 	currentProposalText,
-	toolError,
-	toolText,
-	applyReplyToComment
+	applyReplyToComment,
+	listTabThreads
 } from '$lib/server/mcp-doc-tools';
 import { isScratchPath, resolveTabFromPath, isOpenTab } from '$lib/server/path-router';
-import { matchImportedComment, updateFeedbackDisposition } from '$lib/server/feedback-import';
 import { readFileSync, existsSync } from 'fs';
 import * as Y from 'yjs';
-import {
-	serializeYDoc,
-	getCommentsMap,
-	putThread,
-	readCommentThreads,
-	AGENT_ORIGIN,
-	normalizeTypography,
-	captureAnchorContext,
-	nthIndexOf
-} from '$lib/shared/ydoc-codec';
-import type {
-	CommentMessage,
-	CommentThread
-} from '$lib/types';
+import { normalizeTypography } from '$lib/shared/ydoc-codec';
 import { formatListedThreads } from '$lib/shared/list-threads';
 import { resolveWorkspacePath } from '$lib/server/workspace-path';
 import { addCustomSkill, readEnabledSkill } from '$lib/server/skills-config';
 import {
-	acceptTabRounds,
+	resolveAllTabThreads,
+	resolveTabThread,
 	flushTabMarkdownNow,
-	rejectTabRounds,
 	setThreadResolution
 } from '$lib/server/ws-server';
 
@@ -59,76 +41,72 @@ function toToolResult(r: any): ToolResult {
 	return { content: textContent, isError: r.isError };
 }
 
+function errorResult(text: string): ToolResult {
+	return { isError: true, content: [{ type: 'text' as const, text }] };
+}
+
+function textResult(text: string): ToolResult {
+	return { content: [{ type: 'text' as const, text }] };
+}
+
+export const REVIEW_ACTIONS = [
+	'accept_thread',
+	'accept_all',
+	'reject_thread',
+	'reject_all',
+	'resolve_thread',
+	'reopen_thread'
+] as const;
+
 export async function executeReviewAction(input: unknown): Promise<ToolResult> {
-	const { file_path: path, action, round_id, thread_id } = input as {
+	const { file_path: path, action, thread_id } = input as {
 		file_path?: string;
 		action?: string;
-		round_id?: string;
 		thread_id?: string;
 	};
-	if (!path) {
-		return { isError: true, content: [{ type: 'text' as const, text: 'review_action requires `file_path`.' }] };
-	}
+	if (!path) return errorResult('review_action requires `file_path`.');
 	const opened = ensureWorkspaceTabOpen(path, { createIfMissing: false });
 	if (!opened.ok) return toToolResult(opened.error);
 	const tabId = opened.tabId;
 
 	try {
-		if (action === 'accept_round' || action === 'accept_all') {
-			if (action === 'accept_round' && !round_id) {
-				return { isError: true, content: [{ type: 'text' as const, text: 'accept_round requires `round_id`.' }] };
+		if (action === 'accept_thread' || action === 'reject_thread') {
+			if (!thread_id) return errorResult(`${action} requires \`thread_id\`.`);
+			const outcome = action === 'accept_thread' ? 'accepted' : 'rejected';
+			const result = await resolveTabThread(tabId, thread_id, outcome);
+			if (!result.ok) return errorResult(`Thread "${thread_id}" was not found in ${path}.`);
+			if (outcome === 'accepted') {
+				try { flushTabMarkdownNow(tabId); } catch { /* best effort */ }
 			}
-			const result = await acceptTabRounds(tabId, action === 'accept_round' ? round_id : undefined);
-			try { flushTabMarkdownNow(tabId); } catch { /* best effort */ }
-			return {
-				content: [{
-					type: 'text' as const,
-					text: `Accepted ${result.acceptedCount} review edit${result.acceptedCount === 1 ? '' : 's'} in ${path}.`
-				}]
-			};
+			return textResult(
+				result.hadProposal
+					? `${outcome === 'accepted' ? 'Accepted' : 'Rejected'} the proposal on thread ${thread_id} in ${path}.`
+					: `Thread ${thread_id} in ${path} had no pending proposal; it is now resolved.`
+			);
 		}
-		if (action === 'reject_round' || action === 'reject_all') {
-			if (action === 'reject_round' && !round_id) {
-				return { isError: true, content: [{ type: 'text' as const, text: 'reject_round requires `round_id`.' }] };
+		if (action === 'accept_all' || action === 'reject_all') {
+			const outcome = action === 'accept_all' ? 'accepted' : 'rejected';
+			const result = await resolveAllTabThreads(tabId, outcome);
+			if (outcome === 'accepted') {
+				try { flushTabMarkdownNow(tabId); } catch { /* best effort */ }
 			}
-			const result = await rejectTabRounds(tabId, action === 'reject_round' ? round_id : undefined);
-			return {
-				content: [{
-					type: 'text' as const,
-					text: `Rejected ${result.rejectedCount} review edit${result.rejectedCount === 1 ? '' : 's'} in ${path}.`
-				}]
-			};
+			return textResult(
+				`${outcome === 'accepted' ? 'Accepted' : 'Rejected'} ${result.count} proposal${result.count === 1 ? '' : 's'} in ${path}.`
+			);
 		}
 		if (action === 'resolve_thread' || action === 'reopen_thread') {
-			if (!thread_id) {
-				return { isError: true, content: [{ type: 'text' as const, text: `${action} requires \`thread_id\`.` }] };
-			}
+			if (!thread_id) return errorResult(`${action} requires \`thread_id\`.`);
 			const result = await setThreadResolution(tabId, thread_id, action === 'resolve_thread');
-			if (!result.ok) {
-				return { isError: true, content: [{ type: 'text' as const, text: `Thread "${thread_id}" was not found in ${path}.` }] };
-			}
-			return {
-				content: [{
-					type: 'text' as const,
-					text: `${action === 'resolve_thread' ? 'Resolved' : 'Reopened'} thread ${thread_id} in ${path}.`
-				}]
-			};
+			if (!result.ok) return errorResult(`Thread "${thread_id}" was not found in ${path}.`);
+			return textResult(
+				`${action === 'resolve_thread' ? 'Dismissed' : 'Reopened'} thread ${thread_id} in ${path}.`
+			);
 		}
-		return {
-			isError: true,
-			content: [{
-				type: 'text' as const,
-				text: 'Unknown review action. Use accept_round, accept_all, reject_round, reject_all, resolve_thread, or reopen_thread.'
-			}]
-		};
+		return errorResult(
+			'Unknown review action. Use accept_thread, accept_all, reject_thread, reject_all, resolve_thread, or reopen_thread.'
+		);
 	} catch (err) {
-		return {
-			isError: true,
-			content: [{
-				type: 'text' as const,
-				text: `review_action failed: ${(err as Error).message}`
-			}]
-		};
+		return errorResult(`review_action failed: ${(err as Error).message}`);
 	}
 }
 
@@ -137,7 +115,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
 		{
 			name: 'edit_doc',
 			description:
-				'Replace `old_string` with `new_string` in the given file. Creates a pending review proposal for open tabs.',
+				'Replace `old_string` with `new_string` in the given file. For open tabs this lands as a pending proposal (tracked changes) under a comment thread; the document changes only when I accept it.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -145,7 +123,11 @@ export function buildToolDefinitions(): ToolDefinition[] {
 					old_string: { type: 'string', description: 'Exact substring to replace.' },
 					new_string: { type: 'string', description: 'The replacement string.' },
 					replace_all: { type: 'boolean', description: 'Replace all occurrences.' },
-					thread_id: { type: 'string', description: 'Attach this edit to an existing comment thread.' }
+					thread_id: {
+						type: 'string',
+						description:
+							'The thread this edit belongs to: the id comment_doc returned, the feedback thread you are answering, or the thread whose proposal you are revising. A passage has one thread. Omit only when no thread is about this passage yet.'
+					}
 				},
 				required: ['file_path', 'old_string', 'new_string']
 			},
@@ -154,9 +136,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
 					file_path: string; old_string: string; new_string: string;
 					replace_all?: boolean; thread_id?: string;
 				};
-				if (!path) {
-					return { isError: true, content: [{ type: 'text' as const, text: 'edit_doc requires `file_path`.' }] };
-				}
+				if (!path) return errorResult('edit_doc requires `file_path`.');
 				const replaceAll = replace_all === true;
 				const normOld = normalizeTypography(old_string);
 				const normNew = normalizeTypography(new_string);
@@ -164,57 +144,21 @@ export function buildToolDefinitions(): ToolDefinition[] {
 
 				const opened = ensureWorkspaceTabOpen(path, { createIfMissing: false });
 				if (!opened.ok) return toToolResult(opened.error);
-				const tabId = opened.tabId;
-
-				// An explicit thread_id wins over the render-level default for
-				// this one call; restore the prior value after so the targeting
-				// cannot leak into (or blank out for) later edits this turn.
-				const priorThreadId = getActiveFeedbackThreadId();
-				if (typeof thread_id === 'string' && thread_id) {
-					setActiveFeedbackThreadId(thread_id);
-				}
-				let failure: string | null = null;
-				let appliedHits = 0;
-				const result = await runTabWrite(tabId, 'agent_edit_doc', (currentMd) => {
-					const hits = countOccurrences(currentMd, normOld);
-					if (hits === 0) {
-						failure = `old_string not found in ${path}. The text may have changed since your last read — read_doc to see the current state and retry.`;
-						return null;
-					}
-					if (hits > 1 && !replaceAll) {
-						failure = `old_string matches ${hits} locations in ${path}. Make it more specific or pass replace_all: true.`;
-						return null;
-					}
-					appliedHits = hits;
-					const afterMd = replaceAll
-						? currentMd.split(normOld).join(normNew)
-						: currentMd.replace(normOld, () => normNew);
-					return {
-						operation: { type: 'edit' as const, oldString: normOld, newString: normNew, ...(replaceAll ? { replaceAll: true } : {}) },
-						afterMd
-					};
-				});
-				if (typeof thread_id === 'string' && thread_id) {
-					setActiveFeedbackThreadId(priorThreadId);
-				}
-				if (failure) return { isError: true, content: [{ type: 'text' as const, text: failure }] };
-				if ('error' in result) {
-					return { isError: true, content: [{ type: 'text' as const, text: `edit_doc failed: ${result.error}` }] };
-				}
-				if (result.discarded) {
-					return { content: [{ type: 'text' as const, text: `Edit discarded for ${path}: this feedback thread was resolved.` }] };
-				}
-				return {
-					content: [{
-						type: 'text' as const,
-						text: describeTabWrite(path, result, { kind: 'edit', replaceAll, hits: appliedHits })
-					}]
-				};
+				return toToolResult(
+					await editOpenTab(
+						path,
+						opened.tabId,
+						normOld,
+						normNew,
+						replaceAll,
+						typeof thread_id === 'string' && thread_id ? thread_id : undefined
+					)
+				);
 			}
 		},
 		{
 			name: 'read_doc',
-			description: 'Read the current content of an open tab or a scratch file.',
+			description: 'Read the current content of an open tab (with pending proposals shown as if accepted) or a scratch file.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -224,23 +168,21 @@ export function buildToolDefinitions(): ToolDefinition[] {
 			},
 			execute: async (input) => {
 				const { file_path: path } = input as { file_path: string };
-				if (!path) {
-					return { isError: true, content: [{ type: 'text' as const, text: 'read_doc requires `file_path`.' }] };
-				}
+				if (!path) return errorResult('read_doc requires `file_path`.');
 				if (isScratchPath(path)) return toToolResult(readScratch(path));
 				const tabId = resolveTabFromPath(path);
 				if (tabId && isOpenTab(tabId)) {
 					const ws = getHocuspocus();
-					if (!ws) return { isError: true, content: [{ type: 'text' as const, text: 'WebSocket server not initialized.' }] };
+					if (!ws) return errorResult('WebSocket server not initialized.');
 					const direct = await ws.openDirectConnection(tabId);
 					try {
 						let content = '';
 						await direct.transact((document) => {
 							content = currentProposalText(document as unknown as Y.Doc);
 						});
-						return { content: [{ type: 'text' as const, text: content }] };
+						return textResult(content);
 					} catch (err) {
-						return { isError: true, content: [{ type: 'text' as const, text: `Failed to read ${path}: ${(err as Error).message}` }] };
+						return errorResult(`Failed to read ${path}: ${(err as Error).message}`);
 					} finally {
 						await direct.disconnect();
 					}
@@ -249,23 +191,21 @@ export function buildToolDefinitions(): ToolDefinition[] {
 				if (candidateTabId) {
 					let absPath: string;
 					try { absPath = resolveWorkspacePath(candidateTabId); } catch (err) {
-						return { isError: true, content: [{ type: 'text' as const, text: `${path} cannot be read: ${(err as Error).message}` }] };
+						return errorResult(`${path} cannot be read: ${(err as Error).message}`);
 					}
-					if (!existsSync(absPath)) {
-						return { isError: true, content: [{ type: 'text' as const, text: `${path} does not exist.` }] };
-					}
+					if (!existsSync(absPath)) return errorResult(`${path} does not exist.`);
 					try {
-						return { content: [{ type: 'text' as const, text: readFileSync(absPath, 'utf8') }] };
+						return textResult(readFileSync(absPath, 'utf8'));
 					} catch (err) {
-						return { isError: true, content: [{ type: 'text' as const, text: `Failed to read ${path}: ${(err as Error).message}` }] };
+						return errorResult(`Failed to read ${path}: ${(err as Error).message}`);
 					}
 				}
-				return { isError: true, content: [{ type: 'text' as const, text: `${path} is not a valid workspace path or scratch path.` }] };
+				return errorResult(`${path} is not a valid workspace path or scratch path.`);
 			}
 		},
 		{
 			name: 'write_doc',
-			description: 'Replace the full content of a workspace file or scratch file.',
+			description: 'Replace the full content of a workspace file (as a pending proposal) or scratch file.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -276,30 +216,12 @@ export function buildToolDefinitions(): ToolDefinition[] {
 			},
 			execute: async (input) => {
 				const { file_path: path, content } = input as { file_path: string; content: string };
-				if (!path) {
-					return { isError: true, content: [{ type: 'text' as const, text: 'write_doc requires `file_path`.' }] };
-				}
+				if (!path) return errorResult('write_doc requires `file_path`.');
 				if (isScratchPath(path)) return toToolResult(writeScratch(path, content));
 				const normalized = normalizeTypography(content);
 				const opened = ensureWorkspaceTabOpen(path, { createIfMissing: true });
 				if (!opened.ok) return toToolResult(opened.error);
-				const result = await runTabWrite(opened.tabId, 'agent_write_doc', () => ({
-					operation: { type: 'write' as const, content: normalized },
-					afterMd: normalized
-				}));
-				if ('error' in result) {
-					return { isError: true, content: [{ type: 'text' as const, text: `write_doc failed: ${result.error}` }] };
-				}
-				return {
-					content: [{
-						type: 'text' as const,
-						text: describeTabWrite(path, result, {
-							kind: 'write',
-							created: !opened.existedOnDisk,
-							chars: content.length
-						})
-					}]
-				};
+				return toToolResult(await writeOpenTab(path, opened.tabId, normalized, !opened.existedOnDisk));
 			}
 		},
 		{
@@ -315,18 +237,8 @@ export function buildToolDefinitions(): ToolDefinition[] {
 			execute: async (input) => {
 				const { name } = input as { name: string };
 				const skill = readEnabledSkill(name);
-				if (!skill) {
-					return {
-						isError: true,
-						content: [{ type: 'text' as const, text: `Skill "${name}" is not enabled or does not exist.` }]
-					};
-				}
-				return {
-					content: [{
-						type: 'text' as const,
-						text: `Skill: ${skill.name}\nPath: ${skill.path}\n\n${skill.content}`
-					}]
-				};
+				if (!skill) return errorResult(`Skill "${name}" is not enabled or does not exist.`);
+				return textResult(`Skill: ${skill.name}\nPath: ${skill.path}\n\n${skill.content}`);
 			}
 		},
 		{
@@ -346,38 +258,28 @@ export function buildToolDefinitions(): ToolDefinition[] {
 				const { source } = input as { source: string };
 				try {
 					addCustomSkill(source);
-					return {
-						content: [{
-							type: 'text' as const,
-							text: `Added skill from ${source}. It is now enabled and synced to the native skill folders.`
-						}]
-					};
+					return textResult(
+						`Added skill from ${source}. It is now enabled and synced to the native skill folders.`
+					);
 				} catch (err) {
-					return {
-						isError: true,
-						content: [{
-							type: 'text' as const,
-							text: `add_skill failed: ${(err as Error).message}`
-						}]
-					};
+					return errorResult(`add_skill failed: ${(err as Error).message}`);
 				}
 			}
 		},
 		{
 			name: 'review_action',
 			description:
-				'Accept/reject pending review edits, or dismiss/reopen comment threads, ONLY when I explicitly ask. reopen_thread brings a dismissed thread back into the gutter — find its id with list_threads(include_dismissed=true).',
+				'Accept or reject a thread\'s pending proposal, or dismiss/reopen comment threads, ONLY when I explicitly ask. reopen_thread brings a dismissed thread back into the gutter — find its id with list_threads(include_dismissed=true).',
 			inputSchema: {
 				type: 'object',
 				properties: {
 					file_path: { type: 'string', description: 'Workspace-relative path or absolute path inside the workspace.' },
 					action: {
 						type: 'string',
-						enum: ['accept_round', 'accept_all', 'reject_round', 'reject_all', 'resolve_thread', 'reopen_thread'],
+						enum: [...REVIEW_ACTIONS],
 						description: 'The explicit review action I requested.'
 					},
-					round_id: { type: 'string', description: 'Required for accept_round or reject_round.' },
-					thread_id: { type: 'string', description: 'Required for resolve_thread or reopen_thread.' }
+					thread_id: { type: 'string', description: 'Required for accept_thread, reject_thread, resolve_thread and reopen_thread.' }
 				},
 				required: ['file_path', 'action']
 			},
@@ -399,7 +301,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
 				},
 				required: ['text']
 			},
-			execute: async () => ({ content: [{ type: 'text' as const, text: 'Rule proposal sent for review.' }] })
+			execute: async () => textResult('Rule proposal sent for review.')
 		},
 		{
 			name: 'propose_hook',
@@ -414,12 +316,12 @@ export function buildToolDefinitions(): ToolDefinition[] {
 				},
 				required: ['event', 'command']
 			},
-			execute: async () => ({ content: [{ type: 'text' as const, text: 'Hook proposal sent for review.' }] })
+			execute: async () => textResult('Hook proposal sent for review.')
 		},
 		{
 			name: 'comment_doc',
 			description:
-				'Create a new agent comment thread anchored to existing text in a workspace document. It does not change document text. Use it as the announce thread before an edit proposal; unprompted observations are allowed at Medium or High autonomy.',
+				'Create a new agent comment thread anchored to existing text in a workspace document. It does not change document text. Use it as the announce thread before an edit proposal and pass the returned thread id to edit_doc; unprompted observations are allowed at Medium or High autonomy. A passage has one thread: anchoring on text another thread holds fails and names that thread.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -442,77 +344,38 @@ export function buildToolDefinitions(): ToolDefinition[] {
 					occurrence_index?: number;
 					external_author?: string;
 				};
-				if (!path) {
-					return { isError: true, content: [{ type: 'text' as const, text: 'comment_doc requires `file_path`.' }] };
-				}
-				if (isScratchPath(path)) return { isError: true, content: [{ type: 'text' as const, text: 'comment_doc cannot be used on scratch paths.' }] };
+				if (!path) return errorResult('comment_doc requires `file_path`.');
+				if (isScratchPath(path)) return errorResult('comment_doc cannot be used on scratch paths.');
 				const opened = ensureWorkspaceTabOpen(path, { createIfMissing: false });
 				if (!opened.ok) return toToolResult(opened.error);
-				const anchorText = anchor_text.trim();
+				const anchorText = normalizeTypography(anchor_text.trim());
 				const trimmedMessage = msg.trim();
-				if (!anchorText) return { isError: true, content: [{ type: 'text' as const, text: 'comment_doc requires non-empty anchor_text.' }] };
-				if (!trimmedMessage) return { isError: true, content: [{ type: 'text' as const, text: 'comment_doc requires a non-empty message.' }] };
+				if (!anchorText) return errorResult('comment_doc requires non-empty anchor_text.');
+				if (!trimmedMessage) return errorResult('comment_doc requires a non-empty message.');
 				let threadId = '';
 				const outcome = await runCommentWrite(opened.tabId, (doc) => {
-					const liveText = serializeYDoc(doc);
-					const hits = countOccurrences(liveText, anchorText);
-					if (hits === 0) {
-						return { ok: false as const, error: `anchor_text was not found in ${path}.` };
-					}
-					if (hits > 1 && occurrence_index === undefined) {
-						return { ok: false as const, error: `anchor_text matches ${hits} locations in ${path}. Pass occurrence_index to choose one.` };
-					}
-					const occurrence = occurrence_index ?? 0;
-					if (!Number.isInteger(occurrence) || occurrence < 0 || occurrence >= hits) {
-						return { ok: false as const, error: `occurrence_index ${occurrence} is out of range; anchor_text appears ${hits} time${hits === 1 ? '' : 's'}.` };
-					}
-					const commentsMap = getCommentsMap(doc);
-					const now = Date.now();
-					threadId = 'thread_' + cryptoRandomId();
-					// Snapshot the anchor's surroundings (same as the Claude-path
-					// comment tools) so the client's quote fallback can tell "this
-					// text came back" (undo) apart from "the same string appears
-					// somewhere else" once the passage is deleted.
-					const anchorIdx = nthIndexOf(liveText, anchorText, occurrence);
-					const isExternal = !!external_author;
-					const thread: CommentThread = {
-						id: threadId,
-						anchor: {
-							quote: anchorText,
-							occurrenceIndex: occurrence,
-							...(anchorIdx >= 0
-								? captureAnchorContext(liveText, anchorIdx, anchorText.length)
-								: {})
-						},
-						messages: [{
-							id: 'msg_' + cryptoRandomId(),
-							author: isExternal ? 'external' : 'agent',
-							text: trimmedMessage,
-							timestamp: now,
-							...(isExternal ? { externalAuthor: external_author } : {})
-						}],
-						resolved: false,
-						createdAt: now
-					};
-					doc.transact(() => putThread(commentsMap, thread), AGENT_ORIGIN);
-
-					if (isExternal && external_author) {
-						const commentId = matchImportedComment(external_author, trimmedMessage);
-						if (commentId) {
-							updateFeedbackDisposition(commentId, threadId, 'discussed');
-						}
-					}
-
+					const created = createAgentCommentThread(
+						doc,
+						path,
+						anchorText,
+						occurrence_index,
+						trimmedMessage,
+						external_author
+					);
+					if (!created.ok) return created;
+					threadId = created.threadId;
 					return { ok: true as const };
 				});
-				if (!outcome.ok) return { isError: true, content: [{ type: 'text' as const, text: outcome.error }] };
-				return { content: [{ type: 'text' as const, text: `Commented on ${path} in thread ${threadId}.` }] };
+				if (!outcome.ok) return errorResult(outcome.error);
+				return textResult(
+					`Commented on ${path} in thread ${threadId}. Pass thread_id="${threadId}" to edit_doc for the edit this comment announces.`
+				);
 			}
 		},
 		{
 			name: 'reply_to_comment',
 			description:
-				'Reply on an existing comment thread. When the reply says what you would change, propose that change with edit_doc on the same thread in this turn; a reply is never a substitute for the diff, and there is no separate approval step. Pass optional anchor_text to re-attach the thread to a new passage after the original text was replaced.',
+				'Reply on an existing comment thread. When the reply says what you would change, propose that change with edit_doc on the same thread in this turn; a reply is never a substitute for the diff, and there is no separate approval step. Pass optional anchor_text to re-attach the thread to a new passage after the passage it was on is gone.',
 			inputSchema: {
 				type: 'object',
 				properties: {
@@ -522,7 +385,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
 					anchor_text: {
 						type: 'string',
 						description:
-							'Exact current document text to move this thread onto. Use when the original anchor was deleted and you need to re-attach the conversation to the corresponding current passage.'
+							'Exact current document text to move this thread onto. Use when the passage it was on is gone and you need to re-attach the conversation to the corresponding current passage.'
 					},
 					occurrence_index: {
 						type: 'number',
@@ -537,32 +400,27 @@ export function buildToolDefinitions(): ToolDefinition[] {
 					anchor_text?: string;
 					occurrence_index?: number;
 				};
-				if (!path) {
-					return { isError: true, content: [{ type: 'text' as const, text: 'reply_to_comment requires `file_path`.' }] };
-				}
-				if (isScratchPath(path)) return { isError: true, content: [{ type: 'text' as const, text: 'reply_to_comment cannot be used on scratch paths.' }] };
+				if (!path) return errorResult('reply_to_comment requires `file_path`.');
+				if (isScratchPath(path)) return errorResult('reply_to_comment cannot be used on scratch paths.');
 				const opened = ensureWorkspaceTabOpen(path, { createIfMissing: false });
 				if (!opened.ok) return toToolResult(opened.error);
 				const trimmedMessage = msg.trim();
-				if (!trimmedMessage) return { isError: true, content: [{ type: 'text' as const, text: 'reply_to_comment requires a non-empty message.' }] };
+				if (!trimmedMessage) return errorResult('reply_to_comment requires a non-empty message.');
 				let reanchored = false;
 				const outcome = await runCommentWrite(opened.tabId, (doc) => {
 					const result = applyReplyToComment(doc, thread_id, path, trimmedMessage, {
-						anchorText: anchor_text,
+						anchorText: anchor_text ? normalizeTypography(anchor_text) : undefined,
 						occurrenceIndex: occurrence_index
 					});
 					if (result.ok) reanchored = result.reanchored;
 					return result;
 				});
-				if (!outcome.ok) return { isError: true, content: [{ type: 'text' as const, text: outcome.error }] };
-				return {
-					content: [{
-						type: 'text' as const,
-						text: reanchored
-							? `Replied on thread ${thread_id} (${path}) and re-attached it to the new passage.`
-							: `Replied on thread ${thread_id} (${path}).`
-					}]
-				};
+				if (!outcome.ok) return errorResult(outcome.error);
+				return textResult(
+					reanchored
+						? `Replied on thread ${thread_id} (${path}) and re-attached it to the new passage.`
+						: `Replied on thread ${thread_id} (${path}).`
+				);
 			}
 		},
 		{
@@ -586,27 +444,23 @@ export function buildToolDefinitions(): ToolDefinition[] {
 					file_path: string;
 					include_dismissed?: boolean;
 				};
-				if (!path) {
-					return { isError: true, content: [{ type: 'text' as const, text: 'list_threads requires `file_path`.' }] };
-				}
-				if (isScratchPath(path)) return { isError: true, content: [{ type: 'text' as const, text: 'list_threads cannot be used on scratch paths.' }] };
+				if (!path) return errorResult('list_threads requires `file_path`.');
+				if (isScratchPath(path)) return errorResult('list_threads cannot be used on scratch paths.');
 				const tabId = resolveTabFromPath(path);
-				if (!tabId || !isOpenTab(tabId)) {
-					return { isError: true, content: [{ type: 'text' as const, text: `${path} is not an open tab.` }] };
-				}
+				if (!tabId || !isOpenTab(tabId)) return errorResult(`${path} is not an open tab.`);
 				const ws = getHocuspocus();
-				if (!ws) return { isError: true, content: [{ type: 'text' as const, text: 'WebSocket server not initialized.' }] };
+				if (!ws) return errorResult('WebSocket server not initialized.');
 				const direct = await ws.openDirectConnection(tabId);
 				let result = '';
 				try {
 					await direct.transact((document) => {
-						const threads = readCommentThreads(document as unknown as Y.Doc);
-						result = formatListedThreads(path, threads, include_dismissed === true);
+						const { threads, quotes } = listTabThreads(document as unknown as Y.Doc);
+						result = formatListedThreads(path, threads, include_dismissed === true, quotes);
 					});
 				} finally {
 					await direct.disconnect();
 				}
-				return { content: [{ type: 'text' as const, text: result }] };
+				return textResult(result);
 			}
 		}
 	];

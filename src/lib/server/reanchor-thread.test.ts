@@ -1,17 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
-import {
-	buildThreadAnchor,
-	getCommentsMap,
-	getThread,
-	getReviewArray,
-	readReviewRounds,
-	seedYDoc,
-	serializeYDoc
-} from '$lib/shared/ydoc-codec';
-import { applyPendingReviewRound } from '$lib/review-rounds';
-import { applyReplyToComment, commitWriteToLiveDoc } from './mcp-doc-tools';
-import { matchesStaleAcceptApply } from '$lib/shared/stale-accept';
+import { getCommentsMap, getThread, seedYDoc, serializeYDoc } from '$lib/shared/ydoc-codec';
+import { proposeReplacement, proposedText, summarizeThreadMarks } from '$lib/shared/proposals';
+import { applyReplyToComment, createAgentCommentThread } from './mcp-doc-tools';
 import type { CommentThread } from '$lib/types';
 
 function seedDoc(text: string): Y.Doc {
@@ -20,60 +11,23 @@ function seedDoc(text: string): Y.Doc {
 	return doc;
 }
 
-describe('stale proposal + thread re-attach', () => {
-	it('marks an edit stale once its old_string is gone', () => {
-		const applied = applyPendingReviewRound(
-			'The course covers databases and systems.',
-			{
-				id: 'r1',
-				timestamp: 1,
-				operation: {
-					type: 'edit',
-					oldString: 'Placeholder: add a short description.',
-					newString: 'A seminar on data systems.'
-				}
-			}
-		);
-		expect(applied.stale).toBe(true);
-		expect(applied.staleReason).toMatch(/no longer present/i);
-	});
+function orphanThread(id: string): CommentThread {
+	return {
+		id,
+		messages: [{ id: 'msg_1', author: 'agent', text: 'I will replace the placeholder.', timestamp: 1 }],
+		resolved: false,
+		createdAt: 1
+	};
+}
 
-	it('builds a quote anchor at the chosen occurrence', () => {
-		const text = 'alpha\nThe course covers databases.\nomega';
-		const anchor = buildThreadAnchor(text, 'The course covers databases.', 0);
-		expect(anchor).not.toBeNull();
-		expect(anchor?.quote).toBe('The course covers databases.');
-		expect(anchor?.occurrenceIndex).toBe(0);
-		expect(anchor?.contextBefore).toMatch(/alpha/);
-		expect(anchor?.contextAfter).toMatch(/omega/);
-		expect(anchor?.relStart).toBeUndefined();
-		expect(anchor?.relEnd).toBeUndefined();
-	});
-
-	it('re-attaches an existing thread onto a new passage', () => {
+describe('thread re-attach', () => {
+	it('re-attaches an existing thread onto a new passage as a comment mark', () => {
 		const doc = seedDoc(
 			'Course Logistics and Goals.\nA data-systems course on architecture and concurrency.'
 		);
 		expect(serializeYDoc(doc)).toContain('A data-systems course');
-
-		const original: CommentThread = {
-			id: 'thread_orphan',
-			anchor: {
-				quote: 'Placeholder: add a short description.',
-				occurrenceIndex: 0
-			},
-			messages: [
-				{
-					id: 'msg_1',
-					author: 'agent',
-					text: 'I will replace the placeholder with a real description.',
-					timestamp: 1
-				}
-			],
-			resolved: false,
-			createdAt: 1
-		};
-		getCommentsMap(doc).set(original.id, original);
+		// A legacy plain-object thread with no marks anywhere.
+		getCommentsMap(doc).set('thread_orphan', orphanThread('thread_orphan'));
 
 		const result = applyReplyToComment(
 			doc,
@@ -89,22 +43,20 @@ describe('stale proposal + thread re-attach', () => {
 		// form in place; getThread reads both shapes.
 		const updated = getThread(getCommentsMap(doc), 'thread_orphan');
 		expect(updated?.resolved).toBe(false);
-		expect(updated?.anchor.quote).toBe(
-			'A data-systems course on architecture and concurrency.'
-		);
 		expect(updated?.messages).toHaveLength(2);
 		expect(updated?.messages[1]?.text).toMatch(/re-attaching/);
+		const [summary] = summarizeThreadMarks(doc);
+		expect(summary).toMatchObject({
+			threadId: 'thread_orphan',
+			hasProposal: false,
+			para: 1,
+			quote: 'A data-systems course on architecture and concurrency.'
+		});
 	});
 
 	it('rejects re-attach when the new passage is not in the document', () => {
 		const doc = seedDoc('Only this sentence remains.');
-		getCommentsMap(doc).set('thread_orphan', {
-			id: 'thread_orphan',
-			anchor: { quote: 'gone', occurrenceIndex: 0 },
-			messages: [{ id: 'm', author: 'agent', text: 'hi', timestamp: 1 }],
-			resolved: false,
-			createdAt: 1
-		});
+		getCommentsMap(doc).set('thread_orphan', orphanThread('thread_orphan'));
 		const result = applyReplyToComment(
 			doc,
 			'thread_orphan',
@@ -115,84 +67,43 @@ describe('stale proposal + thread re-attach', () => {
 		expect(result.ok).toBe(false);
 		if (!result.ok) expect(result.error).toMatch(/not found/);
 	});
+
+	it('refuses to re-attach onto a passage another thread holds, naming it', () => {
+		const doc = seedDoc('First sentence here.\nSecond sentence here.');
+		getCommentsMap(doc).set('thread_orphan', orphanThread('thread_orphan'));
+		expect(proposeReplacement(doc, 'thread_edit', 'Second', 'Next')).toEqual({ ok: true, noop: false });
+		// The agent reads the proposed view, where line two already says "Next".
+		const result = applyReplyToComment(doc, 'thread_orphan', 'document.md', 'Moving.', {
+			anchorText: 'sentence here.\nNext'
+		});
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.error).toMatch(/thread_edit/);
+		// Nothing was written: no reply, no mark.
+		expect(getThread(getCommentsMap(doc), 'thread_orphan')?.messages).toHaveLength(1);
+		expect(summarizeThreadMarks(doc).map((s) => s.threadId)).toEqual(['thread_edit']);
+	});
 });
 
-describe('stale Accept commits the rebased write', () => {
-	it('matches only the tab the user accepted', () => {
-		const ctx = { tabId: 'document.md', staleRoundId: 'r1' };
-		expect(matchesStaleAcceptApply(ctx, 'document.md')).toBe(true);
-		expect(matchesStaleAcceptApply(ctx, 'other.md')).toBe(false);
-		expect(matchesStaleAcceptApply(null, 'document.md')).toBe(false);
+describe('agent comment threads', () => {
+	it('anchor on the proposed view, so a comment can sit on proposed text', () => {
+		const doc = seedDoc('The cat sat on the mat.');
+		expect(proposeReplacement(doc, 'thread_edit', 'cat', 'dog')).toEqual({ ok: true, noop: false });
+		expect(proposedText(doc)).toBe('The dog sat on the mat.');
+		// The same thread may comment on its own proposal.
+		const own = createAgentCommentThread(doc, 'document.md', 'dog sat', undefined, 'Note.');
+		expect(own.ok).toBe(false); // a fresh thread cannot: the line belongs to thread_edit
+		if (!own.ok) expect(own.error).toMatch(/thread_edit/);
 	});
 
-	it('applies the current old_string and drops the stale round', () => {
-		const live =
-			'A draft note about course goals that no longer matches the proposal.';
-		const intended =
-			'This course surveys database architecture, data models, and concurrency.';
-		const doc = seedDoc(live);
-		getReviewArray(doc).push([
-			{
-				id: 'stale-round',
-				timestamp: 1,
-				feedbackThreadId: 'thread_orphan',
-				operation: {
-					type: 'edit',
-					oldString: '[Placeholder: add a short description of the course goals and content.]',
-					newString: intended
-				}
-			}
-		]);
-		getCommentsMap(doc).set('thread_orphan', {
-			id: 'thread_orphan',
-			anchor: {
-				quote: '[Placeholder: add a short description of the course goals and content.]',
-				occurrenceIndex: 0
-			},
-			messages: [
-				{
-					id: 'msg_1',
-					author: 'agent',
-					text: 'I will replace the placeholder.',
-					timestamp: 1
-				}
-			],
-			resolved: false,
-			createdAt: 1
-		});
-
-		const result = commitWriteToLiveDoc(
-			doc,
-			{ type: 'edit', oldString: live, newString: intended },
-			{ dropThreadId: 'thread_orphan', dropRoundId: 'stale-round' }
-		);
-		expect(result.ok).toBe(true);
-		expect(serializeYDoc(doc)).toBe(intended);
-		expect(readReviewRounds(doc)).toHaveLength(0);
-	});
-
-	it('leaves the document alone when the rebased old_string is missing', () => {
-		const live = 'Current sentence that is not the target.';
-		const doc = seedDoc(live);
-		getReviewArray(doc).push([
-			{
-				id: 'stale-round',
-				timestamp: 1,
-				operation: {
-					type: 'edit',
-					oldString: 'gone placeholder',
-					newString: 'intended'
-				}
-			}
-		]);
-
-		const result = commitWriteToLiveDoc(
-			doc,
-			{ type: 'edit', oldString: 'not in the document', newString: 'intended' },
-			{ dropRoundId: 'stale-round' }
-		);
-		expect(result.ok).toBe(false);
-		expect(serializeYDoc(doc)).toBe(live);
-		expect(readReviewRounds(doc)).toHaveLength(1);
+	it('creates a thread with a comment mark on the passage', () => {
+		const doc = seedDoc('alpha\nbeta gamma\nomega');
+		const created = createAgentCommentThread(doc, 'document.md', 'gamma', undefined, 'Why gamma?');
+		expect(created.ok).toBe(true);
+		if (!created.ok) return;
+		const thread = getThread(getCommentsMap(doc), created.threadId);
+		expect(thread?.messages[0]?.text).toBe('Why gamma?');
+		const [summary] = summarizeThreadMarks(doc);
+		expect(summary).toMatchObject({ threadId: created.threadId, para: 1, rawOffset: 5, quote: 'gamma' });
+		expect(serializeYDoc(doc)).toBe('alpha\nbeta gamma\nomega');
 	});
 });

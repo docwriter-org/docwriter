@@ -14,25 +14,25 @@
  */
 import { Server } from '@hocuspocus/server';
 import * as Y from 'yjs';
-import type { PendingReviewRound } from '$lib/types';
+import type { CommentThread, ThreadOutcome } from '$lib/types';
 import {
 	USER_ORIGIN,
 	SYSTEM_ORIGIN,
 	FRAGMENT_NAME,
-	getReviewArray,
 	getCommentsMap,
 	getThread,
+	appendThreadMessage,
 	setThreadResolved,
-	resolveEmptyEditThreads,
 	migrateLegacyThreads,
-	getFragment,
-	readReviewRounds,
-	serializeYDoc,
-	replaceYDocTextWithAiProvenance,
-	applyEditToFragment,
-	followAcceptedEdits
+	readCommentThreads,
+	serializeYDoc
 } from '$lib/shared/ydoc-codec';
-import { applyPendingReviewRound } from '$lib/review-rounds';
+import {
+	migrateLegacyReviewState,
+	proposalThreadIds,
+	resolveThreadMarks,
+	summarizeThreadMarks
+} from '$lib/shared/proposals';
 import { touchLastSeen } from '$lib/server/last-seen';
 import {
 	appendUpdate,
@@ -98,10 +98,10 @@ export function createWsServer(port: number): Server {
 			// authoritative load. onChange isn't attached yet, so the delta
 			// is persisted manually (same pattern as the file seed).
 			const before = Y.encodeStateVector(ydoc);
-			if (migrateLegacyThreads(ydoc) > 0) {
-				const delta = Y.encodeStateAsUpdate(ydoc, before);
-				if (delta.length > 0) appendUpdate(tabId, delta, SYSTEM_ORIGIN);
-			}
+			migrateLegacyThreads(ydoc);
+			migrateLegacyProposals(tabId, ydoc);
+			const delta = Y.encodeStateAsUpdate(ydoc, before);
+			if (delta.length > 0) appendUpdate(tabId, delta, SYSTEM_ORIGIN);
 			return document;
 		},
 		async afterUnloadDocument({ documentName: tabId }) {
@@ -218,260 +218,120 @@ async function withLiveDoc<T>(
 	return result;
 }
 
-export async function acceptTabRounds(
+/** Land or discard one thread's proposal and resolve the thread, in one
+ * `USER_ORIGIN` transaction so the client applies the returned delta as a
+ * single undoable step: ctrl+z reopens the thread AND brings its marks
+ * back. `accepted` keeps the inserted text (stamped `ai`) and removes the
+ * struck text; `rejected` and `dismissed` revert. A thread with no
+ * proposal (a comment) just resolves. */
+export async function resolveTabThread(
 	tabId: string,
-	roundId?: string | string[]
-): Promise<{
-	acceptedCount: number;
-	rounds: PendingReviewRound[];
-	yjsUpdate: string | null;
-	skippedStale: Array<{ id: string; reason: string }>;
-}> {
+	threadId: string,
+	outcome: ThreadOutcome
+): Promise<{ ok: boolean; hadProposal: boolean; yjsUpdate: string | null }> {
 	return withLiveDoc(tabId, (ydoc) => {
-		const reviewArr = getReviewArray(ydoc);
-		const current = reviewArr.toArray();
-		// roundId omitted → batch-accept everything (kept oldest-first so
-		// each round applies against the previous round's output, the same
-		// order the agent generated them in).
-		// roundId given (string) → accept ONLY that round, leave the rest.
-		// roundId given (array) → accept that SET of rounds (e.g. all edits
-		// for one feedback thread), preserving oldest-first order so they
-		// apply in sequence.
-		let requested: PendingReviewRound[];
-		if (!roundId) {
-			if (current.length === 0)
-				return { acceptedCount: 0, rounds: [], yjsUpdate: null, skippedStale: [] };
-			requested = current;
-		} else if (Array.isArray(roundId)) {
-			const idSet = new Set(roundId);
-			requested = current.filter((r) => idSet.has(r.id));
-			if (requested.length === 0)
-				return { acceptedCount: 0, rounds: current, yjsUpdate: null, skippedStale: [] };
-		} else {
-			const idx = current.findIndex((r) => r.id === roundId);
-			if (idx < 0)
-				return { acceptedCount: 0, rounds: current, yjsUpdate: null, skippedStale: [] };
-			requested = [current[idx]];
-		}
-
-		// Stale walk: verify each round as a string transform before touching
-		// the live fragment. Batch accepts (everything / a set) SKIP stale
-		// rounds and land the rest — one stuck proposal must not block every
-		// other accept (it used to 409 the whole batch). A single-round
-		// accept still throws so the client's stale-rescue flow (re-queue
-		// the agent to rebase this exact round) can take over.
-		const singleMode = typeof roundId === 'string';
-		let staleCheck = serializeYDoc(ydoc);
-		const accepted: PendingReviewRound[] = [];
-		// The text each round applied against (the previous round's output
-		// in a batch), for `followAcceptedEdits` to diff whole-document
-		// writes.
-		const textBeforeById = new Map<string, string>();
-		const skippedStale: Array<{ id: string; reason: string }> = [];
-		for (const round of requested) {
-			const applied = applyPendingReviewRound(staleCheck, round);
-			if (applied.stale) {
-				const reason =
-					round.staleReason ??
-					applied.staleReason ??
-					'This proposal is stale and needs to be regenerated before it can be accepted.';
-				if (singleMode) {
-					const err = new Error(reason) as Error & {
-						staleRoundId?: string;
-						staleRound?: PendingReviewRound;
-					};
-					err.name = 'StalePendingReviewError';
-					err.staleRoundId = round.id;
-					err.staleRound = round;
-					throw err;
-				}
-				skippedStale.push({ id: round.id, reason });
-				continue;
-			}
-			textBeforeById.set(round.id, staleCheck);
-			staleCheck = applied.nextText;
-			accepted.push(round);
-		}
-		if (accepted.length === 0) {
-			return { acceptedCount: 0, rounds: current, yjsUpdate: null, skippedStale };
-		}
-		const acceptedIdSet = new Set(accepted.map((r) => r.id));
-		const remaining = current.filter((r) => !acceptedIdSet.has(r.id));
-
-		// Capture state vector before mutation so we can compute the exact
-		// delta to send back to the client in the HTTP response. The client
-		// applies this delta directly — no WebSocket round-trip, no remount.
+		const commentsMap = getCommentsMap(ydoc);
+		if (!getThread(commentsMap, threadId)) return { ok: false, hadProposal: false, yjsUpdate: null };
+		const hadProposal = proposalThreadIds(ydoc).has(threadId);
 		const beforeStateVector = Y.encodeStateVector(ydoc);
-
-		// Mutate the live fragment one op at a time, touching only the
-		// paragraphs each op covers. Concurrent user typing in any other
-		// paragraph merges through Yjs CRDT untouched. `write` ops are
-		// wholesale by contract. Every op here is agent-authored, so both
-		// paths tag introduced text with the `ai` provenance attribute
-		// (diff-scoped: carried-over user prose stays human-authored).
 		ydoc.transact(() => {
-			const fragment = getFragment(ydoc);
-			for (const round of accepted) {
-				const op = round.operation;
-				if (!op) {
-					// Legacy round without an operation; carry over the stored
-					// afterMd by replacing the fragment wholesale. Rare; only
-					// hit by rounds persisted before the operation field
-					// existed.
-					if (typeof round.afterMd === 'string') {
-						replaceYDocTextWithAiProvenance(ydoc, round.afterMd);
-					}
-					continue;
-				}
-				if (op.type === 'write') {
-					replaceYDocTextWithAiProvenance(ydoc, op.content);
-					continue;
-				}
-				// op.type === 'edit'
-				const ok = applyEditToFragment(
-					fragment,
-					op.oldString,
-					op.newString,
-					op.replaceAll === true
-				);
-				if (!ok) {
-					// Stale check passed but the surgical apply couldn't find
-					// the string. Concurrent user edit between the check and
-					// the apply (rare; same transact, but still possible if
-					// the fragment shape diverges from the serialized text we
-					// stale-checked against). Throw so the client can re-queue
-					// the round; the partially-applied prior rounds in this
-					// batch land — better than reverting them and losing them.
-					const err = new Error(
-						`Edit could not be applied surgically: oldString not found in the live fragment. The text may have changed concurrently. Re-queue the round.`
-					) as Error & { staleRoundId?: string; staleRound?: PendingReviewRound };
-					err.name = 'StalePendingReviewError';
-					err.staleRoundId = round.id;
-					err.staleRound = round;
-					throw err;
-				}
-			}
-			// Remove the accepted rounds in reverse order so each delete's
-			// index stays valid. With single-round accept this loop runs once;
-			// with batch accept it walks all rounds.
-			const acceptedIds = new Set(accepted.map((r) => r.id));
-			const indices: number[] = [];
-			reviewArr.toArray().forEach((r, i) => {
-				if (acceptedIds.has(r.id)) indices.push(i);
-			});
-			for (let i = indices.length - 1; i >= 0; i--) {
-				reviewArr.delete(indices[i], 1);
-			}
-			resolveEmptyEditThreads(
-				ydoc,
-				new Set(
-					accepted
-						.map((r) => r.feedbackThreadId)
-						.filter((id): id is string => typeof id === 'string')
-				)
-			);
-			// The threads behind these edits follow the text they produced
-			// (or resolve when the edit only removed text) instead of parking
-			// at the top of the gutter as orphans. Runs after the announce
-			// threads resolved, so it only moves threads that still show.
-			followAcceptedEdits(
-				ydoc,
-				accepted.map((round) => ({ round, textBefore: textBeforeById.get(round.id) })),
-				serializeYDoc(ydoc)
-			);
+			resolveThreadMarks(ydoc, threadId, outcome);
+			setThreadResolved(commentsMap, threadId, true, outcome);
 		}, USER_ORIGIN);
-
-		// Encode the exact Yjs delta so the client can apply it immediately
-		// via the HTTP response, without waiting for the WebSocket broadcast.
-		const deltaBytes = Y.encodeStateAsUpdate(ydoc, beforeStateVector);
-		const yjsUpdate = Buffer.from(deltaBytes).toString('base64');
-
+		const yjsUpdate = Buffer.from(Y.encodeStateAsUpdate(ydoc, beforeStateVector)).toString('base64');
 		touchLastSeen(tabId, ydoc);
-
-		return { acceptedCount: accepted.length, rounds: remaining, yjsUpdate, skippedStale };
+		return { ok: true, hadProposal, yjsUpdate };
 	});
 }
 
-export async function rejectTabRounds(
+/** Accept or reject every open thread that holds a proposal, as one
+ * undoable step. */
+export async function resolveAllTabThreads(
 	tabId: string,
-	roundId?: string,
-	options?: { keepThreads?: boolean }
-): Promise<{ rejectedCount: number; rounds: PendingReviewRound[]; yjsUpdate: string | null }> {
+	outcome: 'accepted' | 'rejected'
+): Promise<{ count: number; yjsUpdate: string | null }> {
 	return withLiveDoc(tabId, (ydoc) => {
-		const reviewArr = getReviewArray(ydoc);
-		const current = reviewArr.toArray();
-		if (current.length === 0) return { rejectedCount: 0, rounds: [], yjsUpdate: null };
-		// No roundId = reject everything. With a roundId, drop only that
-		// round; later rounds stay and will surface stale if they no longer
-		// apply (the materializer marks them).
-		// keepThreads: drop the edit but leave its announce thread open —
-		// used when Accept on a stale proposal re-queues the agent to
-		// re-attach that same thread to the current text.
-		const keepThreads = options?.keepThreads === true;
+		const commentsMap = getCommentsMap(ydoc);
+		const ids = [...proposalThreadIds(ydoc)].filter((id) => {
+			const t = getThread(commentsMap, id);
+			return t && !t.resolved;
+		});
+		if (ids.length === 0) return { count: 0, yjsUpdate: null };
 		const beforeStateVector = Y.encodeStateVector(ydoc);
-		const threadIdsOf = (rs: PendingReviewRound[]) =>
-			new Set(
-				rs
-					.map((r) => r.feedbackThreadId)
-					.filter((id): id is string => typeof id === 'string')
-			);
-		if (!roundId) {
-			ydoc.transact(() => {
-				reviewArr.delete(0, current.length);
-				if (!keepThreads) resolveEmptyEditThreads(ydoc, threadIdsOf(current));
-			}, USER_ORIGIN);
-			const deltaBytes = Y.encodeStateAsUpdate(ydoc, beforeStateVector);
-			const yjsUpdate = Buffer.from(deltaBytes).toString('base64');
-			touchLastSeen(tabId, ydoc);
-			return { rejectedCount: current.length, rounds: [], yjsUpdate };
-		}
-		const idx = current.findIndex((r) => r.id === roundId);
-		if (idx < 0) return { rejectedCount: 0, rounds: current, yjsUpdate: null };
 		ydoc.transact(() => {
-			reviewArr.delete(idx, 1);
-			if (!keepThreads) resolveEmptyEditThreads(ydoc, threadIdsOf([current[idx]]));
+			for (const id of ids) {
+				resolveThreadMarks(ydoc, id, outcome);
+				setThreadResolved(commentsMap, id, true, outcome);
+			}
 		}, USER_ORIGIN);
-		const remaining = current.slice(0, idx).concat(current.slice(idx + 1));
-		const deltaBytes = Y.encodeStateAsUpdate(ydoc, beforeStateVector);
-		const yjsUpdate = Buffer.from(deltaBytes).toString('base64');
+		const yjsUpdate = Buffer.from(Y.encodeStateAsUpdate(ydoc, beforeStateVector)).toString('base64');
 		touchLastSeen(tabId, ydoc);
-		return { rejectedCount: 1, rounds: remaining, yjsUpdate };
+		return { count: ids.length, yjsUpdate };
 	});
 }
 
-/** Dismiss (or reopen) a comment thread. The thread is the PARENT of any
- * edits grouped under it, so dismissing it also drops those pending edits —
- * a dismissed thread carries no live proposals. Both the comments-map write
- * and the review-array deletes happen in ONE `USER_ORIGIN` transaction, so
- * the returned delta — applied on the client with `USER_ORIGIN` — lands as a
- * single undoable step: ctrl+z reopens the thread AND resurrects its edits
- * (both the comments map and the review array are in the editor's
- * UndoManager scope). Reopening (resolved=false) just clears the flag. */
+/** Dismiss (or reopen) a comment thread. Dismissing reverts any proposal the
+ * thread holds — a dismissed thread carries no live marks. Reopening clears
+ * the flag; the marks come back only through undo. */
 export async function setThreadResolution(
 	tabId: string,
 	threadId: string,
 	resolved: boolean
 ): Promise<{ ok: boolean; yjsUpdate: string | null }> {
+	if (resolved) {
+		const r = await resolveTabThread(tabId, threadId, 'dismissed');
+		return { ok: r.ok, yjsUpdate: r.yjsUpdate };
+	}
 	return withLiveDoc(tabId, (ydoc) => {
 		const commentsMap = getCommentsMap(ydoc);
-		const thread = getThread(commentsMap, threadId);
-		if (!thread) return { ok: false, yjsUpdate: null };
-		const reviewArr = getReviewArray(ydoc);
+		if (!getThread(commentsMap, threadId)) return { ok: false, yjsUpdate: null };
 		const beforeStateVector = Y.encodeStateVector(ydoc);
-		ydoc.transact(() => {
-			setThreadResolved(commentsMap, threadId, resolved);
-			if (resolved) {
-				const arr = reviewArr.toArray();
-				for (let i = arr.length - 1; i >= 0; i--) {
-					if (arr[i].feedbackThreadId === threadId) reviewArr.delete(i, 1);
-				}
-			}
-		}, USER_ORIGIN);
-		const yjsUpdate = Buffer.from(
-			Y.encodeStateAsUpdate(ydoc, beforeStateVector)
-		).toString('base64');
+		ydoc.transact(() => setThreadResolved(commentsMap, threadId, false), USER_ORIGIN);
+		const yjsUpdate = Buffer.from(Y.encodeStateAsUpdate(ydoc, beforeStateVector)).toString('base64');
 		return { ok: true, yjsUpdate };
 	});
+}
+
+/** Threads with proposals, and their summaries, on a tab's live doc. */
+export function readTabProposals(ydoc: Y.Doc) {
+	return summarizeThreadMarks(ydoc).filter((s) => s.hasProposal);
+}
+
+/** Carry a document written under the pending-round model (a `rounds`
+ * array of string pairs, threads anchored by quote) over to marks. Runs on
+ * the authoritative load path, inside the caller's persist window. A round
+ * whose text no longer matches is dropped and its thread told why. A
+ * backup precedes any change. */
+function migrateLegacyProposals(tabId: string, ydoc: Y.Doc): void {
+	const legacyRounds = ydoc.getArray('rounds').length;
+	const threads = readCommentThreads(ydoc);
+	const marked = new Set(summarizeThreadMarks(ydoc).map((s) => s.threadId));
+	const needsAnchor = threads.some((t) => !t.resolved && t.anchor?.quote && !marked.has(t.id));
+	if (legacyRounds === 0 && !needsAnchor) return;
+	backupDocumentState(tabId, 'proposal-migration', ydoc);
+	const byId = new Map<string, CommentThread>(threads.map((t) => [t.id, t]));
+	let result = { migrated: 0, dropped: 0, anchored: 0 };
+	ydoc.transact(() => {
+		result = migrateLegacyReviewState(
+			ydoc,
+			(id) => {
+				const t = byId.get(id);
+				return { exists: !!t, resolved: t?.resolved ?? false, quote: t?.anchor?.quote ?? null };
+			},
+			(threadId, reason) => {
+				if (!threadId || !byId.has(threadId)) return;
+				appendThreadMessage(getCommentsMap(ydoc), threadId, {
+					id: 'msg_migrated_' + Math.random().toString(36).slice(2, 10),
+					author: 'agent',
+					text: `I could not carry my earlier proposal on this thread over to the new tracked-changes format because ${reason}. Ask me to propose it again.`,
+					timestamp: Date.now()
+				});
+			}
+		);
+	}, SYSTEM_ORIGIN);
+	console.log(
+		`[docwriter] migrated "${tabId}" to marks: ${result.migrated} proposal(s) carried, ${result.dropped} dropped, ${result.anchored} thread(s) re-anchored`
+	);
 }
 
 // ── Tab destruction ──────────────────────────────────────────────────────
@@ -525,6 +385,3 @@ export async function destroyTabState(tabId: string): Promise<void> {
 	deleteDocument(tabId);
 	clearTabCaches(tabId);
 }
-
-// Re-export so legacy imports resolve.
-export { readReviewRounds };
