@@ -1,6 +1,6 @@
 # Plan: proposals as marks in the document
 
-Status: proposal, not started. Replaces the pending-round model.
+Status: agreed, not started. Replaces the pending-round model.
 
 ## The problem
 
@@ -33,6 +33,16 @@ reconcile them.
 
 A proposal is track changes inside the CRDT, the way Word and Google Docs
 represent a suggestion. Nothing is computed at render time.
+
+Prior art, so the shape is not novel: in the Google Docs data model the
+body holds both the suggested text and the text suggested for removal,
+each text run carries `suggestedInsertionIds` / `suggestedDeletionIds`,
+and a read specifies a view mode (inline, preview as accepted, preview
+without). Word's tracked changes are `w:ins` / `w:del` runs with an
+author. The ProseMirror suggest-changes packages use insertion and
+deletion marks with ids. This plan is that model with two deliberate
+narrowings, called out below: one thread per passage, and a paragraph
+attribute where Docs uses a `\n` character.
 
 Invariants:
 
@@ -72,9 +82,15 @@ but loses `anchor` and gains `outcome`.
 
 ## Views of a document
 
-All string-to-position mapping lives in one codec function that walks
-the fragment once and returns three strings with a char-to-position map
-for each:
+The agent speaks in strings (`old_string`, `new_string`, what `read_doc`
+returns) and the document is a tree of paragraphs with marked text, so
+something has to turn the tree into a string and map a match in that
+string back to tree positions. Today that is done in three places:
+`serializeFragment` on the server, `buildCharIndex` in the browser, and
+`materializePendingReviewText`. This is not a new layer; it is the
+existing `ydoc-codec.ts` serializer made view-aware, and it becomes the
+only such place. One function walks the fragment once and returns three
+strings with a char-to-position map for each:
 
 - **committed**: no `insertion` text, with `deletion` text, no `ins`
   paragraphs. What the author has actually accepted. `document.md`,
@@ -193,17 +209,20 @@ scratch files, binary tabs.
 
 ## Issues considered
 
-**Structural edits.** Text marks alone cannot add or remove a line. The
-paragraph attribute covers it, and the accept / reject rules for a
-`del` / `ins` paragraph are the same as for marked text. This is the one
-addition to "everything is a text mark" and it is unavoidable.
+**Structural edits.** Text marks alone cannot add or remove a line. Docs
+avoids this because its paragraph break is a character that can carry a
+suggestion id; ProseMirror has no boundary character. The paragraph
+attribute covers it, and the accept / reject rules for a `del` / `ins`
+paragraph are the same as for marked text. This is the one addition to
+"everything is a text mark" and it is unavoidable here.
 
-**Overlapping proposals.** Any model that allows two threads to propose
-on the same text needs an ordering and a rebase story; that is where
-today's stale machinery came from. The one-thread-per-passage rule
-removes the case rather than handling it. Cost: an agent that wants to
-change a passage another thread covers must use that thread. That is
-already what the prompt tells it to do.
+**Overlapping proposals.** Docs and Word let one author suggest deleting
+another author's suggested insertion and render it nested. Any model
+that allows that needs an ordering and a rebase story; that is where
+today's stale machinery came from. There is one agent here, so the
+one-thread-per-passage rule removes the case rather than handling it.
+Cost: an agent that wants to change a passage another thread covers must
+use that thread. That is already what the prompt tells it to do.
 
 **Which view the agent reads.** `read_doc` keeps returning the proposed
 view so the agent reasons about the resulting text and `old_string`
@@ -256,13 +275,17 @@ cards. A true "preview as accepted" view is possible later as CSS, but
 `display: none` on inline text breaks caret movement, so it is not in
 this plan.
 
-## Open decisions
+## Decisions
 
-1. Accept resolves the thread (recommended, matches Word and Google Docs)
-   versus keeping it open re-anchored to the new text (today).
-2. On an overlap, error to the agent (recommended: explicit, one round
-   trip, reuses the existing bounce) versus silently attaching to the
-   covering thread.
+1. **Accept resolves the thread.** Matches Word and Google Docs. The
+   alternative, keeping it open re-anchored to the new text, is what
+   `followAcceptedEdits` does today and is the source of the parked
+   orphan cards. An author who wants to continue the conversation
+   reopens the thread.
+2. **An overlap is an error to the agent**, naming the covering thread.
+   Silently attaching to that thread would skip the reply-before-edit
+   contract, which is what keeps a bare diff from landing with no
+   explanation.
 
 ## Sequence
 
