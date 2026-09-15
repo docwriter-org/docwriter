@@ -148,11 +148,13 @@ export const SuggestParagraph = Paragraph.extend({
 			...(this.parent?.() ?? {}),
 			[SUGGEST_ATTR]: {
 				default: null,
+				parseHTML: (el: HTMLElement) => el.getAttribute('data-suggest') || null,
 				renderHTML: (attrs: Record<string, unknown>) =>
 					attrs[SUGGEST_ATTR] ? { 'data-suggest': String(attrs[SUGGEST_ATTR]) } : {}
 			},
 			[SUGGEST_THREAD_ATTR]: {
 				default: null,
+				parseHTML: (el: HTMLElement) => el.getAttribute('data-thread-id') || null,
 				renderHTML: (attrs: Record<string, unknown>) =>
 					attrs[SUGGEST_THREAD_ATTR] ? { 'data-thread-id': String(attrs[SUGGEST_THREAD_ATTR]) } : {}
 			}
