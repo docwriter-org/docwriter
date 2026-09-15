@@ -15,6 +15,7 @@ import type {
 } from './types';
 import { buildToolDefinitions } from './tool-handlers';
 import {
+	builtinSdkTools,
 	combinePrompt,
 	emitProposalEvents,
 	makeLazySdkLoader,
@@ -145,7 +146,7 @@ export class PiProvider implements AgentProvider {
 	): AsyncIterable<ProviderEvent> {
 		await loadSdk();
 
-		const allTools = tools.length > 0 ? tools : buildToolDefinitions();
+		const allTools = [...(tools.length > 0 ? tools : buildToolDefinitions()), ...builtinSdkTools()];
 		// Filter to options.allowedTools and gate each execute through
 		// options.canUseTool. Empty during warmup (allowedTools excludes every
 		// doc tool), so Pi no longer exposes mutation tools on a warmup ping.
