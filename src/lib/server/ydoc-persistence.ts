@@ -27,9 +27,9 @@ import {
 	serializeYDoc,
 	seedYDoc,
 	normalizeTypography,
-	replaceYDocTextFromExternal,
 	SYSTEM_ORIGIN
 } from '$lib/shared/ydoc-codec';
+import { applyExternalText } from '$lib/shared/proposals';
 
 /** Filesystem mtime can lag our `Date.now()` row-insert by a few hundred ms
  * (and HFS+ quantizes to 1s), so we require a couple seconds of slack before
@@ -41,11 +41,11 @@ const EXTERNAL_EDIT_SKEW_MS = 2_000;
  * observer sees the same origins it would live.
  *
  * External edits (the file's mtime beats the log and its normalized content
- * differs) are folded IN as one more SYSTEM-origin update that replaces the
- * text in place — an external edit is just an edit that arrived via disk.
- * Comment threads, pending rounds and the provenance of surviving text ride
- * through untouched, and no log rows are deleted (the old behavior purged
- * the whole log — threads, rounds, provenance — and left permanent seq
+ * differs) are folded IN as one more SYSTEM-origin update that replaces only
+ * the changed lines — an external edit is just an edit that arrived via
+ * disk. Comment threads, proposals outside the changed lines and the
+ * provenance of surviving text ride through untouched, and no log rows are
+ * deleted (the old behavior purged the whole log and left permanent seq
  * gaps; deletion is now reserved for explicit intent and compaction).
  *
  * Keeping the log also keeps the tab's CRDT IDENTITY, which is what stops
@@ -72,11 +72,11 @@ export function replayUpdatesInto(ydoc: Y.Doc, tabId: string): void {
 		const externalContent = detectExternalEdit(tabId, rows, ydoc);
 		if (externalContent !== null) {
 			console.log(
-				`[docwriter] tab "${tabId}" was edited externally since last sync; folding the disk content in as an update (threads and pending rounds preserved)`
+				`[docwriter] tab "${tabId}" was edited externally since last sync; folding the disk content in as an update (threads and proposals elsewhere preserved)`
 			);
 			backupDocumentState(tabId, 'external-edit-reseed', ydoc);
 			const before = Y.encodeStateVector(ydoc);
-			ydoc.transact(() => replaceYDocTextFromExternal(ydoc, externalContent), SYSTEM_ORIGIN);
+			ydoc.transact(() => applyExternalText(ydoc, externalContent), SYSTEM_ORIGIN);
 			const delta = Y.encodeStateAsUpdate(ydoc, before);
 			if (delta.length > 0) appendUpdate(tabId, delta, SYSTEM_ORIGIN);
 		}
@@ -191,8 +191,8 @@ const dirtyTabs = new Set<string>();
 let flushTimer: NodeJS.Timeout | null = null;
 let resolveLiveDoc: ((tabId: string) => Y.Doc | null) | null = null;
 /** Last committed markdown we wrote to each tab's file. Lets writeTabFile skip
- * a no-op rewrite: a pending review round (agent proposal) marks the tab dirty
- * but does NOT change the committed fragment, so its serialization is
+ * a no-op rewrite: a pending proposal (marks on the document) dirties the
+ * tab but does NOT change the committed text, so its serialization is
  * identical. Rewriting anyway would bump the file mtime and trip the CLI
  * file-watcher → a `reload` event → a full tab remount that closes the open
  * comment thread and drops the in-doc diff reveal. Skipping identical writes
@@ -231,7 +231,7 @@ function runFlushTick() {
 function writeTabFile(tabId: string, ydoc: Y.Doc) {
 	const content = serializeYDoc(ydoc);
 	const path = tabFile(tabId);
-	// Skip no-op rewrites: a pending review round dirties the tab without
+	// Skip no-op rewrites: a pending proposal dirties the tab without
 	// changing the committed text, and rewriting would bump mtime → CLI
 	// watcher reload → tab remount → the open comment thread closes.
 	// The existsSync guard keeps the skip from masking an external delete:

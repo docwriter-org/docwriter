@@ -4,7 +4,7 @@
  *
  *   - status:        'open' (in the tab bar) or 'closed' (retained,
  *                    restorable — reopening replays text, threads, pending
- *                    rounds and provenance from the update log).
+ *                    proposals and provenance from the update log).
  *   - order_index /  tab-bar presentation for open documents. The tab bar
  *     is_active:     is a VIEW of this table, never a separate registry.
  *   - last_seen:     the agent's diff baseline (was kv `last_seen:<id>`).
@@ -167,7 +167,7 @@ export function setOpenTabs(state: { order: string[]; active: string | null }) {
 
 /** Open a document (registering it if new), appending it to the tab bar.
  * `activate` focuses it. Reopening a closed document restores it — its log
- * replays text, threads, pending rounds and provenance on next load. */
+ * replays text, threads, pending proposals and provenance on next load. */
 export function openDocument(tabId: string, opts: { activate?: boolean } = {}) {
 	const activate = opts.activate !== false;
 	try {

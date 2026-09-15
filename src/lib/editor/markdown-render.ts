@@ -1,5 +1,5 @@
 import { Extension } from '@tiptap/core';
-import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { Plugin, PluginKey, type Selection } from '@tiptap/pm/state';
 import type { Node as PMNode } from '@tiptap/pm/model';
 import { Decoration, DecorationSet, type EditorView } from '@tiptap/pm/view';
 
@@ -47,7 +47,7 @@ const mdRenderKey = new PluginKey<MarkdownRenderState>('markdownRender');
 const BOLD_RE = /(\*\*|__)(.+?)\1/g;
 const ITALIC_RE = /(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)|(?<!_)_(?!_)(.+?)(?<!_)_(?!_)/g;
 const CODE_RE = /`([^`]+)`/g;
-const LINK_RE = /\[([^\]]+)\]\(([^)]+)\)/g;
+const LINK_START_RE = /(?<!!|\\)\[((?:\\.|[^\]\n])+)\]\(/g;
 const STRIKETHROUGH_RE = /~~(.+?)~~/g;
 
 function hashString(value: string): string {
@@ -334,7 +334,15 @@ function renderTableSourceToggle(table: MarkdownTable, expanded: boolean, view: 
 	return wrap;
 }
 
-function buildDecorations(state: MarkdownRenderState, doc: PMNode): DecorationSet {
+/** Match the marker's visible width, including indentation and tab stops.
+ * The plain editor displays tabs at two columns. */
+function listMarkerWidth(marker: string): number {
+	let columns = 0;
+	for (const char of marker) columns += char === '\t' ? 2 - columns % 2 : 1;
+	return columns;
+}
+
+function buildDecorations(state: MarkdownRenderState, doc: PMNode, selection: Selection): DecorationSet {
 	const decorations: Decoration[] = [];
 	const tableLineStarts = new Set<number>();
 	const codeLineStarts = new Set<number>();
@@ -435,7 +443,7 @@ function buildDecorations(state: MarkdownRenderState, doc: PMNode): DecorationSe
 		const start = pos + 1;
 		if (codeLineStarts.has(pos) || codeFenceStarts.has(pos)) return false;
 		if (tableLineStarts.has(pos)) {
-			addInlineDecorations(text, start, decorations);
+			addInlineDecorations(text, start, decorations, selection);
 			return false;
 		}
 
@@ -453,7 +461,7 @@ function buildDecorations(state: MarkdownRenderState, doc: PMNode): DecorationSe
 					class: 'md-syntax'
 				})
 			);
-			addInlineDecorations(text, start, decorations);
+			addInlineDecorations(text, start, decorations, selection);
 			return false;
 		}
 
@@ -470,16 +478,17 @@ function buildDecorations(state: MarkdownRenderState, doc: PMNode): DecorationSe
 					class: 'md-syntax'
 				})
 			);
-			addInlineDecorations(text, start, decorations);
+			addInlineDecorations(text, start, decorations, selection);
 			return false;
 		}
 
 		// Unordered list: - or * at start
-		const ulMatch = text.match(/^(\s*[-*+]\s)/);
+		const ulMatch = text.match(/^([ \t]*[-*+][ \t]+)/);
 		if (ulMatch) {
 			decorations.push(
 				Decoration.node(pos, pos + node.nodeSize, {
-					class: 'md-list-item'
+					class: 'md-list-item',
+					style: `--md-list-offset: ${listMarkerWidth(ulMatch[0])}ch`
 				})
 			);
 			decorations.push(
@@ -487,16 +496,17 @@ function buildDecorations(state: MarkdownRenderState, doc: PMNode): DecorationSe
 					class: 'md-syntax md-list-marker md-bullet'
 				})
 			);
-			addInlineDecorations(text, start, decorations);
+			addInlineDecorations(text, start, decorations, selection);
 			return false;
 		}
 
 		// Ordered list: 1. 2. etc.
-		const olMatch = text.match(/^(\s*\d+[.)]\s)/);
+		const olMatch = text.match(/^([ \t]*\d+[.)][ \t]+)/);
 		if (olMatch) {
 			decorations.push(
 				Decoration.node(pos, pos + node.nodeSize, {
-					class: 'md-list-item md-ol-item'
+					class: 'md-list-item md-ol-item',
+					style: `--md-list-offset: ${listMarkerWidth(olMatch[0])}ch`
 				})
 			);
 			decorations.push(
@@ -504,7 +514,7 @@ function buildDecorations(state: MarkdownRenderState, doc: PMNode): DecorationSe
 					class: 'md-syntax md-list-marker md-ordered-marker'
 				})
 			);
-			addInlineDecorations(text, start, decorations);
+			addInlineDecorations(text, start, decorations, selection);
 			return false;
 		}
 
@@ -519,7 +529,7 @@ function buildDecorations(state: MarkdownRenderState, doc: PMNode): DecorationSe
 		}
 
 		// Regular paragraph: just inline decorations
-		addInlineDecorations(text, start, decorations);
+		addInlineDecorations(text, start, decorations, selection);
 		return false;
 	});
 
@@ -529,10 +539,12 @@ function buildDecorations(state: MarkdownRenderState, doc: PMNode): DecorationSe
 function addInlineDecorations(
 	text: string,
 	start: number,
-	decorations: Decoration[]
+	decorations: Decoration[],
+	selection: Selection
 ) {
 	// Track which character positions are already decorated to avoid overlaps
 	const claimed = new Set<number>();
+	const codeRanges: Array<{ from: number; to: number }> = [];
 
 	function claim(from: number, to: number): boolean {
 		for (let i = from; i < to; i++) {
@@ -586,6 +598,7 @@ function addInlineDecorations(
 	while ((m = CODE_RE.exec(text)) !== null) {
 		const from = m.index;
 		const to = from + m[0].length;
+		codeRanges.push({ from, to });
 		if (!claim(from, to)) continue;
 		decorations.push(
 			Decoration.inline(start + from, start + from + 1, { class: 'md-syntax' })
@@ -615,24 +628,36 @@ function addInlineDecorations(
 		);
 	}
 
-	// Links: [text](url)
-	LINK_RE.lastIndex = 0;
-	while ((m = LINK_RE.exec(text)) !== null) {
+	// Keep the source in the document, but show only the label until the
+	// selection enters the link. At the outer boundaries it stays folded,
+	// including immediately after the author types the closing parenthesis.
+	LINK_START_RE.lastIndex = 0;
+	while ((m = LINK_START_RE.exec(text)) !== null) {
 		const from = m.index;
-		const to = from + m[0].length;
-		if (!claim(from, to)) continue;
-		const linkTextEnd = from + 1 + m[1].length;
-		// [ syntax
+		const urlStart = from + m[0].length;
+		let cursor = urlStart;
+		let depth = 1;
+		for (; cursor < text.length && text[cursor] !== '\n'; cursor++) {
+			if (text[cursor] === '\\') { cursor++; continue; }
+			if (text[cursor] === '(') depth++;
+			if (text[cursor] === ')' && --depth === 0) break;
+		}
+		if (depth !== 0) continue;
+		const to = cursor + 1;
+		LINK_START_RE.lastIndex = to;
+		if (codeRanges.some((range) => from >= range.from && from < range.to)) continue;
+		const linkTextEnd = urlStart - 2;
+		const expanded = selection.from < start + to && selection.to > start + from;
+		const syntaxClass = expanded ? 'md-syntax' : 'md-link-syntax-hidden';
 		decorations.push(
-			Decoration.inline(start + from, start + from + 1, { class: 'md-syntax' })
-		);
-		// link text
-		decorations.push(
-			Decoration.inline(start + from + 1, start + linkTextEnd, { class: 'md-link-text' })
-		);
-		// ](url) part
-		decorations.push(
-			Decoration.inline(start + linkTextEnd, start + to, { class: 'md-syntax md-link-url' })
+			Decoration.inline(start + from, start + from + 1, { class: syntaxClass }),
+			Decoration.inline(start + from + 1, start + linkTextEnd, {
+				class: 'md-link-text',
+				title: `${text.slice(urlStart, cursor)}\nClick to edit link`
+			}),
+			Decoration.inline(start + linkTextEnd, start + to, {
+				class: expanded ? 'md-syntax md-link-url' : syntaxClass
+			})
 		);
 	}
 }
@@ -678,7 +703,7 @@ export const MarkdownRender = Extension.create({
 					decorations(state) {
 						const s = mdRenderKey.getState(state);
 						if (!s) return null;
-						return buildDecorations(s, state.doc);
+						return buildDecorations(s, state.doc, state.selection);
 					}
 				}
 			})

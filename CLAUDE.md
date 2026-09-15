@@ -1,455 +1,213 @@
-# CLAUDE.md
+# Working on DocWriter
 
-Guidance for Claude Code when working on **DocWriter**.
+Use this guide when you change DocWriter. Read [ARCHITECTURE.md](ARCHITECTURE.md) for more detail about the system.
 
 ## Commands
 
+Use Node 22 or later; the pinned version is in `.nvmrc`.
+
 ```bash
-# Requires Node 22+ (use `nvm use 22` if needed)
-npm run dev          # Start Vite dev server (hot reload)
-npm run build        # Production build
-npm run check        # TypeScript + Svelte type checking
-npm run check:watch  # Watch mode type checking
-npm run test:unit    # vitest (src/**/*.test.ts)
-npm run doctor       # docwriter doctor — inspect/repair .docwriter state
+npm run dev          # Start Vite with hot reload
+npm run build        # Build for production
+npm run check        # Check TypeScript and Svelte
+npm run check:watch  # Keep type checks running
+npm run test:unit    # Run Vitest
+npm run doctor       # Inspect or repair .docwriter state
 ```
 
-Validate changes with `npm run check` AND `npm run test:unit`. The
-lifecycle/consistency invariants live in
-`src/lib/server/state-consistency.test.ts`.
+Run both `npm run check` and `npm run test:unit` before you finish. You can find the document lifecycle tests in `src/lib/server/state-consistency.test.ts`.
 
-## What DocWriter is
+## Work with the live document
 
-A plain-markdown writing editor with an AI side-channel. The user writes
-markdown in a Tiptap editor. The editor state for every open tab is a CRDT
-(Yjs `Y.Doc`) whose authoritative copy lives on the **server**; the browser
-is a synced client. An agent proposes edits by mutating the server Y.Doc
-directly through custom MCP tools. Every mutation reaches the browser over
-a WebSocket as an atomic Yjs update and appears in the UI as a reviewable
-round. The data model is flat markdown — no atoms, no blocks, no pins.
+DocWriter is a Markdown editor where you write with an AI agent. Each text tab has a Yjs document in the Hocuspocus server; you access that document over a WebSocket in the browser.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system.
+Read the live server document when it is available. To change it from the server, use `hocuspocus.openDirectConnection(...)`; do not change a temporary document rebuilt from SQLite while a live copy is available. Your change would not be visible in the browser.
 
-## The one big idea
+Use the same document for agent tools. In `edit_doc` and `write_doc`, store proposed additions and deletions as marks on its text; each mark has a comment thread ID. Display the marks with CSS in the browser.
 
-**The server owns the Y.Doc.** Clients connect to a Hocuspocus WebSocket
-and sync the same per-tab `Y.Doc` the agent is editing. Every Yjs update
-— user keystroke, agent edit, review-map change — appends to the
-`yjs_updates` table in `.docwriter/docwriter.db` with its original Yjs
-origin. SQLite is the persistence layer; `document.md` is a debounced
-markdown backup for portability and git, not the source of truth. There
-are no shadow files: the agent's `edit_doc` / `write_doc` MCP tools open a
-`DirectConnection` to the live Hocuspocus document and transact with
-`AGENT_ORIGIN` directly.
+Keep the editor content as plain Markdown. Use Document, Paragraph, Text, and HardBreak nodes; keep headings, links, and other Markdown syntax in the text. Use display plugins for their appearance.
 
-## Persistence layout
+## Store proposals
 
-```
-project-root/
-  document.md          ← user-facing markdown (debounced 1s flush from the
-                         server Y.Doc; git-friendly)
-  drafts/chapter-1.md  ← any workspace file can be an open tab
-  .docwriter/
-    docwriter.db       ← SQLite: documents, yjs_updates, rules, reviewers,
-                         recent_actions, action_usage_counts,
-                         provider_session_entries, conversation_events,
-                         kv (sessionId, agentSettings, feedbackImport…)
-    workspace.json     ← stamp naming the workspace this state dir belongs
-                         to (written on boot; warns if the folder moved)
-    backups/           ← JSON snapshots written before any destructive
-                         transition (file delete, external-edit reseed,
-                         doctor repairs); pruned to the newest 40
-    hooks.json         ← user-defined shell hooks (read by hooks-config.ts)
-    agent/scratch/     ← agent scratch workspace (lazy-created on first
-                         scratch write; cleared on "New session")
-```
+Use `src/lib/shared/proposals.ts` for proposal operations:
 
-**`documents` is the identity table** (schema v13): one row per document
-the app holds CRDT state for — lifecycle `status` (`open` in the tab bar /
-`closed` but restorable), tab-bar order, the agent's `last_seen` diff
-baseline (was kv `last_seen:<tabId>`), and the missing-file grace stamp.
-`yjs_updates.tab_id` has a FOREIGN KEY to it with ON DELETE/UPDATE CASCADE:
-deleting a document deletes its log in the same statement, renaming re-keys
-it, and an orphaned log row is structurally impossible. The old `tabs`
-table is gone; all access goes through `documents-store.ts` (never
-DELETE-all + INSERT for identity tables). Closing a tab is a status flip —
-reopening replays text, threads, pending rounds, and provenance. A missing
-file badges the tab (grace window; history-backed docs self-heal from the
-log) instead of deleting it. External file edits fold in as one appended
-SYSTEM update (normalized comparison — typography-only diffs don't count);
-log rows are deleted only by explicit delete, `docwriter doctor`, or
-compaction (>500 rows on unload), always after a backup. Binary tabs
-(`isBinaryTabPath` — a DENYLIST; LaTeX/Typst/BibTeX are text) are
-preview-only and never touch the CRDT.
+| If you need to | Use |
+| --- | --- |
+| Read text and map its offsets to document positions | `buildView` |
+| Replace exact text in a proposal | `proposeReplacement` |
+| Propose a complete document | `proposeText` |
+| Accept, reject, or dismiss marked text | `resolveThreadMarks` |
+| Read a thread's changes and position | `summarizeThreadMarks` |
 
-SQLite is the single source of truth for runtime state — there is no
-`state.json` JSON mirror (it was removed; only stale comments referenced it).
+Choose the text view for your operation. In the committed view, you have original text and accepted edits; in the proposed view, you have pending edits as if accepted. To revise a thread, build the proposed view with that thread's marks reverted, then compare it with the desired text.
 
-No per-tab shadows (`.docwriter/agent/<tabId>`), no IndexedDB, no
-in-browser persistence. A fresh browser paints only after the WebSocket's
-first `synced` event — on localhost this is sub-20ms.
+Use word marks within a modified line. Use `suggest` and `suggestThread` paragraph attributes for added or removed lines, and for a line rewritten beyond the `WHOLE_LINE_CHURN` threshold. Existing HardBreak nodes in a structural deletion also have proposal ownership attributes.
 
-## Layout
+Keep one thread per passage. If you touch a line with another thread's marks, return `overlap` with that thread's ID; request a revision on that thread. When you have a new proposal on the same thread, replace its previous one.
 
-- **Left (`OutlinePane`, 200px default, resizable):** auto-generated TOC from headings only
-  (`showOutline`), with the `FileTree` below it. This is the sole
-  `OutlinePane` instance — it renders only the TOC. (There used to be a
-  second `showReview` instance in a right-hand sidebar; that mode has been
-  removed.)
-- **Center:** Tiptap editor + a floating `AgentDock` in the top-right (Wake
-  up button, sleeping-cat mascot, gear-icon settings popover). The agent
-  tool-call log (`HistoryPane`) lives inside the expandable
-  `AgentDockShell`, not a fixed pane.
-- **Pending agent edits + comment threads** render inline in the editor's
-  comment gutter (`CommentGutter`, mounted in `TiptapEditor`) with Accept /
-  Reject / Retry, plus per-tab badges on the `TabBar` — there is no separate
-  review column.
-- **Proposed rules / hooks** surface as dismissable toasts (`ToastStack`).
-- **AI provenance toggle** (`AiProvenanceToggle`, in the editor's sticky
-  top-right chrome next to `PreviewButton`): colors agent-written text,
-  iA-Writer-authorship style. Accepting a round stamps the `ai` Yjs
-  text-format attribute onto the text the agent actually introduced — a
-  word-level diff (`diffWordLevel` in `ydoc-codec.ts`), so surviving user
-  prose stays unmarked. The client renders the attribute as the
-  `AiProvenanceMark` Tiptap mark (`span[data-ai-text]`); the toggle is pure
-  CSS view state (`showAiProvenance` store, localStorage). Typing into an
-  AI span strips the mark from the typed text ("make it your own").
+Keep author text in the committed view even when it is inside a proposed paragraph. When you reject or accept that proposal, preserve any text and line breaks the author added.
 
-## Agent SDK integration
+## Save document state
 
-`/api/render` streams a single `query()` call over SSE:
+You will find workspace state in these locations:
 
-1. Build a multi-tab prompt:
-   - Every text tab: header (path + active marker) + diff vs the document's `last_seen` baseline (a `documents` column) if it changed, else "unchanged" note. Diffs above ~8KB are summarized (`+X/−Y lines — call read_doc`) instead of inlined. Binary tabs are listed as preview-only, never materialized. No tab content is ever inlined; the agent calls `read_doc(file_path)` on demand.
-   - First-render tab (no `last_seen`): path only — agent must `read_doc` to see content.
-   Agency guidance (`conservative` / `balanced` / `aggressive`) rewires
-   the "how to decide whether to edit" section.
-   The `<author_style>` block (`src/lib/server/style-block.ts`) carries the
-   learned style's full instruction list only when the transcript has not
-   seen the current list: the first turn of a session, or a turn where the
-   published propositions changed. Every other turn gets a one-line
-   reminder naming the skill, so no turn runs with nothing saying a style
-   exists (an earlier delta-only version had that hole) and the author's
-   words no longer sit under the same bullets every turn. "First turn of a
-   session" is tracked by `last_render:session`, the session id the
-   `last_render:*` snapshots were sent in: a turn that resumes a different
-   session, or none (New session, a provider switch, the first real turn
-   after a warmup, which mints the session without building this prompt),
-   treats every snapshot as absent and sends the full rules, refs, agency,
-   audience and style. Clearing the snapshots on New session was not enough
-   for the warmup case.
-2. `query()` runs with two MCP servers:
-   - `docwriter` — `propose_rule` / `propose_hook` (user-review tools).
-   - `docwriter-doc` — `edit_doc` / `read_doc` / `write_doc` /
-     `comment_doc` / `reply_to_comment` / `list_threads` on tab paths;
-     these route scratch paths to plain filesystem I/O and tab paths to
-     `DirectConnection.transact` against the live Hocuspocus document.
-     `comment_doc` accepts an optional `external_author` parameter for
-     feedback import (sets `author: 'external'` on the thread).
-   Built-in `Edit` / `Write` / `Read` remain available for files outside
-   the open-tab set; the prompt explicitly routes open-tab work through
-   the custom tools.
-   There is no approve-a-suggestion step: a reply that names a change is
-   followed by `edit_doc` on the same thread in the same turn, and the
-   diff lands under the explanation. Only genuine uncertainty about the
-   change itself (rare) earns a reply with no proposal. The old
-   `proposed_edit` parameter and the gutter's "Approve & propose edit"
-   button are gone; `CommentMessage.proposedEdit` survives as legacy data
-   on older threads and renders as plain text.
-   `comment-then-edit.test.ts` guards the contract.
-   The feedback trigger quotes the passage as "Current text of the
-   passage, quoted verbatim from the document" — the earlier
-   `Rewrite it: "<passage>"` read as "rewrite it TO this", and the agent
-   compared the quote with the document and declared nothing to change.
-   An edit-mode feedback turn, or a reply on a thread, that ends with no new round on the tab gets
-   one harness retry (`feedbackRetryPrompt` in the render route) naming
-   the fact; it stands down only if the agent already said no change is
-   needed or asked a question on the thread.
-   The fixed agent dock floats over the lower gutter column, so
-   `CommentGutter` scrolls a card into view (`revealCard`) when it opens
-   and when the proposal an author is waiting on lands — its edits
-   section and reply box are exactly the part the dock covers.
-   A comment the author makes opens its card (`openFeedbackThread` in
-   `TiptapEditor.svelte` sets `openCommentThreadId` before the thread
-   has synced back; the gutter reveals it on arrival). Cards render
-   collapsed by default, and the author used to have to click the card
-   they had just written to see the reply and the proposal.
-   A card's message list is capped at 300px and scrolls; it opens at its
-   END (newest reply, then the edits section below), because a long first
-   comment used to fill the box and hide the agent's answer and the
-   proposal. Growth after that scrolls smoothly (`followNewMessages`).
-   A round that moves text (one diff block only strikes, another block
-   of the same round only adds) gets a "Proposed text moves below ↓"
-   button under the struck passage (`createMovedNote` in
-   `diff-overlay.ts`); red alone read as a deletion while the green sat
-   off-screen past a code block. Clicking it scrolls the insertion into
-   view.
-3. Agent calls `edit_doc`: server finds the single `old_string` match in
-   the live markdown, then in one `document.transact(..., AGENT_ORIGIN)`
-   both rebuilds the XmlFragment via a headless Collaboration editor and
-   appends a new `PendingReviewRound` to the tab's `Y.Map('review')`. The
-   content change + review card land atomically.
-4. Hocuspocus syncs the combined update to every connected browser over
-   WebSocket. The review card appears next to the Tiptap cursor.
-5. SSE stream emits `tool_call_start`, `tool_call`, `assistant_text`,
-   `result` — drives the HistoryPane. The `result` event does NOT carry
-   markdown anymore; there's nothing to apply on the client.
-6. After render completes, update each text tab's `last_seen` column to the current
-   markdown for every tab the agent saw, so the next render's diff block
-   reflects what changed since.
+| Path | Contents |
+| --- | --- |
+| `document.md`, or another workspace file | Plain text written from the committed view |
+| `.docwriter/docwriter.db` | Documents, Yjs updates, rules, reviewers, sessions, activity, and runtime settings |
+| `.docwriter/workspace.json` | The workspace path recorded at startup |
+| `.docwriter/backups/` | Snapshots before file deletion, external edits, migration, or repairs; keep the newest 40 |
+| `.docwriter/hooks.json` | Shell hooks read by `hooks-config.ts` |
+| `.docwriter/agent/scratch/` | Agent scratch files; created on demand and cleared on New session |
 
-Tool results for `edit_doc` / `write_doc` come from one helper,
-`describeTabWrite` in `mcp-doc-tools.ts`, shared by the MCP tools and the
-provider handlers. They say the edit was *proposed* as a pending diff on
-its thread, never *applied*: the document changes only when the author
-Accepts, and the old "Edit applied to X." had the agent telling the author
-an edit was in when it was still pending. A replacement that leaves the
-text identical after typography normalization creates no round and says
-"No change proposed" instead of succeeding silently.
+Use SQLite for saved state. Append each Yjs update to `yjs_updates.payload` with its origin; committed text is also saved to the workspace file on a 500 ms flush tick. You can use that file with Git and other tools; it has no pending additions or comment data.
 
-## Agent reconciliation
+Use `documents-store.ts` for document identities. In schema v13, each row in `documents` has its open or closed status, tab order, `last_seen` text, and missing-file timestamp. Deletes and renames are cascaded through the foreign key on `yjs_updates.tab_id`. Do not replace all identity rows with a delete and insert.
 
-There is none — in the old sense. Agent edits flow as CRDT ops directly
-through the live Hocuspocus document; the browser receives them like any
-other remote update. No client-side 3-way merge, no clone-and-diff, no
-rolling baselines. User keystrokes typed during a render converge with
-agent ops via Yjs's item-level CRDT merge.
+When you close a tab, change its status; retain its update log. When you reopen it, restore text, comments, proposals, and AI authorship marks. If its file is missing, show that state during the grace window; restore from the log when possible instead of deleting the document.
 
-On the server, Accept/Reject run against the live Hocuspocus Document
-(`acceptTabRounds` / `rejectTabRounds` in `ws-server.ts`; there is no
-server-side UndoManager). Reject removes the round from the review
-`Y.Array`; the doc fragment isn't touched. Accept walks each accepted
-round and applies its `edit` op via `applyEditToFragment` (in
-`ydoc-codec.ts`), which deletes + reinserts only the paragraphs the edit
-covers. `write` ops fall back to wholesale `replaceYDocText`. Batch
-accepts SKIP stale rounds and report them (`skippedStale`) instead of
-409ing everything; only single-round accepts throw the
-StalePendingReviewError that drives the client's rebase flow. Both paths
-run in a single `ydoc.transact(..., USER_ORIGIN)` along with the
-`reviewArr.delete`.
+Use `applyExternalText` to fold an external file edit into the committed text as one `SYSTEM_ORIGIN` update. Compare normalized text so you do not replace a passage for a typography-only difference. Keep proposals outside the changed area.
 
-Accept also moves the threads behind the accepted rounds
-(`followAcceptedEdits` in `ydoc-codec.ts`, same transaction): a thread
-whose quote the edit replaced is re-anchored to the first line the edit
-added, and one whose edit only removed text resolves. Threads whose
-passage survived, or that still have another pending round, are left
-alone. Without this every round of accepts left the feedback threads
-parked at the top of the gutter as orphans. A parked card says "This
-passage is no longer in the document."
+Delete log rows only for an explicit delete, a doctor repair, or compaction; take a backup first. Compact logs with more than 500 rows when the document is unloaded.
 
-Because Accept's blast radius is bounded to the affected paragraphs,
-the client doesn't need to disconnect + remount the editor to avoid
-clobbering concurrent typing — the Yjs sync delivers the surgical
-update over the existing WebSocket and ProseMirror re-renders only the
-touched range. `acceptAgentEdit` / `rejectAgentEdit` in `+page.svelte`
-just POST to `/api/document` and let the sync handle the UI update.
+Keep binary files out of Yjs. Use the binary extension list in `isBinaryTabPath`; LaTeX, Typst, and BibTeX are editable text. Do not add per-tab shadow files, IndexedDB document storage, or a `state.json` mirror. Wait for the first WebSocket `synced` event before you display the editor.
 
-On the client, undo lives in `src/lib/editor-extensions.ts`: a custom
-`Y.UndoManager` scoped to the text fragment + review array + comments map,
-with `trackedOrigins = {ySyncPluginKey, USER_ORIGIN}` — local typing and
-Accept/Reject are undoable; agent-origin changes are not on the local undo
-stack. The editor update handler distinguishes user typing from remote/
-agent transactions via `transaction.getMeta(ySyncPluginKey)` (undefined ⇒
-local typing ⇒ restart the idle timer).
+## Find the UI code
 
-## Agent settings
+- Use `OutlinePane` for the heading outline and `FileTree` for files on the left; keep a single outline instance.
+- Use `TiptapEditor` for the document, `AgentDockShell` for agent controls, and `HistoryPane` for the activity log.
+- Use `CommentGutter` for expanded comment cards beside the document. Use `ThreadOverlay` for visible additions, the feedback selection, and the comment-count buttons.
+- Use `TabBar` badges to count proposals and `ToastStack` for proposed rules and hooks.
+- Use `AiProvenanceToggle` to show accepted AI text; store that display preference in localStorage through `showAiProvenance`.
 
-`AgentSettings` in `src/lib/types.ts`, persisted in the SQLite `kv` table
-(`agentSettings` key; see `runtime-state.ts`):
-- **autonomy** (`agency: 'conservative' | 'balanced' | 'aggressive'`) —
-  prompt rewiring.
-- **trackChanges** — review mode on/off. (Track-changes off bypasses the
-  pending-round UI; edits still flow through `AGENT_ORIGIN` so Undo
-  continues to isolate them.)
+Keep comment cards expanded. Show additions when you focus a card or click struck text; hide them when you return to writing, and keep the original text struck through. Do not add purple passage highlights or vertical diff borders.
 
-Edited via the `AgentDock` settings popover (click the gear icon pinned to
-the mascot card).
+Use `revealCard` to show a comment, but do not scroll while the editor has focus. Keep the message list capped at 300 px; show the newest reply and use `followNewMessages` for new replies.
 
-## Critique passes (reviewer agents)
+Give accepted additions `ai: true`; display them as `span[data-ai-text]` through `AiProvenanceMark`. Change their appearance with CSS. When you type a replacement, strip the AI mark from the text you add.
 
-Settings → **Critique pass** lists reviewer agents — built-ins (PhD
-Advisor, Skeptic, Fresh Eyes, Gricean Maxims) from
-`src/lib/shared/reviewers.ts`, custom ones from the SQLite `reviewers`
-table (`/api/reviewers` CRUD; created via `ReviewerEditorDialog`, which
-collects name, mascot, color, and the reviewer's system prompt). Picking
-one POSTs `/api/render` with `reviewerId`:
+## Send an agent request
 
-- The server resolves the reviewer, builds a `<mode>` message
-  (`buildCritiqueMessage` in `src/lib/server/reviewers.ts`) telling the
-  agent to adopt the reviewer's brief (its prompt + the shared pass
-  procedure: read the whole draft, rationale comment before each edit,
-  ≤6 findings, honest "no findings" allowed) and run it IN THIS TURN.
-  Critique renders run at `effort: 'medium'`.
-- **Never delegate document work to a subagent.** `docwriter-doc` is an
-  in-process SDK MCP server bound to the query that connects it, so a
-  subagent's `read_doc` / `comment_doc` / `edit_doc` calls fail with
-  "Stream closed" — and the failure takes the parent's connection with
-  it, costing the rest of the turn its tools too. The pass used to spawn
-  a subagent and silently produced nothing: the reviewer did the whole
-  analysis, then could not land one finding. The same rule is stated in
-  the system prompt's `## Subagents` section and in the feedback-import
-  prompts, which had the same defect.
-- `setActiveReviewerId` in `mcp-doc-tools.ts` (same lifecycle as
-  `setActiveFeedbackThreadId`) stamps `reviewerId` onto every review
-  round and agent comment the pass creates. Findings are ordinary
-  threads + pending rounds — Accept/Reject/reply machinery unchanged.
-- Client: the `activeReviewer` store makes the agent pill hand itself to
-  the reviewer while the pass runs (mascot + name, reviewer-tinted, in
-  `AgentDockShell` and `HistoryPane`); `CommentGutter` renders the
-  reviewer's mascot + name on attributed cards via `ReviewerMascot`
-  (line-icon set keyed by the reviewer's `icon` field).
+Start provider requests in `/api/render`. Build the prompt from open tabs and their `last_seen` text; send activity through server-sent events and document changes through Yjs sync.
 
-## Feedback import
+1. List each text tab and whether its content is different. Include a diff against `last_seen` when available; summarize diffs above roughly 8 KB. For a new tab, include its path and ask the agent to call `read_doc`. List binary tabs as previews.
+2. Add the agency setting and current instructions. Send the full learned style instructions on the first turn of a session or when published style propositions are different; otherwise send a reminder naming the style skill.
+3. Create the tool servers for that query. Use `docwriter` for rule and hook proposals; use `docwriter-doc` for document reads, edits, comments, replies, and thread lists.
+4. Run the provider query. Use document tools to change the live Hocuspocus document; those changes will be available in connected browsers.
+5. Stream `tool_call_start`, `tool_call`, `assistant_text`, and `result` events to the activity log. Do not put document Markdown in the result event to apply in the browser.
+6. Save the proposed view as `last_seen` for the tabs you included in the agent request.
 
-Settings → **Import feedback…** lets the user bring in external reviewer
-comments and have the agent take a first pass at addressing them. Two
-input paths:
+Keep `last_render:session` with the prompt snapshots. If you have a different session, treat those snapshots as absent; send full rules, references, agency, audience, and style instructions. Include the first request after warmup, since you can have a new session after warmup without that prompt.
 
-- **Upload .docx**: server-side extraction of Word comments from
-  `word/comments.xml` via `jszip` (`src/lib/server/docx-comments.ts`).
-  Each `<w:comment>` yields author + text; anchored passages come from
-  `<w:commentRangeStart/End>` markers in `word/document.xml`. The dialog
-  (`FeedbackImportDialog`) shows a preview before importing.
-- **Paste raw text**: any format (email, Slack, reviewer notes). Sent
-  as-is to the agent via `buildRawFeedbackMessage`; the agent identifies
-  individual comments, finds matching passages, and anchors them itself.
+Route tab paths through `docwriter-doc`; route `.docwriter/agent/scratch/` paths to normal file operations. You can use built-in file tools where permitted; use the document tools for open-tab edits.
 
-The import is a single agent pass — threads appear progressively in the
-gutter as the agent works. For structured imports (.docx), the prompt
-uses `buildFeedbackImportMessage` (in `src/lib/shared/feedback-import.ts`)
-with numbered comments and original anchor hints. The agent receives the
-prompt directly and works the batch itself — like a critique pass, it
-must not delegate to a subagent, which cannot reach the document tools.
+## Explain an edit before proposing it
 
-**External author attribution**: `CommentAuthor` includes `'external'`
-alongside `'user'` and `'agent'`. The `comment_doc` MCP tool accepts an
-optional `external_author` parameter; when set,
-`createAgentCommentThread` stamps `author: 'external'` and
-`externalAuthor: <name>` on the first message. `CommentGutter` renders
-external authors with a purple `MessageSquare` icon and the person's
-name.
+If you already have a feedback thread, use it. Reply with what you plan to change, then call `edit_doc` on that thread in the same turn. If you have no thread, create one with `comment_doc` before the edit. Ask a question when you need clarification about the change itself.
 
-**Coverage ledger**: import state (comments, thread mappings,
-dispositions) is persisted in the SQLite `kv` table under the
-`feedbackImport` key (`src/lib/server/feedback-import.ts`). The
-`FeedbackLedger` component in `AgentDockShell` polls
-`GET /api/feedback-import` and shows per-comment disposition
-(applied / discussed / deferred / untouched) with a progress bar.
-When `comment_doc` fires with `external_author`, the handler matches
-against the active import and records the thread ID; `edit_doc` upgrades
-the disposition from `discussed` to `applied`.
+Do not add another approval step between that explanation and the pending edit. Check this behavior with `comment-then-edit.test.ts`. Old `proposedEdit` data may be on saved messages; do not restore it as a separate approval flow.
+
+When you build a feedback trigger, identify the quoted passage as the current text. Do not phrase it as the requested replacement; you may otherwise get a comparison of the quote with itself and a report of no change.
+
+Use `feedbackRetryPrompt` after an edit-mode feedback turn or thread reply with no changed proposal. Ask for one retry; allow the agent to stop if you already have an explanation of why no edit is needed or a question to answer.
+
+Use `openFeedbackThread` when you create feedback in the editor; set `openCommentThreadId` before the thread is synced so you can show its proposal once available.
+
+Keep tool results in `describeTabWrite`, shared by the MCP and provider handlers. Say an edit was proposed and is pending acceptance; do not say it was applied. If the proposed text is unchanged, report "No change proposed."
+
+## Accept, reject, dismiss, and undo
+
+Use `resolveTabThread(tabId, threadId, outcome)` in `ws-server.ts`. Within that function, run `resolveThreadMarks` and `setThreadResolved` on the live document in one `USER_ORIGIN` transaction, then return the Yjs update. Use `resolveAllTabThreads` for batch review.
+
+When you accept, keep additions as AI text and remove deletions. When you reject or dismiss, remove additions and restore the original text; preserve any author text in either case. When you reopen, change the thread's status; when you undo, restore its proposal too.
+
+On the client, keep the order in `postThreadAction`:
+
+1. Wait for local edits to be synced where required, then pause WebSocket sync.
+2. Post to `/api/document` with `resolve_thread`, `resolve_all`, or `set_thread_resolution`.
+3. Apply the returned update locally with `USER_ORIGIN`.
+4. Reconnect the provider.
+
+Return `ok: true` with successful batch responses too; check it on the client before applying the update for undo.
+
+Use the custom `Y.UndoManager` in `editor-extensions.ts`, scoped to the text fragment and comments map. Keep `trackedOrigins = {ySyncPluginKey, USER_ORIGIN}` so typing and review actions are undoable, while agent proposals are outside that history.
+
+Use `LocalInputMarkStrip` to remove `ai`, `insertion`, and `deletion` marks from typed text. Keep HTML parse rules so existing marks are preserved during DOM reconstruction; strip copied proposal marks in `transformPasted`.
+
+## Agent settings and critique passes
+
+Store `AgentSettings` from `src/lib/types.ts` under `agentSettings` in SQLite `kv`. The agency choice is `conservative`, `balanced`, or `aggressive`; use it when building the prompt. When you mute the agent, its comment cards are hidden and the struck text is faint; pending proposals are still stored. You can change these settings from the agent settings controls.
+
+Use Settings, then **Critique pass**, to choose a reviewer. Built-in reviewers are in `src/lib/shared/reviewers.ts`; use the `reviewers` table and `/api/reviewers` for custom reviewers. Collect the name, icon, color, and instructions in `ReviewerEditorDialog`.
+
+Send `reviewerId` to `/api/render`. Use `buildCritiqueMessage` to ask the agent to read the draft and explain each edit before proposing it; keep the pass to at most six findings and allow a response with no findings. Use `effort: 'medium'` for critique passes.
+
+Never delegate document work to a subagent. The in-process `docwriter-doc` server is bound to its original query; you can have "Stream closed" errors in the parent query if you delegate document work. Keep critique and feedback-import work in the current query.
+
+Use `setActiveReviewerId` to stamp the reviewer on each comment. Keep findings as ordinary comment threads and proposals. Use `activeReviewer` for the name and icon in the agent dock and history; use `ReviewerMascot` on attributed comments in `CommentGutter`.
+
+## Import feedback
+
+Use Settings, then **Import feedback**, to bring in comments. You can upload a Word file or paste text.
+
+For Word files, read authors and comments from `word/comments.xml` with `jszip` in `docx-comments.ts`; read selected passages from comment-range markers in `word/document.xml`. Show a preview in `FeedbackImportDialog` before importing.
+
+For pasted text, pass the text to the agent with `buildRawFeedbackMessage`; ask the agent to separate the comments and find their passages. For extracted Word comments, use `buildFeedbackImportMessage` with numbered comments and their original passages. Run the import in one query without subagents; show each comment once it is available.
+
+Pass `external_author` to `comment_doc` for an imported comment. In `createAgentCommentThread`, store `author: 'external'` and the person's name in `externalAuthor`; show that name with a message icon on the comment card.
+
+Store import progress under `feedbackImport` in SQLite `kv`. Poll `/api/feedback-import` in `FeedbackLedger`; show each comment as applied, discussed, deferred, or untouched. Match imported comments to thread IDs when you create them; in `edit_doc`, change their recorded disposition from discussed to applied.
 
 ## Conventions
 
-- **Svelte 5 runes** (`$state`, `$derived`, `$effect`) in components.
-  `$store` auto-subscription is fine in runes mode (TiptapEditor uses it);
-  if you use manual `.subscribe()`, capture and call the unsubscriber on
-  destroy — leaked subscriptions on remounting components were a real bug.
-- **Font:** Lora (serif) for editor prose, Inter for UI, Geist Mono for
-  plain/code rendering.
-- **Model selection:** multi-provider (claude / openai / codex / cursor /
-  pi); request bodies carry `provider` + `model`.
-- **Timing:** 3s idle countdown to auto-submit, 500ms markdown-flush tick
-  on the server, Cmd/Ctrl+Enter skips the countdown.
-- **Yjs origins** (`AGENT_ORIGIN`, `USER_ORIGIN`, `SYSTEM_ORIGIN`) are
-  single shared constants in `src/lib/shared/ydoc-codec.ts`, imported by
-  both client and server — never redefine them locally.
+- Use Svelte 5 runes in components. You can use `$store` subscriptions; if you subscribe manually, call the unsubscriber on destroy.
+- Use Lora for prose, Inter for UI, and Geist Mono for plain text and code.
+- Include `provider` and `model` in provider request bodies; supported providers are Claude, OpenAI, Codex, Cursor, and Pi.
+- Keep the three-second idle countdown and 500 ms server file-flush tick. Press Command or Control plus Enter to skip the countdown.
+- Import transaction origins from `src/lib/shared/ydoc-codec.ts`; do not define local copies.
 
-## Gotchas
+## Common mistakes
 
-- **Accept/Reject pause the WebSocket, and the resume must re-arm it.**
-  `pauseTabSync` disconnects the provider so the HTTP response's delta is
-  applied locally with `USER_ORIGIN` (undo contract). `disconnect()` only
-  starts the close handshake; if the HTTP reply lands before the close
-  completes, the provider's `connect()` returns early without setting
-  `shouldConnect`, and the later close never reconnects — a silently dead
-  tab (keystrokes stop syncing, the agent's next proposals never arrive).
-  The resume sets `websocketProvider.shouldConnect = true` before
-  `connect()`. `onSyncConnectionChange` reports a tab that stays
-  disconnected outside a pause for 5 s; the page turns it into a history
-  notification.
-- **Unloading a live doc flushes it.** `afterUnloadDocument` runs
-  `onTabUnloaded`: a tab still dirty from the 500 ms flush window is
-  replayed from the log and written to its file before the dirty flag is
-  dropped, so `document.md` never lags the CRDT because the last browser
-  disconnected mid-window.
-- **`globalThis.__docwriterWsServer` singleton.** Vite HMR re-executes
-  `hooks.server.ts` on save; the module-scope guard keeps us from
-  double-binding the Hocuspocus port (`ECONNREFUSED`-via-reconnect). The
-  live server instance is also how route handlers (`mcp-doc-tools.ts`,
-  `/api/document`'s flush path) reach `openDirectConnection`.
-- **`yjs_updates.payload` column.** The blob column holding raw Yjs
-  updates is named `payload`. (Historical: it was originally named
-  `update`, a SQLite reserved word; migration v2 renamed it. Don't
-  revive the old name.)
-- **`ySyncPluginKey` must come from `@tiptap/y-tiptap`.** The
-  Collaboration extension installs its sync plugin from `@tiptap/y-tiptap`,
-  not `y-prosemirror`; both packages define a `PluginKey('y-sync')`, and
-  prosemirror-state dedupes key names, so the two instances never match.
-  Import the key (and the rel-position helpers) from
-  `src/lib/editor-extensions.ts`, which re-exports the correct one —
-  importing from `y-prosemirror` silently breaks agent-vs-user transaction
-  classification and comment anchoring (this was a real shipped bug).
-- **Hocuspocus's internal Document is authoritative.** Once the WS server
-  is up, server code that wants to READ a tab should prefer the live
-  in-memory Document (`hocuspocus.documents.get(...)`, falling back to a
-  throwaway Y.Doc hydrated via `replayUpdatesInto`), and code that wants
-  to MUTATE a tab MUST go through
-  `hocuspocus.openDirectConnection(...)` (see `getHocuspocus` in
-  `mcp-doc-tools.ts`) — never mutate a replayed throwaway doc.
-- **Comment threads are nested Y types.** Each thread is a `Y.Map`
-  (id/anchor/resolved/createdAt) holding a `Y.Array` of messages, so
-  concurrent writes merge (a Dismiss racing an agent reply keeps both).
-  NEVER `commentsMap.set(id, {...})` a whole plain object — that reverts to
-  last-writer-wins and one side's write silently vanishes (the original
-  dismissed-thread-resurrects / reply-disappears bug). Read via
-  `readThreadValue`/`getThread`/`readCommentThreads` (they also accept the
-  legacy plain shape); write via `putThread` / `appendThreadMessage` /
-  `setThreadResolved` / `setThreadAnchor`. Legacy threads migrate on doc
-  load. Client observers must `observeDeep` — nested mutations don't fire
-  shallow map observers.
-- **Per-render state is per-render, not module-level.** The reviewer id,
-  the active feedback thread and the stale-accept payload live in an
-  `AsyncLocalStorage` scope opened by `runWithRenderScope`
-  (`mcp-doc-tools.ts`), because `runTabWrite` / `createAgentEditThread` /
-  `createAgentCommentThread` / `applyReplyToComment` are shared by every
-  provider and read them ambiently. As module globals they were clobbered
-  by overlapping renders: a critique pass's findings got another
-  reviewer's id or none, a feedback reply attached to the wrong thread,
-  and whichever render finished first blanked all three for the one still
-  streaming. Never move them back to module scope.
-- **Agent tool availability is per-render.** `buildDocToolsMcp()` builds a
-  FRESH `docwriter-doc` MCP server for every `query()`. It must never become
-  a module singleton again: an in-process SDK MCP server binds to the query
-  that connects it, so a shared instance leaves a second, overlapping render
-  with no `edit_doc` / `read_doc` / `comment_doc` at all. Paired with that,
-  `permissionMode` is `'default'`, NOT `'acceptEdits'` — `acceptEdits`
-  auto-approves built-in file mutation and skips `canUseTool`, so the
-  "built-in Edit / Write are restricted to your scratch directory" gate
-  never ran and a tool-less agent would rewrite the workspace file with no
-  review round, no thread and no diff card. `agent-voice.test.ts` and the
-  live gate message are the guards.
-- **Injected transcript voice.** The transcript is the author and the agent
-  talking: injected user turns speak as "I", the system prompt is the
-  author's briefing, and the agent addresses the author as "you" — never
-  "the user" in anything a person reads. Trigger-string MATCHERS
-  (`stale-accept.ts`, `+page.svelte` shortDescription) accept both the old
-  third-person and new first-person forms because persisted rounds carry
-  old triggers; keep them in lockstep when templates change.
-- **`Y.XmlText.toString()` is not plain text.** Once a text node carries a
-  format attribute (the `ai` provenance attribute), `toString()` serializes
-  formatted ranges as XML tags (`a <ai>b</ai>`). All text extraction in
-  `ydoc-codec.ts` goes through `toDelta()` — never call `toString()` on a
-  fragment's text. Related: `Y.Text.insert` WITHOUT attributes inherits the
-  formatting of the preceding character; build formatted paragraphs with
-  `applyDelta` (attribute-less ops insert genuinely unformatted).
-- **Serialization is plain text, not markdown.** `serializeFragment` /
-  `serializeYDoc` in `ydoc-codec.ts` emit the document text verbatim
-  (plus typography normalization) — nothing escapes markdown specials, and
-  the `ai` provenance attribute is stripped, so `document.md`, `read_doc`,
-  prompt diffs and stale checks all see plain text (provenance lives only
-  in the CRDT log).
-  The editor schema is intentionally minimal (Document / Paragraph /
-  Text / HardBreak); don't add StarterKit, Link, or Tiptap's history
-  extension — undo is the custom `Y.UndoManager` wired through
-  `Collaboration.configure({ yUndoOptions })` in `editor-extensions.ts`.
+### Reconnecting after review
+
+With `disconnect()`, you start a close handshake. If the socket is still open when you receive the HTTP response, you can have an early return from `connect()`; the tab may then be offline. Set `websocketProvider.shouldConnect = true` before calling `connect()` in the resume function.
+
+Keep the five-second grace period in `onSyncConnectionChange`; report a tab that is still disconnected outside an intentional pause.
+
+### Unloading before a file flush
+
+Keep `onTabUnloaded` in `afterUnloadDocument`. If the tab is dirty, replay its log and flush its file before clearing the dirty flag; otherwise you can lose the last pending file write after a browser disconnect.
+
+### Reloading server modules
+
+Reuse `globalThis.__docwriterWsServer` across Vite reloads. Do not start a second server on the same port. Use that instance in route handlers to access the live document too.
+
+### Importing the wrong sync key
+
+Import `ySyncPluginKey` and relative position helpers from `src/lib/editor-extensions.ts`. The key in the collaboration extension is from `@tiptap/y-tiptap`; the similarly named key in `y-prosemirror` is a different object. If you mix them, you can have incorrect checks for local edits and comment positions.
+
+### Replacing a whole comment thread
+
+Keep each thread as a nested `Y.Map` with a `Y.Array` of messages. Do not call `commentsMap.set(id, {...})` with a plain object; you can overwrite a concurrent reply or dismissal.
+
+Read with `readThreadValue`, `getThread`, or `readCommentThreads`. Write with `putThread`, `appendThreadMessage`, and `setThreadResolved`; use `observeDeep` on the client so you see nested changes. Convert older plain-object threads during loading.
+
+Locate threads through their text marks with `firstThreadPos` or `summarizeThreadMarks`. Check `threadUnderRange` before creating feedback so you can reply on an existing thread. Read legacy quote anchors only during migration; do not write new ones.
+
+### Sharing state between requests
+
+Keep the reviewer ID and feedback thread ID in the `AsyncLocalStorage` scope created by `runWithRenderScope`. Do not move them to module variables; you could overwrite the IDs of another request.
+
+Build a fresh MCP server with `buildDocToolsMcp()` for each query. Keep `permissionMode: 'default'`; with `acceptEdits`, built-in file writes are not checked through `canUseTool` and you can have workspace edits without review.
+
+### Writing transcript messages
+
+Write injected user messages as "I" and address the author as "you" in agent replies. Keep the system prompt in the author's voice. When you change trigger wording, update the matching code too; older saved messages may still have the previous wording.
+
+### Reading formatted text
+
+Use `Y.XmlText.toDelta()` to read text; the output of `toString()` can have XML tags for format attributes. When you insert unformatted text, pass explicit empty attributes or use `applyDelta` with unformatted operations; with a plain `insert`, your text can have the preceding marks.
+
+Use `serializeFragment` or `serializeYDoc` for committed text, and `proposedText` for agent reads and `last_seen`. Keep Markdown characters unchanged; omit proposal and AI attributes from the saved text. Use `buildView` for text-offset mapping.
+
+Do not add StarterKit, Link, or Tiptap history to the editor. Undo is already configured through `Collaboration.configure({ yUndoOptions })` in `editor-extensions.ts`.

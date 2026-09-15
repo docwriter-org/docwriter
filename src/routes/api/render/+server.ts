@@ -22,13 +22,14 @@ import { getSessionId, setSessionId, setLastSystemPrompt, getTabsState } from '$
 import { buildStyleBlock } from '$lib/server/style-block';
 import { readMeta } from '$lib/server/document-io';
 import { kvGet, kvSet, dbAppendConversationEvent } from '$lib/server/db-writes';
-import { readCommentThreads, readReviewRounds } from '$lib/shared/ydoc-codec';
+import { readCommentThreads } from '$lib/shared/ydoc-codec';
+import { proposalFingerprints, proposalThreadIds, summarizeThreadMarks } from '$lib/shared/proposals';
 import { feedbackRetryPrompt } from '$lib/server/feedback-retry';
 import type { CommentThread } from '$lib/types';
 import { formatDismissedThreadsHint } from '$lib/shared/list-threads';
 import { replayUpdatesInto } from '$lib/server/ydoc-persistence';
 import { registerPendingAskUser } from '$lib/server/ask-user-state';
-import { unifiedLineDiff } from '$lib/diff';
+import { unifiedLineDiff } from '$lib/shared/text-diff';
 import { listStyleReferences } from '$lib/server/references';
 import { readStyleProfile } from '$lib/server/style-analysis/profile-store';
 import { publishedStylePropositions, type StyleProfile } from '$lib/style-profile';
@@ -43,7 +44,6 @@ import {
 	runWithRenderScope,
 	REPLY_BEFORE_EDIT_PROMPT_NOTE
 } from '$lib/server/mcp-doc-tools';
-import type { StaleAcceptApply } from '$lib/shared/stale-accept';
 import { getReviewerById, buildCritiqueMessage } from '$lib/server/reviewers';
 import type { Reviewer } from '$lib/shared/reviewers';
 
@@ -92,7 +92,8 @@ function buildTabPromptInfos(textTabIds: string[]): TabPromptInfo[] {
 		currentMd: readLiveTabMarkdown(id),
 		lastSeenMd: readLastSeen(id),
 		commentThreads: readLiveTabCommentThreads(id),
-		pendingEditThreadIds: [...readLiveTabPendingEditThreadIds(id)]
+		pendingEditThreadIds: [...readLiveTabPendingEditThreadIds(id)],
+		threadPassages: readLiveTabThreadPassages(id)
 	}));
 }
 
@@ -123,10 +124,8 @@ function readLiveTabCommentThreads(tabId: string): CommentThread[] {
 	}
 }
 
-/** Which comment threads on a tab currently carry a pending edit (a review
- * round tagged with that thread's id). Lets the prompt flag those threads so
- * the agent knows a reply there is feedback on an edit it should *revise*,
- * not a discussion to chat back on. */
+/** Read something off a tab's live doc (the Hocuspocus in-memory Document,
+ * or a throwaway doc hydrated from SQLite). */
 function readLiveTabRounds<T>(tabId: string, collect: (doc: Y.Doc) => T): T {
 	const holder = globalThis as unknown as {
 		__docwriterWsServer?: {
@@ -145,23 +144,26 @@ function readLiveTabRounds<T>(tabId: string, collect: (doc: Y.Doc) => T): T {
 	}
 }
 
+/** Which comment threads on a tab currently hold a proposal. Lets the
+ * prompt flag those threads so the agent knows a reply there is feedback on
+ * an edit it should *revise*, not a discussion to chat back on. */
 function readLiveTabPendingEditThreadIds(tabId: string): Set<string> {
-	return readLiveTabRounds(
-		tabId,
-		(doc) =>
-			new Set(
-				readReviewRounds(doc)
-					.map((r) => r.feedbackThreadId)
-					.filter((id): id is string => typeof id === 'string')
-			)
+	return readLiveTabRounds(tabId, (doc) => proposalThreadIds(doc));
+}
+
+/** The passage each thread sits on (its marks), for the prompt stubs. */
+function readLiveTabThreadPassages(tabId: string): Record<string, string> {
+	return readLiveTabRounds(tabId, (doc) =>
+		Object.fromEntries(summarizeThreadMarks(doc).map((s) => [s.threadId, s.quote]))
 	);
 }
 
-/** Ids of the pending rounds on a tab right now. The feedback retry compares
- * this before and after a turn to know whether a proposal actually landed,
- * which is the fact that matters — not whether edit_doc was called. */
-function readLiveTabRoundIds(tabId: string): Set<string> {
-	return readLiveTabRounds(tabId, (doc) => new Set(readReviewRounds(doc).map((r) => r.id)));
+/** Per-thread proposal fingerprints on a tab right now. The feedback retry
+ * compares these before and after a turn to know whether a proposal
+ * actually landed on the feedback thread, which is the fact that matters —
+ * not whether edit_doc was called. */
+function readLiveTabProposalFingerprints(tabId: string): Map<string, string> {
+	return readLiveTabRounds(tabId, (doc) => proposalFingerprints(doc));
 }
 
 
@@ -296,9 +298,11 @@ interface TabPromptInfo {
 	currentMd: string;
 	lastSeenMd: string | null;
 	commentThreads: CommentThread[];
-	/** Thread ids that currently carry a pending edit (review round). A reply
-	 * on one of these is feedback on an edit to revise, not a chat. */
+	/** Thread ids that currently hold a proposal. A reply on one of these is
+	 * feedback on an edit to revise, not a chat. */
 	pendingEditThreadIds: string[];
+	/** The passage each thread sits on, by thread id. */
+	threadPassages: Record<string, string>;
 }
 
 interface QueryRoundOutcome {
@@ -380,7 +384,7 @@ Before your first edit in a session, list the files in the workspace directory w
 Every edit proposal needs a comment thread that says what is about to happen, so I see your reasoning next to the pending edit instead of a bare diff.
 
 - If the work already has a thread — my feedback arrives with a thread_id, or you are revising a thread's pending edit — use it. If you have not yet explained this edit there, reply first with reply_to_comment, then call edit_doc with that thread_id. ${REPLY_BEFORE_EDIT_PROMPT_NOTE}
-- If I clicked Accept on a stale or orphaned proposal, rebase it. Keep that thread_id. Re-read the file, find the current passage that now corresponds to the original old_string, re-attach the thread with reply_to_comment(anchor_text) if the original quote is gone, then edit_doc with that new old_string and the intended replacement. Leave the result as a pending reviewable diff — do not expect it to apply until I Accept the rebased proposal. Do not open a new thread.
+- A passage has one thread. If edit_doc or comment_doc fails because the passage is under another thread, that thread is the one to use: reply there if you have not explained the change, then edit_doc with its thread_id. A new proposal on a thread replaces the thread's earlier proposal, so revise by proposing the whole passage as you now want it.
 - Otherwise, before the edit, call comment_doc anchored to the exact text you are about to change, with one or two first-person sentences addressed to me: what prompted the edit (my words, an inline directive, a rule), what you think is wrong, and what you will do. Then call edit_doc with the thread_id that comment_doc returns.
 - Inline directives such as [[ ... ]] follow the same contract: anchor the thread on the directive text, say how you read the directive and what you will write, then propose the edit on that thread.
 - For write_doc on an existing file, anchor the thread to the first sentence of the text you are replacing.
@@ -491,7 +495,8 @@ Do not narrate this ordering or announce that a conflict occurred. Just write th
  * `list_threads(path)` to read the conversation, keeping the prompt lean. */
 function renderCommentThreadsBlock(
 	threads: CommentThread[],
-	pendingEditThreadIds: string[] = []
+	pendingEditThreadIds: string[] = [],
+	passages: Record<string, string> = {}
 ): string {
 	const open = threads.filter((t) => !t.resolved);
 	const dismissedCount = threads.filter((t) => t.resolved).length;
@@ -501,10 +506,15 @@ function renderCommentThreadsBlock(
 	if (open.length > 0) {
 		lines.push('Open threads (route per "Where a response goes"):');
 		for (const thread of open) {
-			const quote = thread.anchor.quote.replace(/\n+/g, ' ').slice(0, 120);
-			const ellipsis = thread.anchor.quote.length > 120 ? '…' : '';
+			const passage = (passages[thread.id] ?? '').replace(/\n+/g, ' ');
+			const quote = passage.slice(0, 120);
+			const ellipsis = passage.length > 120 ? '…' : '';
 			const pendingNote = pending.has(thread.id) ? ' (pending edit)' : '';
-			lines.push(`- ${thread.id}${pendingNote} anchored to: "${quote}${ellipsis}"`);
+			lines.push(
+				passage
+					? `- ${thread.id}${pendingNote} on: "${quote}${ellipsis}"`
+					: `- ${thread.id}${pendingNote} (its passage is gone; re-attach with reply_to_comment anchor_text if you edit for it)`
+			);
 		}
 	}
 	const dismissedHint = formatDismissedThreadsHint(dismissedCount);
@@ -620,10 +630,10 @@ function buildMultiTabPrompt(
 			openTabLine +
 			'\n\n' +
 			tabs
-				.map(({ tabId, currentMd, lastSeenMd, commentThreads, pendingEditThreadIds }) => {
+				.map(({ tabId, currentMd, lastSeenMd, commentThreads, pendingEditThreadIds, threadPassages }) => {
 					const hasLastSeen = lastSeenMd !== null;
 					const hasDiff = hasLastSeen && lastSeenMd !== currentMd;
-					const threadBlock = renderCommentThreadsBlock(commentThreads, pendingEditThreadIds);
+					const threadBlock = renderCommentThreadsBlock(commentThreads, pendingEditThreadIds, threadPassages);
 
 					if (!hasLastSeen) {
 						return `${tabId}\nNew this session. Call read_doc("${tabId}") to read it.${threadBlock}`;
@@ -826,7 +836,7 @@ function buildHooks(
 export const POST: RequestHandler = async ({ request }) => {
 	try {
 		const body = await request.json();
-		const { userMessage, model, warmup, tab, planMode, images, reviewerId, provider: providerIdRaw, staleAccept } = body as {
+		const { userMessage, model, warmup, tab, planMode, images, reviewerId, provider: providerIdRaw } = body as {
 			userMessage?: string;
 			model?: string;
 			warmup?: boolean;
@@ -837,9 +847,6 @@ export const POST: RequestHandler = async ({ request }) => {
 			 * instead of an ordinary render. */
 			reviewerId?: string;
 			provider?: string;
-			/** User Accepted a stale proposal: commit the agent's rebased
-			 * edit_doc immediately instead of leaving another review card. */
-			staleAccept?: StaleAcceptApply;
 		};
 		const providerId = (providerIdRaw || 'claude') as ProviderId;
 		// Switching providers invalidates the persisted session id: each
@@ -1155,13 +1162,13 @@ export const POST: RequestHandler = async ({ request }) => {
 					// Per-render state lives in a scope that flows through the
 					// awaits below, so a concurrent render cannot overwrite it
 					// or clear it out from under this one on its way out.
-					const roundsBeforeTurn = active ? readLiveTabRoundIds(active) : new Set<string>();
+					const proposalsBeforeTurn = active
+						? readLiveTabProposalFingerprints(active)
+						: new Map<string, string>();
 					await runWithRenderScope(
 						{
 							feedbackThreadId,
-							reviewerId: critiqueReviewer?.id ?? null,
-							staleAcceptApply:
-								staleAccept && typeof staleAccept.tabId === 'string' ? staleAccept : null
+							reviewerId: critiqueReviewer?.id ?? null
 						},
 						async () => {
 					const firstOutcome = await runQueryRound(prompt, images);
@@ -1169,8 +1176,10 @@ export const POST: RequestHandler = async ({ request }) => {
 						const retry = feedbackRetryPrompt({
 							message: userMessage,
 							tabId: active,
-							roundsBefore: roundsBeforeTurn,
-							roundsAfter: active ? readLiveTabRoundIds(active) : new Set<string>()
+							proposalsBefore: proposalsBeforeTurn,
+							proposalsAfter: active
+								? readLiveTabProposalFingerprints(active)
+								: new Map<string, string>()
 						});
 						if (retry) {
 							const retryPrompt = buildMultiTabPrompt(

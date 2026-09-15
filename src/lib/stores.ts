@@ -12,30 +12,24 @@ import type {
 	CommentThread,
 	ImageAttachment
 } from './types';
-import type { MaterializedPendingReviewRound } from './review-rounds';
+import type { ThreadMarkSummary } from '$lib/shared/proposals';
 
 // ── Document state ────────────────────────────────────────────────────
 // The canonical client state is a Y.Doc (see src/lib/yjs-doc.ts) bound into
 // the Tiptap editor via @tiptap/extension-collaboration.
 
-/** Baseline text for the active tab's pending review stack. The diff overlay
- * compares the live editor content against this string. Null when no review
- * is pending. */
-export const reviewBaseline = writable<string | null>(null);
-
-/** Pending agent-edit rounds for the ACTIVE tab, oldest first. Each round
- * shows as its own card in the OutlinePane; the editor's diff overlay
- * composes them all (anchored at rounds[0].beforeMd). Accepting a round
- * removes just that round; rejecting a round rewinds to its beforeMd
- * (also dropping all later rounds). */
-export const pendingReviewRounds = writable<MaterializedPendingReviewRound[]>([]);
+/** The marks each thread holds on the ACTIVE tab (see
+ * `$lib/shared/proposals`): which threads carry a proposal (tracked
+ * changes) or a comment highlight, where they sit, and what they change.
+ * Recomputed from the tab's Y.Doc on every fragment change. */
+export const threadMarks = writable<ThreadMarkSummary[]>([]);
 
 /** Agent comment threads for EVERY open tab. Each entry contains a tabId
- * and the unresolved, still-anchored threads that have at least one agent
- * message — the same attachment test the comment gutter renders by
- * (`matchCommentAnchor`), so a tab never advertises threads that wouldn't
- * show. Drives the per-tab dot badges on the TabBar (via
- * `mergedPendingTabs` in +page.svelte). */
+ * and the unresolved threads that have at least one agent message and
+ * still hold marks in the document — the same test the comment gutter
+ * renders by, so a tab never advertises threads that wouldn't show.
+ * Drives the per-tab dot badges on the TabBar (via `mergedPendingTabs`
+ * in +page.svelte). */
 export const allTabCommentThreads = writable<Array<{ tabId: string; threads: CommentThread[] }>>([]);
 
 /** Set of comment thread IDs the user has already seen (opened or clicked).
@@ -63,21 +57,13 @@ export function markCommentSeen(id: string) {
 
 /** Comment threads for the ACTIVE tab, sorted by createdAt. Threaded
  * Google-Docs-style comments. Each thread is anchored to a passage via
- * a stored `quote`; the editor's comment-overlay plugin renders an
- * inline underline + a gutter comment button per unresolved thread. */
+ * the marks carrying its id; the editor renders them and the thread
+ * overlay adds a pill per unresolved thread. */
 export const commentThreads = writable<CommentThread[]>([]);
 
 /** Which thread id (if any) is currently open in the popover. Null when
  * the popover is closed. */
 export const openCommentThreadId = writable<string | null>(null);
-
-/** Stale-Accept in flight: the gutter keeps that card visible with a
- * pulsing border and a "Rebasing…" note until a reviewable diff lands. */
-export const staleAcceptUi = writable<{
-	tabId: string;
-	threadId?: string;
-	staleRoundId: string;
-} | null>(null);
 
 /** Per-tab memory of which comment thread was open, so peeking at another
  * file and coming back re-expands the same thread. Session-only. */
@@ -635,14 +621,3 @@ export const agentSettings = writable<AgentSettings>({
 	intendedAudience: ''
 });
 
-/** When the agent is muted, the editor's diff overlay stays hidden by
- * default. Clicking a pending-review card sets this id; the overlay then
- * renders only that round's decorations. Cleared on accept/reject and
- * tab switch. Null otherwise. Has no effect when muted is false. */
-export const expandedReviewRoundId = writable<string | null>(null);
-
-/** Round ids the user has pinned "keep diff visible" on. Their proposed
- * (green) lines stay revealed in the doc even when the round's gutter card
- * isn't focused — independent of `expandedReviewRoundId`. Toggled by the
- * switch on each edit card. */
-export const pinnedDiffRounds = writable<Set<string>>(new Set());

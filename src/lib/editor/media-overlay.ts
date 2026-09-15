@@ -2,7 +2,7 @@
  * Media overlay — Substack-style inline previews for the plain-markdown
  * editor.
  *
- * Same architectural shape as `diff-overlay.ts` / `comment-overlay.ts`:
+ * Same architectural shape as `thread-overlay.ts`:
  * a ProseMirror plugin that READS the live doc and emits widget
  * decorations. It never mutates content, never adds nodes, never alters
  * the markdown source. The Y.Doc stays plain text.
@@ -31,7 +31,7 @@
  *   - Image widgets are block widgets AFTER the paragraph; inline link
  *     marks are inline decorations ON existing text. Neither shares a
  *     DOM slot with diff word/line decorations.
- *   - When the agent rewrites a URL during a review round, the diff
+ *   - When the agent proposes a new URL, the tracked change
  *     overlay paints the strike+highlight on the markdown text and the
  *     inline mark follows the live URL — hovering the new URL during
  *     review shows what you'd be accepting.

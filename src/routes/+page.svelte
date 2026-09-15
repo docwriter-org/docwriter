@@ -30,12 +30,8 @@
 	import CustomModelDialog from '$lib/components/CustomModelDialog.svelte';
 	import SessionBrowser from '$lib/components/SessionBrowser.svelte';
 	import { themes, applyTheme } from '$lib/themes';
-	import { unifiedLineDiff } from '$lib/diff';
-	import { materializePendingReviewRounds } from '$lib/review-rounds';
-	import { isStaleAcceptFollowup } from '$lib/shared/stale-accept';
+	import { proposalFingerprints, summarizeThreadMarks, type ThreadMarkSummary } from '$lib/shared/proposals';
 	import {
-		serializeFragment as plainTextFromFragment,
-		matchCommentAnchor,
 		readThreadValue,
 		type CommentsMap
 	} from '$lib/shared/ydoc-codec';
@@ -65,9 +61,6 @@
 		if (/^Review the open files? against the following rules/.test(trigger)) {
 			return 'Apply rules';
 		}
-		if (/^(?:The user|I) clicked Accept on your previous edit/.test(trigger)) {
-			return 'Rebase stale proposal';
-		}
 		if (/^(?:The user|I) just rejected/.test(trigger)) {
 			const retryFeedbackMatch = trigger.match(
 				/(?:The user|I) explained why (?:they|I) rejected it:\n\n```text\n([\s\S]*?)\n```/
@@ -86,7 +79,6 @@
 
 	import {
 		getYDocForTab,
-		getReviewArrayForTab,
 		getCommentsMapForTab,
 		whenYDocReadyForTab,
 		destroyTab,
@@ -98,8 +90,7 @@
 	} from '$lib/yjs-doc';
 	import type { Editor } from '@tiptap/core';
 	import {
-		reviewBaseline,
-		pendingReviewRounds,
+		threadMarks,
 		rules,
 		proposedRules,
 		proposedHooks,
@@ -127,7 +118,6 @@
 		showFilesPane,
 		showSidebar,
 		agentSettings,
-		expandedReviewRoundId,
 		tabs,
 		activeTab,
 		recentActions,
@@ -138,7 +128,6 @@
 		allTabCommentThreads,
 		openCommentThreadId,
 		openCommentThreadByTab,
-		staleAcceptUi,
 		queuedSubmissionCount,
 		activeReviewer,
 		customReviewers,
@@ -153,8 +142,7 @@
 	import TabBar from '$lib/components/TabBar.svelte';
 	import AiProvenanceToggle from '$lib/components/AiProvenanceToggle.svelte';
 	import PreviewButton from '$lib/components/PreviewButton.svelte';
-	import type { AgentSettings, CommentThread, HistoryEntry, ImageAttachment, PendingReviewRound, ProposedRule, ProposedHook, Rule } from '$lib/types';
-	import type { MaterializedPendingReviewRound } from '$lib/review-rounds';
+	import type { AgentSettings, CommentThread, HistoryEntry, ImageAttachment, ProposedRule, ProposedHook, Rule } from '$lib/types';
 
 	type AgentSettingsChange =
 		| {
@@ -278,9 +266,6 @@
 		return v;
 	}
 
-	function currentTabText(tabId: string): string {
-		return plainTextFromFragment(getYDocForTab(tabId).getXmlFragment('default'));
-	}
 
 	/** Whether a thread anchor still maps to text in the doc — delegates to
 	 * `matchCommentAnchor`, the SAME quote-matching ladder the comment
@@ -291,28 +276,24 @@
 	 * which context-checks — rendered nothing. Detached threads stay out of
 	 * the tab count without being mutated: if the text comes back (Ctrl+Z),
 	 * the thread re-attaches and counts/renders again. */
-	function anchorPresentInText(anchor: CommentThread['anchor'] | undefined, text: string): boolean {
-		if (!anchor?.quote) return false;
-		return matchCommentAnchor(text, anchor) !== null;
+	/** Threads that still hold a mark in a tab's document. A thread whose
+	 * passage was deleted around it has none: it doesn't render in the
+	 * gutter, so it must not inflate the tab count either. It isn't removed
+	 * — if the text comes back (Ctrl+Z), the marks return with it. */
+	function markedThreadIds(tabId: string): Set<string> {
+		return new Set(summarizeThreadMarks(getYDocForTab(tabId)).map((m) => m.threadId));
 	}
 
-	function materializedRoundsForTab(
-		tabId: string,
-		rawRounds: PendingReviewRound[]
-	): MaterializedPendingReviewRound[] {
-		return materializePendingReviewRounds(currentTabText(tabId), rawRounds);
+	function proposalCount(tabId: string): number {
+		return summarizeThreadMarks(getYDocForTab(tabId)).filter((m) => m.hasProposal).length;
 	}
 
-	function syncActiveReviewState(tabId: string, rawRounds: PendingReviewRound[]) {
-		const rounds = materializedRoundsForTab(tabId, rawRounds);
-		pendingReviewRounds.set(rounds);
-		reviewBaseline.set(rounds.length > 0 ? rounds[0].beforeMd : null);
+	function syncActiveThreadMarks(tabId: string) {
+		const marks = summarizeThreadMarks(getYDocForTab(tabId));
+		threadMarks.set(marks);
 		const nextPending = new Map(pendingReviewTabs);
-		// Stale rounds (no longer match the doc) render no diff — don't let them
-		// pulse the tab dot. They stay in the array and re-activate if the text
-		// returns; see refreshPendingReviewTabs.
-		const actionable = rounds.filter((r) => !r.stale).length;
-		if (actionable > 0) nextPending.set(tabId, actionable);
+		const proposals = marks.filter((m) => m.hasProposal).length;
+		if (proposals > 0) nextPending.set(tabId, proposals);
 		else nextPending.delete(tabId);
 		pendingReviewTabs = nextPending;
 		syncAllTabsState();
@@ -363,15 +344,8 @@
 		const pending = new Map<string, number>();
 		for (const id of tabIds) {
 			if (isPdfPath(id)) continue;
-			const raw = getReviewArrayForTab(id).toArray();
-			if (raw.length === 0) continue;
-			// Count only actionable rounds. A stale round (its old_string no
-			// longer matches the doc, e.g. superseded by later edits) renders
-			// no diff and can't be reviewed — counting it would pulse the tab
-			// dot with nothing to act on. Like detached comments, it stays in
-			// the array (re-activates if the text returns) but doesn't nag.
-			const actionable = materializedRoundsForTab(id, raw).filter((r) => !r.stale).length;
-			if (actionable > 0) pending.set(id, actionable);
+			const n = proposalCount(id);
+			if (n > 0) pending.set(id, n);
 		}
 		pendingReviewTabs = pending;
 	}
@@ -407,9 +381,7 @@
 	/** Load a single tab's meta and hydrate review state from its Y.Doc. */
 	async function loadTab(tabId: string) {
 		if (isPdfPath(tabId)) {
-			detachActiveReviewObservers(
-				activeReviewObserver?.tabId ?? activeReviewTextObserver?.tabId ?? tabId
-			);
+			detachActiveReviewObservers(activeReviewTextObserver?.tabId ?? tabId);
 			return;
 		}
 		try {
@@ -421,19 +393,13 @@
 				agentSettings.set(data.meta.agentSettings);
 			}
 			await whenYDocReadyForTab(tabId);
-			const rounds = getReviewArrayForTab(tabId).toArray();
-			syncActiveReviewState(tabId, rounds);
+			syncActiveThreadMarks(tabId);
 			attachActiveReviewObserver(tabId);
 		} catch (e) {
 			console.error(`Failed to load tab "${tabId}":`, e);
 		}
 	}
 
-	let activeReviewObserver: {
-		tabId: string;
-		arr: Y.Array<PendingReviewRound>;
-		handler: () => void;
-	} | null = null;
 	let activeReviewTextObserver: {
 		tabId: string;
 		fragment: Y.XmlFragment;
@@ -470,13 +436,13 @@
 			// gutter, so it must not inflate the tab count either. It isn't
 			// removed — if the text comes back (Ctrl+Z), the thread re-attaches
 			// and counts/renders again.
-			const tabText = currentTabText(id);
+			const marked = markedThreadIds(id);
 			const threads: CommentThread[] = [];
 			getCommentsMapForTab(id).forEach((value) => {
 				const t = readThreadValue(value);
 				if (!t || t.resolved) return;
 				if (!t.messages.some((m) => m.author === 'agent')) return;
-				if (!anchorPresentInText(t.anchor, tabText)) return;
+				if (!marked.has(t.id)) return;
 				threads.push(t);
 			});
 			if (threads.length > 0) {
@@ -503,10 +469,6 @@
 	}
 
 	function detachActiveReviewObservers(tabId: string) {
-		if (activeReviewObserver?.tabId === tabId) {
-			activeReviewObserver.arr.unobserve(activeReviewObserver.handler);
-			activeReviewObserver = null;
-		}
 		if (activeCommentsObserver?.tabId === tabId) {
 			activeCommentsObserver.map.unobserveDeep(activeCommentsObserver.handler);
 			activeCommentsObserver = null;
@@ -514,31 +476,21 @@
 			openCommentThreadId.set(null);
 		}
 		if (activeReviewTextObserver?.tabId === tabId) {
-			activeReviewTextObserver.fragment.unobserve(activeReviewTextObserver.handler);
+			activeReviewTextObserver.fragment.unobserveDeep(activeReviewTextObserver.handler);
 			activeReviewTextObserver = null;
 		}
 	}
 
 	function attachActiveReviewObserver(tabId: string) {
-		detachActiveReviewObservers(activeReviewObserver?.tabId ?? activeReviewTextObserver?.tabId ?? tabId);
-		const arr = getReviewArrayForTab(tabId);
-		const handler = () => {
-			if (tabId !== getCurrentActiveTab()) return;
-			syncActiveReviewState(tabId, arr.toArray());
-		};
-		arr.observe(handler);
-		activeReviewObserver = { tabId, arr, handler };
+		detachActiveReviewObservers(activeReviewTextObserver?.tabId ?? tabId);
 		const fragment = getYDocForTab(tabId).getXmlFragment('default');
+		// Deep: a proposal is a format change on a paragraph's text, which a
+		// shallow fragment observer (child insert / delete only) never sees.
 		const textHandler = () => {
 			if (tabId !== getCurrentActiveTab()) return;
-			const rounds = arr.toArray();
-			// Use syncActiveReviewState for both paths to ensure consistent
-			// store updates (including pendingReviewTabs). This guards against
-			// timing issues where the fragment observer fires but the array
-			// observer hasn't yet, leaving pendingReviewRounds stale.
-			syncActiveReviewState(tabId, rounds);
+			syncActiveThreadMarks(tabId);
 		};
-		fragment.observe(textHandler);
+		fragment.observeDeep(textHandler);
 		activeReviewTextObserver = { tabId, fragment, handler: textHandler };
 
 		const commentsMap = getCommentsMapForTab(tabId);
@@ -551,26 +503,29 @@
 		syncActiveCommentThreads(tabId);
 	}
 
-	/** Lightweight observers for background tabs: any rounds/comment change
-	 * triggers syncAllTabsState so the OutlinePane cross-tab list stays
-	 * current without touching the active-tab diff overlay state. */
-	const bgTabObservers = new Map<string, { arr: ReturnType<typeof getReviewArrayForTab>; commentsMap: ReturnType<typeof getCommentsMapForTab>; arrHandler: () => void; commentsHandler: () => void }>();
+	/** Lightweight observers for background tabs: any mark or comment change
+	 * triggers syncAllTabsState so the cross-tab badges stay current without
+	 * touching the active tab's state. */
+	const bgTabObservers = new Map<string, { fragment: Y.XmlFragment; commentsMap: ReturnType<typeof getCommentsMapForTab>; handler: () => void }>();
 
 	function attachBgTabObserver(tabId: string) {
 		if (bgTabObservers.has(tabId)) return;
-		const arr = getReviewArrayForTab(tabId);
+		const fragment = getYDocForTab(tabId).getXmlFragment('default');
 		const commentsMap = getCommentsMapForTab(tabId);
-		const handler = () => syncAllTabsState();
-		arr.observe(handler);
+		const handler = () => {
+			refreshPendingReviewTabs(getCurrentTabList());
+			syncAllTabsState();
+		};
+		fragment.observeDeep(handler);
 		commentsMap.observeDeep(handler);
-		bgTabObservers.set(tabId, { arr, commentsMap, arrHandler: handler, commentsHandler: handler });
+		bgTabObservers.set(tabId, { fragment, commentsMap, handler });
 	}
 
 	function detachBgTabObserver(tabId: string) {
 		const obs = bgTabObservers.get(tabId);
 		if (!obs) return;
-		obs.arr.unobserve(obs.arrHandler);
-		obs.commentsMap.unobserveDeep(obs.commentsHandler);
+		obs.fragment.unobserveDeep(obs.handler);
+		obs.commentsMap.unobserveDeep(obs.handler);
 		bgTabObservers.delete(tabId);
 	}
 
@@ -591,9 +546,6 @@
 			freshAgentTabs.delete(tabId);
 			freshAgentTabs = new Set(freshAgentTabs);
 		}
-		// Drop any peeked round id — it belonged to the prior tab's pending
-		// list and would be a stale match (or a no-op) after the switch.
-		expandedReviewRoundId.set(null);
 		// Move the old active tab to a bg observer and drop the bg observer
 		// for the new active tab (the active observer takes over after loadTab).
 		if (current && !isPdfPath(current)) attachBgTabObserver(current);
@@ -702,9 +654,7 @@
 	function showEmptyEditor() {
 		const activeId = getCurrentActiveTab();
 		if (activeId) detachActiveReviewObservers(activeId);
-		expandedReviewRoundId.set(null);
-		pendingReviewRounds.set([]);
-		reviewBaseline.set(null);
+		threadMarks.set([]);
 		commentThreads.set([]);
 		openCommentThreadId.set(null);
 		activeTab.set(null);
@@ -879,27 +829,15 @@
 	/** Clear the peeked round id when the underlying round is going away
 	 * (accept/reject). When `roundId` is undefined the caller is doing a
 	 * batch op, so clear unconditionally. */
-	function clearPeekIfMatches(roundId?: string) {
-		let current: string | null = null;
-		expandedReviewRoundId.subscribe((v) => (current = v))();
-		if (!current) return;
-		if (!roundId || current === roundId) expandedReviewRoundId.set(null);
-	}
-
-	/** Flip the agent's muted flag. Muted: pending edits land as cards but
-	 * the editor's diff overlay stays hidden until the user clicks a card.
-	 * Also clears any currently-expanded round so unmuting doesn't leave
-	 * one round selected when the full overlay returns. */
+	/** Flip the agent's muted flag. Muted: the agent's threads leave the
+	 * gutter and its tracked changes render subdued until the user unmutes. */
 	function toggleMuted() {
 		let next: AgentSettings | null = null;
 		agentSettings.update((prev) => {
 			next = { ...prev, muted: !prev.muted };
 			return next;
 		});
-		if (next) {
-			expandedReviewRoundId.set(null);
-			void persistAgentSettings(next);
-		}
+		if (next) void persistAgentSettings(next);
 	}
 
 	/** Fully pause / unpause the agent. Pause cancels any in-flight render,
@@ -1131,10 +1069,7 @@
 		try {
 			const synced = await editorRef?.flushAutosave();
 			if (synced === false) {
-				// A stale-Accept rebase reads the live Y.Doc via read_doc —
-				// don't abort (or drop the Rebasing… card) because the
-				// browser still has a keystroke in flight.
-				if (!isStaleAcceptFollowup(trigger)) {
+				{
 					pushHistory({
 						type: 'notification',
 						timestamp: Date.now(),
@@ -1169,17 +1104,16 @@
 
 		currentAbort = new AbortController();
 		let success = true;
-		// Snapshot of `pendingRounds` per tab BEFORE this render started.
-		// The agent's custom `edit_doc` / `write_doc` tools append rounds
-		// directly into each tab's `Y.Map('review')` on the server; those
-		// rounds stream to the browser over Hocuspocus sync, so by the
-		// time `result` fires the Y.Doc already has the new rounds. Diffing
-		// against this snapshot lets us count rounds added this render
-		// (for the zero-edit message).
-		const priorRoundIdsByTab = new Map<string, Set<string>>();
+		// Snapshot of each tab's proposals BEFORE this render started. The
+		// agent's `edit_doc` / `write_doc` tools write marks directly into
+		// each tab's Y.Doc on the server; those stream to the browser over
+		// Hocuspocus sync, so by the time `result` fires the Y.Doc already
+		// has them. Comparing against this snapshot tells us whether the
+		// agent proposed anything this render (for the zero-edit message).
+		const priorProposalsByTab = new Map<string, Map<string, string>>();
 		for (const id of getCurrentTabList()) {
-			const rounds = getReviewArrayForTab(id).toArray();
-			priorRoundIdsByTab.set(id, new Set(rounds.map((r) => r.id)));
+			if (isPdfPath(id)) continue;
+			priorProposalsByTab.set(id, proposalFingerprints(getYDocForTab(id)));
 		}
 
 		try {
@@ -1199,16 +1133,7 @@
 					tab: tabId,
 					images: images.length > 0 ? images : undefined,
 					reviewerId: reviewer?.id,
-					provider,
-					staleAccept:
-						isStaleAcceptFollowup(trigger) && pendingStaleApply
-							? {
-									tabId: pendingStaleApply.tabId,
-									staleRoundId: pendingStaleApply.staleRoundId,
-									threadId: pendingStaleApply.threadId,
-									newString: pendingStaleApply.newString
-								}
-							: undefined
+					provider
 				}),
 				signal: currentAbort.signal
 			});
@@ -1432,11 +1357,10 @@
 						// render snapshot captured before `/api/render`.
 						let anyRoundAdded = false;
 						for (const id of getCurrentTabList()) {
-							const priorIds = priorRoundIdsByTab.get(id) ?? new Set<string>();
-							const rounds = getReviewArrayForTab(id).toArray();
-							const added = rounds.filter((r) => !priorIds.has(r.id));
-							if (added.length > 0) {
-								anyRoundAdded = true;
+							if (isPdfPath(id)) continue;
+							const prior = priorProposalsByTab.get(id) ?? new Map<string, string>();
+							for (const [tid, fp] of proposalFingerprints(getYDocForTab(id))) {
+								if (prior.get(tid) !== fp) anyRoundAdded = true;
 							}
 						}
 						if (!anyRoundAdded) {
@@ -1625,11 +1549,6 @@
 			void fileTreeRef?.refresh();
 			// If the render failed, push one visible error entry. Otherwise
 			// the mascot already tells the user it's done.
-			if (pendingStaleApply && isStaleAcceptFollowup(trigger)) {
-				// Settle even if the render later reported an error — the
-				// agent may already have landed a rebased pending diff.
-				await applyPendingStaleAccept({ allowFail: true });
-			}
 			if (!success) {
 				pushHistory({
 					type: 'assistant_text',
@@ -1661,175 +1580,47 @@
 		}
 	}
 
-	/** Read the pending-rounds array for the active tab from the store. */
-	function currentRounds(): MaterializedPendingReviewRound[] {
-		let rounds: MaterializedPendingReviewRound[] = [];
-		pendingReviewRounds.subscribe((v) => (rounds = v))();
-		return rounds;
+	function currentMarks(): ThreadMarkSummary[] {
+		return get(threadMarks);
 	}
 
-	function intendedReplacement(round: MaterializedPendingReviewRound): string | undefined {
-		const op = round.operation;
-		if (op?.type === 'edit') return op.newString;
-		if (op?.type === 'write') return op.content;
-		return typeof round.afterMd === 'string' ? round.afterMd : undefined;
-	}
-
-	function buildStaleAcceptFollowup(
-		tabId: string,
-		stale: MaterializedPendingReviewRound,
-		reason: string
-	): string {
-		const staleDiff = unifiedLineDiff(stale.beforeMd, stale.afterMd, 1);
-		const thread = stale.feedbackThreadId
-			? get(commentThreads).find((t) => t.id === stale.feedbackThreadId)
-			: undefined;
-		const oldString = stale.operation?.type === 'edit' ? stale.operation.oldString : undefined;
-		const newString = intendedReplacement(stale);
-		const lines: string[] = [
-			`I clicked Accept on your previous edit to \`${tabId}\`. Rebase it onto the current text and leave a pending reviewable diff — do not apply it to the live document. It could not be accepted as-is because it became stale:`,
-			'',
-			`> ${reason}`,
-			'',
-			'Your previous proposal (for reference) was:',
-			'',
-			'```diff',
-			staleDiff,
-			'```'
-		];
-		if (oldString && newString) {
-			lines.push(
-				'',
-				'Intended replacement:',
-				'',
-				`old_string (gone): ${JSON.stringify(oldString)}`,
-				`new_string (apply this): ${JSON.stringify(newString)}`
-			);
-		}
-		lines.push(
-			'',
-			'Find the current passage that now corresponds to that old_string — match on intent and nearby wording, not a string-equal match. Then call edit_doc with that current passage as old_string and the intended new_string (adapt it only if the surrounding sentence requires it). Leave that edit as a pending proposal so I can see the rebased diff and Accept it.'
-		);
-		if (thread) {
-			const transcript = thread.messages
-				.map((m) => `- [${m.author}] ${m.text}`)
-				.join('\n');
-			lines.push(
-				'',
-				`Keep comment thread thread_id="${thread.id}". Do not open a new thread.`,
-				`The thread's original anchor was: "${thread.anchor.quote}"`,
-				'',
-				'Full thread:',
-				transcript,
-				'',
-				`If that original anchor quote is no longer in the document, re-attach the thread first: reply_to_comment with thread_id="${thread.id}" and \`anchor_text\` set to the current passage.`
-			);
-		}
-		return lines.join('\n');
-	}
-
-	/** After a stale Accept, auto-apply the agent's rebased edit. */
-	const STALE_ACCEPT_STORAGE_KEY = 'docwriter-stale-accept';
-	type PendingStaleApply = {
-		tabId: string;
-		threadId?: string;
-		staleRoundId: string;
-		newString?: string;
-	};
-	let pendingStaleApply: PendingStaleApply | null = null;
-	let staleAcceptSettling = false;
-
-	function persistPendingStaleApply(
-		value: typeof pendingStaleApply
-	) {
-		try {
-			if (value) sessionStorage.setItem(STALE_ACCEPT_STORAGE_KEY, JSON.stringify(value));
-			else sessionStorage.removeItem(STALE_ACCEPT_STORAGE_KEY);
-		} catch {
-			/* ignore quota / private mode */
-		}
-	}
-
-	function setPendingStaleApply(value: typeof pendingStaleApply) {
-		pendingStaleApply = value;
-		persistPendingStaleApply(value);
-		staleAcceptUi.set(
-			value
-				? {
-						tabId: value.tabId,
-						threadId: value.threadId,
-						staleRoundId: value.staleRoundId
-					}
-				: null
-		);
-	}
-
-	try {
-		const raw = sessionStorage.getItem(STALE_ACCEPT_STORAGE_KEY);
-		if (raw) {
-			const restored = JSON.parse(raw) as PendingStaleApply;
-			pendingStaleApply = restored;
-			staleAcceptUi.set({
-				tabId: restored.tabId,
-				threadId: restored.threadId,
-				staleRoundId: restored.staleRoundId
-			});
-		}
-	} catch {
-		pendingStaleApply = null;
-	}
-
-	type ReviewAction = 'accept_rounds' | 'reject_rounds';
-	type ReviewActionResponse = {
+	type ThreadActionResponse = {
 		ok?: boolean;
-		rounds?: PendingReviewRound[];
 		yjsUpdate?: string | null;
-		acceptedCount?: number;
-		rejectedCount?: number;
+		hadProposal?: boolean;
+		count?: number;
 		error?: string;
-		stale?: boolean;
-		staleRoundId?: string | null;
-		staleRoundKind?: string | null;
-		/** Batch accepts skip stale rounds instead of failing wholesale;
-		 * these stay pending for individual accept (→ agent rebase) or
-		 * dismissal. */
-		skippedStale?: Array<{ id: string; reason: string }>;
 	};
 
-	/** Shared accept/reject transport. The ordering here is the undo contract:
-	 * pause WebSocket sync, let the server mutate, apply the returned delta
-	 * locally with USER_ORIGIN, then reconnect. That guarantees the browser's
-	 * UndoManager sees Accept/Reject as a local user action instead of a
-	 * provider-origin remote update. */
-	async function postReviewAction(
+	/** Shared transport for accept / reject / dismiss / reopen. The ordering
+	 * here is the undo contract: pause WebSocket sync, let the server mutate,
+	 * apply the returned delta locally with USER_ORIGIN, then reconnect. That
+	 * guarantees the browser's UndoManager sees the action as a local user
+	 * step instead of a provider-origin remote update. */
+	async function postThreadAction(
 		tabId: string,
-		action: ReviewAction,
-		roundId?: string | string[],
-		extra?: Record<string, unknown>
-	): Promise<{ res: Response; data: ReviewActionResponse }> {
+		body: Record<string, unknown>,
+		opts?: { requireSynced?: boolean }
+	): Promise<{ res: Response; data: ThreadActionResponse }> {
 		const synced = await editorRef?.flushAutosave();
 		if (synced === false) {
-			if (action === 'accept_rounds') {
+			if (opts?.requireSynced) {
 				throw new Error('Latest local edits are still syncing to the server. Try again in a moment.');
 			}
-			// Reject doesn't apply text ops, so it stays available even when
-			// the sync gate can't settle — a wedged WebSocket used to freeze
-			// the entire review surface behind this throw.
-			console.warn(`[docwriter] proceeding with ${action} while local edits are unsynced`);
+			// Reject / dismiss revert marks and stay available even when the
+			// sync gate can't settle — a wedged WebSocket used to freeze the
+			// entire review surface behind this throw.
+			console.warn(`[docwriter] proceeding with ${String(body.action)} while local edits are unsynced`);
 		}
-
 		const resumeTabSync = pauseTabSync(tabId);
 		try {
-			const body = Array.isArray(roundId)
-				? { action, roundIds: roundId, ...extra }
-				: { action, roundId, ...extra };
 			const res = await fetch(`/api/document?tab=${encodeURIComponent(tabId)}`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify(body)
 			});
-			const data = (await res.json().catch(() => ({}))) as ReviewActionResponse;
-			if (res.ok && data?.ok && Array.isArray(data.rounds) && typeof data.yjsUpdate === 'string') {
+			const data = (await res.json().catch(() => ({}))) as ThreadActionResponse;
+			if (res.ok && data?.ok && typeof data.yjsUpdate === 'string') {
 				applyUpdateToTab(tabId, data.yjsUpdate);
 				// Focus so undo (Cmd+Z) works immediately, but don't scroll the
 				// caret into view — the caret is often far from the accepted
@@ -1837,249 +1628,104 @@
 				// card they just clicked.
 				editorRef?.focusEditor({ scrollIntoView: false });
 			}
-			if (res.ok && data?.ok && (data.skippedStale?.length ?? 0) > 0) {
-				const n = data.skippedStale!.length;
-				pushHistory({
-					type: 'notification',
-					timestamp: Date.now(),
-					text:
-						n === 1
-							? '1 proposal was stale and stays pending — accept it individually to rebase it, or dismiss it.'
-							: `${n} proposals were stale and stay pending — accept them individually to rebase, or dismiss them.`,
-					priority: 'medium'
-				});
-			}
 			return { res, data };
 		} finally {
 			resumeTabSync();
 		}
 	}
 
-	/** Dismiss / reopen a thread through the same undo-friendly transport as
-	 * Accept/Reject: pause sync, let the server dismiss the thread AND drop its
-	 * pending edits in one transaction, apply the delta locally with
-	 * USER_ORIGIN. ctrl+z then reopens the thread and resurrects its edits in a
-	 * single step. */
+	/** Dismiss / reopen a thread. Dismissing also reverts the thread's
+	 * proposal in the same server transaction; ctrl+z reopens the thread and
+	 * brings its marks back in a single step. */
 	async function resolveThread(threadId: string, resolved: boolean) {
 		const tabId = getCurrentActiveTab();
 		if (!tabId) return;
-		const resumeTabSync = pauseTabSync(tabId);
 		try {
-			const res = await fetch(`/api/document?tab=${encodeURIComponent(tabId)}`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ action: 'set_thread_resolution', threadId, resolved })
-			});
-			const data = (await res.json().catch(() => ({}))) as {
-				ok?: boolean;
-				yjsUpdate?: string | null;
-			};
-			if (res.ok && data?.ok && typeof data.yjsUpdate === 'string') {
-				applyUpdateToTab(tabId, data.yjsUpdate);
-				if (resolved) clearPeekIfMatches(undefined);
-				editorRef?.focusEditor({ scrollIntoView: false });
-			}
+			await postThreadAction(tabId, { action: 'set_thread_resolution', threadId, resolved });
 		} catch (e) {
 			console.error('Failed to set thread resolution:', e);
-		} finally {
-			resumeTabSync();
 		}
 	}
 
+	/** One line per changed paragraph, for the followup triggers. */
+	function describeChanges(summary: ThreadMarkSummary): string {
+		return summary.changes
+			.map((c) => {
+				if (!c.before) return `+ ${c.after}`;
+				if (!c.after) return `- ${c.before}`;
+				return `- ${c.before}\n+ ${c.after}`;
+			})
+			.join('\n');
+	}
 
-	/** User accepted a stale/dangling proposal: keep the thread, ask the
-	 * agent to find the current old_string, then apply that rebased edit. */
-	async function requeueStaleAccept(
-		tabId: string,
-		staleRound: MaterializedPendingReviewRound,
-		reason: string
-	) {
-		setPendingStaleApply({
-			tabId,
-			threadId: staleRound.feedbackThreadId,
-			staleRoundId: staleRound.id,
-			newString: intendedReplacement(staleRound)
-		});
-		if (staleRound.feedbackThreadId) {
-			openCommentThreadId.set(staleRound.feedbackThreadId);
-		}
+	function failed(kind: 'Accept' | 'Reject', e: unknown) {
+		console.error(`${kind} failed:`, e);
 		pushHistory({
 			type: 'notification',
 			timestamp: Date.now(),
-			text: 'Rebasing this edit…',
-			priority: 'medium'
+			text: `${kind} failed: ${(e as Error).message}`,
+			priority: 'high'
 		});
-		const followup = buildStaleAcceptFollowup(tabId, staleRound, reason);
-		setTimeout(() => void submit(followup), 50);
 	}
 
-	function findRebasedRound(
-		rounds: MaterializedPendingReviewRound[],
-		pending: NonNullable<typeof pendingStaleApply>
-	): MaterializedPendingReviewRound | undefined {
-		const fresh = rounds.filter((r) => !r.stale && r.id !== pending.staleRoundId);
-		if (pending.threadId) {
-			const onThread = fresh.find((r) => r.feedbackThreadId === pending.threadId);
-			if (onThread) return onThread;
-		}
-		if (pending.newString) {
-			const byNew = fresh.find((r) => intendedReplacement(r) === pending.newString);
-			if (byNew) return byNew;
-		}
-		return undefined;
-	}
-
-	async function applyPendingStaleAccept(options?: { allowFail?: boolean }) {
-		const pending = pendingStaleApply;
-		if (!pending || staleAcceptSettling) return;
-		if (getCurrentActiveTab() !== pending.tabId) return;
-
-		const rebased = findRebasedRound(currentRounds(), pending);
-		if (!rebased) {
-			if (!options?.allowFail || get(isRendering)) return;
-			setPendingStaleApply(null);
-			pushHistory({
-				type: 'notification',
-				timestamp: Date.now(),
-				text: 'Could not rebase this edit onto the current text. The proposal is still stale.',
-				priority: 'high'
-			});
-			return;
-		}
-		// Rebased proposal is now a pending diff — leave it for the user
-		// to Accept. Drop only the original stale round if it is still there.
-		staleAcceptSettling = true;
-		setPendingStaleApply(null);
-		if (currentRounds().some((r) => r.id === pending.staleRoundId)) {
-			await rejectAgentEdit(pending.staleRoundId, { keepThreads: true, silent: true });
-		}
-		staleAcceptSettling = false;
-	}
-
-	/** Accept a single pending round by id (or all rounds if no id is
-	 * given — used by the "Accept all" path). Rounds are independent: the
-	 * server applies just this round's edit op against the current live
-	 * doc. If the round became stale (its `old_string` no longer matches
-	 * because a prior pending round changed the same text), Accept asks
-	 * the agent to rebase it onto the current text as a new pending diff. */
-	async function acceptAgentEdit(
-		roundId?: string | string[],
-		options?: { skipFollowup?: boolean }
-	) {
+	/** Accept the proposal a thread holds: the server lands its text
+	 * (stamped as AI-written) and resolves the thread. */
+	async function acceptThread(threadId: string, options?: { skipFollowup?: boolean }) {
 		const tabId = getCurrentActiveTab();
 		if (!tabId) return;
-		const rounds = currentRounds();
-		const single = typeof roundId === 'string' ? roundId : undefined;
-		if (single && rounds.findIndex((r) => r.id === single) < 0) return;
-		if (Array.isArray(roundId) && !rounds.some((r) => roundId.includes(r.id))) return;
-
-		const knownStale = single ? rounds.find((r) => r.id === single && r.stale) : undefined;
-		if (knownStale) {
-			clearPeekIfMatches(single);
-			editorRef?.cancelIdleTimer();
-			await requeueStaleAccept(
-				tabId,
-				knownStale,
-				knownStale.staleReason ?? 'The proposal no longer fits the current text.'
-			);
-			return;
-		}
-
-		// Accept-all / batch: skip stale orphans so they don't 409 the
-		// whole batch. The user can Accept each stale card individually
-		// to re-queue the agent.
-		let target: string | string[] | undefined = roundId;
-		if (target === undefined) {
-			const fresh = rounds.filter((r) => !r.stale).map((r) => r.id);
-			if (fresh.length === 0) return;
-			target = fresh;
-		} else if (Array.isArray(target)) {
-			const fresh = target.filter((id) => !rounds.find((r) => r.id === id)?.stale);
-			if (fresh.length === 0) return;
-			target = fresh;
-		}
-		const ids = Array.isArray(target) ? target : single ? [single] : null;
-
-		clearPeekIfMatches(single);
+		const summary = currentMarks().find((m) => m.threadId === threadId && m.hasProposal);
+		if (!summary) return;
 		editorRef?.cancelIdleTimer();
 		try {
-			const { res, data } = await postReviewAction(tabId, 'accept_rounds', target);
-			if (res.status === 409 && data?.stale) {
-				const staleRoundId: string | null = data.staleRoundId ?? single ?? null;
-				const reason: string = typeof data.error === 'string' && data.error
-					? data.error
-					: 'The proposal no longer fits the current text.';
-				const staleRound =
-					staleRoundId != null ? rounds.find((r) => r.id === staleRoundId) : rounds[0];
-				if (staleRound) {
-					await requeueStaleAccept(tabId, staleRound, reason);
-				} else if (staleRoundId) {
-					await rejectAgentEdit(staleRoundId, { keepThreads: true, silent: true });
-				}
-				return;
-			}
-			if (!res.ok || !data?.ok || !Array.isArray(data.rounds)) {
-				throw new Error(data?.error || `HTTP ${res.status}`);
-			}
-			const acceptedCount =
-				typeof data.acceptedCount === 'number'
-					? data.acceptedCount
-					: rounds.length - (data.rounds as PendingReviewRound[]).length;
-			if (acceptedCount <= 0) return;
-			// Small-win celebration: flash a sage halo on the accepted range.
-			// Skip 'write' ops — a full-doc rewrite would paint everything green.
-			const justAccepted = ids
-				? rounds.filter((r) => ids.includes(r.id))
-				: rounds.slice(0, acceptedCount);
-			for (const r of justAccepted) {
-				const op = r.operation;
-				if (op?.type !== 'edit') continue;
-				if (!op.newString) continue;
-				editorRef?.flashAcceptedRange(op.newString);
-			}
-			const acceptedMsg =
-				acceptedCount === rounds.length
-					? `Accepted all ${rounds.length} agent edit${rounds.length === 1 ? '' : 's'}`
-					: `Accepted ${acceptedCount} agent edit${acceptedCount === 1 ? '' : 's'}`;
-			pushHistory({
-				type: 'user_action',
-				timestamp: Date.now(),
-				description: acceptedMsg
-			});
-			if (!options?.skipFollowup) {
-				void submit(acceptedMsg);
-			}
+			const { res, data } = await postThreadAction(
+				tabId,
+				{ action: 'resolve_thread', threadId, outcome: 'accepted' },
+				{ requireSynced: true }
+			);
+			if (!res.ok || !data?.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+			// Small-win celebration: flash a sage halo on the accepted text.
+			for (const c of summary.changes) if (c.after) editorRef?.flashAcceptedRange(c.after);
+			const msg = 'Accepted 1 agent edit';
+			pushHistory({ type: 'user_action', timestamp: Date.now(), description: msg });
+			if (!options?.skipFollowup) void submit(msg);
 		} catch (e) {
-			console.error('Failed to accept agent edit:', e);
-			pushHistory({
-				type: 'notification',
-				timestamp: Date.now(),
-				text: `Accept failed: ${(e as Error).message}`,
-				priority: 'high'
-			});
+			failed('Accept', e);
 		}
 	}
 
-	/**
-	 * Reject one round by id. Drops just that round; later rounds stay and
-	 * will surface as stale if their `oldString` no longer matches the
-	 * current text (the materializer flags them). Reject with no id drops
-	 * everything.
-	 *
-	 * Optional retry feedback re-submits with the rejection as context so
-	 * the agent can try again.
-	 */
+	async function acceptAllThreads() {
+		const tabId = getCurrentActiveTab();
+		if (!tabId) return;
+		const proposals = currentMarks().filter((m) => m.hasProposal);
+		if (proposals.length === 0) return;
+		editorRef?.cancelIdleTimer();
+		try {
+			const { res, data } = await postThreadAction(
+				tabId,
+				{ action: 'resolve_all', outcome: 'accepted' },
+				{ requireSynced: true }
+			);
+			if (!res.ok || !data?.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+			for (const p of proposals) for (const c of p.changes) if (c.after) editorRef?.flashAcceptedRange(c.after);
+			const n = data.count ?? proposals.length;
+			const msg = `Accepted all ${n} agent edit${n === 1 ? '' : 's'}`;
+			pushHistory({ type: 'user_action', timestamp: Date.now(), description: msg });
+			void submit(msg);
+		} catch (e) {
+			failed('Accept', e);
+		}
+	}
+
 	function buildRejectedEditFollowup(
 		tabId: string,
-		rejected: MaterializedPendingReviewRound,
+		rejected: ThreadMarkSummary,
 		feedback?: string
 	): string {
-		const rejectedDiff = unifiedLineDiff(rejected.beforeMd, rejected.afterMd, 1);
 		const lines: string[] = [
 			`I just rejected your previous edit on \`${tabId}\`:`,
 			'',
 			'```diff',
-			rejectedDiff,
+			describeChanges(rejected),
 			'```',
 			'',
 			'Do not make that same change again. Take this rejection as feedback on what I want different in that area of the file.'
@@ -2100,63 +1746,56 @@
 		return lines.join('\n');
 	}
 
-	async function rejectAgentEdit(
-		roundId?: string,
-		options?: { retryFeedback?: string; keepThreads?: boolean; silent?: boolean }
-	) {
+	/** Reject the proposal a thread holds: the server reverts its marks and
+	 * resolves the thread. Optional retry feedback re-submits with the
+	 * rejection as context so the agent can try again. */
+	async function rejectThread(threadId: string, options?: { retryFeedback?: string; silent?: boolean }) {
 		const tabId = getCurrentActiveTab();
 		if (!tabId) return;
-		const rounds = currentRounds();
+		const summary = currentMarks().find((m) => m.threadId === threadId && m.hasProposal);
+		if (!summary) return;
 		const retryFeedback = options?.retryFeedback?.trim();
-		const rejectedIdx = roundId ? rounds.findIndex((r) => r.id === roundId) : -1;
-		if (roundId && rejectedIdx < 0) return;
-		clearPeekIfMatches(roundId);
 		editorRef?.cancelIdleTimer();
 		try {
-			const { res, data } = await postReviewAction(
-				tabId,
-				'reject_rounds',
-				roundId,
-				options?.keepThreads ? { keepThreads: true } : undefined
-			);
-			if (!res.ok || !data?.ok || !Array.isArray(data.rounds)) {
-				throw new Error(data?.error || `HTTP ${res.status}`);
-			}
-			const rejectedCount =
-				typeof data.rejectedCount === 'number'
-					? data.rejectedCount
-					: Math.max(0, rounds.length - (data.rounds as PendingReviewRound[]).length);
+			const { res, data } = await postThreadAction(tabId, {
+				action: 'resolve_thread',
+				threadId,
+				outcome: 'rejected'
+			});
+			if (!res.ok || !data?.ok) throw new Error(data?.error || `HTTP ${res.status}`);
 			if (!options?.silent) {
-				pushHistory({
-					type: 'user_action',
-					timestamp: Date.now(),
-					description:
-						!roundId
-							? `Rejected all ${rounds.length} agent edit${rounds.length === 1 ? '' : 's'}`
-							: `Rejected ${rejectedCount} agent edit${rejectedCount === 1 ? '' : 's'}`
-				});
+				pushHistory({ type: 'user_action', timestamp: Date.now(), description: 'Rejected 1 agent edit' });
 			}
 		} catch (e) {
-			console.error('reject failed:', e);
-			pushHistory({
-				type: 'notification',
-				timestamp: Date.now(),
-				text: `Reject failed: ${(e as Error).message}`,
-				priority: 'high'
-			});
+			failed('Reject', e);
 			return;
 		}
-
-		// Retry-with-feedback re-runs the agent with the rejection quoted.
-		if (retryFeedback && rejectedIdx >= 0) {
-			const followup = buildRejectedEditFollowup(tabId, rounds[rejectedIdx], retryFeedback);
+		if (retryFeedback) {
+			const followup = buildRejectedEditFollowup(tabId, summary, retryFeedback);
 			setTimeout(() => void submit(followup), 50);
 		}
 	}
 
-	async function retryRejectedEditWithFeedback(roundId: string, feedback: string) {
-		await rejectAgentEdit(roundId, { retryFeedback: feedback });
+	async function rejectAllThreads() {
+		const tabId = getCurrentActiveTab();
+		if (!tabId) return;
+		const proposals = currentMarks().filter((m) => m.hasProposal);
+		if (proposals.length === 0) return;
+		editorRef?.cancelIdleTimer();
+		try {
+			const { res, data } = await postThreadAction(tabId, { action: 'resolve_all', outcome: 'rejected' });
+			if (!res.ok || !data?.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+			const n = data.count ?? proposals.length;
+			pushHistory({
+				type: 'user_action',
+				timestamp: Date.now(),
+				description: `Rejected all ${n} agent edit${n === 1 ? '' : 's'}`
+			});
+		} catch (e) {
+			failed('Reject', e);
+		}
 	}
+
 
 	/** Accept a rule the agent proposed: append it to the rules list and
 	 * persist via /api/document. Removes the proposal from the pending set. */
@@ -2406,16 +2045,15 @@
 		try {
 			await fetch('/api/session', { method: 'DELETE' });
 			agentHistory.set([]);
-			// Reject any pending agent edits — fresh start across all tabs.
-			// Must go through the server; see rejectAgentEdit for why.
+			// Reject any pending agent proposals — fresh start across all
+			// tabs. Must go through the server; see postThreadAction for why.
 			for (const id of getCurrentTabList()) {
-				const list = getReviewArrayForTab(id).toArray();
-				if (list.length === 0) continue;
+				if (isPdfPath(id) || proposalCount(id) === 0) continue;
 				try {
 					await fetch(`/api/document?tab=${encodeURIComponent(id)}`, {
 						method: 'POST',
 						headers: { 'Content-Type': 'application/json' },
-						body: JSON.stringify({ action: 'reject_rounds' })
+						body: JSON.stringify({ action: 'resolve_all', outcome: 'rejected' })
 					});
 				} catch {
 					// best-effort; local observers + badge map clear below
@@ -2477,9 +2115,8 @@
 	agentSettings.subscribe((v) => (muted = v.muted));
 
 	let pendingRoundCount = $state(0);
-	pendingReviewRounds.subscribe((v) => {
-		pendingRoundCount = v.length;
-		if (pendingStaleApply) void applyPendingStaleAccept();
+	threadMarks.subscribe((v) => {
+		pendingRoundCount = v.filter((m) => m.hasProposal).length;
 	});
 
 	let currentVerbosity = $state<'verbose' | 'minimal'>('verbose');
@@ -2940,8 +2577,8 @@
 						throw new Error(data?.error || `HTTP ${res.status}`);
 					}
 				},
-				accept: acceptAgentEdit,
-				reject: rejectAgentEdit
+				accept: acceptThread,
+				reject: rejectThread
 			};
 		}
 
@@ -2950,12 +2587,8 @@
 
 	onDestroy(() => {
 		stopSyncConnectionWatch();
-		if (activeReviewObserver) {
-			activeReviewObserver.arr.unobserve(activeReviewObserver.handler);
-			activeReviewObserver = null;
-		}
 		if (activeReviewTextObserver) {
-			activeReviewTextObserver.fragment.unobserve(activeReviewTextObserver.handler);
+			activeReviewTextObserver.fragment.unobserveDeep(activeReviewTextObserver.handler);
 			activeReviewTextObserver = null;
 		}
 		removeSidebarResizeListener();
@@ -3574,21 +3207,10 @@
 								bind:this={editorRef}
 								onSubmit={(trigger) => submit(trigger)}
 								initialScrollTop={pendingScrollRestore}
-								onAcceptInlineEdit={(roundId) => {
-									const rounds = currentRounds();
-									if (rounds.length === 0 || !roundId) return;
-									void acceptAgentEdit(roundId);
-								}}
-								onRejectInlineEdit={(roundId) => {
-									const rounds = currentRounds();
-									if (rounds.length === 0 || !roundId) return;
-									void rejectAgentEdit(roundId);
-								}}
-								onAcceptFeedbackEdits={(roundIds) => {
-									if (roundIds.length > 0) void acceptAgentEdit(roundIds);
-								}}
-								onAcceptAllEdits={() => void acceptAgentEdit()}
-								onRejectAllEdits={() => void rejectAgentEdit()}
+								onAcceptThread={(threadId) => void acceptThread(threadId)}
+								onRejectThread={(threadId) => void rejectThread(threadId)}
+								onAcceptAll={() => void acceptAllThreads()}
+								onRejectAll={() => void rejectAllThreads()}
 								onResolveThread={(threadId, resolved) => void resolveThread(threadId, resolved)}
 								onOpenSplitPreview={openSplitPreview}
 								splitPreviewOpen={splitPreviewOpen}

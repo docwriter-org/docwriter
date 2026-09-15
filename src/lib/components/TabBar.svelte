@@ -12,7 +12,7 @@
 		 * — reached via the right-click menu or FileTree only. */
 		onDelete: (id: string) => Promise<void>;
 		onRename: (oldId: string, newId: string) => Promise<void>;
-		/** Map tabId → number of pending agent-edit rounds. Absent or 0 means
+		/** Map tabId → number of pending agent proposals. Absent or 0 means
 		 * no pending reviews on that tab; >0 renders as a numbered badge. */
 		pendingTabs?: Map<string, number>;
 		/** Called when the user drops files from Finder / the filesystem onto
@@ -375,7 +375,7 @@
 		line-height: 1;
 	}
 	.pending-dot.with-count {
-		/* Numbered pill for 2+ pending rounds. */
+		/* Numbered pill for 2+ pending proposals. */
 		width: auto;
 		min-width: 14px;
 		height: 14px;

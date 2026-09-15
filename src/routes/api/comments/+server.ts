@@ -9,10 +9,16 @@ import {
 	putThread,
 	appendThreadMessage,
 	setThreadResolved,
-	serializeYDoc,
-	captureAnchorContext,
+	decodeRelPosition,
 	USER_ORIGIN
 } from '$lib/shared/ydoc-codec';
+import {
+	committedText,
+	resolveThreadMarks,
+	setCommentMarkByAbsolutePositions,
+	setCommentMarkByViewOffsets,
+	type CommentMarkResult
+} from '$lib/shared/proposals';
 import { isValidTabId } from '$lib/server/document-files';
 import type { CommentMessage, CommentThread } from '$lib/types';
 
@@ -31,14 +37,18 @@ function getHocuspocus(): {
 	return (server?.hocuspocus as ReturnType<typeof getHocuspocus>) ?? null;
 }
 
+type MutateOutcome =
+	| { ok: true }
+	| { ok: false; error: string; status?: number; overlapThreadId?: string };
+
 async function mutateTabYDoc(
 	tabId: string,
-	mutator: (doc: Y.Doc) => { ok: true } | { ok: false; error: string; status?: number }
-): Promise<{ ok: true } | { ok: false; error: string; status: number }> {
+	mutator: (doc: Y.Doc) => MutateOutcome
+): Promise<{ ok: true } | { ok: false; error: string; status: number; overlapThreadId?: string }> {
 	const ws = getHocuspocus();
 	if (!ws) return { ok: false, error: 'WebSocket server not initialized', status: 503 };
 	const direct = await ws.openDirectConnection(tabId);
-	let out: { ok: true } | { ok: false; error: string; status: number } = {
+	let out: { ok: true } | { ok: false; error: string; status: number; overlapThreadId?: string } = {
 		ok: false,
 		error: 'DirectConnection transact did not run',
 		status: 500
@@ -47,7 +57,14 @@ async function mutateTabYDoc(
 		await direct.transact((document) => {
 			const doc = document as unknown as Y.Doc;
 			const outcome = mutator(doc);
-			out = outcome.ok ? { ok: true } : { ok: false, error: outcome.error, status: outcome.status ?? 400 };
+			out = outcome.ok
+				? { ok: true }
+				: {
+						ok: false,
+						error: outcome.error,
+						status: outcome.status ?? 400,
+						...(outcome.overlapThreadId ? { overlapThreadId: outcome.overlapThreadId } : {})
+					};
 		});
 	} finally {
 		await direct.disconnect();
@@ -61,17 +78,6 @@ function cryptoRandomId(): string {
 	return 'id-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
 }
 
-function countOccurrences(haystack: string, needle: string): number {
-	if (!needle) return 0;
-	let count = 0;
-	let idx = 0;
-	while ((idx = haystack.indexOf(needle, idx)) !== -1) {
-		count += 1;
-		idx += needle.length;
-	}
-	return count;
-}
-
 export const POST: RequestHandler = async ({ request }) => {
 	const body = await request.json();
 	const tabId = typeof body?.tabId === 'string' ? body.tabId : '';
@@ -80,56 +86,74 @@ export const POST: RequestHandler = async ({ request }) => {
 	if (body?.mode === 'new-thread') {
 		const anchorText = typeof body.anchorText === 'string' ? body.anchorText : '';
 		const messageText = typeof body.message === 'string' ? body.message.trim() : '';
-		// Optional: rel positions captured by the client when the user
-		// made the selection. When present, the comment overlay anchors
-		// to the EXACT selection instead of the first occurrence of
-		// anchorText. Stored unmodified — the client computed them via
-		// y-prosemirror's absolutePositionToRelativePosition.
+		// Optional: rel positions captured by the client when the user made
+		// the selection. When present, the comment mark goes on the EXACT
+		// selection instead of the first occurrence of anchorText.
 		const relStart = typeof body.relStart === 'string' ? body.relStart : undefined;
 		const relEnd = typeof body.relEnd === 'string' ? body.relEnd : undefined;
 		if (!anchorText) throw error(400, 'anchorText is required for a new thread');
 		if (!messageText) throw error(400, 'message is required');
 		const outcomeBox: { threadId?: string } = {};
 		const outcome = await mutateTabYDoc(tabId, (doc) => {
-			const liveText = serializeYDoc(doc);
-			const hasRelAnchor = !!(relStart && relEnd);
-			if (!hasRelAnchor && countOccurrences(liveText, anchorText) === 0) {
-				return { ok: false, error: 'anchorText was not found in the document', status: 409 };
-			}
 			const threadId = 'thread_' + cryptoRandomId();
 			const now = Date.now();
-			const messages: CommentMessage[] = [];
-			messages.push({
-				id: 'msg_' + cryptoRandomId(),
-				author: 'user',
-				text: messageText,
-				timestamp: now
-			});
-			// Snapshot the anchor's surroundings when the occurrence is
-			// unambiguous, so the client's quote fallback can refuse to
-			// re-attach to an unrelated occurrence typed later. With multiple
-			// occurrences the client backfill stamps context from the actual
-			// resolved range instead.
-			const anchorIdx =
-				countOccurrences(liveText, anchorText) === 1 ? liveText.indexOf(anchorText) : -1;
 			const thread: CommentThread = {
 				id: threadId,
-				anchor: {
-					quote: anchorText,
-					occurrenceIndex: 0,
-					...(relStart && relEnd ? { relStart, relEnd } : {}),
-					...(anchorIdx >= 0 ? captureAnchorContext(liveText, anchorIdx, anchorText.length) : {})
-				},
-				messages,
+				messages: [
+					{
+						id: 'msg_' + cryptoRandomId(),
+						author: 'user',
+						text: messageText,
+						timestamp: now
+					}
+				],
 				resolved: false,
 				createdAt: now
 			};
-			const commentsMap = getCommentsMap(doc);
-			doc.transact(() => putThread(commentsMap, thread), USER_ORIGIN);
+			let marked: CommentMarkResult = { ok: false, reason: 'range' };
+			doc.transact(() => {
+				const rs = relStart ? decodeRelPosition(relStart) : null;
+				const re = relEnd ? decodeRelPosition(relEnd) : null;
+				const from = rs ? Y.createAbsolutePositionFromRelativePosition(rs, doc) : null;
+				const to = re ? Y.createAbsolutePositionFromRelativePosition(re, doc) : null;
+				if (from && to) marked = setCommentMarkByAbsolutePositions(doc, threadId, from, to);
+				if (!marked.ok && marked.reason === 'range') {
+					const text = committedText(doc);
+					const idx = text.indexOf(anchorText);
+					if (idx >= 0) {
+						marked = setCommentMarkByViewOffsets(
+							doc,
+							threadId,
+							{ kind: 'committed' },
+							idx,
+							idx + anchorText.length
+						);
+					}
+				}
+				if (marked.ok) putThread(getCommentsMap(doc), thread);
+			}, USER_ORIGIN);
+			const m = marked as CommentMarkResult;
+			if (!m.ok) {
+				// A passage has one thread: the client posts this feedback as a
+				// reply on the thread that already holds the passage instead.
+				return m.reason === 'overlap'
+					? {
+							ok: false,
+							error: 'The selected passage already has a thread',
+							status: 409,
+							overlapThreadId: m.otherThreadId
+						}
+					: { ok: false, error: 'anchorText was not found in the document', status: 409 };
+			}
 			outcomeBox.threadId = threadId;
 			return { ok: true };
 		});
-		if (!outcome.ok) throw error(outcome.status, outcome.error);
+		if (!outcome.ok) {
+			if (outcome.overlapThreadId) {
+				return json({ error: outcome.error, overlapThreadId: outcome.overlapThreadId }, { status: 409 });
+			}
+			throw error(outcome.status, outcome.error);
+		}
 		return json({ threadId: outcomeBox.threadId });
 	}
 
@@ -184,7 +208,10 @@ export const PATCH: RequestHandler = async ({ request }) => {
 		if (!getThread(commentsMap, threadId)) {
 			return { ok: false, error: 'Thread not found', status: 404 };
 		}
-		doc.transact(() => setThreadResolved(commentsMap, threadId, resolved), USER_ORIGIN);
+		doc.transact(() => {
+			if (resolved) resolveThreadMarks(doc, threadId, 'dismissed');
+			setThreadResolved(commentsMap, threadId, resolved, resolved ? 'dismissed' : undefined);
+		}, USER_ORIGIN);
 		return { ok: true };
 	});
 	if (!outcome.ok) throw error(outcome.status, outcome.error);
@@ -200,7 +227,10 @@ export const DELETE: RequestHandler = async ({ url }) => {
 	const outcome = await mutateTabYDoc(tabId, (doc) => {
 		const commentsMap = getCommentsMap(doc);
 		if (!commentsMap.has(threadId)) return { ok: false, error: 'Thread not found', status: 404 };
-		doc.transact(() => commentsMap.delete(threadId), USER_ORIGIN);
+		doc.transact(() => {
+			resolveThreadMarks(doc, threadId, 'dismissed');
+			commentsMap.delete(threadId);
+		}, USER_ORIGIN);
 		return { ok: true };
 	});
 	if (!outcome.ok) throw error(outcome.status, outcome.error);

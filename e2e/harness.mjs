@@ -258,7 +258,7 @@ export async function restartAgentSession(page) {
 }
 
 export async function waitForPendingReview(page, timeoutMs) {
-	const pending = page.locator('.gutter-card').first();
+	const pending = page.locator('.gutter-card:has(.pending-proposal), .gutter-card:has(.thread-proposal)').first();
 	await pending.waitFor({ state: 'visible', timeout: timeoutMs });
 	return pending;
 }

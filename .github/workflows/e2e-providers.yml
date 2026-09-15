@@ -23,6 +23,7 @@ jobs:
       - name: Prefer glibc Claude Agent SDK binary
         run: rm -rf node_modules/@anthropic-ai/claude-agent-sdk-linux-x64-musl
       - run: npm run check
+      - run: npm run test:unit -- --maxWorkers=2
 
   # One GitHub-hosted runner (container) per provider — fully isolated.
   provider-smoke:

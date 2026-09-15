@@ -1,10 +1,12 @@
 import type { CommentThread } from '$lib/types';
 
-function formatOneThread(thread: CommentThread, dismissed: boolean): string {
+function formatOneThread(thread: CommentThread, dismissed: boolean, passage: string | undefined): string {
 	const status = dismissed ? ' [dismissed]' : '';
-	const quote = thread.anchor.quote.slice(0, 120);
-	const ellipsis = thread.anchor.quote.length > 120 ? '…' : '';
-	const lines = [`Thread \`${thread.id}\`${status} — anchor: "${quote}${ellipsis}"`];
+	const full = passage ?? '';
+	const quote = full.slice(0, 120);
+	const ellipsis = full.length > 120 ? '…' : '';
+	const where = full ? ` — on: "${quote}${ellipsis}"` : ' — no longer on any passage';
+	const lines = [`Thread \`${thread.id}\`${status}${where}`];
 	for (const msg of thread.messages) {
 		const role =
 			msg.author === 'agent'
@@ -24,7 +26,8 @@ function formatOneThread(thread: CommentThread, dismissed: boolean): string {
 export function formatListedThreads(
 	filePath: string,
 	threads: CommentThread[],
-	includeDismissed: boolean
+	includeDismissed: boolean,
+	passages: Map<string, string> = new Map()
 ): string {
 	const open = threads.filter((t) => !t.resolved).sort((a, b) => a.createdAt - b.createdAt);
 	const dismissed = threads.filter((t) => t.resolved).sort((a, b) => a.createdAt - b.createdAt);
@@ -39,7 +42,7 @@ export function formatListedThreads(
 			`${open.length} open thread${open.length === 1 ? '' : 's'} on ${filePath}:\n`
 		);
 		for (const thread of open) {
-			parts.push(formatOneThread(thread, false));
+			parts.push(formatOneThread(thread, false, passages.get(thread.id)));
 			parts.push('');
 		}
 	} else {
@@ -51,7 +54,7 @@ export function formatListedThreads(
 			`${dismissed.length} dismissed thread${dismissed.length === 1 ? '' : 's'} on ${filePath} (hidden from the gutter; review_action reopen_thread brings one back):\n`
 		);
 		for (const thread of dismissed) {
-			parts.push(formatOneThread(thread, true));
+			parts.push(formatOneThread(thread, true, passages.get(thread.id)));
 			parts.push('');
 		}
 	} else if (dismissed.length > 0) {

@@ -21,7 +21,7 @@ import type {
 	ToolResult
 } from './types';
 import { buildToolDefinitions } from './tool-handlers';
-import { emitProposalEvents, makeLazySdkLoader, wrapToolsForProvider } from './shared';
+import { builtinSdkTools, emitProposalEvents, makeLazySdkLoader, wrapToolsForProvider } from './shared';
 
 type CodexCtor = new (options?: any) => any;
 let Codex: CodexCtor | null = null;
@@ -231,7 +231,7 @@ export class CodexProvider implements AgentProvider {
 		options: ProviderQueryOptions,
 		tools: ToolDefinition[]
 	): AsyncIterable<ProviderEvent> {
-		const allTools = tools.length > 0 ? tools : buildToolDefinitions();
+		const allTools = [...(tools.length > 0 ? tools : buildToolDefinitions()), ...builtinSdkTools()];
 		const availableTools = wrapToolsForProvider(allTools, options);
 		const toolMap = new Map(availableTools.map((toolDef) => [toolDef.name, toolDef]));
 		const thread = await this.getThread(options);

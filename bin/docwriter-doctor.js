@@ -9,11 +9,12 @@
  * Report (default, read-only): where state lives (and whether a stray
  * .docwriter elsewhere might be the one you're looking at), SQLite
  * integrity, the documents table vs the update log, seq-gap classification,
- * pending review rounds and comment threads per document, and backups.
+ * pending proposals (tracked changes) and comment threads per document,
+ * and backups.
  *
  * Repair flags (each writes a JSON backup to .docwriter/backups/ first):
  *   --reopen <tabId>        Reopen a closed document into the tab bar.
- *   --clear-pending         Drop ALL pending review rounds (per --tab if given).
+ *   --clear-pending         Reject ALL pending proposals (per --tab if given).
  *   --resolve-threads       Mark all open comment threads resolved (per --tab).
  *   --gc                    Delete closed documents whose file no longer exists.
  *   --compact               Merge each oversized update log into one snapshot row.
@@ -39,11 +40,19 @@ try {
 	process.exit(1);
 }
 
-// Mirrors src/lib/shared/ydoc-codec.ts — the doctor is plain JS and cannot
-// import the TS module. Keep in sync.
-const REVIEW_ARRAY_NAME = 'rounds';
+// Mirrors src/lib/shared/ydoc-constants.ts and proposals.ts — the doctor is
+// plain JS and cannot import the TS modules. Keep in sync. A proposal is
+// tracked changes on the document: `insertion` / `deletion` text formats
+// carrying `{ threadId }`, plus the `suggest` / `suggestThread` paragraph
+// attributes for whole lines added or removed.
+const FRAGMENT_NAME = 'default';
 const COMMENTS_MAP_NAME = 'comments';
 const SYSTEM_ORIGIN = 'system';
+const INSERTION_ATTR = 'insertion';
+const DELETION_ATTR = 'deletion';
+const COMMENT_ATTR = 'comment';
+const SUGGEST_ATTR = 'suggest';
+const SUGGEST_THREAD_ATTR = 'suggestThread';
 
 // Mirrors BINARY_EXTENSIONS in src/lib/server/document-files.ts: the gate
 // is a DENYLIST — any extension not on it is an editable text document.
@@ -133,11 +142,11 @@ for (const d of docs) {
 	const stats = logStats.get(d.tab_id);
 	const fileExists = existsSync(join(workspace, d.tab_id));
 	const doc = stats ? replayTab(d.tab_id) : null;
-	const rounds = doc ? readRounds(doc) : [];
+	const proposalThreads = doc ? proposalThreadIds(doc) : new Set();
 	const threads = doc ? readThreads(doc) : [];
 	const openThreads = threads.filter((t) => !t.resolved);
-	const orphanRounds = rounds.filter(
-		(r) => r.feedbackThreadId && !threads.some((t) => t.id === r.feedbackThreadId && !t.resolved)
+	const orphanProposals = [...proposalThreads].filter(
+		(id) => !threads.some((t) => t.id === id && !t.resolved)
 	);
 	const entry = {
 		tabId: d.tab_id,
@@ -146,10 +155,10 @@ for (const d of docs) {
 		missingSince: d.missing_since,
 		updates: stats?.n ?? 0,
 		lastActivity: d.last_activity,
-		pendingRounds: rounds.length,
+		pendingProposals: proposalThreads.size,
 		openThreads: openThreads.length,
 		dismissedThreads: threads.length - openThreads.length,
-		roundsWithDanglingThread: orphanRounds.length,
+		proposalsWithDanglingThread: orphanProposals.length,
 		binary: isBinaryTab(d.tab_id)
 	};
 	out.documents.push(entry);
@@ -157,11 +166,11 @@ for (const d of docs) {
 		const bits = [
 			`${d.status === 'open' ? 'open  ' : 'closed'}`,
 			`${String(entry.updates).padStart(6)} updates`,
-			`${entry.pendingRounds} pending round(s)`,
+			`${entry.pendingProposals} pending proposal(s)`,
 			`${entry.openThreads} open / ${entry.dismissedThreads} dismissed thread(s)`
 		];
 		if (!fileExists) bits.push('FILE MISSING' + (entry.updates > 0 ? ' (restorable from log)' : ''));
-		if (entry.roundsWithDanglingThread > 0) bits.push(`${entry.roundsWithDanglingThread} round(s) with dangling thread`);
+		if (entry.proposalsWithDanglingThread > 0) bits.push(`${entry.proposalsWithDanglingThread} proposal(s) whose thread is gone or dismissed`);
 		if (entry.binary && entry.updates > 0) bits.push('BINARY TAB WITH LOG ROWS (run --gc or report a bug)');
 		console.log(`  ${d.tab_id}\n    ${bits.join(' · ')}`);
 	}
@@ -201,23 +210,16 @@ if (flags.has('--reopen')) {
 if (flags.has('--clear-pending')) {
 	for (const d of docsInScope()) {
 		const changed = mutateTab(d.tab_id, 'clear-pending', (ydoc) => {
-			const arr = ydoc.getArray(REVIEW_ARRAY_NAME);
-			if (arr.length === 0) return false;
-			const dropped = arr.toArray();
-			arr.delete(0, arr.length);
-			// Announce threads that only existed to carry a now-dropped edit
-			// (single agent message, no conversation) resolve with it.
+			const ids = proposalThreadIds(ydoc);
+			if (ids.size === 0) return false;
 			const map = ydoc.getMap(COMMENTS_MAP_NAME);
-			for (const round of dropped) {
-				if (!round || typeof round.feedbackThreadId !== 'string') continue;
-				const t = readThreadValue(map.get(round.feedbackThreadId));
-				if (!t || t.resolved) continue;
-				if (t.messages.some((m) => m.author === 'user')) continue;
-				setResolvedInMap(map, round.feedbackThreadId, true);
+			for (const id of ids) {
+				revertThreadMarks(ydoc, id);
+				setResolvedInMap(map, id, true, 'rejected');
 			}
 			return true;
 		});
-		if (changed) note(`cleared pending rounds on "${d.tab_id}"`);
+		if (changed) note(`rejected pending proposals on "${d.tab_id}"`);
 	}
 	mutated = true;
 }
@@ -291,8 +293,75 @@ function replayTab(tabId) {
 	}
 	return ydoc;
 }
-function readRounds(ydoc) {
-	return ydoc.getArray(REVIEW_ARRAY_NAME).toArray();
+function markThread(attrs, key) {
+	const v = attrs && attrs[key];
+	return v && typeof v === 'object' && typeof v.threadId === 'string' ? v.threadId : null;
+}
+function paragraphs(ydoc) {
+	const out = [];
+	ydoc.getXmlFragment(FRAGMENT_NAME).forEach((p) => { if (p instanceof Y.XmlElement) out.push(p); });
+	return out;
+}
+/** Threads that hold a proposal: any insertion / deletion run or a
+ * `suggest` paragraph carrying their id. */
+function proposalThreadIds(ydoc) {
+	const ids = new Set();
+	for (const p of paragraphs(ydoc)) {
+		const owner = p.getAttribute(SUGGEST_THREAD_ATTR);
+		if (p.getAttribute(SUGGEST_ATTR) && typeof owner === 'string') ids.add(owner);
+		for (const c of p.toArray()) {
+			if (!(c instanceof Y.XmlText)) continue;
+			for (const d of c.toDelta()) {
+				for (const key of [INSERTION_ATTR, DELETION_ATTR]) {
+					const t = markThread(d.attributes, key);
+					if (t) ids.add(t);
+				}
+			}
+		}
+	}
+	return ids;
+}
+/** Undo one thread's marks (mirrors `revertThreadMarks` in proposals.ts):
+ * its inserted text and paragraphs go, its struck text and paragraphs
+ * come back, its comment highlight clears. Caller runs inside a transact. */
+function revertThreadMarks(ydoc, threadId) {
+	const fragment = ydoc.getXmlFragment(FRAGMENT_NAME);
+	const paras = paragraphs(ydoc);
+	for (let i = paras.length - 1; i >= 0; i--) {
+		const p = paras[i];
+		for (const c of p.toArray()) {
+			if (c instanceof Y.XmlElement && c.nodeName === 'hardBreak' && c.getAttribute(SUGGEST_THREAD_ATTR) === threadId) {
+				c.removeAttribute(SUGGEST_ATTR);
+				c.removeAttribute(SUGGEST_THREAD_ATTR);
+			}
+			if (!(c instanceof Y.XmlText)) continue;
+			const ranges = [];
+			let idx = 0;
+			for (const d of c.toDelta()) {
+				if (typeof d.insert !== 'string') continue;
+				ranges.push({ start: idx, length: d.insert.length, attrs: d.attributes || {} });
+				idx += d.insert.length;
+			}
+			for (let r = ranges.length - 1; r >= 0; r--) {
+				const { start, length, attrs } = ranges[r];
+				if (markThread(attrs, INSERTION_ATTR) === threadId) { c.delete(start, length); continue; }
+				const fmt = {};
+				if (markThread(attrs, DELETION_ATTR) === threadId) fmt[DELETION_ATTR] = null;
+				if (markThread(attrs, COMMENT_ATTR) === threadId) fmt[COMMENT_ATTR] = null;
+				if (Object.keys(fmt).length > 0) c.format(start, length, fmt);
+			}
+		}
+		if (p.getAttribute(SUGGEST_THREAD_ATTR) !== threadId) continue;
+		const suggest = p.getAttribute(SUGGEST_ATTR);
+		let remaining = 0;
+		for (const c of p.toArray()) {
+			if (c instanceof Y.XmlText) remaining += c.length;
+			else if (c instanceof Y.XmlElement && c.nodeName === 'hardBreak') remaining += 1;
+		}
+		if (suggest === 'ins' && remaining === 0) { fragment.delete(i, 1); continue; }
+		p.removeAttribute(SUGGEST_ATTR);
+		p.removeAttribute(SUGGEST_THREAD_ATTR);
+	}
 }
 function readThreadValue(value) {
 	if (value instanceof Y.Map) {
@@ -316,17 +385,22 @@ function readThreads(ydoc) {
 	});
 	return outThreads;
 }
-function setResolvedInMap(map, id, resolved) {
+function setResolvedInMap(map, id, resolved, outcome = 'dismissed') {
 	const value = map.get(id);
-	if (value instanceof Y.Map) value.set('resolved', resolved);
-	else if (value && typeof value === 'object') map.set(id, { ...value, resolved });
+	if (value instanceof Y.Map) {
+		value.set('resolved', resolved);
+		if (resolved) value.set('outcome', outcome);
+		else value.delete('outcome');
+	} else if (value && typeof value === 'object') {
+		map.set(id, { ...value, resolved, ...(resolved ? { outcome } : {}) });
+	}
 }
 function backupTab(tabId, reason) {
 	try {
 		const ydoc = replayTab(tabId);
 		mkdirSync(backupsDir, { recursive: true });
 		const path = join(backupsDir, `${encodeURIComponent(tabId)}-${Date.now()}.json`);
-		writeFileSync(path, JSON.stringify({ tabId, reason, savedAt: new Date().toISOString(), rounds: readRounds(ydoc), threads: readThreads(ydoc) }, null, 2));
+		writeFileSync(path, JSON.stringify({ tabId, reason, savedAt: new Date().toISOString(), yjsUpdate: Buffer.from(Y.encodeStateAsUpdate(ydoc)).toString('base64'), proposalThreads: [...proposalThreadIds(ydoc)], threads: readThreads(ydoc) }, null, 2));
 		ydoc.destroy();
 	} catch (err) {
 		console.error(`backup failed for "${tabId}":`, err.message);
