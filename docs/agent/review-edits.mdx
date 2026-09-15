@@ -4,9 +4,9 @@ title: "Review edits"
 
 ## Read a proposal
 
-A proposal is tracked changes in the draft: green text is an addition and red struck text is a removal, word by word. A line the agent adds or removes is marked whole. Every proposal belongs to a comment thread, and the thread's card in the gutter lists each changed paragraph as before and after.
+You see each suggested edit beside a comment explaining it. Red struck text shows what the agent wants to remove, green text shows what it wants to add.
 
-Comment cards stay expanded so you can read the conversation. Click a card, its review button, the red struck text, or the thread's pill to show the proposed additions and review controls. Clicking elsewhere in the document hides the green additions while keeping the original text struck through.
+You can read the comments without opening each card. Click a card, its review button, the red text, or the comment count beside the text; you will see the suggested additions and the Accept and Reject buttons. Click elsewhere in your draft to hide the additions; your original text stays struck through.
 
 <Frame caption="Review one proposal, accept it, then reject another.">
   <video
@@ -29,32 +29,34 @@ Comment cards stay expanded so you can read the conversation. Click a card, its 
 
 ## Accept or reject
 
-Click a thread's card and use **Accept** or **Reject**. Accept keeps the added text and removes the struck text. Reject puts the original back. Both close the thread; reopen it from the gutter if you want to continue the discussion.
+Click a comment card and choose **Accept** or **Reject**. If you accept, you keep the additions and remove the struck text; if you reject, you keep your original text. Either choice closes the comment thread, you can reopen it to continue the discussion.
 
-**Accept all** accepts every proposal in the current tab. **Reject all** removes every proposal in the current tab. Neither action affects another tab.
+Use **Accept all** or **Reject all** to review every pending edit in your current tab. Your other tabs stay as they are.
 
 <Frame>
   ![The Accept all and Reject all controls above pending suggestions](/images/agent-accept-reject-all.png)
 </Frame>
 
-Reply on the thread when the agent should revise the proposal. The agent's new proposal replaces the old one on the same thread. Dismiss the thread when you are done with the discussion; dismissing removes a proposal you did not accept.
+Reply on the comment when you want a different edit; the agent will revise its suggestion on the same thread. Choose **Dismiss** when you are done with the discussion; any edit you have not accepted is discarded.
 
-A passage has one thread. Feedback you give on a passage that already has a thread becomes a reply on that thread, and the agent is told to use it.
+If you leave feedback on a passage that already has a comment, your feedback goes on that thread.
 
-Your own typing is never part of a proposal. Text you type inside a proposal stays when the proposal is rejected. If you edit the file outside DocWriter through a passage under proposal, that proposal goes with the text and its thread card says the passage is no longer in the document.
+You can keep writing while an edit is pending. Text you add inside a suggestion is saved, and you keep it if you reject the suggestion. If you edit the same passage in another app, you may remove the pending edit; its comment stays visible so you can ask for a new suggestion.
 
 ## Copy proposed text
 
-Use **Copy proposed text** on a thread card. You can also select added text in the editor and copy it normally; it pastes as plain text.
+Click **Copy proposed text** on the comment card, or select the green text and copy it. When you paste it into your draft, you get plain text without the suggestion marks.
 
-## AI provenance
+<a id="ai-provenance"></a>
 
-Accepted agent text receives an AI provenance mark so you can find wording that came from an accepted proposal. Use **Highlight AI-written text** to show or hide the marks. Typing your own replacement inside a marked span removes the mark from the text you add.
+## See text written by the agent
+
+Turn on **Highlight AI-written text** to see the wording you accepted from the agent. You can turn the highlight off at any time; your file stays the same. If you replace some of that wording, the text you type is no longer marked as AI-written.
 
 ## Undo
 
-Accept and reject actions use the same undo history as your typing. Press **Command or Control and Z** to undo the latest action, including an accidental accept or reject.
+Press **Command or Control and Z** to undo your last action. You can undo typing, accepting, or rejecting an edit; if you accepted or rejected all edits at once, one undo brings them all back.
 
-After you accept a paragraph edit, the changed range briefly flashes so you can find it in the draft.
+After you accept an edit, you will see a brief highlight where the text changed.
 
-You cannot turn track changes off for agent edits. When you mute the agent, its threads leave the gutter and its struck text appears faintly. The proposals remain pending until you accept or reject them.
+If you mute the agent, its comment cards are hidden and the red text appears faintly. You still need to accept or reject its pending edits.

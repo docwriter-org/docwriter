@@ -1,306 +1,126 @@
-# Plan: proposals as marks in the document
+# Store proposed edits in the document
 
-Status: implemented (see `src/lib/shared/proposals.ts`). Replaced the pending-round model.
+Implemented in `src/lib/shared/proposals.ts`. This note describes the current design and the reasons for it.
 
-## The problem
+## What you can do
 
-Three user-visible bugs (red text with no strike, sub-word diff fragments,
-a diff left behind after its thread was dismissed) are each a symptom of
-one of three structural facts:
+You can read the agent's comments while you write; each comment card stays open. Click a card or the red struck text to see the suggested additions, click elsewhere to hide them. Your original text stays struck through until you accept or reject the edit.
 
-1. **A proposal is a pair of strings, not document content.** A
-   `PendingReviewRound` holds `beforeMd` / `afterMd` and the editor keeps
-   the pre-edit text. On every keystroke the client re-derives where the
-   proposal lives: align the round against a baseline, line-diff, then a
-   character diff per paragraph, then ghost widgets for the added text.
-   That is `diff-overlay.ts` (1,200 lines), the `stale` concept (33 files),
-   and the reveal / collapse state that hides additions until a card is
-   focused.
-2. **Threads and proposals are two tables joined by a soft key.**
-   `feedbackThreadId` is set by whichever of three code paths made the
-   round. When it points at the wrong thread the proposal is orphaned, and
-   the comment overlay and the diff overlay each paint the same text with
-   no knowledge of the other.
-3. **Diff granularity is chosen at paint time** by a character-level
-   algorithm, so "makes this" renders as `mak~~es~~ th~~is~~` with the
-   replacement hidden.
+You can revise a suggestion by replying on its comment thread. You can also accept, reject, or dismiss it; one undo restores the proposal and reopens the thread.
 
-Threads also anchor three ways at once (quote, occurrence index, and
-optional relative positions the client backfills), and 118 call sites
-reconcile them.
+## Why the storage changed
 
-## The model
+Previously, you stored a proposal as a pair of strings in `PendingReviewRound`. After each keystroke, the browser had to match those strings to the current document and rebuild the diff. That could leave you with red text without a strikethrough, changes split inside words, or an edit still visible after you dismissed its comment.
 
-A proposal is track changes inside the CRDT, the way Word and Google Docs
-represent a suggestion. Nothing is computed at render time.
+You now store added and removed text in Yjs with marks identifying its comment thread. You compute the diff when the agent proposes an edit; the browser displays those marks as the document changes.
 
-Prior art, so the shape is not novel: in the Google Docs data model the
-body holds both the suggested text and the text suggested for removal,
-each text run carries `suggestedInsertionIds` / `suggestedDeletionIds`,
-and a read specifies a view mode (inline, preview as accepted, preview
-without). Word's tracked changes are `w:ins` / `w:del` runs with an
-author. The ProseMirror suggest-changes packages use insertion and
-deletion marks with ids. This plan is that model with two deliberate
-narrowings, called out below: one thread per passage, and a paragraph
-attribute where Docs uses a `\n` character.
+## Rules to keep
 
-Invariants:
+When you change proposal handling, keep these rules:
 
-- **A thread owns its marks.** Every mark carries a `threadId`. A thread's
-  anchor is the set of its marks. There is no other anchor field and no
-  separate proposal record.
-- **Text belongs to exactly one thread or to no thread.** A proposal may
-  not touch text that carries another thread's marks. The server rejects
-  the write and names the thread to use.
-- **Author text is never inside a proposal.** Text the author types
-  carries no `insertion` or `deletion` mark, the same rule the `ai` mark
-  already follows.
-- **A thread's proposal is replaced whole.** A new proposal on a thread
-  first reverts that thread's marks, then applies.
-- **Accept, Reject and Dismiss are one operation:** resolve the thread
-  with an outcome (`accepted` / `rejected` / `dismissed`), and convert or
-  revert its marks in the same `USER_ORIGIN` transaction.
+- Give every proposal mark a `threadId`; locate the comment by its marks on the text.
+- Keep one thread per passage; refuse an edit that touches another thread's text and return that thread's ID.
+- Keep text you type free of proposal marks; it must survive accepting or rejecting the surrounding suggestion.
+- Replace a thread's previous proposal when the agent revises it.
+- Change the text and close the thread in the same transaction when you accept, reject, or dismiss an edit.
 
-Data:
+## Stored fields
 
-| Where | What | Meaning |
+| Where you store it | Value | What it means |
 | --- | --- | --- |
-| text format `insertion: {threadId}` | proposed new text | green |
-| text format `deletion: {threadId}` | text proposed for removal | red, struck |
-| text format `comment: {threadId}` | a comment with no edit | amber underline |
-| paragraph attr `suggest: {threadId, op: 'ins' \| 'del'}` | a whole line added or removed | whole-line green / red |
-| text format `ai: true` | accepted agent text | provenance color (exists today) |
-| thread `outcome` | `open` / `accepted` / `rejected` / `dismissed` | replaces `resolved`; keeps history |
+| Text attribute | `insertion: { threadId }` | Words the agent proposes to add |
+| Text attribute | `deletion: { threadId }` | Words the agent proposes to remove |
+| Text attribute | `comment: { threadId }` | Text with a comment |
+| Paragraph attributes | `suggest: 'ins'` or `'del'`, plus `suggestThread: threadId` | A whole line added or removed |
+| HardBreak attributes | `suggest: 'del'`, plus `suggestThread: threadId` | An existing line break removed by a structural edit |
+| Text attribute | `ai: true` | Wording you accepted from the agent |
+| Thread fields | `resolved`, plus `outcome` when closed | Whether you accepted, rejected, or dismissed the thread |
 
-Whole-line marks exist because a paragraph boundary is not a character:
-a blank line, a split, or a join cannot be expressed with text marks.
-One paragraph node is one markdown line (`serializeFragment` joins nodes
-with `\n`), so line-level and paragraph-level are the same thing.
+Keep messages in `Y.Map('comments')`; each thread is a nested `Y.Map` with a `Y.Array` of messages. The old `Y.Array('rounds')` is used only when you migrate saved proposals.
 
-The `Y.Array('review')` goes away. `Y.Map('comments')` stays for messages
-but loses `anchor` and gains `outcome`.
+Use paragraph attributes for whole-line changes because paragraph boundaries cannot carry text marks. A paragraph usually represents one Markdown line; a paragraph with HardBreak nodes can contain several lines.
 
-## Views of a document
+## Choose a text view
 
-The agent speaks in strings (`old_string`, `new_string`, what `read_doc`
-returns) and the document is a tree of paragraphs with marked text, so
-something has to turn the tree into a string and map a match in that
-string back to tree positions. Today that is done in three places:
-`serializeFragment` on the server, `buildCharIndex` in the browser, and
-`materializePendingReviewText`. This is not a new layer; it is the
-existing `ydoc-codec.ts` serializer made view-aware, and it becomes the
-only such place. One function walks the fragment once and returns three
-strings with a char-to-position map for each:
+The agent reads strings, but you store paragraphs and marked text. Use `buildView` to get the text for a particular view and map its character offsets back to the document.
 
-- **committed**: no `insertion` text, with `deletion` text, no `ins`
-  paragraphs. What the author has actually accepted. `document.md`,
-  the external-edit rebase, and the markdown backup use this. It is what
-  they see today.
-- **proposed**: with `insertion` text, no `deletion` text. What `read_doc`
-  returns and what the prompt's `last_seen` diff is taken over. Unchanged
-  from today's `materializePendingReviewText`.
-- **proposed except thread T**: `proposed` with T's marks reverted. The
-  base a revision of T is diffed against.
+| View | What you get | Where you use it |
+| --- | --- | --- |
+| `committed` | Original text and accepted edits; pending additions are omitted | Workspace files and external file comparisons |
+| `proposed` | Text as if you accepted all pending edits | `read_doc`, `old_string` matching, and the agent's last-seen comparison |
+| `proposed` with `except: threadId` | Proposed text with that thread's suggestion reverted | The base for a revision on that thread |
 
-Nothing else in the codebase may convert between text offsets and
-document positions.
+If you type into a proposed new paragraph, keep your text in the committed view. That paragraph must also count when you map later edits to paragraph positions; otherwise a revision can duplicate your text or change the wrong paragraph.
 
-## Writing a proposal
+## Create or revise a proposal
 
-`edit_doc` and `write_doc` reduce to one server function:
+Use `proposeReplacement` for an exact text replacement, or `proposeText` for a complete proposed document.
 
-```
-propose(doc, threadId, after: string)
-```
+1. Match `old_string` in the proposed view; apply `new_string` to get the desired text. For `write_doc`, use its content directly.
+2. Build the base with the current thread's proposal reverted.
+3. Check for another thread on the changed lines; if you find one, return an overlap error before changing anything.
+4. Revert the current thread's old marks.
+5. Compare the base with the desired text; write insertion and deletion marks for the changes.
+6. Save the marks and any new thread in one `AGENT_ORIGIN` transaction.
 
-1. `old_string` is matched in the **proposed** view (the text the agent
-   read). `after` is that view with the replacement applied. `write_doc`
-   passes its content as `after` directly.
-2. Compute `base = proposedExcept(threadId)`.
-3. If the changed span of `base` intersects any mark from another thread,
-   fail with: "that passage is under thread X; call `edit_doc` with
-   `thread_id: X`, or reply there first." This is the existing
-   reply-before-edit bounce, extended to cover the one-thread-per-passage
-   rule.
-4. Revert `threadId`'s marks.
-5. Line-diff `base` against `after`. For a one-to-one modified line, word
-   diff it and write `deletion` / `insertion` text marks; if the churn is
-   above the existing 80% threshold, mark the whole old line `del` and
-   insert the new line marked `ins` instead. Added and removed lines get
-   the paragraph attr. Blank-line changes are paragraph-attr changes.
-6. One `AGENT_ORIGIN` transaction; the thread is created first if it does
-   not exist.
+For a modified line, compare words so the marks start and end at word boundaries. If the changed share exceeds `WHOLE_LINE_CHURN`, currently 0.8, strike the whole line and add its replacement as a new paragraph. The changed share is the number of added and removed characters divided by the combined length of the old and new lines.
 
-Granularity is decided here, once, and stored. The word diff is a real
-word tokenizer, not `diff-match-patch` on characters.
+For structural changes, mark whole paragraphs. If several changes touch one paragraph with HardBreak nodes, combine them before replacing the paragraph; otherwise you can insert its replacement more than once. Apply word edits from the end backwards so an earlier insertion does not shift the positions of later edits.
 
-Mute mode (agent threads hidden) is a CSS class on the editor root that
-renders the marks neutrally and hides the cards. It never hides text.
+An explicit thread ID must refer to a thread in that document. If no thread ID is supplied, you create a thread for the proposal; if the supplied ID is missing, return an error.
 
-## Resolving a thread
+## Accept, reject, or dismiss
 
-```
-resolve(doc, threadId, outcome)
-```
+Use `resolveThreadMarks` with the requested outcome:
 
-- `accepted`: `insertion` marks become `ai: true`; `deletion` text and
-  `del` paragraphs are removed; `ins` paragraphs lose the attr.
-- `rejected` / `dismissed`: `insertion` text and `ins` paragraphs are
-  removed; `deletion` and `del` marks are stripped; `comment` marks are
-  stripped.
-- Thread `outcome` is set. One `USER_ORIGIN` transaction, so undo brings
-  the marks and the open thread back together.
+- On `accepted`, remove the deleted text and line breaks; keep additions and mark them `ai: true`.
+- On `rejected` or `dismissed`, remove additions and restore deleted text and line breaks.
+- Clear the thread's comment marks in either case.
 
-Batch accept is a loop. There is no stale case: a proposal is content, so
-there is nothing to fail to match later. The stale-accept rebase flow, the
-`baseHash`, the batch `skippedStale` report and the prompt's rebase
-instructions are deleted.
+Remove a suggested paragraph only if it has no surviving text or line breaks from the author. Close the thread and set its outcome in the same `USER_ORIGIN` transaction.
 
-A thread that has been accepted or rejected is resolved. That is what
-Word and Google Docs do, and the gutter already has a resolved view
-(`include_dismissed` for the agent, Reopen for the author). Today
-`followAcceptedEdits` re-anchors the thread to the inserted text instead;
-that code goes.
+For batch review, resolve every open thread with a proposal in one transaction. Return `ok: true` and the Yjs update; the browser needs both to record the action for undo.
 
-## Author typing
+You can reopen a closed thread to continue the conversation; use undo if you also want its proposal back.
 
-- Typed text strips `insertion` and `deletion` (the `ai` rule, extended).
-  Typing inside a proposal splits it; both halves still belong to the
-  thread and resolve together.
-- Typing inside a `comment` range extends it (inclusive mark), except at
-  its edges.
-- The author deleting marked text is allowed. Deleting `deletion` text
-  accepts that piece by hand; deleting `insertion` text rejects it. Both
-  are consistent because the marks are on content.
-- Clipboard: the three marks define no `parseHTML`, so copied proposal
-  text pastes as plain text and never re-enters as a proposal.
+## Keep typing and pasting predictable
 
-## Rendering
+Use `LocalInputMarkStrip` to remove `ai`, `insertion`, and `deletion` marks from text you type. If you type in the middle of a marked passage, the existing text on either side keeps its marks.
 
-- Three Tiptap marks and one paragraph attribute, all pure CSS. Strike is
-  `text-decoration`, highlights use `background-color`, so no rule can
-  erase another (the cause of the red-without-strike bug).
-- No diff overlay, no comment overlay decorations, no baseline, no
-  revealed set, no insertion caret. Additions are always visible.
-- The gutter positions a card at the first document position carrying the
-  thread's marks, found by one walk of the document per version. A thread
-  with no marks (its text was deleted around it) is parked at the top, as
-  today.
-- Transient view state (find-in-doc, the selection highlight while the
-  feedback popup is open) stays a decoration.
+You can delete marked text yourself. Deleting struck text removes that part of the original; deleting green text removes that part of the suggestion.
 
-## What this removes
+Keep `parseHTML` rules for proposal marks and paragraph attributes; the browser can rebuild their DOM while you type. Strip proposal and comment marks in `transformPasted` instead, so copied text does not become another pending edit.
 
-- `src/lib/editor/diff-overlay.ts`, the decoration half of
-  `comment-overlay.ts`, `review-rounds.ts`, `review-diff.ts`, `diff.ts`.
-- `PendingReviewRound`, the review `Y.Array`, `materializePendingReviewText`,
-  `applyEditToFragment`, `narrowWriteOperation`, `followAcceptedEdits`.
-- `stale-accept.ts`, `requeueStaleAccept`, the revise-in-place re-base in
-  `runTabWrite`, `baseHash`, `skippedStale`.
-- `CommentThreadAnchor` (quote, occurrence, relative positions) and
-  `resolveAnchorPMRange` / `resolveThreadRange` / occurrence counting.
-- The reveal / pin / expanded state and the "Proposed text moves below"
-  note.
+## Display comments and edits
 
-What stays untouched: Hocuspocus, the update log, `documents`,
-`last_seen`, the render route, the provider layer, the feedback ledger,
-critique passes, the `ai` provenance mark, the undo manager, hooks,
-scratch files, binary tabs.
+Use CSS to color the marks and strike removed text. Keep comment cards expanded; `ThreadOverlay` controls which proposal's additions you can see.
 
-## Issues considered
+When you focus a card or click struck text, show that thread's additions. When you click elsewhere or start typing, hide additions and keep the original text struck through. Keep the proposal data unchanged when you switch views.
 
-**Structural edits.** Text marks alone cannot add or remove a line. Docs
-avoids this because its paragraph break is a character that can carry a
-suggestion id; ProseMirror has no boundary character. The paragraph
-attribute covers it, and the accept / reject rules for a `del` / `ins`
-paragraph are the same as for marked text. This is the one addition to
-"everything is a text mark" and it is unavoidable here.
+Place each card beside its first marked passage. If its passage is gone, keep the card visible near the top so you can reply or dismiss it. Do not scroll to a card while you are typing in the editor.
 
-**Overlapping proposals.** Docs and Word let one author suggest deleting
-another author's suggested insertion and render it nested. Any model
-that allows that needs an ordering and a rebase story; that is where
-today's stale machinery came from. There is one agent here, so the
-one-thread-per-passage rule removes the case rather than handling it.
-Cost: an agent that wants to change a passage another thread covers must
-use that thread. That is already what the prompt tells it to do.
+Keep search highlights and feedback selections as browser display state. You do not need to store them with the shared document.
 
-**Which view the agent reads.** `read_doc` keeps returning the proposed
-view so the agent reasons about the resulting text and `old_string`
-keeps its meaning. The alternative (CriticMarkup in `read_doc`) would put
-markup inside `old_string` and was rejected. The thread listing shows
-each thread's proposal as before / after text derived from its marks.
+## Handle edits from another app
 
-**The revision base.** When the agent revises thread T it read the
-proposed view, which includes T's own insertions. Diffing against
-`proposedExcept(T)` after reverting T's marks reconstructs a valid
-proposal from `after` alone. This is the one piece of subtle logic and it
-is server-side and unit-testable. Today's revise-in-place re-base is the
-same idea done with strings and a special case.
+Compare the changed file with the committed view. Use `applyExternalText` to replace the changed area with the file's text; proposals outside that area stay in place.
 
-**External edits.** The rebase folds the file's text into the committed
-view. A file edit that rewrites a passage under proposal takes the
-proposal's text with it; the thread parks and the author sees "passage no
-longer in the document". Same outcome as today, but it happens through
-the CRDT rather than a failed string match.
+If you replace an area containing a proposal, its marked text can disappear too. Keep the comment thread so you can ask the agent to suggest the edit again.
 
-**Undo.** Proposals land with `AGENT_ORIGIN` and are not on the author's
-undo stack, as today. Resolve is one `USER_ORIGIN` transaction. The
-review array leaves the undo scope; nothing else changes.
+## Preserve undo and concurrent edits
 
-**Big rewrites.** A `write_doc` that replaces most of the document marks
-most of the document. That is what the author asked for and it reads as
-a tracked-changes draft. No special case.
+Store agent proposals with `AGENT_ORIGIN`; do not add them to your typing undo history. Use `USER_ORIGIN` for review actions so you can undo the text change and the thread closure together.
 
-**Concurrency.** Marks are on content, so an author typing while a
-proposal lands converges by Yjs item merge. There is no baseline to drift
-from.
+Keep proposals in the same Yjs document as the text. If you type while an agent edit arrives, Yjs merges those document updates. If the agent's `old_string` no longer matches, return an error so it can read the current text and try again.
 
-**Performance.** No diff runs in the browser. Rendering marks is native
-ProseMirror work. The gutter walk is one linear pass per document
-version.
+## Load older documents
 
-**`Y.Text.insert` inherits the preceding format** (documented gotcha).
-Server writes go through `applyDelta` with explicit attributes, as the
-provenance code does today.
+Write a backup before you migrate pending rounds. Carry over each round whose text still matches and whose thread is open; if you cannot carry one over, leave a note on its thread. Keep the original round payload in the backup.
 
-**Migration.** On first load of a document with a review array, each
-pending round whose `old_string` still matches is converted to marks on
-its thread; any that does not match is dropped and its thread gets a
-system message saying so. A backup is written first (the `backups/`
-mechanism). Legacy `anchor` fields are read once to set an initial
-`comment` mark, then ignored. Schema bumps to v14.
+Use legacy comment quotes to create initial comment marks. New comments use marks for their positions; do not write new quote anchors. The document tables remain at schema version 13.
 
-**Mute.** Cannot hide content. It renders marks neutrally and hides the
-cards. A true "preview as accepted" view is possible later as CSS, but
-`display: none` on inline text breaks caret movement, so it is not in
-this plan.
+## Check changes to this code
 
-## Decisions
+Run `npm run check` and `npm run test:unit`. The regression tests cover word and line edits, blank lines, proposal revisions, overlaps, accept and reject, author text inside suggestions, and edits around HardBreak nodes.
 
-1. **Accept resolves the thread.** Matches Word and Google Docs. The
-   alternative, keeping it open re-anchored to the new text, is what
-   `followAcceptedEdits` does today and is the source of the parked
-   orphan cards. An author who wants to continue the conversation
-   reopens the thread.
-2. **An overlap is an error to the agent**, naming the covering thread.
-   Silently attaching to that thread would skip the reply-before-edit
-   contract, which is what keeps a bare diff from landing with no
-   explanation.
-
-## Sequence
-
-1. **Server, additive.** Codec: the three views, `propose`, `resolve`,
-   the paragraph attribute. Unit tests for word-level, line-level, blank
-   lines, revision of an existing proposal, the overlap error, accept and
-   reject round trips, and the committed / proposed views. No UI change.
-2. **Cutover.** Tools and provider handlers call `propose`. The client
-   registers the marks and attribute, the gutter reads marks, resolve
-   replaces accept / reject / dismiss. Migration on load. Prompt text loses
-   the rebase instructions and the tool schema says to pass the thread id
-   from `comment_doc`. `state-consistency.test.ts` invariants updated.
-3. **Delete.** Everything under "What this removes". `npm run check` and
-   `npm run test:unit` green with the removed files gone. CLAUDE.md and
-   `docs/contribute/architecture.mdx` rewritten for the new model.
-
-Done means: the three bugs cannot be reproduced, the document never
-shows an un-actionable proposal, and no client code diffs strings.
+In the browser, check that you can open a diff from a card or struck text; click elsewhere and make sure only the additions disappear. Reject all edits, undo once, then reload; you should have the same proposals and text you started with.
