@@ -1,6 +1,7 @@
 {
 	"name": "docwriter",
 	"version": "0.0.1",
+	"license": "MIT",
 	"description": "A shared writing workspace for you and an AI agent",
 	"type": "module",
 	"engines": {
