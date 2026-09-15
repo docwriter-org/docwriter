@@ -127,6 +127,77 @@ export function emitProposalEvents(
 	return [];
 }
 
+// ── Built-in SDK tool shims ────────────────────────────────────────────────
+
+/**
+ * Synthetic tool definitions for tools the Claude SDK provides natively
+ * (`AskUserQuestion`, `ExitPlanMode`) but non-Claude providers need in their
+ * tool list so the render endpoint's `canUseTool` can intercept them.
+ * `canUseTool` does the real work (emits the SSE event, blocks on the user's
+ * answer); the `execute` here only runs with the already-resolved
+ * `updatedInput`.
+ */
+export function builtinSdkTools(): ToolDefinition[] {
+	return [
+		{
+			name: 'AskUserQuestion',
+			description:
+				'Ask me a multiple-choice clarification question when you are uncertain how to proceed. ' +
+				'Provide 2–4 concrete options. I will pick one and you continue.',
+			inputSchema: {
+				type: 'object',
+				properties: {
+					questions: {
+						type: 'array',
+						description: 'One or more questions, each with options.',
+						items: {
+							type: 'object',
+							properties: {
+								question: { type: 'string', description: 'The question text.' },
+								options: {
+									type: 'array',
+									items: {
+										type: 'object',
+										properties: {
+											label: { type: 'string' },
+											description: { type: 'string' }
+										},
+										required: ['label', 'description']
+									}
+								}
+							},
+							required: ['question', 'options']
+						}
+					}
+				},
+				required: ['questions']
+			},
+			execute: async (input) => {
+				const answers = (input as any).answers as Record<string, string> | undefined;
+				if (!answers || Object.keys(answers).length === 0) {
+					return { content: [{ type: 'text', text: 'No answer received (timed out).' }], isError: false };
+				}
+				const lines = Object.entries(answers).map(([q, a]) => `Q: ${q}\nA: ${a}`);
+				return { content: [{ type: 'text', text: lines.join('\n\n') }] };
+			}
+		},
+		{
+			name: 'ExitPlanMode',
+			description: 'Submit a plan for review. Call this when plan-first mode is active and your plan is ready.',
+			inputSchema: {
+				type: 'object',
+				properties: {
+					plan: { type: 'string', description: 'The plan text.' }
+				},
+				required: ['plan']
+			},
+			execute: async () => {
+				return { content: [{ type: 'text', text: 'Plan sent for review.' }] };
+			}
+		}
+	];
+}
+
 // ── Lazy optional-SDK loading ───────────────────────────────────────────────
 
 /**

@@ -4,15 +4,18 @@
  * without loading the SDK.
  */
 /** A feedback turn in edit mode is a request for a change on a thread. When
- * the turn ends with no new round on the tab, the author is left with a
+ * the turn ends with no new proposal on the thread, the author is left with a
  * reply that may describe an edit and a document that shows none — the
  * "agent thinks it did" report. One retry names the fact and the two
  * legitimate ways out. Pure, so the condition is testable. */
 export function feedbackRetryPrompt(opts: {
 	message: string;
 	tabId: string | null;
-	roundsBefore: Set<string>;
-	roundsAfter: Set<string>;
+	/** Per-thread proposal fingerprints before and after the turn (see
+	 * `proposalFingerprints`). A proposal landed on the feedback thread when
+	 * its fingerprint appeared or changed. */
+	proposalsBefore: Map<string, string>;
+	proposalsAfter: Map<string, string>;
 }): string | null {
 	const threadId = opts.message.match(/thread_id="([^"]+)"/)?.[1] ?? null;
 	if (!threadId || !opts.tabId) return null;
@@ -28,8 +31,8 @@ export function feedbackRetryPrompt(opts: {
 	// Discuss-mode triggers and other messages aren't expected to land edits.
 	if (!(isFeedbackTrigger && isEditMode) && !isReply) return null;
 
-	let landed = false;
-	for (const id of opts.roundsAfter) if (!opts.roundsBefore.has(id)) landed = true;
+	const after = opts.proposalsAfter.get(threadId);
+	const landed = after !== undefined && after !== opts.proposalsBefore.get(threadId);
 	if (landed) return null;
 
 	if (isReply) {

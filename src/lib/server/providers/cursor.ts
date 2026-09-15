@@ -13,6 +13,7 @@ import type {
 } from './types';
 import { buildToolDefinitions } from './tool-handlers';
 import {
+	builtinSdkTools,
 	combinePrompt,
 	emitProposalEvents,
 	makeLazySdkLoader,
@@ -99,7 +100,7 @@ export class CursorProvider implements AgentProvider {
 	): AsyncIterable<ProviderEvent> {
 		await loadCursorSdk();
 
-		const allTools = tools.length > 0 ? tools : buildToolDefinitions();
+		const allTools = [...(tools.length > 0 ? tools : buildToolDefinitions()), ...builtinSdkTools()];
 		// Filter to options.allowedTools and gate each execute through
 		// options.canUseTool before registering as Cursor custom tools.
 		const providerTools = wrapToolsForProvider(allTools, options);

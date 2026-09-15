@@ -4,9 +4,8 @@
  * plugin paints a soft sage-green halo on the accepted text for ~800ms,
  * then clears itself.
  *
- * Why a separate plugin instead of reusing diff-overlay decorations:
- * after Accept, the diff-overlay state collapses (no more pending
- * rounds → no more diff). The celebration needs to outlive that
+ * Why a separate plugin instead of reusing the proposal marks: after
+ * Accept the thread's marks are gone (the text is plain again). The celebration needs to outlive that
  * collapse and follow concurrent typing, which means its own plugin
  * state with PM mapping.
  */

@@ -5,7 +5,7 @@
 	import { marked } from 'marked';
 	import { FileEdit, User, Bot, Play, CheckCircle, XCircle, Eye, Terminal, Maximize2, X, RotateCcw, ScrollText, Cat, Sparkles, BellOff, Bell, ChevronDown, Pause } from 'lucide-svelte';
 	import type { HistoryEntry } from '$lib/types';
-	import { agentHistory, isRendering, historyVerbosity, sessionCost, agentSettings, pendingReviewRounds, submitCountdown, activeReviewer, type SessionCost } from '$lib/stores';
+	import { agentHistory, isRendering, historyVerbosity, sessionCost, agentSettings, threadMarks, submitCountdown, activeReviewer, type SessionCost } from '$lib/stores';
 	import type { HistoryVerbosity } from '$lib/stores';
 	import { onMount, onDestroy, type Snippet } from 'svelte';
 	import SessionViewer from './SessionViewer.svelte';
@@ -43,7 +43,7 @@
 	}: Props = $props();
 
 	let pendingCount = $state(0);
-	pendingReviewRounds.subscribe((v) => (pendingCount = v.length));
+	threadMarks.subscribe((v) => (pendingCount = v.filter((m) => m.hasProposal).length));
 
 	let entries: HistoryEntry[] = $state([]);
 	agentHistory.subscribe((v) => (entries = v));

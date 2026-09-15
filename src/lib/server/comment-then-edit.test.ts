@@ -72,41 +72,43 @@ describe('a feedback turn that asks for a change ends with a diff or a retry', (
 		expect(src).not.toMatch(/Rewrite it: "\$\{passage\}"/);
 	});
 
-	it('the retry fires only for an edit-mode feedback turn that landed no round', async () => {
+	it('the retry fires only for an edit-mode feedback turn that landed no proposal', async () => {
 		const { feedbackRetryPrompt } = await import('$lib/server/feedback-retry');
 		const message =
 			'I flagged this passage with feedback "too vague". [mode: edit] Current text of the passage, quoted verbatim from the document: "Each dataset is very unique." That quote is what is there now, not what I want. Rewrite it so it addresses my feedback. A thread is open for this feedback (thread_id="thread_1").';
-		const before = new Set(['r0']);
-		expect(feedbackRetryPrompt({ message, tabId: 'essay.md', roundsBefore: before, roundsAfter: new Set(['r0']) })).toMatch(
+		const before = new Map<string, string>();
+		const landed = new Map([['thread_1', 'fingerprint']]);
+		expect(feedbackRetryPrompt({ message, tabId: 'essay.md', proposalsBefore: before, proposalsAfter: before })).toMatch(
 			/no pending diff landed on essay\.md/
 		);
-		expect(feedbackRetryPrompt({ message, tabId: 'essay.md', roundsBefore: before, roundsAfter: new Set(['r0']) })).toMatch(
+		expect(feedbackRetryPrompt({ message, tabId: 'essay.md', proposalsBefore: before, proposalsAfter: before })).toMatch(
 			/thread_id="thread_1"/
 		);
-		// A round landed: no retry.
-		expect(feedbackRetryPrompt({ message, tabId: 'essay.md', roundsBefore: before, roundsAfter: new Set(['r0', 'r1']) })).toBeNull();
+		// A proposal landed on the thread: no retry.
+		expect(feedbackRetryPrompt({ message, tabId: 'essay.md', proposalsBefore: before, proposalsAfter: landed })).toBeNull();
 		// Discuss mode asked for words, not a diff.
-		expect(feedbackRetryPrompt({ message: message.replace('[mode: edit]', '[mode: discuss]'), tabId: 'essay.md', roundsBefore: before, roundsAfter: before })).toBeNull();
+		expect(feedbackRetryPrompt({ message: message.replace('[mode: edit]', '[mode: discuss]'), tabId: 'essay.md', proposalsBefore: before, proposalsAfter: before })).toBeNull();
 		// No active tab: nothing to check against.
-		expect(feedbackRetryPrompt({ message, tabId: null, roundsBefore: before, roundsAfter: before })).toBeNull();
+		expect(feedbackRetryPrompt({ message, tabId: null, proposalsBefore: before, proposalsAfter: before })).toBeNull();
 	});
 
-	it('the retry fires for a thread reply that landed no round', async () => {
+	it('the retry fires for a thread reply that landed no proposal', async () => {
 		const { feedbackRetryPrompt } = await import('$lib/server/feedback-retry');
 		const replyMsg =
 			'I replied on comment thread thread_id="thread_1" on this tab.\n' +
 			'Anchor passage: "Each dataset is very unique."\n' +
 			'My latest reply: "say things like a reviewer can ...."\n' +
 			'Full thread (latest reply included):\n- [you] The passage overexplains\n- [me] say things like a reviewer can ....';
-		const before = new Set(['r0']);
-		// No round landed → retry.
-		expect(feedbackRetryPrompt({ message: replyMsg, tabId: 'essay.md', roundsBefore: before, roundsAfter: new Set(['r0']) })).toMatch(
+		const before = new Map<string, string>();
+		const landed = new Map([['thread_1', 'fingerprint']]);
+		// No proposal landed → retry.
+		expect(feedbackRetryPrompt({ message: replyMsg, tabId: 'essay.md', proposalsBefore: before, proposalsAfter: before })).toMatch(
 			/did not propose an edit/
 		);
-		expect(feedbackRetryPrompt({ message: replyMsg, tabId: 'essay.md', roundsBefore: before, roundsAfter: new Set(['r0']) })).toMatch(
+		expect(feedbackRetryPrompt({ message: replyMsg, tabId: 'essay.md', proposalsBefore: before, proposalsAfter: before })).toMatch(
 			/thread_id="thread_1"/
 		);
-		// A round landed → no retry.
-		expect(feedbackRetryPrompt({ message: replyMsg, tabId: 'essay.md', roundsBefore: before, roundsAfter: new Set(['r0', 'r1']) })).toBeNull();
+		// A proposal landed → no retry.
+		expect(feedbackRetryPrompt({ message: replyMsg, tabId: 'essay.md', proposalsBefore: before, proposalsAfter: landed })).toBeNull();
 	});
 });

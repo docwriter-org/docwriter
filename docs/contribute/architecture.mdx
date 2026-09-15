@@ -2,9 +2,9 @@
 title: "Architecture"
 ---
 
-Read this page before changing the editor, document sync, review actions, undo, or file storage. The server owns the current document, and every browser and agent edits that same document.
+Read this page before you change the editor, document sync, review actions, undo, or file storage. You work with one live document for each tab; that document is in server memory, you access it through the browser or agent tools.
 
-Route every update through the live server document, and limit review actions to the text they cover. Treat workspace files as backups rather than a second live document.
+Send changes through the live server document. When you change a review action, limit it to the text in that proposal.
 
 ```mermaid
 flowchart LR
@@ -15,80 +15,91 @@ flowchart LR
     Browser -->|"Accept or Reject"| Review["/api/document"]
     Review --> Server
     Server --> Updates["SQLite, Yjs updates and app state"]
-    Server --> Files["Workspace files, plain text backup"]
+    Server --> Files["Workspace files, accepted text"]
 ```
 
-## One live document for each tab
+## Read and change a document
 
-Each open text tab has one live Yjs document inside the Hocuspocus server. The browser connects as a synchronized client. Agent tools open a direct server connection to the same document.
+For each open text tab, you have a Yjs document in the Hocuspocus server. Read that live document when it is available; use `openDirectConnection` when you need to change it.
 
-Never change an open tab by loading its saved updates into a temporary Yjs document. A temporary document is not connected to the browser, so the live editor will not receive the change.
+You can rebuild a document from its saved updates to read it when it is not open. Do not edit that temporary copy while a live document is available; your change would not be visible in the browser.
 
-## Text and review changes
+## Store proposed edits
 
-When the user types, the browser sends Yjs updates over the WebSocket. The server applies each update to the live document and saves it in SQLite.
+When you type in the editor, each change is sent over a WebSocket and saved in SQLite.
 
-When the agent proposes an edit, `edit_doc` adds a pending review to the live document. The committed text does not change yet. The browser uses the saved edit to show the proposed text beside the original text.
+For an `edit_doc` call, store the suggestion with the document. Use `insertion` marks for added words and `deletion` marks for removed words; each mark has a comment thread ID. For whole lines, you also store `suggest` and `suggestThread` on the paragraph. You can find these operations in `src/lib/shared/proposals.ts`.
 
-When the user accepts an edit, the server changes the affected paragraphs and removes the review in one transaction. When the user rejects an edit, the server removes the review without changing the text.
+Keep one thread for a passage. If you try to edit another thread's text, return an overlap error with that thread's ID. When you revise a suggestion on the same thread, replace its earlier proposal.
 
-The browser undo manager tracks user typing and review actions. It does not add agent changes to the user's undo history.
+When you accept an edit in the UI, you keep the added text and remove the struck text; you also close the thread. When you reject or dismiss it, you remove the additions and keep the original text. You keep text you typed inside the suggestion in either case.
 
-## Editor representation
+You can always read the expanded comment cards. Click a card or the struck text to see its additions; click elsewhere to hide them. Change their display in the browser without changing the stored proposal.
 
-The Tiptap schema contains only Document, Paragraph, Text, and HardBreak. Markdown symbols remain in the text. ProseMirror plugins show headings, tables, code, media, comments, proposed edits, and search results without turning them into separate document nodes.
+<a id="editor-representation"></a>
 
-Do not add StarterKit, Link, or Tiptap history. Undo uses the Yjs undo manager configured in `src/lib/editor-extensions.ts`.
+## Keep Markdown as text
 
-Import `ySyncPluginKey` and the relative position helpers from `src/lib/editor-extensions.ts`. The collaboration extension uses the key from `@tiptap/y-tiptap`. Importing the key from `y-prosemirror` creates a different key and breaks transaction classification and comment anchors.
+Use the Tiptap Document, Paragraph, Text, and HardBreak nodes. Keep Markdown symbols in the text; use ProseMirror plugins for their display. You can show headings, tables, code, media, comments, and search results without adding a node type for each one.
 
-AI provenance is stored as a Yjs text attribute. Use the delta based helpers in `src/lib/shared/ydoc-codec.ts` when reading or writing formatted text. `Y.XmlText.toString()` can return XML tags, and a plain insert can inherit attributes from the previous character.
+Do not add StarterKit, Link, or Tiptap history. You already have a Yjs undo manager in `src/lib/editor-extensions.ts`.
 
-## Persistence and file loading
+Import `ySyncPluginKey` and the relative position helpers from `src/lib/editor-extensions.ts`. If you import the key from `y-prosemirror`, you get a different instance from the one in the collaboration extension; you can then have incorrect comment positions or checks for local edits.
 
-SQLite is the source of truth while DocWriter is running. The `yjs_updates` table stores document updates in its `payload` column. Other tables store tabs, rules, reviewers, sessions, and agent activity.
+Use the helpers in `src/lib/shared/ydoc-codec.ts` to read formatted text. The output of `Y.XmlText.toString()` can have XML tags; read text through `toDelta()`. When you insert text, set its attributes explicitly so it does not have the preceding character's marks.
 
-The server also writes plain text to the workspace file and records its modification time. The file makes the document easy to use with Git and other tools, but it is not a second live document. Saved files do not include the Yjs attribute that marks text written by AI.
+## Save and load files
 
-Comments and pending reviews live inside the Yjs document. The committed text, comments, and reviews therefore reach every connected browser through the same update stream.
+Use SQLite for saved document state. You will find document updates in `yjs_updates.payload`; tabs, rules, reviewers, sessions, and agent activity are in other tables.
 
-When DocWriter opens a tab, the server first rebuilds its Yjs document from SQLite. A newer workspace file can replace the saved document when its text changed outside DocWriter. Read an open tab from the live Hocuspocus document when it is available. Mutations must use `openDirectConnection`.
+You also get a plain text workspace file for use with Git and other tools. Your text and accepted edits are saved to that file; pending additions, comments, and AI authorship marks are only in Yjs.
 
-## Undo and server restarts
+Store comment messages in the document's comments map; use marks on the text to locate each thread. Text, comments, and proposals are then available through the same connection.
 
-Import `AGENT_ORIGIN`, `USER_ORIGIN`, and `SYSTEM_ORIGIN` from `src/lib/shared/ydoc-codec.ts`. The browser undo manager tracks local typing and review actions made with `USER_ORIGIN`, but it does not track agent proposals.
+When you open a tab, its document is rebuilt from SQLite. If you changed the file in another app, the newer text is included; proposals outside the changed area are still available.
 
-Vite can reload server modules while you develop. The global server guard prevents a second Hocuspocus server from binding to the same port. A browser waits for its first WebSocket sync before it paints the editor, and it reconnects to the new server instance after a restart.
+## Preserve undo and reconnects
 
-## Agent requests
+Import `AGENT_ORIGIN`, `USER_ORIGIN`, and `SYSTEM_ORIGIN` from `src/lib/shared/ydoc-codec.ts`. You can identify the source of a change by its origin. Include local typing and review actions in the browser's undo history; exclude agent proposals.
 
-The browser sends an agent request to `/api/render`. The route starts one provider query and sends activity events back to the agent dock.
+For a review action, pause WebSocket sync before the HTTP request; apply the returned Yjs update locally with `USER_ORIGIN`, then reconnect. Include the success flag in batch responses too; without it, the local update will not be recorded for undo.
 
-The prompt lists the open tabs and describes what changed since the agent last saw them. The agent calls `read_doc` when it needs the full text. Reads and writes for open tabs go through the `docwriter-doc` tool server. Files under `.docwriter/agent/scratch/` use normal file operations.
+After a server module reload in Vite, reuse the global Hocuspocus instance so you do not bind the port twice. Wait for the first WebSocket sync before you display the editor; after a server restart, reconnect to the new instance.
 
-Agent activity and document changes travel on separate connections. Activity appears through server sent events. Document changes appear through Yjs WebSocket updates.
+## Send agent requests
+
+Send an agent request to `/api/render`; you will receive activity updates in the agent dock during the provider query.
+
+In the prompt, list the open tabs and your changes since the last agent request. Use `read_doc` for the full text; its output has pending edits as if you had accepted them. Use that text as the starting point for a revision.
+
+Route open-tab reads and writes through the `docwriter-doc` tools. You can use normal file operations for files under `.docwriter/agent/scratch/`.
+
+Keep agent activity and document updates separate. You receive activity through server-sent events, document updates through the Yjs WebSocket connection.
 
 ## Where to make a change
 
-- Document encoding, saved edit operations, and transaction origins are in `src/lib/shared/ydoc-codec.ts`.
-- The Hocuspocus server and review actions are in `src/lib/server/ws-server.ts`.
-- Agent document tools are in `src/lib/server/mcp-doc-tools.ts`.
-- The provider request starts in `src/routes/api/render/+server.ts`.
-- The editor and undo setup are in `src/lib/editor-extensions.ts`.
-- Runtime state and SQLite access are in `src/lib/server/runtime-state.ts`.
+| If you need to change | Start here |
+| --- | --- |
+| Text encoding, comment storage, or update origins | `src/lib/shared/ydoc-codec.ts` |
+| Proposals, text views, or accept and reject behavior | `src/lib/shared/proposals.ts` |
+| Document sync or review requests | `src/lib/server/ws-server.ts` |
+| Agent document tools | `src/lib/server/mcp-doc-tools.ts` |
+| Provider requests | `src/routes/api/render/+server.ts` |
+| Editor setup or undo | `src/lib/editor-extensions.ts` |
+| Runtime state or SQLite access | `src/lib/server/runtime-state.ts` |
 
-Read [Providers and tools](/contribute/providers-and-tools) before changing an AI provider or tool.
+Read [Providers and tools](/contribute/providers-and-tools) before you change an AI provider or tool.
 
-## Check an architecture change
+## Check your changes
 
-Test the following behavior by hand:
+Before you finish an editor or storage change, check these cases:
 
-- Open the same file in two browser windows and type in one window.
-- Propose an agent edit, then accept and undo it.
-- Propose another edit, then reject it.
-- Turn on AI provenance highlighting and replace part of the marked text.
+- Open the same file in two browser windows; type in one and check the other.
+- Ask for an edit; accept it, then undo it.
+- Ask for another edit; reject it.
+- Turn on AI text highlighting; replace some of the highlighted text.
 - Keep typing while an agent request is running.
-- Change the file outside DocWriter while watch mode is on.
-- Restart the server while both browser windows are open.
+- Change the file in another app while watch mode is on.
+- Restart the server with both browser windows open.
 
-Both windows and the workspace file should contain the same accepted text. Rejected text should never enter the committed document, and AI provenance should remain invisible in the saved Markdown. Run `npm run check` and `npm run build` after the manual checks.
+You should see the same accepted text in both windows and the workspace file. The file should have no pending additions, the Markdown should have no AI authorship marks. Run `npm run check`, `npm run test:unit`, and `npm run build` before you finish.

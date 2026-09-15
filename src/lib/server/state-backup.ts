@@ -11,14 +11,16 @@ import { mkdirSync, writeFileSync, readdirSync, unlinkSync, statSync } from 'fs'
 import { join } from 'path';
 import * as Y from 'yjs';
 import { DOCWRITER_DIR } from './document-files';
-import { serializeYDoc, readCommentThreads, readReviewRounds } from '$lib/shared/ydoc-codec';
+import { serializeYDoc, readCommentThreads } from '$lib/shared/ydoc-codec';
+import { proposedText, summarizeThreadMarks } from '$lib/shared/proposals';
 
 const BACKUPS_DIR = join(DOCWRITER_DIR, 'backups');
 /** Keep the most recent N backup files; older ones are pruned on write. */
 const MAX_BACKUPS = 40;
 
 
-/** Snapshot a document's text + threads + pending rounds. `reason` names
+/** Snapshot a document's committed text, proposed text, threads and the
+ * marks each thread holds. `reason` names
  * the transition (e.g. 'delete-file', 'external-edit-reseed'). Returns the
  * backup file path, or null when the write failed. */
 export function backupDocumentState(tabId: string, reason: string, ydoc: Y.Doc): string | null {
@@ -34,8 +36,12 @@ export function backupDocumentState(tabId: string, reason: string, ydoc: Y.Doc):
 					reason,
 					savedAt: new Date().toISOString(),
 					text: serializeYDoc(ydoc),
+					proposedText: proposedText(ydoc),
 					threads: readCommentThreads(ydoc),
-					rounds: readReviewRounds(ydoc)
+					marks: summarizeThreadMarks(ydoc),
+					// Migration can drop an unmatched legacy proposal. Keep its
+					// original payload in the backup made before migration.
+					...(ydoc.getArray('rounds').length > 0 ? { rounds: ydoc.getArray('rounds').toArray() } : {})
 				},
 				null,
 				2

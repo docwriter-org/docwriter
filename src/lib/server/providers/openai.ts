@@ -13,7 +13,7 @@ import type {
 	ToolDefinition
 } from './types';
 import { buildToolDefinitions } from './tool-handlers';
-import { emitProposalEvents, makeLazySdkLoader, wrapToolsForProvider } from './shared';
+import { builtinSdkTools, emitProposalEvents, makeLazySdkLoader, wrapToolsForProvider } from './shared';
 import { randomUUID } from 'node:crypto';
 import { DocWriterOpenAISession } from './openai-session';
 
@@ -83,7 +83,7 @@ export class OpenAIAgentsProvider implements AgentProvider {
 	): AsyncIterable<ProviderEvent> {
 		await loadSdk();
 
-		const allTools = tools.length > 0 ? tools : buildToolDefinitions();
+		const allTools = [...(tools.length > 0 ? tools : buildToolDefinitions()), ...builtinSdkTools()];
 		// Filter to options.allowedTools and gate each execute through
 		// options.canUseTool before registering with the Agents SDK (plan-mode
 		// mutation-tool blocking + scratch-only Edit/Write guard).

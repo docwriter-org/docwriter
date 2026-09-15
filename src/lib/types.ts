@@ -37,75 +37,6 @@ export interface ProposedRule {
 	timestamp: number;
 }
 
-/** One round of agent edits pending the user's review. The outline pane
- * shows one card per round so each can be accepted/rejected independently,
- * while the editor's diff overlay composes them all into a single view
- * derived from the live doc plus the queued operations. */
-export type PendingReviewOperation =
-	| {
-			type: 'edit';
-			oldString: string;
-			newString: string;
-			/** When true, replace every occurrence of `oldString`. When false
-			 * or omitted (default), `oldString` must match exactly once. */
-			replaceAll?: boolean;
-	  }
-	| {
-			type: 'write';
-			content: string;
-	  };
-
-export interface PendingReviewRound {
-	id: string;
-	/** Stored edit intent. `edit` proposals can be replayed safely against
-	 * the latest live doc on Accept; `write` proposals are whole-document
-	 * rewrites and require a matching base hash. */
-	operation?: PendingReviewOperation;
-	/** Lightweight fingerprint of the proposal base text. Used to detect a
-	 * stale whole-document `write` before Accept clobbers newer user edits. */
-	baseHash?: string;
-	/** Derived preview strings. These are computed on demand from the live
-	 * document plus `operation`, and may be absent on the persisted round.
-	 * Legacy rounds written before the op-based model may still persist
-	 * these directly. */
-	beforeMd?: string;
-	afterMd?: string;
-	/** User-facing prompt or trigger that produced this round. */
-	trigger?: string;
-	/** Comment thread this edit was made in response to, if any. Set when the
-	 * edit was produced during a render triggered by feedback on a thread, so
-	 * the gutter can group an agent's edits under that feedback's card
-	 * (numbered 1, 2, 3…) instead of showing them as loose, separate cards. */
-	feedbackThreadId?: string;
-	timestamp: number;
-	/** Heuristic classification of this round's size, computed at write
-	 * time via a char-count threshold. `tiny` edits (e.g. a typo fix,
-	 * a single-word tweak) render subtler — softer in the editor
-	 * overlay, compact inline pill in the outline — so small corrections
-	 * don't look like a big paragraph-level rewrite. `big` edits get the
-	 * full green/red diff treatment. */
-	kind?: 'tiny' | 'big';
-	/** How many AGENT_ORIGIN undo steps this round contributed to the
-	 * server's live-doc Y.UndoManager. With incremental streaming (one apply per
-	 * Edit/Write tool call + one final apply at result time), this can be
-	 * >1 per round. Reject pops this many steps to fully rewind. Defaults
-	 * to 1 when absent (backward compat with rounds written before
-	 * streaming). */
-	stepCount?: number;
-	/** Derived marker: this proposal can no longer be replayed cleanly
-	 * against the current live doc and needs regeneration. */
-	stale?: boolean;
-	staleReason?: string;
-	/** Reviewer agent that proposed this round during a critique pass
-	 * (Settings → Critique pass). Absent on ordinary agent edits. The
-	 * gutter uses it to show the reviewer's mascot and name on the card. */
-	reviewerId?: string;
-}
-
-/** Character-delta threshold for classifying rounds as `tiny` vs `big`.
- * Sum of added + removed characters below this is "tiny". */
-export const TINY_EDIT_THRESHOLD = 25;
-
 /** Shell hook the agent proposed mid-render. Accept appends to
  * `.docwriter/hooks.json`; Reject dismisses it. */
 export type ProposedHookEvent =
@@ -136,56 +67,23 @@ export interface Action {
 	color: string;
 }
 
-/** Threaded comment anchored to a passage in a tab.
- *
- * Anchoring is quote-based: `anchor.quote` stores a snapshot of the
- * selected text at creation. On every render the client searches the
- * current live markdown for the quote; a unique match becomes the
- * decoration range, multiple matches prefer the `occurrenceIndex`-th
- * match (0-based), and zero matches flag the thread as "detached" in
- * the UI (rendered at the top of the Outline without an anchor).
- *
- * Threads live in a Y.Map keyed by thread id on each tab's Y.Doc, so
- * they sync through Hocuspocus exactly like pending review rounds and
- * merge cleanly with concurrent edits.
- */
-interface CommentThreadAnchor {
+/** Why a resolved thread closed. Absent while the thread is open. */
+export type ThreadOutcome = 'accepted' | 'rejected' | 'dismissed';
+
+/** Legacy quote-based anchor. Threads created before proposals became
+ * marks stored where they sat as a quote; the load-time migration turns
+ * it into a comment mark and nothing writes it any more. A thread's
+ * position is the set of marks carrying its id (see proposals.ts). */
+export interface LegacyCommentThreadAnchor {
 	quote: string;
-	/** Which occurrence of `quote` to prefer when it appears multiple
-	 * times in the document. Snapshot at thread creation; stays fixed
-	 * across edits so the anchor doesn't drift between matches. */
 	occurrenceIndex: number;
-	/** Base64-encoded Y.RelativePosition for the start/end of the anchored
-	 * passage. Yjs CRDT-tracks these through every concurrent edit (user
-	 * typing, agent edits, syncs across clients), so the highlight stays
-	 * glued to the text instead of teleporting when the quote no longer
-	 * matches. Optional because:
-	 *   - Server-side `reply_to_comment` can't compute them (it has no PM
-	 *     binding), so it omits them — the client backfills on first
-	 *     render via the comment-overlay's view hook. Same applies to any
-	 *     thread the user opens through a server-side path (e.g. the
-	 *     feedback popup's auto-created thread).
-	 *   - Legacy threads (created before this field existed) lack them
-	 *     and also get backfilled on first render.
-	 * When absent, the overlay falls back to indexOf-based anchoring. */
 	relStart?: string;
 	relEnd?: string;
-	/** Plain-text snapshot of what surrounded the anchored passage when the
-	 * anchor was (last) known to be alive — up to ~32 chars each side,
-	 * newlines stripped. Used by the overlay's quote fallback: when the rel
-	 * positions die (the anchored text was deleted, e.g. by accepting an
-	 * agent edit), the thread may only re-attach to an occurrence of the
-	 * quote whose surroundings match this context. That keeps undo working
-	 * (restored text brings back the same context) while preventing the
-	 * thread from resurrecting on an unrelated occurrence of the same
-	 * string typed elsewhere later. Optional: captured server-side at
-	 * creation when the occurrence is unambiguous, and backfilled by the
-	 * client whenever the thread renders anchored. */
 	contextBefore?: string;
 	contextAfter?: string;
 }
 
-type CommentAuthor = 'user' | 'agent' | 'external';
+export type CommentAuthor = 'user' | 'agent' | 'external';
 
 export interface CommentMessage {
 	id: string;
@@ -207,12 +105,20 @@ export interface CommentMessage {
 	externalAuthor?: string;
 }
 
+/** Threaded comment on a passage of a tab. Threads live in a Y.Map keyed
+ * by thread id on each tab's Y.Doc, so they sync through Hocuspocus and
+ * merge cleanly with concurrent edits. Where a thread sits in the document
+ * is not stored on it: the document's `comment`, `insertion` and
+ * `deletion` marks carry the thread id (see proposals.ts). */
 export interface CommentThread {
 	id: string;
-	anchor: CommentThreadAnchor;
 	messages: CommentMessage[];
 	resolved: boolean;
+	/** Set when `resolved`; cleared on reopen. */
+	outcome?: ThreadOutcome;
 	createdAt: number;
+	/** Legacy only; see `LegacyCommentThreadAnchor`. */
+	anchor?: LegacyCommentThreadAnchor;
 }
 
 /** Routing hint carried from the feedback popup to the agent prompt. Both
@@ -315,16 +221,16 @@ export type HistoryEntry =
  *    but does not make unsolicited edits; `aggressive` can create comments
  *    and propose reviewable edits on its own.
  *
- * Agent edits are ALWAYS tracked: they land behind the green/red diff overlay
- * as Accept/Reject review rounds. There is no "merge silently" mode.
+ * Agent edits are ALWAYS tracked: they land as tracked changes (marks) on
+ * the document under a comment thread, with Accept / Reject on the thread.
+ * There is no "merge silently" mode.
  */
 export interface AgentSettings {
 	agency: 'conservative' | 'balanced' | 'aggressive';
-	/** When true, agent edits still land in the pending-review array, but the
-	 * editor's inline diff overlay stays hidden until the user clicks a
-	 * pending card — at which point only that round's decorations render.
-	 * Lets you keep writing without the green/red overlay competing for
-	 * attention while the agent works in the background. */
+	/** When true, the agent's threads leave the gutter and its tracked
+	 * changes render subdued. Lets you keep writing without the green/red
+	 * marks competing for attention while the agent works in the
+	 * background. Content is never hidden. */
 	muted: boolean;
 	/** When true, the agent is fully paused: no idle auto-wake, no Wake up,
 	 * no Send / Cmd+Enter, and in-flight renders are cancelled on pause.

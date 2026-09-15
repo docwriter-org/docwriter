@@ -35,7 +35,7 @@ import {
 import { runHookCommand, type HookRunEmitter } from '$lib/server/hook-runner';
 import { addCustomSkill } from '$lib/server/skills-config';
 import { getEffectiveRoot } from '$lib/server/document-files';
-import { executeReviewAction } from './tool-handlers';
+import { executeReviewAction, REVIEW_ACTIONS } from './tool-handlers';
 import {
 	formatClaudeModelLabel,
 	isHiddenClaudeModel
@@ -106,12 +106,11 @@ function buildDocwriterMcp() {
 		),
 		tool(
 			'review_action',
-			'Accept or reject pending edits, or dismiss or reopen comment threads, only when my current message explicitly asks. reopen_thread brings a dismissed thread back into the gutter — find its id with list_threads(include_dismissed=true).',
+			'Accept or reject a thread\'s pending proposal, or dismiss or reopen comment threads, only when my current message explicitly asks. reopen_thread brings a dismissed thread back into the gutter — find its id with list_threads(include_dismissed=true).',
 			{
 				file_path: z.string().describe('Workspace-relative path or absolute path inside the workspace.'),
-				action: z.enum(['accept_round', 'accept_all', 'reject_round', 'reject_all', 'resolve_thread', 'reopen_thread']).describe('The explicit review action I requested.'),
-				round_id: z.string().optional().describe('Required for accept_round or reject_round.'),
-				thread_id: z.string().optional().describe('Required for resolve_thread or reopen_thread.')
+				action: z.enum(REVIEW_ACTIONS).describe('The explicit review action I requested.'),
+				thread_id: z.string().optional().describe('Required for accept_thread, reject_thread, resolve_thread and reopen_thread.')
 			},
 			async (input) => {
 				const result = await executeReviewAction(input);
@@ -256,7 +255,7 @@ export class ClaudeProvider implements AgentProvider {
 			// ("built-in Edit / Write are restricted to your scratch directory,
 			// use edit_doc") never ran. An agent that lost its document tools
 			// would quietly fall back to `Edit` and rewrite the workspace file
-			// with no review round, no thread and no diff card. Under 'default'
+			// with no proposal, no thread and no tracked change. Under 'default'
 			// every tool outside `allowedTools` routes through `canUseTool`,
 			// which allows anything it does not explicitly deny, so the only
 			// behavior change is that the existing rules are enforced.
