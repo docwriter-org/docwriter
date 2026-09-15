@@ -123,8 +123,10 @@ first `synced` event — on localhost this is sub-20ms.
   removed lines) and its thread's card in the comment gutter
   (`CommentGutter`, mounted in `TiptapEditor`) lists the changed paragraphs
   with Accept / Reject; a comment-only thread is an amber highlight. The
-  `ThreadOverlay` plugin adds only per-viewer state (open-thread highlight,
-  hover flash, the per-thread pill). Per-tab badges on the `TabBar` count
+  `ThreadOverlay` plugin controls proposal visibility, the feedback selection,
+  and the per-thread pill. Cards stay expanded. Focusing a card or clicking
+  deleted text reveals its additions; leaving review hides additions and
+  keeps the original text struck through. Per-tab badges on the `TabBar` count
   proposals — there is no separate review column.
 - **Proposed rules / hooks** surface as dismissable toasts (`ToastStack`).
 - **AI provenance toggle** (`AiProvenanceToggle`, in the editor's sticky
@@ -182,7 +184,7 @@ first `synced` event — on localhost this is sub-20ms.
    passage, quoted verbatim from the document" — the earlier
    `Rewrite it: "<passage>"` read as "rewrite it TO this", and the agent
    compared the quote with the document and declared nothing to change.
-   An edit-mode feedback turn, or a reply on a thread, that ends with no new round on the tab gets
+   An edit-mode feedback turn, or a reply on a thread, that ends with no changed proposal on the thread gets
    one harness retry (`feedbackRetryPrompt` in the render route) naming
    the fact; it stands down only if the agent already said no change is
    needed or asked a question on the thread.
@@ -192,19 +194,13 @@ first `synced` event — on localhost this is sub-20ms.
    section and reply box are exactly the part the dock covers.
    A comment the author makes opens its card (`openFeedbackThread` in
    `TiptapEditor.svelte` sets `openCommentThreadId` before the thread
-   has synced back; the gutter reveals it on arrival). Cards render
-   collapsed by default, and the author used to have to click the card
-   they had just written to see the reply and the proposal.
+   has synced back; the gutter reveals it on arrival). Cards stay expanded,
+   and only the active card shows its diff and review controls. The gutter
+   does not scroll to a card while the author is typing in the editor.
    A card's message list is capped at 300px and scrolls; it opens at its
    END (newest reply, then the edits section below), because a long first
    comment used to fill the box and hide the agent's answer and the
    proposal. Growth after that scrolls smoothly (`followNewMessages`).
-   A round that moves text (one diff block only strikes, another block
-   of the same round only adds) gets a "Proposed text moves below ↓"
-   button under the struck passage (`createMovedNote` in
-   `diff-overlay.ts`); red alone read as a deletion while the green sat
-   off-screen past a code block. Clicking it scrolls the insertion into
-   view.
 3. Agent calls `edit_doc`: the server matches `old_string` in the
    proposed view, computes the full `after` text, reverts the thread's
    existing marks, diffs the base against `after` line by line (word-level

@@ -105,7 +105,7 @@ export const POST: RequestHandler = async ({ request, url }) => {
 				return json({ error: 'outcome must be accepted or rejected' }, { status: 400 });
 			}
 			const result = await resolveAllTabThreads(tabId, outcome);
-			return json({ ...result, ...(outcome === 'accepted' ? flushed(tabId) : {}) });
+			return json({ ok: true, ...result, ...(outcome === 'accepted' ? flushed(tabId) : {}) });
 		}
 		if (body?.action === 'set_thread_resolution') {
 			const threadId = typeof body.threadId === 'string' ? body.threadId : '';

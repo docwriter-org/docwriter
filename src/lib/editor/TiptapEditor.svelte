@@ -151,9 +151,6 @@
 	});
 	let feedbackInputEl: HTMLDivElement | null = $state(null);
 	let feedbackInput = $state('');
-	/** After a tab remount, ignore "user edit → collapse thread" for a
-	 * beat so the restored open thread isn't immediately closed by sync. */
-	let suppressThreadCollapseUntil = 0;
 	/** Routing mode for the current feedback submission. `edit` = direct
 	 * edit_doc proposal; `plan` = the agent first replies on the feedback
 	 * thread with WHY the passage was flagged (same reflection contract as
@@ -781,11 +778,8 @@
 		});
 	}
 
-	/** A comment the author just made opens its card and shows the agent
-	 * thinking on it. Cards render collapsed by default, so without this
-	 * the author had to click the card they had just written to see the
-	 * reply and the proposal land under it. The card may not have synced
-	 * back from the server yet; the gutter expands it on arrival. */
+	/** Highlight a comment the author just made and show the agent thinking
+	 * on it. The card may not have synced back from the server yet. */
 	function openFeedbackThread(threadId: string): void {
 		openCommentThreadId.set(threadId);
 		markThreadAwaiting(threadId);
@@ -828,30 +822,6 @@
 		marks;
 		schedulePlainLineSync();
 	});
-	// Thread whose marks should pulse — driven by hovering its card. Null =
-	// nothing flashing.
-	let flashThreadId: string | null = null;
-	let flashClearTimer: ReturnType<typeof setTimeout> | null = null;
-	/** Set (or clear) the hover-flash target. Always self-expiring: a non-null
-	 * flash auto-clears after a beat so it can NEVER get stuck on. Without
-	 * this, accepting a proposal while hovering its card removes the card
-	 * before `onmouseleave` fires, leaving the flash pinned. */
-	function setHoverFlash(threadId: string | null) {
-		if (flashClearTimer) {
-			clearTimeout(flashClearTimer);
-			flashClearTimer = null;
-		}
-		flashThreadId = threadId;
-		syncThreadOverlay();
-		if (threadId) {
-			flashClearTimer = setTimeout(() => {
-				flashClearTimer = null;
-				flashThreadId = null;
-				syncThreadOverlay();
-			}, 1100);
-		}
-	}
-
 	/** PM range currently highlighted as "what the user is giving feedback
 	 * on". Set when the feedback popup opens, cleared when it closes.
 	 * `$state` so the `.feedback-active` class on the wrapper reacts. */
@@ -1024,7 +994,7 @@
 	}
 
 	let threadOverlayQueued = false;
-	/** Refresh the thread overlay (open-thread highlight, hover flash, the
+	/** Refresh the thread overlay (proposal visibility, the
 	 * feedback selection, and the per-thread pills). ALWAYS deferred to a
 	 * microtask: callers fire from Yjs observers (comment-map / fragment
 	 * changes), and dispatching a PM transaction synchronously inside an
@@ -1041,7 +1011,6 @@
 			if (!editor) return;
 			setThreadOverlayState(editor, {
 				openThreadId,
-				flashThreadId,
 				feedbackRange: feedbackSelectionRange,
 				pills: threadsForTab
 					.filter((t) => !t.resolved && !(muted && t.messages[0]?.author === 'agent'))
@@ -1203,23 +1172,15 @@
 		const isUserEdit =
 			transaction.docChanged && transaction.getMeta(ySyncPluginKey) === undefined;
 		if (!isUserEdit) return;
+		openCommentThreadId.set(null);
 		// Burst start (no countdown running): snapshot the doc as it was BEFORE
 		// this keystroke, so the timer can tell whether the burst netted any
 		// real change.
 		if (idleTimer === null) idleBaselineText = docPlainText(transaction.before);
 		restartIdleCountdown();
-		// The user is writing, not reading comments. Collapse any expanded
-		// thread so its margin card doesn't sit in their peripheral vision;
-		// they can re-open it via the pill or gutter card. Skip the first
-		// moments after remount — tab-switch sync can look like a local
-		// edit and would wipe the thread we just restored.
-		if (openThreadId && Date.now() >= suppressThreadCollapseUntil) {
-			openCommentThreadId.set(null);
-		}
 	}
 
 	onMount(async () => {
-		suppressThreadCollapseUntil = Date.now() + 750;
 		// Wait for the Hocuspocus provider's initial sync to finish. The
 		// server is authoritative: it replays the tab's Yjs update log from
 		// SQLite (seeding from the workspace file on first open if the log
@@ -1281,7 +1242,11 @@
 					return false;
 				}
 			},
-			onSelectionUpdate: () => handleSelectionChange(),
+			onSelectionUpdate: () => {
+				if (editor?.isFocused) openCommentThreadId.set(null);
+				handleSelectionChange();
+			},
+			onFocus: () => openCommentThreadId.set(null),
 			onBlur: () => {
 				setTimeout(() => {
 					if (!feedbackPopup) return;
@@ -1343,10 +1308,8 @@
 		};
 		editorRoot.addEventListener('keyup', handleSelectionKeyup);
 
-		// Comment thread decorations dispatch this event when the user
-		// clicks an inline highlight or the gutter pill. With cards in
-		// the right-side comment gutter we just set the store — the
-		// CommentGutter component expands the matching card in place.
+		// Deleted text and thread pills dispatch this event to show the
+		// matching proposal in the document and its expanded comment card.
 		const handleOpenThread = (ev: Event) => {
 			const { threadId } = (ev as CustomEvent).detail as { threadId: string };
 			openCommentThreadId.set(threadId);
@@ -1365,11 +1328,8 @@
 		};
 		editorRoot.addEventListener('docwriter:freeze-menu', handleFreezeMenu as EventListener);
 
-		// Mousedown anywhere outside a gutter card collapses the open
-		// thread AND the open edit card. Pill clicks stop propagation on
-		// mousedown, so window won't see those; inline-highlight clicks
-		// fire handleClick after this mousedown, so they re-open the
-		// matching thread.
+		// Leaving a card hides its diff while keeping its comments visible.
+		// Pill clicks stop propagation and explicitly activate review.
 		const handleOutsideMousedown = (e: MouseEvent) => {
 			const target = e.target as HTMLElement | null;
 			if (!target) return;
@@ -1446,8 +1406,6 @@
 
 	onDestroy(() => {
 		if (editor) editor.destroy();
-		if (flashClearTimer) clearTimeout(flashClearTimer);
-		flashClearTimer = null;
 		if (plainMetricsRaf) cancelAnimationFrame(plainMetricsRaf);
 		plainMetricsRaf = 0;
 		plainResizeObserver?.disconnect();
@@ -1570,7 +1528,6 @@
 				onRejectAll={() => onRejectAll?.()}
 				onResolveThread={(threadId, resolved) => onResolveThread?.(threadId, resolved)}
 				muted={muted}
-				onHoverThread={(threadId) => setHoverFlash(threadId)}
 				onReply={(t, replyText) => {
 					// User replied on a thread — wake the agent to respond.
 					// The post-reply thread `t` doesn't yet include the just-
@@ -1637,7 +1594,7 @@
 					title="Stop the agent from editing this passage. Stored as a Freeze rule; unlock from the gutter or Rules panel."
 				>
 					<Lock size={11} />
-					<span>Freeze for agent</span>
+					<span>Freeze text so agent can't edit</span>
 				</button>
 			</div>
 				<div class="feedback-input-row">
@@ -2036,11 +1993,15 @@
 	 * paragraphs; nothing is computed at render time. Strikes use
 	 * text-decoration and highlights use background-color, so no rule can
 	 * erase another when a passage carries several. */
+	.tiptap-editor :global(p:not(.proposal-review) span[data-mark='insertion']),
+	.tiptap-editor :global(p.proposal-hidden-line) {
+		display: none;
+	}
 	@keyframes markFadeIn {
 		from { opacity: 0; }
 		to { opacity: 1; }
 	}
-	.tiptap-editor :global(span[data-mark='insertion']) {
+	.tiptap-editor :global(p.proposal-review span[data-mark='insertion']) {
 		color: var(--diff-added-color);
 		background-color: var(--diff-added-bg);
 		border-radius: 2px;
@@ -2062,31 +2023,17 @@
 	.tiptap-editor :global(span[data-mark='comment']:hover) {
 		background-color: color-mix(in srgb, #f59e0b 18%, transparent);
 	}
-	.tiptap-editor :global(.tiptap-plain p[data-suggest='ins']) {
+	.tiptap-editor :global(.tiptap-plain p.proposal-review[data-suggest='ins']) {
 		background-color: var(--diff-added-bg);
-		box-shadow: -3px 0 0 color-mix(in srgb, var(--diff-added-color) 55%, transparent);
 	}
 	.tiptap-editor :global(.tiptap-plain p[data-suggest='del']) {
 		color: var(--diff-removed-color);
 		text-decoration: line-through;
 		text-decoration-thickness: 1.5px;
 		opacity: 0.75;
-		box-shadow: -3px 0 0 color-mix(in srgb, var(--diff-removed-color) 55%, transparent);
 	}
 	.tiptap-editor :global([data-thread-id]) {
 		cursor: pointer;
-	}
-	/* The open thread's marks, and a hovered card's marks. */
-	.tiptap-editor :global(.thread-open) {
-		background-color: color-mix(in srgb, var(--accent) 16%, transparent);
-		box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--accent) 55%, transparent);
-	}
-	.tiptap-editor :global(.thread-flash) {
-		animation: thread-flash-pulse 0.9s ease-in-out infinite;
-	}
-	@keyframes thread-flash-pulse {
-		0%, 100% { background-color: color-mix(in srgb, var(--accent) 8%, transparent); }
-		50% { background-color: color-mix(in srgb, var(--accent) 26%, transparent); }
 	}
 	/* Muted agent: proposals stay visible (they are the document's tracked
 	 * changes) but subdued, so a quiet review does not shout. */
@@ -2096,8 +2043,8 @@
 		opacity: 0.5;
 	}
 	.tiptap-editor :global(.feedback-selection) {
-		background: color-mix(in srgb, var(--accent) 18%, transparent);
-		box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--accent) 42%, transparent);
+		background: color-mix(in srgb, var(--text) 12%, transparent);
+		box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--text) 30%, transparent);
 		border-radius: 2px;
 	}
 	/* Find-in-doc match highlights. Soft amber on every match; the
@@ -2984,6 +2931,10 @@
 		color: var(--accent);
 		text-decoration: underline;
 		text-underline-offset: 2px;
+		cursor: pointer;
+	}
+	.tiptap-editor :global(.md-link-syntax-hidden) {
+		display: none;
 	}
 	.tiptap-editor :global(.md-link-url) {
 		opacity: 0.3;
@@ -2995,28 +2946,16 @@
 		color: var(--text-muted);
 	}
 	.tiptap-editor :global(.tiptap-plain p.md-list-item) {
-		--md-list-offset: 2.6ch;
 		padding-left: var(--md-list-offset);
 		text-indent: calc(-1 * var(--md-list-offset));
 	}
-	.tiptap-editor :global(.tiptap-plain p.md-ol-item) {
-		--md-list-offset: 3.6ch;
-	}
 	.tiptap-editor :global(.md-list-marker) {
 		display: inline-block;
+		width: var(--md-list-offset);
+		text-indent: 0;
+		text-align: left;
 		color: var(--text-faint);
-		font-weight: 600;
 		opacity: 0.72;
-	}
-	.tiptap-editor :global(.md-bullet) {
-		width: 1.7ch;
-		margin-right: 0.55ch;
-		text-align: right;
-	}
-	.tiptap-editor :global(.md-ordered-marker) {
-		width: 3ch;
-		margin-right: 0.45ch;
-		text-align: right;
 	}
 	.tiptap-editor :global(.tiptap-plain p.md-hr) {
 		border-bottom: 1px solid var(--border-light);

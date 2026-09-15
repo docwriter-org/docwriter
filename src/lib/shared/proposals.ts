@@ -93,7 +93,9 @@ function collectRuns(el: Y.XmlElement | Y.XmlFragment, out: Run[]): void {
 		}
 		if (child instanceof Y.XmlElement) {
 			if (child.nodeName === 'hardBreak') {
-				out.push({ text: '\n', attrs: {}, br: true });
+				const threadId = child.getAttribute(SUGGEST_THREAD_ATTR);
+				const deleted = child.getAttribute(SUGGEST_ATTR) === 'del' && typeof threadId === 'string';
+				out.push({ text: '\n', attrs: deleted ? { [DELETION_ATTR]: { threadId } } : {}, br: true });
 				return;
 			}
 			collectRuns(child, out);
@@ -164,10 +166,13 @@ function normChar(c: string): string {
 }
 
 function paragraphIncluded(p: Para, mode: ViewMode): boolean {
-	if (mode.kind === 'committed') return p.suggest !== 'ins';
-	if (p.suggest === 'del') return !!mode.except && p.suggestThread === mode.except;
-	if (p.suggest === 'ins') return !(mode.except && p.suggestThread === mode.except);
-	return true;
+	const omitted = mode.kind === 'committed'
+		? p.suggest === 'ins'
+		: (p.suggest === 'del' && p.suggestThread !== mode.except) ||
+			(p.suggest === 'ins' && p.suggestThread === mode.except);
+	// Author text can keep a suggested paragraph alive after its marked
+	// text is removed. The view must match what resolving its marks retains.
+	return !omitted || p.runs.some((run) => runDisposition(run, mode).shown);
 }
 
 /** Whether a run's text is part of the view, and whether it still occupies
@@ -188,7 +193,7 @@ export function buildView(fragment: Y.XmlFragment, mode: ViewMode): DocView {
 	for (const p of paras) {
 		const included = paragraphIncluded(p, mode);
 		const removedByRevert =
-			mode.kind === 'proposed' && !!mode.except && p.suggest === 'ins' && p.suggestThread === mode.except;
+			!included && mode.kind === 'proposed' && !!mode.except && p.suggest === 'ins' && p.suggestThread === mode.except;
 		if (!included) {
 			if (!removedByRevert) paraIndex += 1;
 			continue;
@@ -340,6 +345,18 @@ type ThreadRangeAction = 'revert' | 'accept';
  * one being accepted, that holds nothing but this thread's text). */
 function applyToParagraph(para: Y.XmlElement, threadId: string, action: ThreadRangeAction): boolean {
 	const ranges = textRanges(para);
+	// Structural proposals own the existing hard breaks too. A new break
+	// inserted by the author has no ownership and survives acceptance.
+	for (let i = para.length - 1; i >= 0; i--) {
+		const child = para.get(i);
+		if (!(child instanceof Y.XmlElement) || child.nodeName !== 'hardBreak') continue;
+		if (child.getAttribute(SUGGEST_ATTR) !== 'del' || child.getAttribute(SUGGEST_THREAD_ATTR) !== threadId) continue;
+		if (action === 'accept') para.delete(i, 1);
+		else {
+			child.removeAttribute(SUGGEST_ATTR);
+			child.removeAttribute(SUGGEST_THREAD_ATTR);
+		}
+	}
 	// Descending so deletions never shift the ranges still to be visited.
 	for (let i = ranges.length - 1; i >= 0; i -= 1) {
 		const r = ranges[i];
@@ -568,6 +585,11 @@ function formatRaw(para: Y.XmlElement, s: number, e: number, attrs: Attrs): void
 			if (to > from) c.format(from - cursor, to - from, attrs);
 			cursor += len;
 		} else if (c instanceof Y.XmlElement && c.nodeName === 'hardBreak') {
+			const threadId = markThread(attrs, DELETION_ATTR);
+			if (threadId && cursor >= s && cursor < e) {
+				c.setAttribute(SUGGEST_ATTR, 'del');
+				c.setAttribute(SUGGEST_THREAD_ATTR, threadId);
+			}
 			cursor += 1;
 		}
 	});
@@ -598,11 +620,30 @@ function churn(before: string, after: string): number {
  * node, not a character, and cannot be struck. */
 function planOps(base: DocView, afterLines: string[]): { ops: Op[]; overlap: string | null } {
 	const ops: Op[] = [];
-	const hunks = diffLineLevel(
+	const rawHunks = diffLineLevel(
 		base.lines.map((l) => l.text),
 		afterLines
 	);
 	const lines = base.lines;
+	// Separate diff hunks can touch different lines of the same hardBreak
+	// paragraph. Combine them before expanding a structural edit, so that
+	// paragraph is replaced once with all of its changes.
+	const touchedParas = (h: LineHunk): [number, number] | null => {
+		if (h.aStart < h.aEnd) return [lines[h.aStart].para, lines[h.aEnd - 1].para];
+		const prev = lines[h.aStart - 1];
+		const next = lines[h.aStart];
+		return prev && next && prev.para === next.para ? [prev.para, next.para] : null;
+	};
+	const hunks: LineHunk[] = [];
+	for (const h of rawHunks) {
+		const previous = hunks[hunks.length - 1];
+		const previousParas = previous && touchedParas(previous);
+		const currentParas = touchedParas(h);
+		if (previous && previousParas && currentParas && previousParas[1] >= currentParas[0]) {
+			previous.aEnd = h.aEnd;
+			previous.bEnd = h.bEnd;
+		} else hunks.push({ ...h });
+	}
 	let overlap: string | null = null;
 	const foreignOf = (l: ViewLine) => (l.foreign.length > 0 ? l.foreign[0] : null);
 	const paraLineRange = (para: number): [number, number] => {
@@ -753,9 +794,10 @@ export function proposeText(doc: Y.Doc, threadId: string, after: string): Propos
 	revertThreadMarks(doc, threadId);
 	if (ops.length === 0) return { ok: true, noop: true };
 	const paras = paragraphNodes(fragment);
-	// Existing paragraphs are addressed by node, so their ops can run in any
-	// order; new paragraphs are inserted by index, descending, last.
-	for (const op of ops) {
+	// Work backwards so inserting words into one hardBreak line cannot
+	// shift the raw offsets of a later line that still needs an edit.
+	// New paragraphs are inserted by index, descending, last.
+	for (const op of [...ops].reverse()) {
 		if (op.kind === 'modify') applyModify(paras[op.para], threadId, op.line, op.after);
 		else if (op.kind === 'delPara') {
 			const para = paras[op.para];
@@ -974,24 +1016,12 @@ export function summarizeThreadMarks(doc: Y.Doc): ThreadMarkSummary[] {
 		for (const t of proposalThreads) {
 			const s = byThread.get(t)!;
 			s.hasProposal = true;
-			const before =
-				p.suggest === 'ins'
-					? ''
-					: normalizeTypography(
-							p.runs
-								.filter((r) => !markThread(r.attrs, INSERTION_ATTR))
-								.map((r) => r.text)
-								.join('')
-						);
-			const after =
-				p.suggest === 'del'
-					? ''
-					: normalizeTypography(
-							p.runs
-								.filter((r) => !markThread(r.attrs, DELETION_ATTR))
-								.map((r) => r.text)
-								.join('')
-						);
+			const before = normalizeTypography(
+				p.runs.filter((r) => !markThread(r.attrs, INSERTION_ATTR)).map((r) => r.text).join('')
+			);
+			const after = normalizeTypography(
+				p.runs.filter((r) => !markThread(r.attrs, DELETION_ATTR)).map((r) => r.text).join('')
+			);
 			s.changes.push({ para: pi, before, after });
 			if (!s.quote) s.quote = before || after;
 		}
@@ -1015,7 +1045,7 @@ export function proposalFingerprints(doc: Y.Doc): Map<string, string> {
 		if (!s.hasProposal) continue;
 		out.set(
 			s.threadId,
-			s.changes.map((c) => `${c.para}:${c.before} ${c.after}`).join('')
+			s.changes.map((c) => `${c.para}:${c.before}\0${c.after}`).join('\x01')
 		);
 	}
 	return out;

@@ -11,6 +11,7 @@ import {
 } from '@tiptap/y-tiptap';
 import { Editor, Extension, Mark, type Extensions } from '@tiptap/core';
 import { Plugin, PluginKey, type EditorState } from '@tiptap/pm/state';
+import { Fragment, Slice, type Node as PMNode } from '@tiptap/pm/model';
 import * as Y from 'yjs';
 import { AI_ATTR, FRAGMENT_NAME, COMMENTS_MAP_NAME, USER_ORIGIN, encodeRelPosition } from '$lib/shared/ydoc-codec';
 import {
@@ -106,9 +107,9 @@ export const AiProvenanceMark = Mark.create({
 
 /** A mark that carries a thread id (see proposals.ts). Rendered as
  * `span[data-mark=<kind>][data-thread-id]`; the CSS in TiptapEditor colors
- * it and the thread overlay opens the thread on click. `parseHTML` is empty
- * on purpose: copied proposal text pastes as plain text and never re-enters
- * the document as a proposal. */
+ * it and the thread overlay opens the thread on click. Parse rules preserve
+ * marks when the browser rebuilds their DOM during typing. Clipboard marks
+ * are removed separately by LocalInputMarkStrip. */
 function threadMark(name: string, kind: 'insertion' | 'deletion' | 'comment', inclusive: boolean) {
 	return Mark.create({
 		name,
@@ -117,13 +118,14 @@ function threadMark(name: string, kind: 'insertion' | 'deletion' | 'comment', in
 			return {
 				threadId: {
 					default: null,
+					parseHTML: (el: HTMLElement) => el.getAttribute('data-thread-id'),
 					renderHTML: (attrs: { threadId?: string | null }) =>
 						attrs.threadId ? { 'data-thread-id': attrs.threadId } : {}
 				}
 			};
 		},
 		parseHTML() {
-			return [];
+			return [{ tag: `span[data-mark="${kind}"][data-thread-id]` }];
 		},
 		renderHTML({ HTMLAttributes }) {
 			return ['span', { ...HTMLAttributes, 'data-mark': kind }, 0];
@@ -139,26 +141,34 @@ export const DeletionMark = threadMark(DELETION_ATTR, 'deletion', false);
  * the commented passage, as in Google Docs. */
 export const CommentMark = threadMark(COMMENT_ATTR, 'comment', true);
 
-/** Paragraph with the proposal attributes: a whole line added (`ins`) or
- * removed (`del`) by the thread in `suggestThread`. Attribute names match
- * the Y.XmlElement attribute names, which is how y-prosemirror maps them. */
+/** Paragraphs and hard breaks preserve proposal ownership through DOM
+ * parsing and Yjs sync. Attribute names match the Y.XmlElement attributes. */
+function suggestionAttributes() {
+	return {
+		[SUGGEST_ATTR]: {
+			default: null,
+			parseHTML: (el: HTMLElement) => el.getAttribute('data-suggest') || null,
+			renderHTML: (attrs: Record<string, unknown>) =>
+				attrs[SUGGEST_ATTR] ? { 'data-suggest': String(attrs[SUGGEST_ATTR]) } : {}
+		},
+		[SUGGEST_THREAD_ATTR]: {
+			default: null,
+			parseHTML: (el: HTMLElement) => el.getAttribute('data-thread-id') || null,
+			renderHTML: (attrs: Record<string, unknown>) =>
+				attrs[SUGGEST_THREAD_ATTR] ? { 'data-thread-id': String(attrs[SUGGEST_THREAD_ATTR]) } : {}
+		}
+	};
+}
+
 export const SuggestParagraph = Paragraph.extend({
 	addAttributes() {
-		return {
-			...(this.parent?.() ?? {}),
-			[SUGGEST_ATTR]: {
-				default: null,
-				parseHTML: (el: HTMLElement) => el.getAttribute('data-suggest') || null,
-				renderHTML: (attrs: Record<string, unknown>) =>
-					attrs[SUGGEST_ATTR] ? { 'data-suggest': String(attrs[SUGGEST_ATTR]) } : {}
-			},
-			[SUGGEST_THREAD_ATTR]: {
-				default: null,
-				parseHTML: (el: HTMLElement) => el.getAttribute('data-thread-id') || null,
-				renderHTML: (attrs: Record<string, unknown>) =>
-					attrs[SUGGEST_THREAD_ATTR] ? { 'data-thread-id': String(attrs[SUGGEST_THREAD_ATTR]) } : {}
-			}
-		};
+		return { ...(this.parent?.() ?? {}), ...suggestionAttributes() };
+	}
+});
+
+const SuggestHardBreak = HardBreak.extend({
+	addAttributes() {
+		return { ...(this.parent?.() ?? {}), ...suggestionAttributes() };
 	}
 });
 
@@ -178,9 +188,27 @@ export const LocalInputMarkStrip = Extension.create({
 		const types = [AI_ATTR, INSERTION_ATTR, DELETION_ATTR]
 			.map((name) => schema.marks[name])
 			.filter((t): t is NonNullable<typeof t> => !!t);
+		const clipboardTypes = [...types, schema.marks[COMMENT_ATTR]];
+		function plainClipboardContent(content: Fragment): Fragment {
+			const nodes: PMNode[] = [];
+			content.forEach((node) => {
+				const marks = node.marks.filter((mark) => !clipboardTypes.includes(mark.type));
+				nodes.push(node.isText ? node.mark(marks) : node.type.create(
+					{ ...node.attrs, [SUGGEST_ATTR]: null, [SUGGEST_THREAD_ATTR]: null },
+					plainClipboardContent(node.content),
+					marks
+				));
+			});
+			return Fragment.fromArray(nodes);
+		}
 		return [
 			new Plugin({
 				key: new PluginKey('localInputMarkStrip'),
+				props: {
+					transformPasted(slice) {
+						return new Slice(plainClipboardContent(slice.content), slice.openStart, slice.openEnd);
+					}
+				},
 				appendTransaction(transactions, _oldState, newState) {
 					// Collect ranges inserted by LOCAL transactions, mapping
 					// previously-collected ranges through every later step so
@@ -227,6 +255,21 @@ export const LocalInputMarkStrip = Extension.create({
 	}
 });
 
+/** Insert a literal tab through a normal editor transaction so it syncs
+ * and undoes like typed text. Shift+Tab remains available to move focus. */
+const PlainTextTab = Extension.create({
+	name: 'plainTextTab',
+	addKeyboardShortcuts() {
+		return {
+			Tab: () => {
+				if (!this.editor.isEditable) return false;
+				this.editor.view.dispatch(this.editor.state.tr.insertText('\t').scrollIntoView());
+				return true;
+			}
+		};
+	}
+});
+
 /** Plain-text extension set: minimal schema (doc, paragraph, text, hard-break)
  * plus the provenance and proposal marks. Every file — including `.md` /
  * `.markdown` / `.mdx` — is rendered as source text. `# Heading` shows as
@@ -238,12 +281,13 @@ export function plainBaseExtensions(options?: { placeholder?: string }): Extensi
 		Document,
 		SuggestParagraph,
 		Text,
-		HardBreak,
+		SuggestHardBreak,
 		AiProvenanceMark,
 		InsertionMark,
 		DeletionMark,
 		CommentMark,
 		LocalInputMarkStrip,
+		PlainTextTab,
 		Placeholder.configure({ placeholder: options?.placeholder ?? 'Start writing...' })
 	];
 }

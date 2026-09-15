@@ -38,7 +38,10 @@ export function backupDocumentState(tabId: string, reason: string, ydoc: Y.Doc):
 					text: serializeYDoc(ydoc),
 					proposedText: proposedText(ydoc),
 					threads: readCommentThreads(ydoc),
-					marks: summarizeThreadMarks(ydoc)
+					marks: summarizeThreadMarks(ydoc),
+					// Migration can drop an unmatched legacy proposal. Keep its
+					// original payload in the backup made before migration.
+					...(ydoc.getArray('rounds').length > 0 ? { rounds: ydoc.getArray('rounds').toArray() } : {})
 				},
 				null,
 				2

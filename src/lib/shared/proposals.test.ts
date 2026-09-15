@@ -276,6 +276,24 @@ describe('comment marks', () => {
 });
 
 describe('typography and structure', () => {
+	it.each([
+		'first longer part\nsecond changed part\nthird longer part',
+		'FIRST\nnew line\nsecond part\nTHIRD'
+	])('replaces several parts of a hardBreak paragraph without shifting later edits: %s', (after) => {
+		const doc = new Y.Doc();
+		const paragraph = new Y.XmlElement('paragraph');
+		paragraph.insert(0, [
+			new Y.XmlText('first part'), new Y.XmlElement('hardBreak'),
+			new Y.XmlText('second part'), new Y.XmlElement('hardBreak'), new Y.XmlText('third part')
+		]);
+		doc.getXmlFragment(FRAGMENT_NAME).insert(0, [paragraph]);
+		expect(proposeText(doc, 't1', after)).toEqual({ ok: true, noop: false });
+		expect(proposedText(doc)).toBe(after);
+		expect(committedText(doc)).toBe('first part\nsecond part\nthird part');
+		resolveThreadMarks(doc, 't1', 'accepted');
+		expect(committedText(doc)).toBe(after);
+	});
+
 	it('matches the normalized text and marks the raw characters', () => {
 		const doc = new Y.Doc();
 		doc.transact(() => {
@@ -313,6 +331,9 @@ describe('typography and structure', () => {
 		]);
 		expect(proposedText(doc)).toBe('first part\nmiddle\nsecond part');
 		expect(committedText(doc)).toBe('first part\nsecond part');
+		resolveThreadMarks(doc, 't1', 'accepted');
+		expect(committedText(doc)).toBe('first part\nmiddle\nsecond part');
+		expect(doc.getXmlFragment(FRAGMENT_NAME).length).toBe(3);
 	});
 
 	it('author text typed into an inserted paragraph survives a reject', () => {
@@ -325,9 +346,36 @@ describe('typography and structure', () => {
 			t.insert(t.length, ' mine', {});
 		}, USER_ORIGIN);
 		expect(proposedText(doc)).toBe('one\nadded mine');
+		expect(committedText(doc)).toBe('one\n mine');
+		expect(summarizeThreadMarks(doc)[0].changes[0].before).toBe(' mine');
 		doc.transact(() => resolveThreadMarks(doc, 't1', 'rejected'), USER_ORIGIN);
 		expect(committedText(doc)).toBe('one\n mine');
 		expect(paraAttrs(doc).every((a) => a.suggest === undefined)).toBe(true);
+	});
+
+	it('revises a proposal after author text keeps its inserted paragraph alive', () => {
+		const doc = docWith('one\ntail');
+		proposeReplacement(doc, 't1', 'one', 'one\nadded');
+		const paragraph = doc.getXmlFragment(FRAGMENT_NAME).get(1) as Y.XmlElement;
+		const text = paragraph.get(0) as Y.XmlText;
+		text.insert(text.length, ' mine', {});
+		expect(proposeReplacement(doc, 't1', 'added', 'revised')).toEqual({ ok: true, noop: false });
+		expect(proposedText(doc)).toBe('one\nrevised mine\ntail');
+		expect(committedText(doc)).toBe('one\n mine\ntail');
+		resolveThreadMarks(doc, 't1', 'rejected');
+		expect(committedText(doc)).toBe('one\n mine\ntail');
+	});
+
+	it('includes author text in a deleted paragraph in the proposed view and summary', () => {
+		const doc = docWith('old\ntail');
+		proposeReplacement(doc, 't1', 'old', 'replacement');
+		const paragraph = doc.getXmlFragment(FRAGMENT_NAME).get(0) as Y.XmlElement;
+		const text = paragraph.get(0) as Y.XmlText;
+		text.insert(text.length, ' mine', {});
+		expect(proposedText(doc)).toBe(' mine\nreplacement\ntail');
+		expect(summarizeThreadMarks(doc)[0].changes[0].after).toBe(' mine');
+		resolveThreadMarks(doc, 't1', 'accepted');
+		expect(committedText(doc)).toBe(' mine\nreplacement\ntail');
 	});
 });
 

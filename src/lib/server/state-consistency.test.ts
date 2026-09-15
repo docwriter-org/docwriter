@@ -13,7 +13,7 @@
  * LEGACY (v12) database BEFORE the server modules load, so the first
  * `getDb()` runs the v13 migration against real damaged data.
  */
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
 	mkdtempSync,
 	mkdirSync,
@@ -25,9 +25,12 @@ import {
 	unlinkSync
 } from 'node:fs';
 import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import BetterSqlite3 from 'better-sqlite3';
 import * as Y from 'yjs';
+
+vi.mock('$app/environment', () => ({ dev: false }));
 
 let root = '';
 let db: typeof import('$lib/server/db');
@@ -514,6 +517,50 @@ describe('per-render state is isolated between concurrent renders', () => {
 });
 
 describe('tool results never claim an edit was applied', () => {
+	it('a missing target thread cannot create an unreviewable proposal', () => {
+		const doc = seededDoc('Original text.');
+		const before = Y.encodeStateAsUpdate(doc);
+		const result = mcp.runWithRenderScope({ feedbackThreadId: 'missing' }, () =>
+			mcp.applyTabWrite(doc, { kind: 'edit', oldString: 'Original', newString: 'Revised' })
+		);
+		expect(result).toHaveProperty('error');
+		expect(Y.encodeStateAsUpdate(doc)).toEqual(before);
+		doc.destroy();
+	});
+
+	it('a migration backup retains the original pending round payloads', async () => {
+		const doc = seededDoc('Original text.');
+		const round = { id: 'legacy', operation: { type: 'edit', oldString: 'missing text', newString: 'proposal to recover' } };
+		doc.getArray('rounds').push([round]);
+		const { backupDocumentState } = await import('$lib/server/state-backup');
+		const path = backupDocumentState('migration-backup.md', 'proposal-migration', doc);
+		expect(path).not.toBeNull();
+		expect(JSON.parse(readFileSync(path!, 'utf8')).rounds).toEqual([round]);
+		doc.destroy();
+	});
+
+	it('doctor rejects hardBreak proposals and backs up their complete document state', () => {
+		const tab = 'doctor-breaks.md';
+		const doc = new Y.Doc();
+		const paragraph = new Y.XmlElement('paragraph');
+		paragraph.insert(0, [new Y.XmlText('first'), new Y.XmlElement('hardBreak'), new Y.XmlText('second')]);
+		doc.getXmlFragment(codec.FRAGMENT_NAME).insert(0, [paragraph]);
+		proposals.proposeText(doc, 'doctor-thread', 'replacement');
+		yp.appendUpdate(tab, Y.encodeStateAsUpdate(doc), codec.AGENT_ORIGIN);
+		execFileSync(process.execPath, [join(import.meta.dirname, '../../../bin/docwriter-doctor.js'), root, '--tab', tab, '--clear-pending', '--json']);
+		const restored = new Y.Doc();
+		yp.replayUpdatesInto(restored, tab);
+		expect(proposals.proposedText(restored)).toBe('first\nsecond');
+		expect(proposals.summarizeThreadMarks(restored)).toEqual([]);
+		const backupDir = join(root, '.docwriter', 'backups');
+		const backupName = readdirSync(backupDir).find((name) => name.startsWith(tab))!;
+		const backup = JSON.parse(readFileSync(join(backupDir, backupName), 'utf8'));
+		const snapshot = new Y.Doc();
+		Y.applyUpdate(snapshot, Buffer.from(backup.yjsUpdate, 'base64'));
+		expect(proposals.proposedText(snapshot)).toBe('replacement');
+		for (const d of [doc, restored, snapshot]) d.destroy();
+	});
+
 	// The agent repeats its tool results to the author. "Edit applied to
 	// X." had it announcing an edit as done while the author still had to
 	// Accept the pending diff — or while nothing had happened at all.
@@ -611,6 +658,20 @@ describe('accept, reject and dismiss are one resolve operation', () => {
 			marks: proposals.summarizeThreadMarks(doc)
 		};
 	}
+
+	it.each(['accepted', 'rejected'] as const)('the batch %s endpoint acknowledges its undoable update', async (outcome) => {
+		const tab = seed('batch_route', P1, P1NEW);
+		const { POST } = await import('../../routes/api/document/+server');
+		const url = new URL(`http://localhost/api/document?tab=${encodeURIComponent(tab)}`);
+		const request = new Request(url, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ action: 'resolve_all', outcome })
+		});
+		const response = await POST({ request, url } as never);
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({ ok: true, count: 1, yjsUpdate: expect.any(String) });
+	});
 
 	it('accept lands the text, resolves the thread, and leaves no marks', async () => {
 		const tab = seed('thread_accept', P1, P1NEW);

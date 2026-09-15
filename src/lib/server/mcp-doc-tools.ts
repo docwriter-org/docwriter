@@ -292,6 +292,9 @@ export function applyTabWrite(doc: Y.Doc, op: WriteOp): TabWriteResult | TabWrit
 	const commentsMap = getCommentsMap(doc);
 	if (targetThreadId) {
 		const thread = getThread(commentsMap, targetThreadId);
+		if (!thread) {
+			return { error: `Thread "${targetThreadId}" does not exist in this document. Call list_threads to find the correct thread, or comment_doc to create one before proposing the edit.` };
+		}
 		// (1) The user already RESOLVED the thread (e.g. while the agent was
 		// still thinking): they are done with it — toss the edit instead of
 		// reviving the thread with a new proposal. (2) The prompt's

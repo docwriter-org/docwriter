@@ -330,6 +330,10 @@ function revertThreadMarks(ydoc, threadId) {
 	for (let i = paras.length - 1; i >= 0; i--) {
 		const p = paras[i];
 		for (const c of p.toArray()) {
+			if (c instanceof Y.XmlElement && c.nodeName === 'hardBreak' && c.getAttribute(SUGGEST_THREAD_ATTR) === threadId) {
+				c.removeAttribute(SUGGEST_ATTR);
+				c.removeAttribute(SUGGEST_THREAD_ATTR);
+			}
 			if (!(c instanceof Y.XmlText)) continue;
 			const ranges = [];
 			let idx = 0;
@@ -396,7 +400,7 @@ function backupTab(tabId, reason) {
 		const ydoc = replayTab(tabId);
 		mkdirSync(backupsDir, { recursive: true });
 		const path = join(backupsDir, `${encodeURIComponent(tabId)}-${Date.now()}.json`);
-		writeFileSync(path, JSON.stringify({ tabId, reason, savedAt: new Date().toISOString(), proposalThreads: [...proposalThreadIds(ydoc)], threads: readThreads(ydoc) }, null, 2));
+		writeFileSync(path, JSON.stringify({ tabId, reason, savedAt: new Date().toISOString(), yjsUpdate: Buffer.from(Y.encodeStateAsUpdate(ydoc)).toString('base64'), proposalThreads: [...proposalThreadIds(ydoc)], threads: readThreads(ydoc) }, null, 2));
 		ydoc.destroy();
 	} catch (err) {
 		console.error(`backup failed for "${tabId}":`, err.message);

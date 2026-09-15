@@ -15,17 +15,15 @@ import {
  * proposals.ts), rendered by CSS on the mark spans; nothing here draws a
  * diff. This plugin adds the transient, per-viewer state on top:
  *
- *   - the open thread's marks get a stronger highlight (`thread-open`);
- *   - a hovered card pulses its thread's marks (`thread-flash`);
+ *   - only the active thread's proposal is shown for review;
  *   - the feedback popup's selection is highlighted (`feedback-selection`);
  *   - each open thread gets a small pill after its last mark showing the
- *     message count; clicking a mark or a pill dispatches
- *     `docwriter:open-thread` for the editor host.
+ *     message count; clicking a pill dispatches `docwriter:open-thread`.
+ *     Clicking deleted text opens its diff; other document text leaves review.
  */
 
 export interface ThreadOverlayState {
 	openThreadId: string | null;
-	flashThreadId: string | null;
 	feedbackRange: { from: number; to: number } | null;
 	/** Open threads and their message counts, for the pills. */
 	pills: Array<{ threadId: string; count: number }>;
@@ -35,7 +33,6 @@ const threadKey = new PluginKey<ThreadOverlayState>('threadOverlay');
 
 const INITIAL_STATE: ThreadOverlayState = {
 	openThreadId: null,
-	flashThreadId: null,
 	feedbackRange: null,
 	pills: []
 };
@@ -135,23 +132,50 @@ export const ThreadOverlay = Extension.create({
 					}
 				},
 				props: {
+					handleDOMEvents: {
+						click(view, event) {
+							// Run after mouseup has placed the cursor and focus/selection
+							// handlers have closed the previous review. Preserve drag selection.
+							if (!view.state.selection.empty || event.button !== 0) return false;
+							const target = event.target;
+							if (!(target instanceof Element) || target.closest('.comment-thread-pill')) return false;
+							const deletion = target.closest<HTMLElement>('[data-mark="deletion"], p[data-suggest="del"]');
+							const threadId = deletion?.getAttribute('data-thread-id');
+							if (!deletion || !threadId || !view.dom.contains(deletion)) return false;
+							dispatchOpenThread(deletion, threadId);
+							return false;
+						}
+					},
 					decorations(state) {
-						const { openThreadId, flashThreadId, feedbackRange, pills } =
+						const { openThreadId, feedbackRange, pills } =
 							threadKey.getState(state) ?? INITIAL_STATE;
 						const decorations: Decoration[] = [];
 						const ranges = threadRanges(state.doc);
+						// Review is local UI state. Keep the underlying proposal
+						// intact while showing the committed text outside review.
+						state.doc.descendants((node, pos) => {
+							if (node.type.name !== 'paragraph') return;
+							let reviewing = !!openThreadId && node.attrs[SUGGEST_THREAD_ATTR] === openThreadId;
+							let onlyInsertions = node.attrs[SUGGEST_ATTR] === 'ins';
+							node.descendants((child) => {
+								if (openThreadId && child.marks.some((mark) =>
+									(mark.type.name === INSERTION_ATTR || mark.type.name === DELETION_ATTR) &&
+									mark.attrs.threadId === openThreadId
+								)) reviewing = true;
+								if (!child.marks.some((mark) => mark.type.name === INSERTION_ATTR)) onlyInsertions = false;
+							});
+							if (reviewing || onlyInsertions) {
+								decorations.push(Decoration.node(pos, pos + node.nodeSize, {
+									class: reviewing ? 'proposal-review' : 'proposal-hidden-line'
+								}));
+							}
+							return false;
+						});
 						if (feedbackRange) {
 							const maxPos = state.doc.content.size;
 							const from = Math.max(1, Math.min(feedbackRange.from, maxPos));
 							const to = Math.max(from, Math.min(feedbackRange.to, maxPos));
 							if (to > from) decorations.push(Decoration.inline(from, to, { class: 'feedback-selection' }));
-						}
-						for (const id of [openThreadId, flashThreadId]) {
-							if (!id) continue;
-							const cls = id === openThreadId ? 'thread-open' : 'thread-flash';
-							for (const r of ranges.get(id) ?? []) {
-								if (r.to > r.from) decorations.push(Decoration.inline(r.from, r.to, { class: cls }));
-							}
 						}
 						for (const { threadId, count } of pills) {
 							const list = ranges.get(threadId);
@@ -193,22 +217,6 @@ export const ThreadOverlay = Extension.create({
 							);
 						}
 						return DecorationSet.create(state.doc, decorations);
-					},
-					handleClick(_view, _pos, event) {
-						const target = event.target as HTMLElement | null;
-						if (!target) return false;
-						// A click on a mark span (not the pill — that's handled by
-						// the button's own click). Walk up looking for the data
-						// attribute the mark renders.
-						const el = target.closest?.('[data-thread-id]') as HTMLElement | null;
-						if (!el) return false;
-						if (el.classList.contains('comment-thread-pill')) return false;
-						const threadId = el.getAttribute('data-thread-id');
-						if (!threadId) return false;
-						dispatchOpenThread(el, threadId);
-						// Let ProseMirror place the caret too: the span is real,
-						// editable text.
-						return false;
 					}
 				}
 			})
