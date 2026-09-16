@@ -68,17 +68,17 @@ Connect Claude, OpenAI, Codex, Cursor, or Pi when you want to use the agent. Fol
 
 ## Development
 
-Use Node.js 22.22.2, which is pinned in `.nvmrc`.
+Use Node.js 22.22.2, which is pinned in `.nvmrc`. From your checkout, install the packages and start the development version with a folder for your test documents:
 
 ```sh
 nvm use
 npm install
-npm run dev
-npm run check
-npm run build
+node bin/docwriter-dev.js ~/writing/docwriter-test
 ```
 
-Use `npm run docs` to preview the documentation. Read the [contributor setup](https://docs.docwriter.org/contribute/setup) before submitting a code change.
+Keep the terminal open, edit the application code, and save; you will see your changes in the browser at `http://127.0.0.1:5173` without rebuilding. You can also use `npm run dev:workspace -- ~/writing/docwriter-test`.
+
+Read [Contributor setup](https://docs.docwriter.org/contribute/setup) for restart instructions and checks before submitting a code change. Use `npm run docs` to preview the documentation.
 
 ## About the project
 
