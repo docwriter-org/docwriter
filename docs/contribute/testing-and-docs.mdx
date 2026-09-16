@@ -10,10 +10,11 @@ These checks prevent broken links, missing images, unused media, stale generated
 
 ```sh
 npm run check
+npm run test:unit
 npm run build
 ```
 
-Run both commands for every code change. A page-only documentation change can use the documentation checks below instead. The project does not have a unit test suite.
+Run all three commands for code changes. For changes to documentation pages, use the documentation checks below. Use `npm run test:unit` for the Vitest unit tests.
 
 If you changed a provider, run its smoke test with the matching credential:
 

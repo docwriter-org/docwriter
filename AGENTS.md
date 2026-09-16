@@ -1,54 +1,75 @@
-# AGENTS.md
+# Working on DocWriter
 
-DocWriter is an AI-assisted markdown writing editor (SvelteKit + Svelte 5 +
-Tiptap, server-owned Yjs CRDT, embedded SQLite). See `README.md` for the
-standard dev commands and `CLAUDE.md` / `ARCHITECTURE.md` for the system design.
+DocWriter is a local Markdown editor for writing with an AI agent. You work with SvelteKit, Svelte 5, Tiptap, Yjs, and SQLite.
 
-## Cursor Cloud specific instructions
+Keep shared instructions in this file. `CLAUDE.md` is a relative symlink to `AGENTS.md`; edit this file when you change the instructions.
 
-Services & ports (single Node process):
+## Writing preferences
 
-- `npm run dev` starts Vite on **:5173** and auto-boots the Hocuspocus Y.Doc
-  WebSocket sync server on **:3001** in-process (from `src/hooks.server.ts`).
-  The browser only paints after the WS `synced` event, so a blank editor that
-  never fills in usually means the :3001 WS server didn't start.
-- `npm run dev` runs against the current working directory as the workspace
-  root, so the file tree shows the whole repo. To run against a clean target
-  folder instead, use `npm run dev:workspace -- [--no-open] [--host 0.0.0.0] /path/to/folder`.
-- No test framework is configured; `npm run check` (svelte-check) is the
-  validation command. `npm run build` is the production build.
+Apply these preferences to documentation, UI text, comments, commit messages, and PR descriptions:
 
-Node version (important gotcha):
+- Address the reader as "you"; use second person and direct instructions.
+- Use simple, everyday words and complete sentences. Explain necessary technical terms.
+- Join closely related clauses with commas, semicolons, or "and"; keep each sentence easy to follow.
+- Do not assign actions to inanimate subjects. Use "be" or "have" for them, or make a person the subject. Write "The original text will still have a strikethrough," not "The original text stays struck through."
+- Be literal and specific. Avoid filler, hype, analogies, clever headings, invented compound words, and unnecessary jargon.
+- Use straight quotes and sentence case. Avoid em dashes and en dashes.
+- Explain what you changed, why, and how you checked it. Report any limits without claiming checks you did not run.
 
-- `.npmrc` sets `engine-strict=true` and a dependency requires Node
-  **>=22.19.0**; the repo pins **22.22.2** via `.nvmrc`. The system
-  `/exec-daemon/node` is older (22.14.0) and sits ahead of nvm on `PATH`, so a
-  raw `node`/`npm install` can fail with `EBADENGINE`. The update script and a
-  one-time `~/.bashrc` pin already force nvm's 22.22.2 for new shells; if a
-  shell still shows `node v22.14.0`, run `nvm use` (reads `.nvmrc`) first.
+## Run the app
 
-AI agent (for end-to-end testing of the headline feature):
+Use Node 22.22.2 from `.nvmrc`. From your checkout:
 
-- The editor loads and edits without any key, but the agent loop
-  (Send → propose edit → review card) needs a provider credential. Prompt
-  the agent via the **Send** button (top-right of the center pane); proposed
- edits appear as tracked changes plus an **Accept/Reject/Retry** review card
- floating inline near the edit in the center editor (there is no separate
- review pane). Accept writes through to the tab's file on disk (e.g.
- `document.md`, or whichever tab is open).
-- **Claude** (default provider) needs `ANTHROPIC_API_KEY` (a secret). Two
-  non-obvious gotchas when present:
-  - The `@anthropic-ai/claude-agent-sdk` ships both a glibc and a musl native
-    binary and its resolver prefers the **musl** one, which cannot run on this
-    glibc VM (`ReferenceError: Claude Code native binary not found … -musl/claude`).
-    The update script deletes
-    `node_modules/@anthropic-ai/claude-agent-sdk-linux-x64-musl` after install so
-    the glibc binary is selected; if you reinstall deps by hand, remove it again.
-  - **Claude Opus 4.8** currently errors with `thinking.type.enabled is not
-    supported for this model` against the bundled SDK version. Use
-    **Settings → Model → Claude Sonnet 4.6** (or Haiku 4.5) for agent runs.
-- **OpenAI**: `OPENAI_API_KEY` works via **Settings → Provider → OpenAI**.
-  NON-OBVIOUS: the OpenAI provider defaults to the **Codex Mini**
-  (`codex-mini`) model, which is unavailable and errors with
-  `Error 400 The requested model 'codex-mini' does not exist`. Switch to
-  **Settings → Model → GPT-5.5** (or another listed GPT-5.x) before sending.
+```sh
+nvm use
+npm install
+node bin/docwriter-dev.js ~/writing/docwriter-test
+```
+
+If you do not have that Node version, run `nvm install` first. Keep the terminal open; save application code changes to see them in the browser at `http://127.0.0.1:5173`. Your writing is in the folder you specified.
+
+Use `npm run dev` if you want the repository itself as your writing workspace. You need port 3001 for document sync; if the editor is blank, check the terminal for a sync server error.
+
+Read [Contributor setup](docs/contribute/setup.mdx) for launcher options, restart instructions, and production builds. You can edit documents without provider credentials; see [Connect a provider](docs/connect-provider.mdx) when testing the agent.
+
+## Work on a change
+
+- Read the relevant code before editing; keep changes within the requested task.
+- Complete authorized work without asking for the same permission again. Ask when you need information that you cannot infer safely.
+- Keep the user's unrelated work. Do not revert, overwrite, or include it in your commit.
+- Use the existing code and conventions; use Svelte 5 runes for component state.
+- When you change behavior, add or update a focused test. For wording or visual changes, use the relevant documentation or browser checks.
+- Write PR descriptions for someone who has not read the conversation. Describe the final change and the checks you ran.
+
+## Preserve document and review behavior
+
+Read [Architecture](docs/contribute/architecture.mdx) before changing the editor, sync, review, or storage. Read [Proposal handling](docs/contribute/plan-suggestions-as-marks.md) for edit and undo details.
+
+- Read the live server Yjs document when available. Use `openDirectConnection` for server edits; do not change a temporary copy while a live document is available.
+- Keep Markdown in Document, Paragraph, Text, and HardBreak nodes. Use display plugins for formatting; do not add StarterKit, Link, or Tiptap history.
+- Use `src/lib/shared/proposals.ts` for proposals. Keep one thread per passage; revise a proposal on its existing thread. Preserve text and line breaks typed by the author when accepting or rejecting an edit.
+- Store document state in SQLite and save committed text to workspace files. Keep pending additions and comment data out of those files. Back up data before deletion, migration, or repair; retain the update log when closing a tab.
+- Resolve proposal marks and close the thread in one `USER_ORIGIN` transaction. Keep review actions undoable; exclude agent proposals from typing history. Import transaction origins from `src/lib/shared/ydoc-codec.ts` and sync helpers from `src/lib/editor-extensions.ts`.
+- Keep comment cards expanded. Show additions when the user focuses a card or clicks struck text; hide additions when they click elsewhere or type. The original text must still have a strikethrough. Do not add purple passage highlights or vertical diff borders.
+- In the app's agent workflow, explain an edit on its comment thread before proposing it. Use `docwriter-doc` tools for open documents, and keep request state in `AsyncLocalStorage`. Do not delegate document tool work to subagents; the tool connection is bound to its original query.
+
+## Check your work
+
+Before finishing, run:
+
+```sh
+npm run check
+npm run test:unit
+```
+
+For application code changes, also run `npm run build`. For public documentation changes, run `npm run docs:validate`. Run provider smoke tests with the appropriate credentials when changing provider behavior; say if you could not run them.
+
+For editor or review changes, check typing, accepting, rejecting, undo, and reloading in the browser. Take new screenshots only when the existing ones are outdated or you need to explain a new interaction.
+
+## Where to look
+
+- [README](README.md) for installation and project context.
+- [Contributor setup](docs/contribute/setup.mdx) for local development.
+- [Architecture](docs/contribute/architecture.mdx) for storage, sync, and a map of the code.
+- [Providers and tools](docs/contribute/providers-and-tools.mdx) for agent integration.
+- [Testing and documentation](docs/contribute/testing-and-docs.mdx) for browser tests and documentation assets.
