@@ -189,20 +189,32 @@ function usageEvent(usage: unknown): ProviderEvent {
 	return { type: 'cost', usage, numTurns: 1 };
 }
 
+/** Options for the Codex SDK client. With an API key, Codex keeps its state
+ * in the workspace's `.docwriter/codex`. Without one, Codex uses its normal
+ * home (`CODEX_HOME` or `~/.codex`), where the Codex CLI login is saved;
+ * pointing it anywhere else makes every request fail with 401. */
+export function codexClientOptions(
+	env: NodeJS.ProcessEnv,
+	docwriterDir: string
+): { apiKey: string | undefined; env: NodeJS.ProcessEnv } {
+	// Prefer CODEX_API_KEY, but allow OPENAI_API_KEY for CI and local setups
+	// where Codex uses the same OpenAI credential.
+	const apiKey = env.CODEX_API_KEY || env.OPENAI_API_KEY || undefined;
+	if (!apiKey) return { apiKey: undefined, env: { ...env } };
+	return { apiKey, env: { ...env, CODEX_HOME: join(docwriterDir, 'codex') } };
+}
+
 export class CodexProvider implements AgentProvider {
 	readonly id = 'codex' as const;
 
 	private async createClient(): Promise<any> {
 		await loadSdk();
 		if (!Codex) throw new Error('Codex SDK failed to load.');
-		const codexHome = join(getEffectiveDocwriterDir(), 'codex');
-		await mkdir(codexHome, { recursive: true });
-		// Prefer CODEX_API_KEY, but allow OPENAI_API_KEY for CI and local setups
-		// where Codex uses the same OpenAI credential.
-		return new Codex({
-			apiKey: process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY || undefined,
-			env: { ...process.env, CODEX_HOME: codexHome }
-		});
+		const options = codexClientOptions(process.env, getEffectiveDocwriterDir());
+		if (options.env.CODEX_HOME && options.apiKey) {
+			await mkdir(options.env.CODEX_HOME, { recursive: true });
+		}
+		return new Codex(options);
 	}
 
 	private async getThread(options: ProviderQueryOptions): Promise<any> {
