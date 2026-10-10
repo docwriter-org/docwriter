@@ -1,6 +1,19 @@
 const HIDDEN_CLAUDE_MODEL_PATTERNS = [/fable/i, /mythos/i];
 
+export const DEFAULT_CLAUDE_MODEL_PREFIX = 'claude-opus-5-5';
+
+/** Pick the default model: Opus 5.5 if listed, then any Opus, then the first model. */
+export function pickDefaultClaudeModel(ids: string[]): string {
+	return (
+		ids.find((id) => id.startsWith(DEFAULT_CLAUDE_MODEL_PREFIX)) ??
+		ids.find((id) => id.includes('opus')) ??
+		ids[0] ??
+		DEFAULT_CLAUDE_MODEL_PREFIX
+	);
+}
+
 const ONE_M_CONTEXT_CLAUDE_MODEL_PREFIXES = [
+	'claude-opus-5-5',
 	'claude-opus-4-8',
 	'claude-sonnet-4-6'
 ];
