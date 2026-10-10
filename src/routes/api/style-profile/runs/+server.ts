@@ -1,14 +1,13 @@
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import type { ProviderId } from '$lib/server/providers/types';
+import { isProviderId, type ProviderId } from '$lib/shared/providers';
 import { startStyleAnalysisRun } from '$lib/server/style-analysis/run-manager';
 
-const PROVIDERS = new Set<ProviderId>(['claude', 'openai', 'codex', 'cursor', 'pi']);
 
 export const POST: RequestHandler = async ({ request }) => {
 	const body = await request.json();
 	const provider = body?.provider as ProviderId;
-	if (!PROVIDERS.has(provider)) throw error(400, 'Invalid provider');
+	if (!isProviderId(provider)) throw error(400, 'Invalid provider');
 	try {
 		return json({ run: startStyleAnalysisRun({
 			provider,

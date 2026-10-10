@@ -1,11 +1,9 @@
 /** Static model lists for each provider, newest first. The server returns
  * them when a provider cannot list its models, and the client shows them
  * before `/api/models` responds. Keep both sides on these lists. */
-export type FallbackModelOption = {
-	id: string;
-	label: string;
-	provider: 'claude' | 'openai' | 'codex' | 'cursor' | 'pi';
-};
+import type { ProviderId } from './providers';
+
+export type FallbackModelOption = { id: string; label: string; provider: ProviderId };
 
 export const CLAUDE_FALLBACK_MODELS: FallbackModelOption[] = [
 	{ id: 'claude-opus-5-5', label: 'Claude Opus 5.5 (1M context)', provider: 'claude' },
@@ -52,11 +50,11 @@ export const CURSOR_FALLBACK_MODELS: FallbackModelOption[] = [
 
 export const PI_FALLBACK_MODELS: FallbackModelOption[] = [
 	{ id: 'together/moonshotai/Kimi-K2.6', label: 'Kimi K2.6 (Together)', provider: 'pi' },
-	{ id: 'anthropic/claude-sonnet-4-5', label: 'Claude Sonnet 4.5', provider: 'pi' },
-	{ id: 'anthropic/claude-opus-4-5', label: 'Claude Opus 4.5', provider: 'pi' },
-	{ id: 'anthropic/claude-haiku-3-5', label: 'Claude Haiku 3.5', provider: 'pi' },
-	{ id: 'openai/gpt-4o', label: 'GPT-4o', provider: 'pi' },
-	{ id: 'openai/gpt-4o-mini', label: 'GPT-4o Mini', provider: 'pi' },
+	{ id: 'anthropic/claude-opus-4-8', label: 'Claude Opus 4.8', provider: 'pi' },
+	{ id: 'anthropic/claude-sonnet-4-6', label: 'Claude Sonnet 4.6', provider: 'pi' },
+	{ id: 'anthropic/claude-haiku-4-5', label: 'Claude Haiku 4.5', provider: 'pi' },
+	{ id: 'openai/gpt-5.5', label: 'GPT-5.5', provider: 'pi' },
+	{ id: 'openai/gpt-5.4-mini', label: 'GPT-5.4 Mini', provider: 'pi' },
 	{ id: 'openai/o4-mini', label: 'o4-mini', provider: 'pi' },
 	{ id: 'google/gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro', provider: 'pi' },
 	{ id: 'google/gemini-3.5-flash', label: 'Gemini 3.5 Flash', provider: 'pi' },

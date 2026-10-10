@@ -224,6 +224,7 @@ export class CursorProvider implements AgentProvider {
 			await loadCursorSdk();
 			if (Cursor?.models?.list) {
 				const models = await Cursor.models.list();
+				if (!models?.length) return FALLBACK_MODELS;
 				return models.map((m: any) => ({
 					id: m.id,
 					label: m.displayName || m.id,

@@ -6,6 +6,7 @@ import {
 	OPENAI_FALLBACK_MODELS,
 	PI_FALLBACK_MODELS
 } from '$lib/shared/fallback-models';
+import { PROVIDER_IDS, PROVIDER_LABELS } from '$lib/shared/providers';
 import {
 	isHiddenClaudeModel,
 	pickDefaultClaudeModel
@@ -276,13 +277,10 @@ export type ModelOption = { id: string; label: string; provider?: string };
 
 /** Available provider options. */
 export type ProviderOption = { id: string; label: string };
-export const AVAILABLE_PROVIDERS: ProviderOption[] = [
-	{ id: 'claude', label: 'Claude' },
-	{ id: 'openai', label: 'OpenAI' },
-	{ id: 'codex', label: 'Codex' },
-	{ id: 'cursor', label: 'Cursor' },
-	{ id: 'pi', label: 'Pi' }
-];
+export const AVAILABLE_PROVIDERS: ProviderOption[] = PROVIDER_IDS.map((id) => ({
+	id,
+	label: PROVIDER_LABELS[id]
+}));
 
 /** Newest-first static list, shown immediately on load and used as the
  * fallback whenever the live Models API can't be reached. The server uses
