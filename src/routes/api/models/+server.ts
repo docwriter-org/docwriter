@@ -2,13 +2,14 @@ import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { getProvider, listAllModels } from '$lib/server/providers';
 import type { ProviderId } from '$lib/server/providers/types';
+import { DEFAULT_CLAUDE_MODEL_PREFIX, pickDefaultClaudeModel } from '$lib/shared/claude-models';
 
 export type ModelOption = { id: string; label: string; provider?: string };
 
 const cache = new Map<string, { models: ModelOption[]; defaultModel: string }>();
 
 function defaultModelFor(models: ModelOption[]): string {
-	return models.find((m) => m.id.includes('opus'))?.id ?? models[0]?.id ?? 'opus';
+	return pickDefaultClaudeModel(models.map((m) => m.id));
 }
 
 export const GET: RequestHandler = async ({ url }) => {
@@ -31,13 +32,13 @@ export const GET: RequestHandler = async ({ url }) => {
 		}
 
 		if (models.length === 0) {
-			return json({ models: [], defaultModel: 'opus' });
+			return json({ models: [], defaultModel: DEFAULT_CLAUDE_MODEL_PREFIX });
 		}
 
 		const result = { models, defaultModel: defaultModelFor(models) };
 		cache.set(cacheKey, result);
 		return json(result);
 	} catch {
-		return json({ models: [], defaultModel: 'opus' });
+		return json({ models: [], defaultModel: DEFAULT_CLAUDE_MODEL_PREFIX });
 	}
 };

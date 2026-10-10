@@ -45,6 +45,7 @@ const PROPOSE_RULE_TOOL_NAME = 'mcp__docwriter__propose_rule';
 const PROPOSE_HOOK_TOOL_NAME = 'mcp__docwriter__propose_hook';
 
 const FALLBACK_MODELS: ProviderModelOption[] = [
+	{ id: 'claude-opus-5-5', label: 'Claude Opus 5.5 (1M context)', provider: 'claude' },
 	{ id: 'claude-opus-4-8', label: 'Claude Opus 4.8 (1M context)', provider: 'claude' },
 	{ id: 'claude-opus-4-7', label: 'Claude Opus 4.7', provider: 'claude' },
 	{ id: 'claude-opus-4-6', label: 'Claude Opus 4.6', provider: 'claude' },
