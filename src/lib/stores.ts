@@ -1,6 +1,7 @@
 import { get, writable } from 'svelte/store';
 import {
-	isHiddenClaudeModel
+	isHiddenClaudeModel,
+	pickDefaultClaudeModel
 } from '$lib/shared/claude-models';
 import type {
 	Rule,
@@ -303,6 +304,7 @@ export const AVAILABLE_PROVIDERS: ProviderOption[] = [
  * fallback whenever the live Models API can't be reached. Mirrors the server
  * fallback in `/api/models`. */
 const ALL_FALLBACK_MODELS: ModelOption[] = [
+	{ id: 'claude-opus-5-5', label: 'Claude Opus 5.5 (1M context)', provider: 'claude' },
 	{ id: 'claude-opus-4-8', label: 'Claude Opus 4.8 (1M context)', provider: 'claude' },
 	{ id: 'claude-opus-4-7', label: 'Claude Opus 4.7', provider: 'claude' },
 	{ id: 'claude-opus-4-6', label: 'Claude Opus 4.6', provider: 'claude' },
@@ -417,13 +419,13 @@ function addStoredSelections(models: ModelOption[]): ModelOption[] {
 
 function fallbackModelForProvider(provider: string): string {
 	const providerModels = FALLBACK_MODELS.filter((m) => m.provider === provider || !m.provider);
-	return providerModels.find((m) => m.id.includes('opus'))?.id ?? providerModels[0]?.id ?? 'opus';
+	return pickDefaultClaudeModel(providerModels.map((m) => m.id));
 }
 
 function defaultModelForProvider(provider: string, models: ModelOption[]): string {
 	const providerModels = models.filter((m) => !m.provider || m.provider === provider);
 	if (provider === 'claude') {
-		return providerModels.find((m) => m.id.includes('opus'))?.id ?? providerModels[0]?.id ?? 'opus';
+		return pickDefaultClaudeModel(providerModels.map((m) => m.id));
 	}
 	return providerModels[0]?.id ?? fallbackModelForProvider(provider);
 }
