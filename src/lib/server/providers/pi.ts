@@ -90,6 +90,19 @@ function jsonSchemaToTypebox(schema: any): any {
 	return Type.Object(props);
 }
 
+/** Find the saved file for a Pi session id. `SessionManager.open` takes a
+ * file path; passing the bare id made Pi start a new session file named
+ * after the id in the server's working directory instead of resuming. */
+export async function findPiSessionPath(
+	sessions: { list(cwd: string, sessionDir?: string): Promise<Array<{ id: string; path: string }>> },
+	sessionId: string,
+	cwd: string,
+	sessionDir: string
+): Promise<string | null> {
+	const saved = await sessions.list(cwd, sessionDir);
+	return saved.find((session) => session.id === sessionId)?.path ?? null;
+}
+
 function buildPiTools(defs: ToolDefinition[]): any[] {
 	return defs.map((def) =>
 		defineTool({
@@ -149,7 +162,9 @@ export class PiProvider implements AgentProvider {
 		let resumeFailed = false;
 		if (options.sessionId) {
 			try {
-				sessionManager = SessionManager.open(options.sessionId, sessionDir, cwd);
+				const path = await findPiSessionPath(SessionManager, options.sessionId, cwd, sessionDir);
+				if (path) sessionManager = SessionManager.open(path, sessionDir, cwd);
+				else resumeFailed = true;
 			} catch {
 				resumeFailed = true;
 			}
