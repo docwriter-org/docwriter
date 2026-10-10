@@ -14,7 +14,7 @@
  *       --root <dir>      Workspace root (default: cwd or positional arg)
  *       --version         Print version and exit
  *       --api-key <key>   Anthropic API key (overrides ANTHROPIC_API_KEY env var)
- *       --model <name>    Default model: opus | sonnet | haiku (overrides UI setting)
+ *       --model <name>    Fallback model ID, used only when the app sends no model
  *       --new-session     Clear the persisted AI session — start a fresh conversation
  *   -h, --help            Show this help
  *
@@ -42,7 +42,7 @@ import { existsSync, mkdirSync, readFileSync, watch as fsWatch } from 'node:fs';
 const argv = process.argv.slice(2);
 
 // Subcommand: `docwriter doctor [workspace] [flags]` — inspect and repair a
-// workspace's .docwriter state (orphans, pending review rounds, threads,
+// workspace's .docwriter state (orphans, pending proposals, threads,
 // seq gaps). See bin/docwriter-doctor.js.
 if (argv[0] === 'doctor') {
 	const { spawnSync } = await import('node:child_process');
@@ -136,7 +136,7 @@ Options:
       --root <dir>      Workspace root (default: cwd)
       --version         Print version and exit
       --api-key <key>   Anthropic API key (overrides ANTHROPIC_API_KEY)
-      --model <name>    Default model: opus | sonnet | haiku
+      --model <name>    Fallback model ID, used only when the app sends no model
       --new-session     Start a fresh AI conversation (clear persisted session)
   -h, --help            Show this help
 
@@ -149,7 +149,6 @@ Examples:
   docwriter ~/projects/mybook
   docwriter --port 8080 --watch
   docwriter --host --watch          # LAN + live reload
-  docwriter --model opus            # force Opus for this session
   docwriter --new-session           # fresh conversation on start
   docwriter doctor [dir]            # inspect/repair .docwriter state
 `.trim());

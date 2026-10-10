@@ -21,10 +21,8 @@
  * branch in the MCP tools); workspace paths are resolved to tab ids by
  * `resolveTabFromPath` and routed through the live Y.Doc.
  */
-import { AGENT_SCRATCH_DIR, isAgentScratchPath } from './document-files';
+import { isAgentScratchPath } from './document-files';
 import { getTabsState } from './runtime-state';
-
-export { AGENT_SCRATCH_DIR };
 
 /** True iff `path` is the scratch dir itself or anywhere inside it. Accepts
  * both absolute paths and relative fragments that include the scratch

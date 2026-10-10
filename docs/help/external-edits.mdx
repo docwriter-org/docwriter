@@ -24,11 +24,11 @@ Reload the browser if watch mode was already running. Reloading refreshes the fi
 
 Stop typing in one editor before changing the same passage in the other. You need to choose which version to keep because DocWriter does not merge conflicting edits to the same passage.
 
-When you open a tab, a newer project file with different text can replace what you were seeing.
+When DocWriter loads a tab whose project file has newer text, DocWriter compares the file with the saved document and replaces only the lines that changed. Proposals, comments, and AI authorship markers outside the changed lines are kept. DocWriter writes a backup to `.docwriter/backups/` before it applies the change.
 
-If the newer file replaces what you had open, you lose pending reviews, comments, and AI authorship markers for that version. Reloading also clears your browser undo history. Accept, reject, or copy any work you need before you let the external file replace the saved version.
+The replaced lines have the file's text with no proposals, comment highlights, or AI authorship markers. If a proposal was on those lines, you lose its suggested text. Its comment thread is kept, and you will see its card near the top of the comments so you can reply, ask the agent to suggest the edit again, or dismiss it. Reloading also clears your browser undo history.
 
-An external change can also make an open proposal stale, which means the proposal no longer matches the text it was based on. Review the affected tab after each reload. Reject a stale proposal or ask the agent for a new proposal based on the current text.
+Review the affected tab after each reload. Accept, reject, or copy any pending work on a passage before you change that passage in another editor.
 
 ## A Git operation changed files
 

@@ -265,12 +265,6 @@ export interface ImportedComment {
 
 export type FeedbackDisposition = 'applied' | 'discussed' | 'deferred' | 'untouched';
 
-export interface FeedbackLedgerEntry {
-	importedCommentId: string;
-	threadId?: string;
-	disposition: FeedbackDisposition;
-}
-
 export interface FeedbackImportState {
 	id: string;
 	source: 'paste' | 'docx' | 'gdocs';

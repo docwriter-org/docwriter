@@ -1895,8 +1895,7 @@
 		opacity: 0.58;
 	}
 
-	/* `<mark>` from the Highlight extension: theme-aware flat tint (no
-	 * rough-notation for persistent marks since they can be many). */
+	/* `<mark>` from the Highlight extension: theme-aware flat tint. */
 	.tiptap-editor :global(.tiptap-content mark) {
 		background: color-mix(in srgb, var(--accent) 26%, transparent);
 		color: inherit;

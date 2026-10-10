@@ -3,7 +3,6 @@ import { HocuspocusProvider, WebSocketStatus } from '@hocuspocus/provider';
 import { env } from '$env/dynamic/public';
 import {
 	COMMENTS_MAP_NAME,
-	FRAGMENT_NAME,
 	USER_ORIGIN,
 	type CommentsMap
 } from '$lib/shared/ydoc-codec';
@@ -182,10 +181,6 @@ export function getYDocForTab(tabId: string): Y.Doc {
 	return ydoc;
 }
 
-export function getXmlFragmentForTab(tabId: string): Y.XmlFragment {
-	return getYDocForTab(tabId).getXmlFragment(FRAGMENT_NAME);
-}
-
 /** Comment-thread map for a specific tab. Keyed by thread id; values are
  * nested Y.Maps (or legacy plain objects) — read via `readThreadValue`. */
 export function getCommentsMapForTab(tabId: string): CommentsMap {
@@ -233,10 +228,6 @@ export function pauseTabSync(tabId: string): () => void {
 		provider.configuration.websocketProvider.shouldConnect = true;
 		void provider.connect();
 	};
-}
-
-export function isYDocEmptyForTab(tabId: string): boolean {
-	return getXmlFragmentForTab(tabId).length === 0;
 }
 
 export async function destroyTab(tabId: string): Promise<void> {

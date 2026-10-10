@@ -50,11 +50,3 @@ export function resolvePendingAskUser(id: string, answers: AskUserAnswers): bool
 	p.resolve(answers);
 	return true;
 }
-
-/** Clear an entry without resolving — used when the render is aborted. */
-export function cancelPendingAskUser(id: string): void {
-	const p = pending.get(id);
-	if (!p) return;
-	clearTimeout(p.timer);
-	pending.delete(id);
-}

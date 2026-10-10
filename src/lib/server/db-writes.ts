@@ -507,16 +507,6 @@ export function dbGetConversationEvents(
 	}
 }
 
-export function dbClearConversationEvents(session: string) {
-	try {
-		getDb()
-			.prepare('DELETE FROM conversation_events WHERE session = ?')
-			.run(session);
-	} catch (err) {
-		logDbError('clearConversationEvents', err);
-	}
-}
-
 export function dbReplaceHooks(hooks: Hook[]) {
 	try {
 		const db = getDb();

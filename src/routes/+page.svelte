@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { DEFAULT_CLAUDE_MODEL_PREFIX } from '$lib/shared/claude-models';
 	import { onMount, onDestroy, type Component } from 'svelte';
 	import { get } from 'svelte/store';
 	import type * as Y from 'yjs';
@@ -1117,7 +1118,7 @@
 		}
 
 		try {
-			let model = 'opus';
+			let model: string = DEFAULT_CLAUDE_MODEL_PREFIX;
 			selectedModel.subscribe((v) => (model = v))();
 			let provider = 'claude';
 			selectedProvider.subscribe((v) => (provider = v))();
@@ -2080,7 +2081,7 @@
 		}
 	}
 
-	let model = $state('opus');
+	let model = $state<string>(DEFAULT_CLAUDE_MODEL_PREFIX);
 	selectedModel.subscribe((v) => (model = v));
 
 	let currentProvider = $state('claude');

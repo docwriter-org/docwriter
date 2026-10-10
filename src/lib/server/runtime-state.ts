@@ -11,7 +11,7 @@ import {
 	dbSetTheme,
 	kvGet
 } from './db-writes';
-import { listOpenTabs, setOpenTabs } from './documents-store';
+import { listOpenTabs } from './documents-store';
 import { actionIdForLabel } from '$lib/shared/stable-id';
 import { resolveThemeName } from '$lib/themes';
 import { DEFAULT_AGENT_SETTINGS, type AgentSettings, type Rule } from '$lib/types';
@@ -86,14 +86,6 @@ export function getSessionId(): string | null {
 
 export function setSessionId(sessionId: string) {
 	dbSetSessionId(sessionId);
-}
-
-export function getSessionProvider(): string | null {
-	return kvGet('sessionProvider');
-}
-
-export function getSessionModel(): string | null {
-	return kvGet('sessionModel');
 }
 
 export function setSessionOwner(provider: string, model: string) {
@@ -217,14 +209,4 @@ export function getTabsState(): TabsState {
 	const { order, active } = listOpenTabs();
 	if (order.length === 0) return { ...DEFAULT_TABS };
 	return { order, active };
-}
-
-/** Replace the tab bar (order + active). Backed by the `documents` table:
- * open documents missing from `order` are CLOSED, never deleted, so a stale
- * or partial write can no longer destroy tab registrations — their history
- * stays restorable. Lifecycle transitions (open/close/delete/rename) have
- * dedicated functions in `documents-store.ts`; this remains for callers
- * that genuinely mean "this is the whole bar now" (reorder, focus). */
-export function setTabsState(tabs: TabsState) {
-	setOpenTabs(tabs);
 }

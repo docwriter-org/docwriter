@@ -133,13 +133,3 @@ export const FreezeOverlay = Extension.create({
 		];
 	}
 });
-
-/** Resolve the editor position of a freeze quote for gutter anchoring. */
-export function resolveFreezeAnchorPos(
-	editor: Editor,
-	quote: string
-): number | null {
-	const { plainText, charPositions } = buildCharIndex(editor.state.doc);
-	const range = resolveQuoteRange(plainText, charPositions, quote);
-	return range?.from ?? null;
-}

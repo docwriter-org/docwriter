@@ -1,6 +1,4 @@
-import { existsSync, readFileSync, mkdirSync } from 'fs';
-import { dirname } from 'path';
-import { writeTextAtomic } from './file-utils';
+import { existsSync, readFileSync } from 'fs';
 import { tabFile, ensureDocWriterDir } from './document-files';
 import {
 	getRules,
@@ -40,14 +38,4 @@ export function readMeta(): DocMeta {
 export function writeMeta(meta: Partial<DocMeta>) {
 	if (meta.rules !== undefined) setRules(meta.rules);
 	if (meta.agentSettings !== undefined) setAgentSettings(meta.agentSettings);
-}
-
-export function writeUserDoc(tabId: string, markdown: string, meta?: Partial<DocMeta>) {
-	ensureDocWriterDir();
-	const userPath = tabFile(tabId);
-	// Ensure the user-facing parent exists (e.g. "drafts/" for
-	// "drafts/chapter-1.md").
-	mkdirSync(dirname(userPath), { recursive: true });
-	writeTextAtomic(userPath, markdown);
-	if (meta) writeMeta(meta);
 }

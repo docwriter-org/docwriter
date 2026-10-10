@@ -29,7 +29,7 @@
 			: provider === 'codex'
 				? 'e.g. gpt-5.5, gpt-5.3-codex'
 			: provider === 'claude'
-				? 'e.g. claude-opus-4-8, claude-sonnet-4-6'
+				? 'e.g. claude-opus-5-5, claude-sonnet-5-5'
 				: provider === 'cursor'
 					? 'e.g. composer-2.5'
 					: 'e.g. ollama/llama3.1'

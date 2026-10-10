@@ -41,53 +41,6 @@ export function getEffectiveScratchDir(): string {
 	return AGENT_SCRATCH_DIR;
 }
 
-/** File extensions we treat as text-editable tabs. */
-const TEXT_EXTENSIONS = new Set([
-	'md',
-	'markdown',
-	'mdx',
-	'txt',
-	'json',
-	'jsonl',
-	'yaml',
-	'yml',
-	'toml',
-	'ts',
-	'tsx',
-	'js',
-	'jsx',
-	'py',
-	'rs',
-	'go',
-	'java',
-	'cpp',
-	'c',
-	'h',
-	'hpp',
-	'html',
-	'htm',
-	'css',
-	'scss',
-	'sass',
-	'less',
-	'sh',
-	'bash',
-	'zsh',
-	'ps1',
-	'sql',
-	'xml',
-	'svg',
-	'csv',
-	'tsv',
-	'log',
-	'env',
-	'ini',
-	'conf',
-	'gitignore',
-	'gitattributes',
-	'rst'
-]);
-
 /** A tab id is a workspace-relative path (e.g. "drafts/chapter-1.md" or
  * "script.py"). Must be safe: no leading slash, no `..` segments, no null
  * bytes, no empty segments. */
@@ -100,11 +53,6 @@ export function isValidTabId(id: string): boolean {
 		if (seg === '..' || seg === '.' || seg === '') return false;
 	}
 	return true;
-}
-
-export function isKnownTextExtension(tabId: string): boolean {
-	const ext = extensionOf(tabId);
-	return ext !== null && TEXT_EXTENSIONS.has(ext);
 }
 
 /** Extensions that are definitely NOT editable text documents. Everything
@@ -192,15 +140,6 @@ export function tabFile(tabId: string): string {
 export function ensureDocWriterDir() {
 	if (!existsSync(DOCWRITER_DIR)) {
 		mkdirSync(DOCWRITER_DIR, { recursive: true });
-	}
-}
-
-/** Ensure the agent's scratch dir exists. Called lazily the first time the
- * agent writes a scratch file. Idempotent. */
-export function ensureAgentScratchDir() {
-	ensureDocWriterDir();
-	if (!existsSync(AGENT_SCRATCH_DIR)) {
-		mkdirSync(AGENT_SCRATCH_DIR, { recursive: true });
 	}
 }
 

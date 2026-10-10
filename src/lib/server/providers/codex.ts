@@ -22,6 +22,7 @@ import type {
 } from './types';
 import { buildToolDefinitions } from './tool-handlers';
 import { builtinSdkTools, emitProposalEvents, makeLazySdkLoader, wrapToolsForProvider } from './shared';
+import { CODEX_FALLBACK_MODELS } from '$lib/shared/fallback-models';
 
 type CodexCtor = new (options?: any) => any;
 let Codex: CodexCtor | null = null;
@@ -37,13 +38,7 @@ async function loadSdk(): Promise<void> {
 	Codex = sdk.Codex as CodexCtor;
 }
 
-const FALLBACK_MODELS: ProviderModelOption[] = [
-	{ id: 'gpt-5.5', label: 'GPT-5.5', provider: 'codex' },
-	{ id: 'gpt-5.4', label: 'GPT-5.4', provider: 'codex' },
-	{ id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini', provider: 'codex' },
-	{ id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex', provider: 'codex' },
-	{ id: 'gpt-5.2', label: 'GPT-5.2', provider: 'codex' }
-];
+const FALLBACK_MODELS: ProviderModelOption[] = CODEX_FALLBACK_MODELS;
 
 const TOOL_LOOP_SCHEMA = {
 	type: 'object',

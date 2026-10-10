@@ -16,7 +16,9 @@ Back up `.docwriter/hooks.json` when the workspace uses hooks. A hook is a shell
 
 Keep API keys out of the repository. Keys saved through DocWriter live in `~/.docwriter/keys.env`, outside the workspace, and need a separate secure backup if you cannot restore them from the provider.
 
-Writing references are listed in `.docwriter/references.json`, with the pasted text under `.docwriter/references/`. Measurements, calibration state, and the generated author skill live under `.docwriter/style-analysis/`, `.docwriter/style-profile.json`, and `.docwriter/skills/`. Local study events live in `.docwriter/style-study/` and do not contain reference text or generated passages.
+Writing references are listed in `.docwriter/references.json`, with the pasted text under `.docwriter/references/`. Calibration state and the style profile are in `docwriter.db`. Measurements and cached reference text live under `.docwriter/style-analysis/`, including `.docwriter/style-analysis/source-cache/`. The generated author skill lives under `.docwriter/skills/author-style/`, and earlier versions of that skill live in `.docwriter/style-skill-versions/`. Older workspaces can also have `.docwriter/style-profile.json`; DocWriter reads it once and then uses the database. Local study events live in `.docwriter/style-study/` and do not contain reference text or generated passages.
+
+When you finish a style, you can choose **Save globally** to copy the skill to `~/.claude/skills/my-writing-style/` in your home folder, outside the workspace. Claude Code can then use it in every project. Back up that folder separately if you need it.
 
 Decide whether conversation and comment history belongs in the repository before adding `.docwriter`. The folder can contain document text, comments, file paths, provider conversations, and agent activity.
 

@@ -25,6 +25,7 @@ import {
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getEffectiveDocwriterDir, getEffectiveRoot } from '$lib/server/document-files';
+import { PI_FALLBACK_MODELS } from '$lib/shared/fallback-models';
 
 let createAgentSession: any = null;
 let defineTool: any = null;
@@ -57,22 +58,7 @@ async function loadSdk() {
 	Type = tb.Type;
 }
 
-const FALLBACK_MODELS: ProviderModelOption[] = [
-	{ id: 'together/moonshotai/Kimi-K2.6', label: 'Kimi K2.6 (Together)', provider: 'pi' },
-	{ id: 'anthropic/claude-sonnet-4-5', label: 'Claude Sonnet 4.5', provider: 'pi' },
-	{ id: 'anthropic/claude-opus-4-5', label: 'Claude Opus 4.5', provider: 'pi' },
-	{ id: 'anthropic/claude-haiku-3-5', label: 'Claude Haiku 3.5', provider: 'pi' },
-	{ id: 'openai/gpt-4o', label: 'GPT-4o', provider: 'pi' },
-	{ id: 'openai/gpt-4o-mini', label: 'GPT-4o Mini', provider: 'pi' },
-	{ id: 'openai/o4-mini', label: 'o4-mini', provider: 'pi' },
-	{ id: 'google/gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro', provider: 'pi' },
-	{ id: 'google/gemini-3.5-flash', label: 'Gemini 3.5 Flash', provider: 'pi' },
-	{ id: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash', provider: 'pi' },
-	{ id: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro', provider: 'pi' },
-	{ id: 'deepseek/deepseek-r1', label: 'DeepSeek R1', provider: 'pi' },
-	{ id: 'ollama/llama3.1', label: 'Llama 3.1 (Ollama)', provider: 'pi' },
-	{ id: 'ollama/qwen3', label: 'Qwen 3 (Ollama)', provider: 'pi' }
-];
+const FALLBACK_MODELS: ProviderModelOption[] = PI_FALLBACK_MODELS;
 
 function jsonSchemaToTypebox(schema: any): any {
 	if (!schema || schema.type !== 'object') return Type.Object({});

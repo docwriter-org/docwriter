@@ -45,10 +45,6 @@ function resolveAuthorStyleTarget(): { id: string; path: string } {
 	return { id: candidateId, path: candidate };
 }
 
-export function resolveAuthorStyleSkillDir(): string {
-	return resolveAuthorStyleTarget().path;
-}
-
 function yamlString(value: string): string {
 	return JSON.stringify(value);
 }

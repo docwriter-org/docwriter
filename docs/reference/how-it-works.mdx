@@ -21,7 +21,7 @@ If DocWriter crashes, restart it and check the end of the document. The last tex
 
 When the agent proposes an edit, your accepted text in the project file stays unchanged until you accept. You will see a diff that marks the text the proposal would add and remove.
 
-When you accept the proposal, the affected document text updates and the pending review disappears. DocWriter checks that the old text still matches before it applies the edit, which protects newer typing from a stale proposal. Accepting also marks text introduced by the agent as AI provenance. AI provenance is saved information about which text the agent wrote.
+When you accept the proposal, the affected document text updates and the pending review disappears. DocWriter stores each proposal as marks on the document text, so the proposal is still on the same words after you type nearby. Text you type inside a proposal is kept when you accept or reject it. Accepting also marks text introduced by the agent as AI provenance. AI provenance is saved information about which text the agent wrote.
 
 When you reject the proposal, the pending review disappears and your accepted document text stays the same. Starting a new session also rejects pending proposals. Copy proposal text first if you may need it later.
 
@@ -29,9 +29,9 @@ When you reject the proposal, the pending review disappears and your accepted do
 
 After a restart, you will see each tab restored from saved DocWriter state when it is available. Otherwise, DocWriter opens the text from the project file.
 
-If another program changes a project file, you may see that newer text when you reload. If the newer file replaces what you had open, you lose comments, pending reviews, and AI authorship markers attached to the previous version. Reloading also clears your browser undo history.
+If another program changes a project file, you will see that newer text when DocWriter loads the tab again. DocWriter replaces only the lines that changed and keeps comments, pending reviews, and AI authorship markers on the other lines. You lose the suggested text of a proposal on a changed line, but you keep its comment thread. Reloading also clears your browser undo history.
 
-Run DocWriter with `--watch` when another program will edit workspace files while DocWriter is open. Watch mode reloads the browser after supported files change. Finish or copy pending review work before an external file replaces saved tab state.
+Run DocWriter with `--watch` when another program will edit workspace files while DocWriter is open. Watch mode reloads the browser after supported files change. Finish or copy pending review work on a passage before another program changes that passage.
 
 ## What to back up
 
