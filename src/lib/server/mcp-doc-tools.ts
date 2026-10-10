@@ -124,10 +124,6 @@ export type WriteOp =
 	| { kind: 'edit'; oldString: string; newString: string; replaceAll?: boolean }
 	| { kind: 'write'; content: string };
 
-export function currentProposalText(doc: Y.Doc): string {
-	return proposedText(doc);
-}
-
 /**
  * Per-render state, held in an AsyncLocalStorage scope rather than at module
  * scope. These values are ambient inputs to `runTabWrite`,
@@ -1150,6 +1146,18 @@ const listThreadsTool = tool(
 	}
 );
 
+/** The document tools. Claude gets them through `buildDocToolsMcp`; the
+ * other providers get the same names, descriptions, schemas and handlers
+ * through `buildToolDefinitions` in providers/tool-handlers.ts. */
+export const DOC_TOOLS = [
+	editDocTool,
+	readDocTool,
+	writeDocTool,
+	commentDocTool,
+	replyToCommentTool,
+	listThreadsTool
+] as const;
+
 /** Build a FRESH `docwriter-doc` MCP server for one `query()` call.
  *
  * This must NOT be a module-level singleton. An in-process SDK MCP server
@@ -1165,7 +1173,7 @@ export function buildDocToolsMcp() {
 	return createSdkMcpServer({
 		name: 'docwriter-doc',
 		version: '0.0.1',
-		tools: [editDocTool, readDocTool, writeDocTool, commentDocTool, replyToCommentTool, listThreadsTool]
+		tools: [...DOC_TOOLS]
 	});
 }
 

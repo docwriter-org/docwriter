@@ -3,8 +3,9 @@
  */
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
+import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -67,7 +68,12 @@ export function hasProviderCredentials(provider) {
 		return Boolean(process.env.TOGETHER_API_KEY?.trim() || process.env.GEMINI_API_KEY?.trim());
 	}
 	if (provider === 'codex') {
-		return Boolean(process.env.OPENAI_API_KEY?.trim() || process.env.CODEX_API_KEY?.trim());
+		// Like the app, Codex can also use the Codex CLI login.
+		return Boolean(
+			process.env.OPENAI_API_KEY?.trim() ||
+				process.env.CODEX_API_KEY?.trim() ||
+				existsSync(join(homedir(), '.codex', 'auth.json'))
+		);
 	}
 	const envVar = PROVIDER_ENV_VARS[provider];
 	if (!envVar) return false;
