@@ -194,6 +194,14 @@ function usageEvent(usage: unknown): ProviderEvent {
 	return { type: 'cost', usage, numTurns: 1 };
 }
 
+/** Codex models reason at `medium` or more. Callers often ask for `low`,
+ * for example routine renders, so raise that to `medium`. */
+export function codexReasoningEffort(
+	effort: ProviderQueryOptions['effort']
+): 'medium' | 'high' {
+	return effort === 'high' ? 'high' : 'medium';
+}
+
 /** Options for the Codex SDK client. With an API key, Codex keeps its state
  * in the workspace's `.docwriter/codex`. Without one, Codex uses its normal
  * home (`CODEX_HOME` or `~/.codex`), where the Codex CLI login is saved;
@@ -230,7 +238,7 @@ export class CodexProvider implements AgentProvider {
 			sandboxMode: 'read-only',
 			approvalPolicy: 'never',
 			...(options.model ? { model: options.model } : {}),
-			...(options.effort ? { modelReasoningEffort: options.effort } : {}),
+			modelReasoningEffort: codexReasoningEffort(options.effort),
 			webSearchMode: options.allowedTools?.includes('WebSearch') ? 'live' : 'disabled'
 		};
 
