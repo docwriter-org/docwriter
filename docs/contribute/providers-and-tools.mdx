@@ -27,26 +27,7 @@ Normal file tools are still used for agent scratch files under `.docwriter/agent
 
 Use the shared permission wrapper in `src/lib/server/providers/shared.ts` when an SDK needs local tool definitions. The wrapper applies the allowed tool list and asks the permission callback before a tool runs.
 
-The `docwriter-doc` tools are:
-
-- `read_doc`, to read an open tab with pending proposals shown as if accepted, or a scratch file.
-- `edit_doc`, to replace `old_string` with `new_string`. In an open tab, the change is a pending proposal on a comment thread.
-- `write_doc`, to replace the full text of a file. In an open tab, the change is a pending proposal.
-- `comment_doc`, to start a comment thread on existing text without changing the text.
-- `reply_to_comment`, to reply on an existing thread.
-- `list_threads`, to list the comment threads for a tab.
-
-The other DocWriter tools are:
-
-- `propose_rule` and `propose_hook`, to suggest a rule or a hook for the user to review. Keep that review step when you expose the tools through another provider.
-- `add_skill`, to add an Agent Skill from a GitHub repository URL or a local path.
-- `review_action`, to accept or reject a proposal, or dismiss or reopen a thread, only when the user asks.
-- `read_skill`, to read the instructions for an enabled skill. In the prompt, DocWriter asks OpenAI and Cursor runs to call it. The Claude adapter does not register it.
-- `AskUserQuestion` and `ExitPlanMode`, to ask the user a question or submit a plan. They are defined in `src/lib/server/providers/shared.ts` for providers whose SDKs do not have them.
-
-For Claude, the document tools are in the `docwriter-doc` MCP server and the other DocWriter tools are in the `docwriter` MCP server; both are set up in `src/lib/server/providers/claude.ts`. The other providers get the same tools from `buildToolDefinitions` in `src/lib/server/providers/tool-handlers.ts`.
-
-Style analysis runs with `isolatedTools`, so the agent has no workspace tools. For Claude, the agent has only its submission tool, in a separate `docwriter-style` MCP server, and DocWriter does not load user or project settings for that run.
+The `propose_rule` and `propose_hook` tools create items for the user to review. Keep that review step when you expose the tools through another provider.
 
 ## Sessions
 

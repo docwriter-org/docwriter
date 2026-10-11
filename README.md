@@ -64,7 +64,7 @@ Connect Claude, OpenAI, Codex, Cursor, or Pi when you want to use the agent. Fol
 - [Tour the interface](https://docs.docwriter.org/tour/interface) to find files, comments, reviews, and agent activity.
 - [Control agent behavior](https://docs.docwriter.org/agent/agent-behavior) to set autonomy or pause the agent.
 - [Add writing rules](https://docs.docwriter.org/customize/rules) for preferences that should apply across requests.
-- [Fix common problems](https://docs.docwriter.org/help/recovery) after a crash, a lost comment passage, or a blank editor.
+- [Fix common problems](https://docs.docwriter.org/help/recovery) after a crash, lost proposal, or blank editor.
 
 ## Development
 

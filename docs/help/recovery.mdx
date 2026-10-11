@@ -26,13 +26,13 @@ The option starts the server again one second after an unexpected exit. The agen
 
 Reload the browser after DocWriter starts again. You will see the latest saved text. Text entered immediately before the crash may be lost.
 
-## A comment card has lost its passage
+## A proposal lost its passage
 
-You will see a comment card near the top of the comments when the text it was on is gone. This can happen when you delete that text or when another program changes those lines. If the card had a proposal, you lose its suggested text, but you keep the thread.
+A proposal loses its passage when the text it was meant to replace no longer exists in the current document. You cannot accept that proposal.
 
-Dismiss the card if you no longer need it. Reply in the thread or send a new Chat request to ask for a proposal based on the current text. The new agent request can use provider quota and may produce different text.
+Reject the proposal if you no longer need it. When you reject the proposal, it disappears and your current document text stays unchanged. You cannot recover the rejected proposal from its review card unless you undo the rejection before later actions replace that undo history.
 
-When you reject a proposal, it disappears and your current document text stays unchanged. You cannot recover the rejected proposal from its review card unless you undo the rejection before later actions replace that undo history.
+Reply in the related thread or send a new Chat request to ask for a proposal based on the current text. The new agent request can use provider quota and may produce different text.
 
 ## A deleted file still appears
 
@@ -41,8 +41,6 @@ Reload DocWriter so it can remove tabs for files that no longer exist. Removing 
 When you delete a file inside DocWriter, you also lose its comments, pending reviews, and saved AI authorship markers. Browser undo history lasts only while the tab is loaded. Restore the project file and `.docwriter` folder from a backup if you need this information.
 
 ## You need to reset DocWriter
-
-Before you reset, run `docwriter doctor` from the workspace folder to check the saved state. The report does not change anything, and it can show a problem that a smaller repair can fix. Read [Check saved state](/help/command-line#check-saved-state) for the report and repair options.
 
 Delete `.docwriter/docwriter.db` only when you want to clear all saved DocWriter state for the workspace. A reset can help when the database is damaged or when you want the workspace to start with new DocWriter state.
 

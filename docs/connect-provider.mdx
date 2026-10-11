@@ -49,15 +49,15 @@ If auth fails later, repeat steps 1–3, then retry in DocWriter. See [Provider 
 
 ### OpenAI and Codex
 
-OpenAI needs `OPENAI_API_KEY` and uses the OpenAI API directly. Codex uses `CODEX_API_KEY` when you set it. Without that key, Codex uses `OPENAI_API_KEY`, or your Codex command line login in `~/.codex/auth.json`. Choose a model that is available to the account.
+OpenAI uses `OPENAI_API_KEY`. Codex can use an existing Codex login. Choose a model that is available to the account.
 
 ### Cursor
 
-Cursor needs `CURSOR_API_KEY`. Save it in **Settings**, then **API keys**, or set it in the environment. Session recovery differs from provider to provider, so start a new session when a saved provider session can no longer resume.
+Cursor uses `CURSOR_API_KEY`. Session recovery differs from provider to provider, so start a new session when a saved provider session can no longer resume.
 
 ### Pi
 
-Pi can use provider keys such as `TOGETHER_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, or `ANTHROPIC_API_KEY`, depending on the selected model. Set `TOGETHER_API_KEY` for models that Together serves. The **Gemini (Pi)** entry in **API keys** stores `GEMINI_API_KEY`, which Pi uses for Google models such as `google/gemini-*`. Gemini is not a separate provider. You can get a Gemini key at aistudio.google.com.
+Pi can use provider keys such as `TOGETHER_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, or `ANTHROPIC_API_KEY`, depending on the selected model.
 
 ## Choose a model the account can use
 
