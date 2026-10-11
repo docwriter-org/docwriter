@@ -42,8 +42,3 @@ export function pushToast(spec: Omit<ToastSpec, 'id'>): void {
 export function dismissToast(id: string): void {
 	toastQueue.update((q) => q.filter((t) => t.id !== id));
 }
-
-/** Remove the toast representing a given proposal, if present. */
-export function dismissToastByRef(kind: ToastSpec['kind'], refId: string): void {
-	dismissToast(toastId(kind, refId));
-}

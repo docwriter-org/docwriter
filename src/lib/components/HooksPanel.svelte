@@ -446,7 +446,7 @@
 		letter-spacing: 0.04em;
 	}
 	.hook-matcher {
-		font-family: 'SF Mono', 'Menlo', monospace;
+		font-family: var(--font-mono);
 		font-size: 10px;
 		color: var(--text-faint);
 	}
@@ -464,7 +464,7 @@
 	.hook-output-input {
 		width: 100%;
 		min-width: 0;
-		font-family: 'SF Mono', 'Menlo', monospace;
+		font-family: var(--font-mono);
 		font-size: 11.5px;
 		color: var(--text-secondary);
 		background: transparent;
@@ -628,7 +628,7 @@
 	.command-input {
 		flex: 1;
 		min-width: 0;
-		font-family: 'SF Mono', 'Menlo', monospace;
+		font-family: var(--font-mono);
 	}
 	.event-select:focus,
 	.matcher-input:focus,
@@ -665,7 +665,7 @@
 		user-select: text;
 	}
 	.form-hint code {
-		font-family: 'SF Mono', 'Menlo', monospace;
+		font-family: var(--font-mono);
 		font-size: 10.5px;
 		background: var(--bg-surface);
 		padding: 1px 4px;

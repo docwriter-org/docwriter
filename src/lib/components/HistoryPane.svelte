@@ -843,7 +843,7 @@
 	.bounce-dots {
 		display: inline-flex;
 		gap: 1px;
-		font-family: 'SF Mono', 'Fira Code', 'Menlo', monospace;
+		font-family: var(--font-mono);
 		font-size: 11px;
 		font-weight: 600;
 		color: var(--text-faint);
@@ -852,7 +852,7 @@
 	 * 3 → 2 → 1 doesn't make the row jitter horizontally. Accent color
 	 * to signal "agent will wake in N seconds." */
 	.countdown {
-		font-family: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+		font-family: var(--font-mono);
 		font-size: 11px;
 		font-weight: 600;
 		color: var(--accent);
@@ -1234,7 +1234,7 @@
 		font-size: 0.8em;
 	}
 	.expand-body-inner :global(code) {
-		font-family: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+		font-family: var(--font-mono);
 		font-size: 0.84em;
 		padding: 2px 6px;
 		border-radius: 4px;
@@ -1250,7 +1250,7 @@
 		border: 1px solid var(--border-light);
 		border-radius: 8px;
 		overflow-x: auto;
-		font-family: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+		font-family: var(--font-mono);
 		font-size: 12.5px;
 		line-height: 1.55;
 		color: var(--text);
@@ -1423,7 +1423,7 @@
 		margin-bottom: 4px;
 	}
 	.user-diff-body {
-		font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+		font-family: var(--font-mono);
 		font-size: 11px;
 		line-height: 1.4;
 		margin: 0;
@@ -1484,7 +1484,7 @@
 		border-top: 1px solid var(--border-light);
 		white-space: pre-wrap;
 		word-break: break-word;
-		font-family: 'SF Mono', 'Menlo', monospace;
+		font-family: var(--font-mono);
 		line-height: 1.5;
 		max-height: 200px;
 		overflow-y: auto;
@@ -1510,7 +1510,7 @@
 		background: var(--bg-surface);
 		white-space: pre-wrap;
 		word-break: break-word;
-		font-family: 'SF Mono', 'Menlo', monospace;
+		font-family: var(--font-mono);
 		line-height: 1.5;
 		max-height: 200px;
 		overflow-y: auto;
@@ -1594,7 +1594,7 @@
 		color: var(--text);
 	}
 	.assistant-body :global(code) {
-		font-family: 'SF Mono', 'Menlo', monospace;
+		font-family: var(--font-mono);
 		font-size: 12px;
 		background: var(--bg-surface);
 		color: var(--text-secondary);
@@ -1621,7 +1621,7 @@
 		border-radius: 3px;
 		margin-left: auto;
 		flex-shrink: 0;
-		font-family: 'SF Mono', 'Menlo', monospace;
+		font-family: var(--font-mono);
 	}
 	.tool-summary .duration,
 	.hook-summary .duration,
@@ -1676,7 +1676,7 @@
 	.hook-command {
 		flex: 1 1 100%;
 		min-width: 0;
-		font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+		font-family: var(--font-mono);
 		font-size: 11.5px;
 		color: var(--text-secondary);
 		background: transparent;
@@ -1689,7 +1689,7 @@
 	.hook-running-tag {
 		font-size: 10px;
 		color: #0891b2;
-		font-family: 'SF Mono', 'Menlo', monospace;
+		font-family: var(--font-mono);
 		padding: 1px 6px;
 		border: 1px solid color-mix(in srgb, #0891b2 40%, transparent);
 		border-radius: 3px;
@@ -1698,7 +1698,7 @@
 	.hook-exit-bad {
 		font-size: 10px;
 		color: #ef4444;
-		font-family: 'SF Mono', 'Menlo', monospace;
+		font-family: var(--font-mono);
 		padding: 1px 6px;
 		border: 1px solid color-mix(in srgb, #ef4444 40%, transparent);
 		border-radius: 3px;
@@ -1707,7 +1707,7 @@
 	.hook-exit-ok {
 		font-size: 10px;
 		color: #10b981;
-		font-family: 'SF Mono', 'Menlo', monospace;
+		font-family: var(--font-mono);
 		padding: 1px 6px;
 		border: 1px solid color-mix(in srgb, #10b981 40%, transparent);
 		border-radius: 3px;

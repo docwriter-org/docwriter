@@ -565,7 +565,7 @@
 	}
 	.file {
 		padding: 2px 12px;
-		font-family: 'Geist Mono', 'SFMono-Regular', Consolas, monospace;
+		font-family: var(--font-mono);
 		font-size: 11px;
 		color: #555;
 	}
@@ -590,7 +590,7 @@
 		font-weight: 500;
 		color: #888;
 		border-bottom: 2px solid transparent;
-		font-family: 'Geist Mono', 'SFMono-Regular', Consolas, monospace;
+		font-family: var(--font-mono);
 	}
 	.tab.active {
 		color: #1a1a1a;
@@ -608,7 +608,7 @@
 	.editor {
 		flex: 1;
 		padding: 12px 0 12px 4px;
-		font-family: 'Geist Mono', 'SFMono-Regular', Consolas, monospace;
+		font-family: var(--font-mono);
 		font-size: 10.5px;
 		line-height: 1.75;
 		overflow: hidden;
@@ -897,7 +897,7 @@
 		color: #444;
 	}
 	.about code {
-		font-family: 'Geist Mono', monospace;
+		font-family: var(--font-mono);
 		font-size: 13px;
 		background: rgba(109, 40, 217, 0.06);
 		padding: 1px 5px;

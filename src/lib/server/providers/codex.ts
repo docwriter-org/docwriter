@@ -22,6 +22,7 @@ import type {
 } from './types';
 import { buildToolDefinitions } from './tool-handlers';
 import { builtinSdkTools, emitProposalEvents, makeLazySdkLoader, wrapToolsForProvider } from './shared';
+import { CODEX_FALLBACK_MODELS } from '$lib/shared/fallback-models';
 
 type CodexCtor = new (options?: any) => any;
 let Codex: CodexCtor | null = null;
@@ -37,13 +38,7 @@ async function loadSdk(): Promise<void> {
 	Codex = sdk.Codex as CodexCtor;
 }
 
-const FALLBACK_MODELS: ProviderModelOption[] = [
-	{ id: 'gpt-5.5', label: 'GPT-5.5', provider: 'codex' },
-	{ id: 'gpt-5.4', label: 'GPT-5.4', provider: 'codex' },
-	{ id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini', provider: 'codex' },
-	{ id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex', provider: 'codex' },
-	{ id: 'gpt-5.2', label: 'GPT-5.2', provider: 'codex' }
-];
+const FALLBACK_MODELS: ProviderModelOption[] = CODEX_FALLBACK_MODELS;
 
 const TOOL_LOOP_SCHEMA = {
 	type: 'object',
@@ -194,20 +189,40 @@ function usageEvent(usage: unknown): ProviderEvent {
 	return { type: 'cost', usage, numTurns: 1 };
 }
 
+/** Codex models reason at `medium` or more. Callers often ask for `low`,
+ * for example routine renders, so raise that to `medium`. */
+export function codexReasoningEffort(
+	effort: ProviderQueryOptions['effort']
+): 'medium' | 'high' {
+	return effort === 'high' ? 'high' : 'medium';
+}
+
+/** Options for the Codex SDK client. With an API key, Codex keeps its state
+ * in the workspace's `.docwriter/codex`. Without one, Codex uses its normal
+ * home (`CODEX_HOME` or `~/.codex`), where the Codex CLI login is saved;
+ * pointing it anywhere else makes every request fail with 401. */
+export function codexClientOptions(
+	env: NodeJS.ProcessEnv,
+	docwriterDir: string
+): { apiKey: string | undefined; env: NodeJS.ProcessEnv } {
+	// Prefer CODEX_API_KEY, but allow OPENAI_API_KEY for CI and local setups
+	// where Codex uses the same OpenAI credential.
+	const apiKey = env.CODEX_API_KEY || env.OPENAI_API_KEY || undefined;
+	if (!apiKey) return { apiKey: undefined, env: { ...env } };
+	return { apiKey, env: { ...env, CODEX_HOME: join(docwriterDir, 'codex') } };
+}
+
 export class CodexProvider implements AgentProvider {
 	readonly id = 'codex' as const;
 
 	private async createClient(): Promise<any> {
 		await loadSdk();
 		if (!Codex) throw new Error('Codex SDK failed to load.');
-		const codexHome = join(getEffectiveDocwriterDir(), 'codex');
-		await mkdir(codexHome, { recursive: true });
-		// Prefer CODEX_API_KEY, but allow OPENAI_API_KEY for CI and local setups
-		// where Codex uses the same OpenAI credential.
-		return new Codex({
-			apiKey: process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY || undefined,
-			env: { ...process.env, CODEX_HOME: codexHome }
-		});
+		const options = codexClientOptions(process.env, getEffectiveDocwriterDir());
+		if (options.env.CODEX_HOME && options.apiKey) {
+			await mkdir(options.env.CODEX_HOME, { recursive: true });
+		}
+		return new Codex(options);
 	}
 
 	private async getThread(options: ProviderQueryOptions): Promise<any> {
@@ -218,7 +233,7 @@ export class CodexProvider implements AgentProvider {
 			sandboxMode: 'read-only',
 			approvalPolicy: 'never',
 			...(options.model ? { model: options.model } : {}),
-			...(options.effort ? { modelReasoningEffort: options.effort } : {}),
+			modelReasoningEffort: codexReasoningEffort(options.effort),
 			webSearchMode: options.allowedTools?.includes('WebSearch') ? 'live' : 'disabled'
 		};
 

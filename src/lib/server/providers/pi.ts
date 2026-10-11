@@ -25,6 +25,7 @@ import {
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getEffectiveDocwriterDir, getEffectiveRoot } from '$lib/server/document-files';
+import { PI_FALLBACK_MODELS } from '$lib/shared/fallback-models';
 
 let createAgentSession: any = null;
 let defineTool: any = null;
@@ -57,22 +58,7 @@ async function loadSdk() {
 	Type = tb.Type;
 }
 
-const FALLBACK_MODELS: ProviderModelOption[] = [
-	{ id: 'together/moonshotai/Kimi-K2.6', label: 'Kimi K2.6 (Together)', provider: 'pi' },
-	{ id: 'anthropic/claude-sonnet-4-5', label: 'Claude Sonnet 4.5', provider: 'pi' },
-	{ id: 'anthropic/claude-opus-4-5', label: 'Claude Opus 4.5', provider: 'pi' },
-	{ id: 'anthropic/claude-haiku-3-5', label: 'Claude Haiku 3.5', provider: 'pi' },
-	{ id: 'openai/gpt-4o', label: 'GPT-4o', provider: 'pi' },
-	{ id: 'openai/gpt-4o-mini', label: 'GPT-4o Mini', provider: 'pi' },
-	{ id: 'openai/o4-mini', label: 'o4-mini', provider: 'pi' },
-	{ id: 'google/gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro', provider: 'pi' },
-	{ id: 'google/gemini-3.5-flash', label: 'Gemini 3.5 Flash', provider: 'pi' },
-	{ id: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash', provider: 'pi' },
-	{ id: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro', provider: 'pi' },
-	{ id: 'deepseek/deepseek-r1', label: 'DeepSeek R1', provider: 'pi' },
-	{ id: 'ollama/llama3.1', label: 'Llama 3.1 (Ollama)', provider: 'pi' },
-	{ id: 'ollama/qwen3', label: 'Qwen 3 (Ollama)', provider: 'pi' }
-];
+const FALLBACK_MODELS: ProviderModelOption[] = PI_FALLBACK_MODELS;
 
 function jsonSchemaToTypebox(schema: any): any {
 	if (!schema || schema.type !== 'object') return Type.Object({});
@@ -102,6 +88,19 @@ function jsonSchemaToTypebox(schema: any): any {
 		}
 	}
 	return Type.Object(props);
+}
+
+/** Find the saved file for a Pi session id. `SessionManager.open` takes a
+ * file path; passing the bare id made Pi start a new session file named
+ * after the id in the server's working directory instead of resuming. */
+export async function findPiSessionPath(
+	sessions: { list(cwd: string, sessionDir?: string): Promise<Array<{ id: string; path: string }>> },
+	sessionId: string,
+	cwd: string,
+	sessionDir: string
+): Promise<string | null> {
+	const saved = await sessions.list(cwd, sessionDir);
+	return saved.find((session) => session.id === sessionId)?.path ?? null;
 }
 
 function buildPiTools(defs: ToolDefinition[]): any[] {
@@ -163,7 +162,9 @@ export class PiProvider implements AgentProvider {
 		let resumeFailed = false;
 		if (options.sessionId) {
 			try {
-				sessionManager = SessionManager.open(options.sessionId, sessionDir, cwd);
+				const path = await findPiSessionPath(SessionManager, options.sessionId, cwd, sessionDir);
+				if (path) sessionManager = SessionManager.open(path, sessionDir, cwd);
+				else resumeFailed = true;
 			} catch {
 				resumeFailed = true;
 			}

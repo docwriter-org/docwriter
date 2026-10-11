@@ -235,14 +235,6 @@ export function seedYDoc(ydoc: Y.Doc, content: string): void {
 	fragment.insert(0, buildParagraphElements(normalizeTypography(content)));
 }
 
-/** Replace the fragment's content wholesale. Callers must wrap this in
- * `ydoc.transact(..., origin)` so the update carries the right origin tag. */
-export function replaceYDocText(ydoc: Y.Doc, content: string): void {
-	const fragment = getFragment(ydoc);
-	if (fragment.length > 0) fragment.delete(0, fragment.length);
-	if (content) fragment.insert(0, buildParagraphElements(normalizeTypography(content)));
-}
-
 /** Base64 encode/decode for shipping a Y.RelativePosition (a Uint8Array)
  * over JSON. btoa/atob are global in both the browser and Node 16+, so one
  * implementation serves client and server. The client captures its feedback

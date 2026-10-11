@@ -354,7 +354,7 @@
 	}
 	.skill-path {
 		margin-top: 6px;
-		font-family: 'Geist Mono', ui-monospace, monospace;
+		font-family: var(--font-mono);
 		font-size: 10.5px;
 		line-height: 1.35;
 		color: var(--text-faint);

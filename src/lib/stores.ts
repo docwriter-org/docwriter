@@ -1,5 +1,13 @@
 import { get, writable } from 'svelte/store';
 import {
+	CLAUDE_FALLBACK_MODELS,
+	CODEX_FALLBACK_MODELS,
+	CURSOR_FALLBACK_MODELS,
+	OPENAI_FALLBACK_MODELS,
+	PI_FALLBACK_MODELS
+} from '$lib/shared/fallback-models';
+import { PROVIDER_IDS, PROVIDER_LABELS } from '$lib/shared/providers';
+import {
 	isHiddenClaudeModel,
 	pickDefaultClaudeModel
 } from '$lib/shared/claude-models';
@@ -32,29 +40,6 @@ export const threadMarks = writable<ThreadMarkSummary[]>([]);
  * Drives the per-tab dot badges on the TabBar (via `mergedPendingTabs`
  * in +page.svelte). */
 export const allTabCommentThreads = writable<Array<{ tabId: string; threads: CommentThread[] }>>([]);
-
-/** Set of comment thread IDs the user has already seen (opened or clicked).
- * Persisted to localStorage so it survives page reloads. A thread absent
- * from this set that has an agent message is shown with an unread dot. */
-const SEEN_COMMENTS_KEY = 'docwriter.seenCommentIds';
-function readSeenCommentIds(): Set<string> {
-	if (typeof window === 'undefined') return new Set();
-	try {
-		const raw = window.localStorage.getItem(SEEN_COMMENTS_KEY);
-		return raw ? new Set(JSON.parse(raw) as string[]) : new Set();
-	} catch {
-		return new Set();
-	}
-}
-export const seenCommentIds = writable<Set<string>>(readSeenCommentIds());
-if (typeof window !== 'undefined') {
-	seenCommentIds.subscribe((s) =>
-		window.localStorage.setItem(SEEN_COMMENTS_KEY, JSON.stringify([...s]))
-	);
-}
-export function markCommentSeen(id: string) {
-	seenCommentIds.update((s) => { const n = new Set(s); n.add(id); return n; });
-}
 
 /** Comment threads for the ACTIVE tab, sorted by createdAt. Threaded
  * Google-Docs-style comments. Each thread is anchored to a passage via
@@ -292,60 +277,21 @@ export type ModelOption = { id: string; label: string; provider?: string };
 
 /** Available provider options. */
 export type ProviderOption = { id: string; label: string };
-export const AVAILABLE_PROVIDERS: ProviderOption[] = [
-	{ id: 'claude', label: 'Claude' },
-	{ id: 'openai', label: 'OpenAI' },
-	{ id: 'codex', label: 'Codex' },
-	{ id: 'cursor', label: 'Cursor' },
-	{ id: 'pi', label: 'Pi' }
-];
+export const AVAILABLE_PROVIDERS: ProviderOption[] = PROVIDER_IDS.map((id) => ({
+	id,
+	label: PROVIDER_LABELS[id]
+}));
 
 /** Newest-first static list, shown immediately on load and used as the
- * fallback whenever the live Models API can't be reached. Mirrors the server
- * fallback in `/api/models`. */
-const ALL_FALLBACK_MODELS: ModelOption[] = [
-	{ id: 'claude-opus-5-5', label: 'Claude Opus 5.5 (1M context)', provider: 'claude' },
-	{ id: 'claude-opus-4-8', label: 'Claude Opus 4.8 (1M context)', provider: 'claude' },
-	{ id: 'claude-opus-4-7', label: 'Claude Opus 4.7', provider: 'claude' },
-	{ id: 'claude-opus-4-6', label: 'Claude Opus 4.6', provider: 'claude' },
-	{ id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6 (1M context)', provider: 'claude' },
-	{ id: 'claude-opus-4-5', label: 'Claude Opus 4.5', provider: 'claude' },
-	{ id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5', provider: 'claude' },
-	{ id: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5', provider: 'claude' },
-	{ id: 'gpt-5.5', label: 'GPT-5.5', provider: 'openai' },
-	{ id: 'gpt-5.5-pro', label: 'GPT-5.5 Pro', provider: 'openai' },
-	{ id: 'gpt-5.4', label: 'GPT-5.4', provider: 'openai' },
-	{ id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini', provider: 'openai' },
-	{ id: 'gpt-5.4-nano', label: 'GPT-5.4 Nano', provider: 'openai' },
-	{ id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex', provider: 'openai' },
-	{ id: 'gpt-5.2', label: 'GPT-5.2', provider: 'openai' },
-	{ id: 'o3', label: 'o3', provider: 'openai' },
-	{ id: 'gpt-4.1', label: 'GPT-4.1', provider: 'openai' },
-	{ id: 'gpt-5.5', label: 'GPT-5.5', provider: 'codex' },
-	{ id: 'gpt-5.4', label: 'GPT-5.4', provider: 'codex' },
-	{ id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini', provider: 'codex' },
-	{ id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex', provider: 'codex' },
-	{ id: 'gpt-5.2', label: 'GPT-5.2', provider: 'codex' },
-	{ id: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5', provider: 'cursor' },
-	{ id: 'gpt-4o', label: 'GPT-4o', provider: 'cursor' },
-	{ id: 'gpt-4o-mini', label: 'GPT-4o Mini', provider: 'cursor' },
-	{ id: 'claude-haiku-3-5', label: 'Claude Haiku 3.5', provider: 'cursor' },
-	{ id: 'cursor-small', label: 'Cursor Small', provider: 'cursor' },
-	{ id: 'anthropic/claude-sonnet-4-5', label: 'Claude Sonnet 4.5', provider: 'pi' },
-	{ id: 'anthropic/claude-opus-4-5', label: 'Claude Opus 4.5', provider: 'pi' },
-	{ id: 'anthropic/claude-haiku-3-5', label: 'Claude Haiku 3.5', provider: 'pi' },
-	{ id: 'openai/gpt-4o', label: 'GPT-4o', provider: 'pi' },
-	{ id: 'openai/gpt-4o-mini', label: 'GPT-4o Mini', provider: 'pi' },
-	{ id: 'openai/o4-mini', label: 'o4-mini', provider: 'pi' },
-	{ id: 'google/gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro', provider: 'pi' },
-	{ id: 'google/gemini-3.5-flash', label: 'Gemini 3.5 Flash', provider: 'pi' },
-	{ id: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash', provider: 'pi' },
-	{ id: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro', provider: 'pi' },
-	{ id: 'deepseek/deepseek-r1', label: 'DeepSeek R1', provider: 'pi' },
-	{ id: 'ollama/llama3.1', label: 'Llama 3.1 (Ollama)', provider: 'pi' },
-	{ id: 'ollama/qwen3', label: 'Qwen 3 (Ollama)', provider: 'pi' }
+ * fallback whenever the live Models API can't be reached. The server uses
+ * the same lists from `$lib/shared/fallback-models`. */
+export const FALLBACK_MODELS: ModelOption[] = [
+	...CLAUDE_FALLBACK_MODELS,
+	...OPENAI_FALLBACK_MODELS,
+	...CODEX_FALLBACK_MODELS,
+	...CURSOR_FALLBACK_MODELS,
+	...PI_FALLBACK_MODELS
 ];
-export const FALLBACK_MODELS: ModelOption[] = ALL_FALLBACK_MODELS;
 
 const SELECTED_MODEL_KEY = 'docwriter.selectedModel';
 const SELECTED_PROVIDER_KEY = 'docwriter.selectedProvider';

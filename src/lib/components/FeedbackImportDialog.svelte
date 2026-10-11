@@ -468,7 +468,7 @@
 		border-radius: 0;
 		background: transparent;
 		color: var(--text);
-		font-family: 'Geist Mono', 'SF Mono', monospace;
+		font-family: var(--font-mono);
 		font-size: 13.5px;
 		line-height: 1.65;
 		resize: none;

@@ -41,6 +41,7 @@ import {
 	WRITE_DOC_TOOL_NAME,
 	COMMENT_DOC_TOOL_NAME,
 	REPLY_TO_COMMENT_TOOL_NAME,
+	LIST_THREADS_TOOL_NAME,
 	runWithRenderScope,
 	REPLY_BEFORE_EDIT_PROMPT_NOTE
 } from '$lib/server/mcp-doc-tools';
@@ -1053,14 +1054,14 @@ export const POST: RequestHandler = async ({ request }) => {
 					const planAllowedTools = [
 						'Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch', 'Agent',
 						'AskUserQuestion', 'ExitPlanMode',
-						READ_DOC_TOOL_NAME, REPLY_TO_COMMENT_TOOL_NAME,
+						READ_DOC_TOOL_NAME, REPLY_TO_COMMENT_TOOL_NAME, LIST_THREADS_TOOL_NAME,
 						'read_doc', 'reply_to_comment', 'list_threads', TOOL_NAMES.READ_SKILL
 					];
 					const fullAllowedTools = [
 						'Read', 'Bash', 'Glob', 'Grep', 'WebSearch', 'WebFetch', 'Agent',
 						'mcp__docwriter__propose_rule', 'mcp__docwriter__propose_hook', 'mcp__docwriter__add_skill', 'mcp__docwriter__review_action',
 						'AskUserQuestion', 'ExitPlanMode',
-						EDIT_DOC_TOOL_NAME, READ_DOC_TOOL_NAME, WRITE_DOC_TOOL_NAME, COMMENT_DOC_TOOL_NAME, REPLY_TO_COMMENT_TOOL_NAME,
+						EDIT_DOC_TOOL_NAME, READ_DOC_TOOL_NAME, WRITE_DOC_TOOL_NAME, COMMENT_DOC_TOOL_NAME, REPLY_TO_COMMENT_TOOL_NAME, LIST_THREADS_TOOL_NAME,
 						'edit_doc', 'read_doc', 'write_doc', 'comment_doc', 'reply_to_comment', 'list_threads',
 						'propose_rule', 'propose_hook', TOOL_NAMES.READ_SKILL, TOOL_NAMES.ADD_SKILL, TOOL_NAMES.REVIEW_ACTION
 					];

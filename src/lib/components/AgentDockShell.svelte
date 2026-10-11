@@ -320,7 +320,7 @@
 	.bounce-dots {
 		display: inline-flex;
 		gap: 1px;
-		font-family: 'SF Mono', 'Fira Code', 'Menlo', monospace;
+		font-family: var(--font-mono);
 		font-size: 11px;
 		font-weight: 600;
 		color: var(--text-faint);
@@ -330,7 +330,7 @@
 		font-weight: 700;
 	}
 	.countdown {
-		font-family: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+		font-family: var(--font-mono);
 		font-size: 11px;
 		font-weight: 600;
 		color: var(--accent);

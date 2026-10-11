@@ -1,10 +1,21 @@
 <script lang="ts">
+	import '@fontsource/commit-mono/400.css';
+	import '@fontsource/commit-mono/400-italic.css';
+	import '@fontsource/commit-mono/500.css';
+	import '@fontsource/commit-mono/600.css';
+	import '@fontsource/commit-mono/700.css';
+
 	let { children } = $props();
 </script>
 
 {@render children()}
 
 <style>
+	/* The one monospace font for the app, bundled from @fontsource. */
+	:global(:root) {
+		--font-mono: 'Commit Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+	}
+
 	/* Global hover tooltip element, owned by src/lib/actions/tooltip.ts.
 	 * Lives at document.body level so it can position above any element
 	 * without being clipped by overflow:hidden parents. */

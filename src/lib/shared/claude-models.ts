@@ -30,14 +30,6 @@ export function isOneMillionContextClaudeModel(
 	return ONE_M_CONTEXT_CLAUDE_MODEL_PREFIXES.some((prefix) => id.startsWith(prefix));
 }
 
-export function usesAdaptiveThinkingClaudeModel(id: string): boolean {
-	if (id.startsWith('claude-sonnet-4-6')) return true;
-
-	const opusMatch = id.match(/^claude-opus-4-(\d+)/);
-	if (!opusMatch) return false;
-	return Number(opusMatch[1]) >= 6;
-}
-
 export function formatClaudeModelLabel(
 	id: string,
 	label: string,

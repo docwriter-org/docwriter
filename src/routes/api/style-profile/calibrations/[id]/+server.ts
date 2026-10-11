@@ -1,15 +1,14 @@
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import type { CalibrationChoice } from '$lib/style-profile';
-import type { ProviderId } from '$lib/server/providers/types';
+import { isProviderId, type ProviderId } from '$lib/shared/providers';
 import { answerCalibrationTrial, generateCalibrationTrial } from '$lib/server/style-analysis/calibration';
 import { publicCalibrationTrial, styleProfileForClient } from '$lib/server/style-analysis/profile-store';
 
-const PROVIDERS = new Set<ProviderId>(['claude', 'openai', 'codex', 'cursor', 'pi']);
 const CHOICES = new Set<CalibrationChoice>(['a', 'b', 'same', 'neither', 'skip']);
 
 function providerFrom(value: unknown): ProviderId {
-	if (!PROVIDERS.has(value as ProviderId)) throw error(400, 'Invalid provider');
+	if (!isProviderId(value)) throw error(400, 'Invalid provider');
 	return value as ProviderId;
 }
 

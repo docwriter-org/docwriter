@@ -602,7 +602,7 @@
 		font-size: 12px;
 	}
 	.path {
-		font-family: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+		font-family: var(--font-mono);
 		font-size: 11px;
 		color: var(--text-secondary, #cfcfcf);
 		max-width: 60%;

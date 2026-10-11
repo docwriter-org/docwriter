@@ -61,7 +61,7 @@ Options:
       --host [addr]     Bind addr (bare --host → 0.0.0.0)
       --no-open         Don't open a browser window
       --api-key <key>   Anthropic API key (overrides ANTHROPIC_API_KEY)
-      --model <name>    Default model: opus | sonnet | haiku
+      --model <name>    Fallback model ID, used only when the app sends no model
       --new-session     Start with a fresh AI conversation
   -h, --help            Show this help
 

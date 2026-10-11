@@ -4,6 +4,7 @@
  */
 import type { AgentProvider, ProviderId, ProviderModelOption } from './types';
 import { ClaudeProvider } from './claude';
+import { PROVIDER_IDS } from '$lib/shared/providers';
 
 const providers = new Map<ProviderId, AgentProvider>();
 
@@ -42,7 +43,7 @@ export async function getProvider(id: ProviderId = 'claude'): Promise<AgentProvi
 
 export async function listAllModels(): Promise<ProviderModelOption[]> {
 	const all: ProviderModelOption[] = [];
-	for (const id of ['claude', 'openai', 'codex', 'cursor', 'pi'] as ProviderId[]) {
+	for (const id of PROVIDER_IDS) {
 		try {
 			const p = await getProvider(id);
 			const models = await p.listModels();

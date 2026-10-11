@@ -292,11 +292,6 @@ export async function setThreadResolution(
 	});
 }
 
-/** Threads with proposals, and their summaries, on a tab's live doc. */
-export function readTabProposals(ydoc: Y.Doc) {
-	return summarizeThreadMarks(ydoc).filter((s) => s.hasProposal);
-}
-
 /** Carry a document written under the pending-round model (a `rounds`
  * array of string pairs, threads anchored by quote) over to marks. Runs on
  * the authoritative load path, inside the caller's persist window. A round

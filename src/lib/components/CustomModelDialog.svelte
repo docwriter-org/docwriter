@@ -29,7 +29,7 @@
 			: provider === 'codex'
 				? 'e.g. gpt-5.5, gpt-5.3-codex'
 			: provider === 'claude'
-				? 'e.g. claude-opus-4-8, claude-sonnet-4-6'
+				? 'e.g. claude-opus-5-5, claude-sonnet-5-5'
 				: provider === 'cursor'
 					? 'e.g. composer-2.5'
 					: 'e.g. ollama/llama3.1'
@@ -143,7 +143,7 @@
 	.dialog-body input {
 		width: 100%;
 		box-sizing: border-box;
-		font-family: ui-monospace, monospace;
+		font-family: var(--font-mono);
 		font-size: 13px;
 		padding: 9px 11px;
 		border: 1px solid var(--border-light);

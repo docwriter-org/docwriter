@@ -1419,7 +1419,7 @@
 		line-height: 1.5;
 	}
 	.tool-name {
-		font-family: 'Geist Mono', ui-monospace, monospace;
+		font-family: var(--font-mono);
 		font-size: 11px;
 		color: var(--tool-accent);
 	}
@@ -1430,7 +1430,7 @@
 		border-radius: 6px;
 		background: var(--tool-bg);
 		color: var(--text-muted);
-		font-family: 'Geist Mono', ui-monospace, monospace;
+		font-family: var(--font-mono);
 		font-size: 10.5px;
 		line-height: 1.5;
 		white-space: pre-wrap;
@@ -1876,7 +1876,7 @@
 	.measurement-value {
 		flex: none;
 		color: var(--text);
-		font-family: 'Geist Mono', ui-monospace, monospace;
+		font-family: var(--font-mono);
 		font-size: 12px;
 		font-variant-numeric: tabular-nums;
 	}
@@ -2173,7 +2173,7 @@
 		padding: 10px 12px;
 		border-top: 1px solid var(--border-light);
 		overflow: auto;
-		font-family: 'Geist Mono', ui-monospace, monospace;
+		font-family: var(--font-mono);
 		font-size: 11.5px;
 		line-height: 1.55;
 		white-space: pre-wrap;

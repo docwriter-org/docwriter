@@ -39,6 +39,13 @@ jobs:
           # path works, not that Together answers within 90 s.
           - provider: pi
             agent_timeout_ms: 180000
+          # The OpenAI API key that these two jobs use has no credits. Run them
+          # without blocking the PR, and warn when they fail; they pass again
+          # once the account has credits.
+          - provider: openai
+            optional: true
+          - provider: codex
+            optional: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -51,6 +58,8 @@ jobs:
       - name: Install Playwright Chromium
         run: npx playwright install chromium --with-deps
       - name: Provider smoke (${{ matrix.provider }})
+        id: smoke
+        continue-on-error: ${{ matrix.optional == true }}
         env:
           E2E_PROVIDER: ${{ matrix.provider }}
           E2E_REQUIRE_CREDENTIALS: '1'
@@ -61,3 +70,6 @@ jobs:
           TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: node e2e/run-provider.mjs
+      - name: Warn about an optional provider failure
+        if: steps.smoke.outcome == 'failure'
+        run: echo "::warning title=${{ matrix.provider }} smoke failed::The ${{ matrix.provider }} provider smoke test failed. It does not block this PR. Check the OpenAI API key credits."

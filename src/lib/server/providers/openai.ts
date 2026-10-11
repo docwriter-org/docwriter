@@ -16,6 +16,7 @@ import { buildToolDefinitions } from './tool-handlers';
 import { builtinSdkTools, emitProposalEvents, makeLazySdkLoader, wrapToolsForProvider } from './shared';
 import { randomUUID } from 'node:crypto';
 import { DocWriterOpenAISession } from './openai-session';
+import { OPENAI_FALLBACK_MODELS } from '$lib/shared/fallback-models';
 
 let Agent: any = null;
 let run: any = null;
@@ -35,20 +36,7 @@ async function loadSdk() {
 	tool = sdk.tool;
 }
 
-// Current OpenAI frontier + reasoning models (newest first), per
-// developers.openai.com/api/docs/models as of 2026-06.
-const FALLBACK_MODELS: ProviderModelOption[] = [
-	{ id: 'codex-mini', label: 'Codex Mini', provider: 'openai' },
-	{ id: 'gpt-5.5', label: 'GPT-5.5', provider: 'openai' },
-	{ id: 'gpt-5.5-pro', label: 'GPT-5.5 Pro', provider: 'openai' },
-	{ id: 'gpt-5.4', label: 'GPT-5.4', provider: 'openai' },
-	{ id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini', provider: 'openai' },
-	{ id: 'gpt-5.4-nano', label: 'GPT-5.4 Nano', provider: 'openai' },
-	{ id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex', provider: 'openai' },
-	{ id: 'gpt-5.2', label: 'GPT-5.2', provider: 'openai' },
-	{ id: 'o3', label: 'o3', provider: 'openai' },
-	{ id: 'gpt-4.1', label: 'GPT-4.1', provider: 'openai' }
-];
+const FALLBACK_MODELS: ProviderModelOption[] = OPENAI_FALLBACK_MODELS;
 
 /** Called after each tool finishes, with the SDK call_id for correlation. */
 type ToolResultSink = (callId: string, name: string, text: string, isError: boolean) => void;

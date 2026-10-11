@@ -86,13 +86,6 @@ export function writeHooks(cfg: HooksConfig) {
 	dbReplaceHooks(cfg.hooks);
 }
 
-// Templates moved to $lib/shared/hook-templates so the client can
-// import them directly. Re-export for any server-side consumers.
-export {
-	HOOK_TEMPLATES,
-	type HookTemplate
-} from '$lib/shared/hook-templates';
-
 /** Substitute template placeholders in a hook command or output path.
  * Supported placeholders:
  *   {{file}} — the active file's path (as the agent / tool reported it)
