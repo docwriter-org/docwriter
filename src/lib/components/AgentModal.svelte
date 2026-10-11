@@ -511,7 +511,7 @@
 		font-size: 0.75em;
 	}
 	.modal-body.plan-body :global(code) {
-		font-family: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+		font-family: var(--font-mono);
 		font-size: 0.82em;
 		padding: 2px 6px;
 		border-radius: 4px;

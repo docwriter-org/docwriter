@@ -66,6 +66,7 @@
 		"@cursor/sdk": "^1.0.18",
 		"@earendil-works/pi-ai": "^0.80.2",
 		"@earendil-works/pi-coding-agent": "^0.80.2",
+		"@fontsource/commit-mono": "^5.3.0",
 		"@hocuspocus/provider": "^3.4.4",
 		"@hocuspocus/server": "^3.4.4",
 		"@modelcontextprotocol/sdk": "^1.29.0",

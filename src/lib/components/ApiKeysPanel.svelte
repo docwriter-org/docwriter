@@ -171,7 +171,7 @@
 	}
 	.intro code,
 	.env-var code {
-		font-family: ui-monospace, monospace;
+		font-family: var(--font-mono);
 		font-size: 11px;
 		background: var(--bg-surface);
 		padding: 1px 4px;
@@ -246,7 +246,7 @@
 	.key-input input {
 		flex: 1;
 		min-width: 0;
-		font-family: ui-monospace, monospace;
+		font-family: var(--font-mono);
 		font-size: 12px;
 		padding: 6px 8px;
 		border: 1px solid var(--border-light);

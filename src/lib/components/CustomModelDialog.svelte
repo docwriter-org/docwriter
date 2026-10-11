@@ -143,7 +143,7 @@
 	.dialog-body input {
 		width: 100%;
 		box-sizing: border-box;
-		font-family: ui-monospace, monospace;
+		font-family: var(--font-mono);
 		font-size: 13px;
 		padding: 9px 11px;
 		border: 1px solid var(--border-light);

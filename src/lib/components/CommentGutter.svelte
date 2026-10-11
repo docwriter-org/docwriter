@@ -1004,7 +1004,7 @@
 		font-style: italic;
 	}
 	.message-body :global(code) {
-		font-family: 'JetBrains Mono', ui-monospace, monospace;
+		font-family: var(--font-mono);
 		font-size: 11.5px;
 		background: var(--bg-surface);
 		padding: 1px 4px;

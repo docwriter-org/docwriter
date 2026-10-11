@@ -1059,7 +1059,7 @@
 	.topbar-sub {
 		font-size: 11px;
 		color: var(--text-faint);
-		font-family: ui-monospace, monospace;
+		font-family: var(--font-mono);
 	}
 	.expand-all-btn {
 		font-size: 11px;
@@ -1160,7 +1160,7 @@
 		border: 1px solid var(--border-light);
 		border-radius: 20px;
 		padding: 2px 8px;
-		font-family: ui-monospace, monospace;
+		font-family: var(--font-mono);
 		white-space: nowrap;
 	}
 	.model-pill {
@@ -1206,7 +1206,7 @@
 		color: var(--accent);
 	}
 	.context-toggle-pct {
-		font-family: ui-monospace, monospace;
+		font-family: var(--font-mono);
 		font-size: 10.5px;
 		font-variant-numeric: tabular-nums;
 	}
@@ -1263,7 +1263,7 @@
 	.context-totals {
 		font-size: 11.5px;
 		color: var(--text-faint);
-		font-family: ui-monospace, monospace;
+		font-family: var(--font-mono);
 		font-variant-numeric: tabular-nums;
 	}
 	.context-bar-wrap {
@@ -1349,7 +1349,7 @@
 	}
 	.context-legend-tokens {
 		color: var(--text-faint);
-		font-family: ui-monospace, monospace;
+		font-family: var(--font-mono);
 		font-variant-numeric: tabular-nums;
 		font-size: 11.5px;
 	}
@@ -1438,7 +1438,7 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-		font-family: 'Geist Mono', ui-monospace, monospace;
+		font-family: var(--font-mono);
 	}
 	.tool-count {
 		flex-shrink: 0;
@@ -1521,18 +1521,18 @@
 	.card-ts {
 		font-size: 11px;
 		color: var(--text-faint);
-		font-family: ui-monospace, monospace;
+		font-family: var(--font-mono);
 	}
 	.tok-info {
 		margin-left: auto;
 		font-size: 11px;
 		color: var(--text-faint);
-		font-family: ui-monospace, monospace;
+		font-family: var(--font-mono);
 	}
 	.model-info {
 		font-size: 11px;
 		color: var(--text-faint);
-		font-family: ui-monospace, monospace;
+		font-family: var(--font-mono);
 		max-width: 240px;
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -1543,7 +1543,7 @@
 		min-width: 0;
 		font-size: 11.5px;
 		color: var(--text-secondary);
-		font-family: 'Geist Mono', ui-monospace, monospace;
+		font-family: var(--font-mono);
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
@@ -1654,7 +1654,7 @@
 		border: 1px solid var(--border-light);
 		border-radius: 3px;
 		padding: 1px 5px;
-		font-family: 'Geist Mono', ui-monospace, monospace;
+		font-family: var(--font-mono);
 		font-size: 12px;
 	}
 	.card-body.md-body :global(pre) {
@@ -1705,7 +1705,7 @@
 	.card-body.md-body :global(strong) { font-weight: 600; }
 	.card-body.md-body :global(em) { font-style: italic; }
 	.card-body.mono {
-		font-family: 'Geist Mono', ui-monospace, monospace;
+		font-family: var(--font-mono);
 		font-size: 12px;
 		line-height: 1.5;
 	}
@@ -1732,7 +1732,7 @@
 		border: 1px solid var(--border-light);
 		border-radius: 5px;
 		padding: 8px 10px;
-		font-family: 'Geist Mono', ui-monospace, monospace;
+		font-family: var(--font-mono);
 		font-size: 11.5px;
 		white-space: pre-wrap;
 		word-break: break-all;

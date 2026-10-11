@@ -177,7 +177,7 @@ window.addEventListener('load', resize);
 
 const showError = (e) => {
   const errDiv = document.createElement('div');
-  errDiv.style.cssText = 'color:#ef4444;font:13px/1.4 monospace;padding:12px;white-space:pre-wrap;';
+  errDiv.style.cssText = 'color:#ef4444;font:13px/1.4 var(--font-mono, monospace);padding:12px;white-space:pre-wrap;';
   errDiv.textContent = 'D3 Error: ' + (e && e.message ? e.message : String(e));
   document.body.replaceChildren(errDiv);
   resize();

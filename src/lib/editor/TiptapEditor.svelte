@@ -1819,7 +1819,7 @@
 		 * the editor's content top, not from this padding edge. */
 		padding: 0;
 		color: var(--text-faint);
-		font-family: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+		font-family: var(--font-mono);
 		font-size: calc(15px * var(--font-scale, 1));
 		line-height: 1.45;
 		user-select: none;
@@ -1864,11 +1864,11 @@
 	.tiptap-editor.plain-mode.soft-wrap-enabled :global(.tiptap-content) {
 		width: 100%;
 	}
-	/* Plain-text mode: Geist Mono — clean, modern, narrow letterforms that
-	 * read like a writing app rather than a code editor. Tight line-height
-	 * + narrow column for focus; ui-monospace is the OS fallback. */
+	/* Plain-text mode: the app monospace font (Commit Mono). Tight
+	 * line-height and a narrow column for focus; ui-monospace is the OS
+	 * fallback. */
 	.tiptap-editor :global(.tiptap-plain) {
-		font-family: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+		font-family: var(--font-mono);
 		font-size: calc(15px * var(--font-scale, 1));
 		line-height: 1.45;
 		white-space: pre;
@@ -2636,7 +2636,7 @@
 		display: inline-flex;
 		align-items: center;
 		margin: 1px 0 2px;
-		font-family: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+		font-family: var(--font-mono);
 		font-size: calc(12px * var(--font-scale, 1));
 		line-height: 1.45;
 		user-select: none;
@@ -2711,7 +2711,7 @@
 		color: var(--text-secondary);
 	}
 	:global(.md-table-preview code) {
-		font-family: 'Geist Mono', ui-monospace, monospace;
+		font-family: var(--font-mono);
 		font-size: 0.92em;
 		background: var(--bg-surface);
 		border-radius: 3px;
@@ -2849,7 +2849,7 @@
 		font-style: italic;
 	}
 	.tiptap-editor :global(.md-code) {
-		font-family: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+		font-family: var(--font-mono);
 		font-size: 0.9em;
 		background: var(--bg-surface);
 		padding: 1px 4px;
@@ -2905,7 +2905,7 @@
 		border-right: 1px solid var(--border-light);
 		background: color-mix(in srgb, var(--text) 4%, var(--bg-elevated));
 		color: var(--text);
-		font-family: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+		font-family: var(--font-mono);
 		font-size: calc(14px * var(--font-scale, 1));
 		line-height: 1.5;
 		min-height: 1.5em;
